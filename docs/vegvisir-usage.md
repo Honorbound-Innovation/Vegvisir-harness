@@ -1,21 +1,19 @@
-# Vegvisir Usage
+# Vegvisir Usage And Command Reference
 
 Vegvisir is the main agent harness. It can run as an interactive terminal UI or as a headless CLI for scripted work and agent servers.
 
-This page is based on the current `vegvisir --help` output and the built-in slash command registry.
+This document is intentionally comprehensive for the current CLI and TUI slash-command surface.
 
-## Installed Command
+Installed command:
 
 ```bash
 vegvisir
 ```
 
-The installer also installs `vegvisir-rust` as an explicit binary alias.
-
-## Top-Level CLI Help Tree
+## Top-Level Help
 
 ```text
-Usage: vegvisir [OPTIONS] [COMMAND]
+Usage: vegvisir-rust [OPTIONS] [COMMAND]
 
 Commands:
   tui
@@ -26,145 +24,281 @@ Commands:
   model-request
   eval
   verify
-  help
+  help           Print this message or the help of the given subcommand(s)
 
 Options:
   -p, --prompt <PROMPT>
-      --workspace <WORKSPACE>
-      --max-steps <MAX_STEPS>
+      --workspace <WORKSPACE>                     [default: /mnt/storage/Projects/Vegvisir-harness]
+      --max-steps <MAX_STEPS>                     [default: 4]
       --provider <PROVIDER>
       --model <MODEL>
       --agent <AGENT>
       --json
       --scripted
       --dangerously-bypass-approvals-and-sandbox
-  -h, --help
+  -h, --help                                      Print help
 ```
 
-## Start The TUI
+## Startup Behavior
 
-The default command starts the TUI:
+Running `vegvisir` with no subcommand starts the TUI. `vegvisir tui` is accepted as the explicit form.
+
+```bash
+vegvisir
+vegvisir tui
+```
+
+## CLI Commands
+
+#### tui
+
+Purpose:
+
+Starts the interactive terminal UI. This is the default behavior when running `vegvisir` with no subcommand, and it is the normal mode for conversational coding, workspace switching, approvals, slash commands, and live provider streaming.
+
+Exact help:
+
+```text
+Usage: vegvisir-rust tui [OPTIONS]
+
+Options:
+      --provider <PROVIDER>
+      --model <MODEL>
+      --agent <AGENT>
+      --json
+      --scripted
+      --dangerously-bypass-approvals-and-sandbox
+  -h, --help                                      Print help
+```
+
+Examples:
 
 ```bash
 vegvisir
 ```
 
-The explicit form is also accepted:
-
-```bash
-vegvisir tui
-```
-
-Common startup options:
-
 ```bash
 vegvisir --workspace /path/to/project
+```
+
+```bash
 vegvisir --provider openai-hbse --model gpt-5.5
-vegvisir --agent coder
 ```
 
-The dangerous bypass mode is startup-only:
+Notes:
 
-```bash
-vegvisir --dangerously-bypass-approvals-and-sandbox
-```
+- `--workspace` controls project scope for tools and memory.
+- `--agent` applies a persistent custom agent profile.
+- `--dangerously-bypass-approvals-and-sandbox` is startup-only and should be used only for explicitly trusted sessions.
 
-That mode authorizes all tools, commands, approvals, and sandbox checks for the running session. It is not exposed as a TUI command.
 
-## Headless Commands
+#### run
 
-### `run`
+Purpose:
+
+Runs one headless agent task from the command line. Use it for scripts, agent servers, CI-like checks, or remote sessions where the full TUI is unnecessary.
+
+Exact help:
 
 ```text
-Usage: vegvisir run [OPTIONS] <GOAL>
+Usage: vegvisir-rust run [OPTIONS] <GOAL>
+
+Arguments:
+  <GOAL>
 
 Options:
-      --workspace <WORKSPACE>
-      --max-steps <MAX_STEPS>
+      --workspace <WORKSPACE>                     [default: /mnt/storage/Projects/Vegvisir-harness]
+      --max-steps <MAX_STEPS>                     [default: 4]
       --provider <PROVIDER>
       --model <MODEL>
       --agent <AGENT>
       --json
       --scripted
       --dangerously-bypass-approvals-and-sandbox
+  -h, --help                                      Print help
 ```
 
-Use `run` for non-interactive work:
+Examples:
 
 ```bash
-vegvisir --workspace /path/to/project run "Create a test plan for this crate"
-vegvisir --workspace /path/to/project --json run "List risky files"
-vegvisir --workspace /path/to/project --scripted run "Run verification"
+vegvisir --workspace /path/to/project run "Summarize this repository"
 ```
 
-### `remember`
+Notes:
 
-Stores a durable CMS-v2 memory from the CLI.
+- `--workspace` controls project scope for tools and memory.
+- `--agent` applies a persistent custom agent profile.
+- `--dangerously-bypass-approvals-and-sandbox` is startup-only and should be used only for explicitly trusted sessions.
 
-```bash
-vegvisir --workspace /path/to/project remember "Build decision | Use HBSE for provider secrets"
-```
 
-### `recall`
+#### remember
+
+Purpose:
+
+Stores a durable CMS-v2 memory in the active workspace/project scope. Use it to record project decisions, preferences, operational facts, and reusable context without starting the TUI.
+
+Exact help:
 
 ```text
-Usage: vegvisir recall [OPTIONS] <QUERY>
+Usage: vegvisir-rust remember [OPTIONS] <TITLE> <CONTENT>
+
+Arguments:
+  <TITLE>
+  <CONTENT>
 
 Options:
-      --limit <LIMIT>
-      --workspace <WORKSPACE>
+      --memory-type <MEMORY_TYPE>                 [default: note]
+      --workspace <WORKSPACE>                     [default: /mnt/storage/Projects/Vegvisir-harness]
       --provider <PROVIDER>
       --model <MODEL>
       --agent <AGENT>
       --json
       --scripted
       --dangerously-bypass-approvals-and-sandbox
+  -h, --help                                      Print help
 ```
 
-Example:
+Examples:
+
+```bash
+vegvisir --workspace /path/to/project remember "Decision | Use HBSE for provider secrets"
+```
+
+Notes:
+
+- `--workspace` controls project scope for tools and memory.
+- `--agent` applies a persistent custom agent profile.
+- `--dangerously-bypass-approvals-and-sandbox` is startup-only and should be used only for explicitly trusted sessions.
+
+
+#### recall
+
+Purpose:
+
+Retrieves relevant CMS-v2 memories for a query in the selected workspace/project scope. Use it to verify what Vegvisir can remember before sending a model request.
+
+Exact help:
+
+```text
+Usage: vegvisir-rust recall [OPTIONS] <QUERY>
+
+Arguments:
+  <QUERY>
+
+Options:
+      --limit <LIMIT>                             [default: 8]
+      --workspace <WORKSPACE>                     [default: /mnt/storage/Projects/Vegvisir-harness]
+      --provider <PROVIDER>
+      --model <MODEL>
+      --agent <AGENT>
+      --json
+      --scripted
+      --dangerously-bypass-approvals-and-sandbox
+  -h, --help                                      Print help
+```
+
+Examples:
 
 ```bash
 vegvisir --workspace /path/to/project recall --limit 8 "provider setup"
 ```
 
-### `context`
+Notes:
 
-Prepares CMS-v2 ECM context for a message.
+- `--workspace` controls project scope for tools and memory.
+- `--agent` applies a persistent custom agent profile.
+- `--dangerously-bypass-approvals-and-sandbox` is startup-only and should be used only for explicitly trusted sessions.
 
-```bash
-vegvisir --workspace /path/to/project context "What should I remember about this repo?"
-```
 
-### `model-request`
+#### context
 
-Prepares a provider-cacheable CMS-v2 model request envelope.
+Purpose:
+
+Builds the ECM context packet for a message without necessarily sending it to a provider. Use it to debug memory retrieval, token budgeting, and project-scoped context assembly.
+
+Exact help:
 
 ```text
-Usage: vegvisir model-request [OPTIONS] <MESSAGE>
+Usage: vegvisir-rust context [OPTIONS] <MESSAGE>
+
+Arguments:
+  <MESSAGE>
 
 Options:
+      --workspace <WORKSPACE>                     [default: /mnt/storage/Projects/Vegvisir-harness]
       --provider <PROVIDER>
       --model <MODEL>
-      --workspace <WORKSPACE>
       --agent <AGENT>
       --json
       --scripted
       --dangerously-bypass-approvals-and-sandbox
+  -h, --help                                      Print help
 ```
 
-Example:
+Examples:
 
 ```bash
-vegvisir --workspace /path/to/project model-request --provider openai-hbse --model gpt-5.5 "Summarize the current work"
+vegvisir --workspace /path/to/project context "What context matters?"
 ```
 
-### `eval`
+Notes:
+
+- `--workspace` controls project scope for tools and memory.
+- `--agent` applies a persistent custom agent profile.
+- `--dangerously-bypass-approvals-and-sandbox` is startup-only and should be used only for explicitly trusted sessions.
+
+
+#### model-request
+
+Purpose:
+
+Builds the provider-facing model request envelope, including CMS-v2 context and cacheable prompt sections. Use it to inspect what would be sent to a model and diagnose token pressure or cache behavior.
+
+Exact help:
 
 ```text
-Usage: vegvisir eval [OPTIONS] [SCOPE]
+Usage: vegvisir-rust model-request [OPTIONS] <MESSAGE>
 
 Arguments:
-  [SCOPE]  default: all
+  <MESSAGE>
+
+Options:
+      --provider <PROVIDER>                       [default: local]
+      --model <MODEL>                             [default: unspecified]
+      --workspace <WORKSPACE>                     [default: /mnt/storage/Projects/Vegvisir-harness]
+      --agent <AGENT>
+      --json
+      --scripted
+      --dangerously-bypass-approvals-and-sandbox
+  -h, --help                                      Print help
+```
+
+Examples:
+
+```bash
+vegvisir --workspace /path/to/project model-request --provider openai-hbse --model gpt-5.5 "Summarize active work"
+```
+
+Notes:
+
+- `--workspace` controls project scope for tools and memory.
+- `--agent` applies a persistent custom agent profile.
+- `--dangerously-bypass-approvals-and-sandbox` is startup-only and should be used only for explicitly trusted sessions.
+
+
+#### eval
+
+Purpose:
+
+Runs deterministic harness evaluation checks. Use it after changing memory, providers, tool policy, approvals, USRL contracts, MCP, or custom agent behavior.
+
+Exact help:
+
+```text
+Usage: vegvisir-rust eval [OPTIONS] [SCOPE]
+
+Arguments:
+  [SCOPE]  [default: all]
 
 Options:
       --file <FILE>
@@ -174,27 +308,64 @@ Options:
       --json
       --scripted
       --dangerously-bypass-approvals-and-sandbox
+  -h, --help                                      Print help
 ```
 
 Examples:
 
 ```bash
 vegvisir eval all
-vegvisir eval security
-vegvisir eval --file ./evals/workspace.json
 ```
 
-### `verify`
+```bash
+vegvisir eval --file ./evals/security.json
+```
+
+Notes:
+
+- `--workspace` controls project scope for tools and memory.
+- `--agent` applies a persistent custom agent profile.
+- `--dangerously-bypass-approvals-and-sandbox` is startup-only and should be used only for explicitly trusted sessions.
+
+
+#### verify
+
+Purpose:
+
+Runs production-readiness verification checks. Use it after installation, workspace changes, provider setup, MCP setup, or dangerous-bypass sessions to confirm the harness state.
+
+Exact help:
+
+```text
+Usage: vegvisir-rust verify [OPTIONS] [SCOPE]
+
+Arguments:
+  [SCOPE]  [default: all]
+
+Options:
+      --workspace <WORKSPACE>                     [default: /mnt/storage/Projects/Vegvisir-harness]
+      --provider <PROVIDER>
+      --model <MODEL>
+      --agent <AGENT>
+      --json
+      --scripted
+      --dangerously-bypass-approvals-and-sandbox
+  -h, --help                                      Print help
+```
+
+Examples:
 
 ```bash
 vegvisir verify all --workspace /path/to/project
-vegvisir verify auth
-vegvisir verify mcp
-vegvisir verify memory
-vegvisir verify runtime
 ```
 
-## TUI Slash Command Tree
+Notes:
+
+- `--workspace` controls project scope for tools and memory.
+- `--agent` applies a persistent custom agent profile.
+- `--dangerously-bypass-approvals-and-sandbox` is startup-only and should be used only for explicitly trusted sessions.
+
+## TUI Slash Commands
 
 Run `/help` inside the TUI to print the live command reference. The current tree is:
 

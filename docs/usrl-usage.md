@@ -55,11 +55,25 @@ The current CLI prints this usage text when called with no command or an unknown
 
 For syntax, contract structure, expressions, built-ins, `.pll/.cll` libraries, and complete authoring examples, see [USRL language reference](usrl-language-reference.md).
 
-## Commands
+## Complete CLI Command Reference
 
 ### `validate`
 
-Validates one `.usrl`, `.pll`, or `.cll` file.
+Purpose:
+
+Validates one `.usrl`, `.pll`, or `.cll` file. For `.usrl`, this parses the program and runs the USRL validator. For `.pll`, it parses and validates a prompt library. For `.cll`, it parses and validates a contract library.
+
+Usage:
+
+```text
+usrl validate <file.usrl|file.pll|file.cll>
+```
+
+When to use it:
+
+Use this as the first check after writing or editing any USRL-family file. It catches syntax errors, missing required fields, duplicate declarations, invalid type references, bad constructors, invalid linked-library shapes, and other validation issues supported by the current implementation.
+
+Examples:
 
 ```bash
 usrl validate ./contracts/security-audit.usrl
@@ -75,7 +89,21 @@ Exit behavior:
 
 ### `validate-pair`
 
-Validates a paired policy library and contract library.
+Purpose:
+
+Validates a paired prompt library and contract library. The `.pll` side defines prompt units. The `.cll` side defines contract units that govern prompt targets. Pair validation checks that blocking contract links resolve to prompt IDs in the paired prompt library.
+
+Usage:
+
+```text
+usrl validate-pair <file.pll> <file.cll>
+```
+
+When to use it:
+
+Use this when authoring prompt packs and contract packs that must be distributed or imported together.
+
+Example:
 
 ```bash
 usrl validate-pair ./contracts/security-policy.pll ./contracts/security-contract.cll
@@ -85,7 +113,21 @@ The first path must be `.pll`; the second must be `.cll`.
 
 ### `resolve`
 
-Resolves a `.usrl` project, including imports and symbol references, and prints JSON.
+Purpose:
+
+Resolves a `.usrl` project, including imports, modules, symbol references, graph nodes, graph edges, validation issues, resolution issues, and loader issues. Output is JSON.
+
+Usage:
+
+```text
+usrl resolve <file.usrl>
+```
+
+When to use it:
+
+Use this after `validate` when a contract has imports, namespaces, type references, or symbols that need deeper inspection. It is also useful when Vegvisir cannot bind or import a contract as expected.
+
+Example:
 
 ```bash
 usrl resolve ./contracts/security-audit.usrl
@@ -107,7 +149,21 @@ Use this when a contract validates alone but imported symbols or module paths ne
 
 ### `run`
 
-Evaluates a `.usrl` program and prints runtime JSON.
+Purpose:
+
+Evaluates a `.usrl` program with the current USRL runtime and prints runtime JSON containing facts, events, derivations, queries, decisions, taint state, and runtime issues.
+
+Usage:
+
+```text
+usrl run <file.usrl>
+```
+
+When to use it:
+
+Use this to verify that rules, stages, triggers, facts, queries, permit/deny decisions, capability checks, and taint behavior produce the expected result before binding a contract to a Vegvisir agent.
+
+Example:
 
 ```bash
 usrl run ./contracts/security-audit.usrl
@@ -129,7 +185,21 @@ Use this when checking whether the contract reaches the expected policy decision
 
 ### `jsrt-validate`
 
-Validates a JSRT trace document.
+Purpose:
+
+Validates a JSRT trace document. JSRT traces are JSON-based execution records governed by the JSRT schema, profiles, transition rules, and error definitions in the USRL package.
+
+Usage:
+
+```text
+usrl jsrt-validate <file.jsrt|file.json>
+```
+
+When to use it:
+
+Use this to verify that a trace is structurally valid before applying it or using it as evidence.
+
+Examples:
 
 ```bash
 usrl jsrt-validate ./trace.jsrt
@@ -146,7 +216,21 @@ The output JSON includes frame count and issues.
 
 ### `jsrt-apply`
 
-Validates and applies a JSRT trace document, then prints accepted/rejected frames and the resulting snapshot.
+Purpose:
+
+Validates and applies a JSRT trace document, then prints accepted frames, rejected frames, issue count, and the resulting snapshot.
+
+Usage:
+
+```text
+usrl jsrt-apply <file.jsrt|file.json>
+```
+
+When to use it:
+
+Use this when a trace should update or reconstruct contract execution state and you need to inspect accepted/rejected frame behavior.
+
+Example:
 
 ```bash
 usrl jsrt-apply ./trace.jsrt
