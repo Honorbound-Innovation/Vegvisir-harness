@@ -298,5 +298,5 @@ Environment example:
 
 Try:
   $bin_dir/vegvisir verify all --workspace "$repo_root"
-  $bin_dir/vegvisir tui
+  $bin_dir/vegvisir
 EOF

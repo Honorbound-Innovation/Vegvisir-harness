@@ -1,10 +1,12 @@
 # Vegvisir Agent Harness
 
-Vegvisir Agent Harness is a secure local-first agentic development harness. It combines a Rust terminal and headless agent runtime with CMS-v2 memory, HBSE secret isolation, USRL governed execution, MCP client support, custom persistent agents, skills, approvals, and workspace-aware sessions.
+Vegvisir Agent Harness is a secure Rust agent runtime for people who want a powerful coding and operations assistant without handing the harness every secret, every memory, and every permission by default.
 
-The project is designed for users who want the power of modern coding agents without giving the harness direct access to long-lived secrets or dumping all memory into every model request.
+It brings the main pieces of the system into one repository: the Vegvisir Rust harness, CMS-v2 memory, HBSE secret brokering, USRL contracts, MCP client support, custom agents, skills, approvals, and workspace-aware sessions.
 
-## Repository Layout
+The goal is straightforward: make high-capability agent work practical, inspectable, and controlled. Vegvisir can run interactively in a terminal UI, run headlessly on an agent server, switch between projects, use persistent memory, call tools, and route provider or MCP credentials through HBSE instead of storing plaintext secrets in the harness.
+
+## What Is Included
 
 ```text
 Vegvisir-harness/
@@ -13,33 +15,36 @@ Vegvisir-harness/
 │   ├── cms-v2/            # Continuum Memory System v2 runtime and CLI
 │   ├── HBSE/              # Rust Hardware Bound Secrets Enclave implementation
 │   └── usrl/              # USRL parser and contract runtime
-├── docs/                  # Usage documentation for the included systems
-├── scripts/               # Local setup helpers
+├── docs/                  # Usage documentation for each included system
+├── scripts/               # Helper scripts
+├── install.sh             # Full-system installer
+├── uninstall.sh           # Full-system uninstaller
 └── LICENSE                # MIT license for included project code
 ```
 
-## Core Features
+## What Vegvisir Does
 
-- Rust TUI and headless CLI for agentic development workflows.
-- Streaming provider integration across OpenAI, OpenAI-compatible, SSO, HBSE-brokered, Anthropic, Google, Azure OpenAI, and local/demo providers.
-- Tool execution for file IO, commands, tests, memory recall, MCP tools, and custom runtime plugins.
-- Human approval queue for risky operations, plus startup-only full bypass mode for explicitly trusted high-risk sessions.
-- CMS-v2 memory substrate with global, user, project, workspace, session, and agent scoping.
-- HBSE zero-knowledge secret delivery where Vegvisir requests provider/service access without reading plaintext credentials.
-- USRL contract skills for tightly bounded regulated workflows.
-- Persistent custom agents with dedicated prompts, modes, memory scopes, tool permissions, skills, USRL bindings, MCP exposure, provider, and model defaults.
-- Workspace/project switching with relevant session and memory scope restoration.
-- Markdown rendering in the TUI, including code fences, common language labels, and tables.
-- MCP client support with HBSE-backed auth for remote HTTP MCP services.
-- Eval, verification, trace, and audit commands for production hardening.
+- Runs as a full TUI or as a headless CLI.
+- Streams provider output into the harness when the provider supports streaming.
+- Supports OpenAI, OpenAI-compatible providers, OpenAI SSO, HBSE-brokered OpenAI-compatible requests, Anthropic, Google, Azure OpenAI, and local/demo providers.
+- Exposes workspace-scoped tools for file IO, command execution, tests, memory recall, MCP calls, and runtime plugins.
+- Uses an approval queue for risky operations, with approve-once, approve-pattern, edit, and deny flows.
+- Includes a startup-only dangerous bypass mode for explicitly trusted high-risk sessions.
+- Uses CMS-v2 as the memory system, with global, user, project, workspace, session, and agent scopes.
+- Uses HBSE for secret and auth isolation so provider and service credentials can stay outside the harness.
+- Uses USRL contracts for tightly bounded workflows and regulated skills.
+- Supports persistent custom agents with their own prompts, modes, memory scopes, tool permissions, skills, USRL bindings, MCP access, provider defaults, and model defaults.
+- Supports workspace/project switching with the right session and memory scope restored.
+- Renders Markdown in the TUI, including code fences and tables.
+- Includes verification, eval, trace, and audit surfaces for production hardening.
 
-## Quick Start
+## Install
 
 Prerequisites:
 
 - Rust toolchain with Cargo.
 - Node.js and npm for the USRL TypeScript package.
-- Linux is the primary runtime target for full HBSE service integration.
+- Linux for the full HBSE broker service workflow.
 
 Install the full system:
 
@@ -53,43 +58,56 @@ Install with a user HBSE broker service:
 ./install.sh --hbse-service user --enable-hbse-service --start-hbse-service
 ```
 
+Install into a specific prefix:
+
+```bash
+./install.sh --prefix "$HOME/.local"
+```
+
 Uninstall:
 
 ```bash
 ./uninstall.sh
 ```
 
-Build all Rust crates:
+The installer puts these commands under `$prefix/bin`:
+
+- `vegvisir`
+- `vegvisir-rust`
+- `cms-v2`
+- `hbse`
+- `hbse-broker`
+- `usrl`
+
+## Build And Test From Source
+
+Build Rust crates:
 
 ```bash
 cargo build --workspace
 ```
 
-Run the test suite:
+Run Rust tests:
 
 ```bash
 cargo test --workspace -- --test-threads=1
 ```
 
-Build the USRL package:
+Build and test USRL:
 
 ```bash
 cd components/usrl
 npm install
 npm run build
+npm test
 ```
 
-Install Vegvisir locally:
-
-```bash
-cargo build -p vegvisir-rust --release
-install -Dm755 target/release/vegvisir-rust "$HOME/.local/bin/vegvisir"
-```
+## Basic Use
 
 Start the TUI:
 
 ```bash
-vegvisir tui
+vegvisir
 ```
 
 Run headlessly:
@@ -98,7 +116,35 @@ Run headlessly:
 vegvisir --workspace /path/to/project --provider openai-hbse --model gpt-5.5 run "Summarize this repository"
 ```
 
+Check the installation:
+
+```bash
+vegvisir verify all --workspace /path/to/project
+```
+
+Use CMS-v2 directly:
+
+```bash
+cms-v2 --help
+cms-v2 retrieve --user user:default --project /path/to/project "provider secrets"
+```
+
+Use HBSE directly:
+
+```bash
+hbse --help
+hbse broker install-service --scope user --broker-executable "$(command -v hbse-broker)"
+```
+
+Use USRL directly:
+
+```bash
+usrl validate ./path/to/contract.usrl
+```
+
 ## Documentation
+
+The usage docs include command trees, explanations, and examples for the included systems.
 
 - [Vegvisir usage](docs/vegvisir-usage.md)
 - [CMS-v2 usage](docs/cms-v2-usage.md)
