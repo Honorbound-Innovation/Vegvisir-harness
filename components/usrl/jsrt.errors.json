@@ -1,0 +1,23 @@
+{
+  "error_codes": [
+    "SyntaxError",
+    "SchemaError",
+    "MissingField",
+    "TypeMismatch",
+    "UnknownFrameType",
+    "InvalidSequence",
+    "UnknownSession",
+    "IllegalTransition",
+    "ReferenceResolutionError",
+    "ProfileViolation",
+    "ContractViolation",
+    "PayloadOverflow",
+    "SignatureFailure",
+    "ChecksumFailure",
+    "ReplayDetected",
+    "Timeout",
+    "RuntimeFailure"
+  ],
+  "severity": ["Info", "Warning", "Error", "Critical", "Blocking"],
+  "recoverability": ["none", "retryable", "remediable", "resumable", "manual"]
+}

@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://usrl.dev/schemas/jsrt.schema.json",
+  "title": "USRL JSRT Frame",
+  "type": "object",
+  "required": [
+    "jsrt_version",
+    "frame_id",
+    "session_id",
+    "sequence",
+    "frame_type",
+    "timestamp",
+    "state",
+    "payload"
+  ],
+  "properties": {
+    "jsrt_version": { "const": "0.1" },
+    "frame_id": { "type": "string", "minLength": 1 },
+    "session_id": { "type": "string", "minLength": 1 },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "frame_type": {
+      "type": "string",
+      "pattern": "^(SessionCreate|SessionInit|StateDeclare|StateTransition|PromptDispatch|PromptResult|ContractBind|ValidationRequest|ValidationResult|ArtifactDeclare|ArtifactSubmit|ArtifactAccept|ArtifactReject|RemediationRequest|RemediationResult|ToolRequest|ToolResult|CheckpointCreate|CheckpointRestore|Error|Complete|Terminate|Heartbeat|CapabilityDeclare|[A-Za-z][A-Za-z0-9_]*\\.[A-Za-z][A-Za-z0-9_]*\\.[A-Za-z][A-Za-z0-9_]*)$"
+    },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "state": {
+      "type": "string",
+      "enum": [
+        "Created",
+        "Initialized",
+        "Ready",
+        "Active",
+        "AwaitingInput",
+        "AwaitingValidation",
+        "AwaitingRemediation",
+        "Paused",
+        "Checkpointed",
+        "Completed",
+        "Rejected",
+        "Failed",
+        "Terminated",
+        "Expired"
+      ]
+    },
+    "payload": { "type": "object" },
+    "stream_id": { "type": "string" },
+    "correlation_id": { "type": "string" },
+    "parent_frame_id": { "type": "string" },
+    "profile": { "type": "string" },
+    "source": { "type": "string" },
+    "target": { "type": "string" },
+    "checksum": { "type": "string" },
+    "signature": { "type": "string" },
+    "tags": { "type": "array", "items": { "type": "string" } },
+    "priority": { "type": "number" },
+    "contract_refs": { "type": "array", "items": { "type": "string" } },
+    "prompt_refs": { "type": "array", "items": { "type": "string" } },
+    "checkpoint": { "type": "object" },
+    "expires_at": { "type": "string", "format": "date-time" },
+    "retry_of": { "type": "string" },
+    "supersedes": { "type": "string" },
+    "annotations": { "type": "object" },
+    "trace": { "type": "object" },
+    "diagnostics": { "type": "object" },
+    "capabilities": { "type": "array", "items": { "type": "string" } }
+  },
+  "unevaluatedProperties": false
+}

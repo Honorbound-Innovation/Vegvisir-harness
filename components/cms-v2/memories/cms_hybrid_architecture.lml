@@ -1,0 +1,50 @@
+memory {
+    id: "mem_2026_05_15_cms_hybrid_architecture"
+    type: "design-thought"
+    title: "CMS should use hybrid memory substrates"
+    created: "2026-05-15"
+    updated: "2026-05-15"
+    confidence: 0.86
+    source: "CMS.V2"
+    source_kind: "architecture-brief"
+
+    summary: """
+    CMS should evolve beyond SQLite-only storage and use a hybrid architecture
+    combining .lml files, SQLite, vector embeddings, graph relationships, and
+    RAG orchestration.
+    """
+
+    claims {
+        claim {
+            id: "claim_001"
+            text: "SQLite is useful for durable records and metadata."
+            confidence: 0.95
+        }
+
+        claim {
+            id: "claim_002"
+            text: "Vector embeddings are useful for semantic retrieval."
+            confidence: 0.95
+        }
+
+        claim {
+            id: "claim_003"
+            text: "Graph databases are useful for relationship traversal."
+            confidence: 0.95
+        }
+    }
+
+    links {
+        relates_to: "project:CMS"
+        relates_to: "concept:RAG"
+        relates_to: "concept:USRL"
+        depends_on: "concept:LML"
+    }
+
+    retrieval {
+        embedding_priority: "high"
+        graph_priority: "high"
+        sql_priority: "normal"
+        tags: ["CMS", "memory-system", "RAG", "vector-db", "graph-db", "LML"]
+    }
+}

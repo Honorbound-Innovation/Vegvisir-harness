@@ -1,0 +1,297 @@
+{
+  "providers": [
+    {
+      "name": "demo",
+      "display_name": "Demo Local",
+      "kind": "demo",
+      "auth_type": "none",
+      "enabled": true
+    },
+    {
+      "name": "openai",
+      "display_name": "OpenAI API",
+      "kind": "openai",
+      "api_key_env": "OPENAI_API_KEY",
+      "base_url": "https://api.openai.com/v1",
+      "auth_type": "api_key",
+      "enabled": true
+    },
+    {
+      "name": "openai-sso",
+      "display_name": "OpenAI SSO Profile",
+      "kind": "openai_sso",
+      "auth_type": "oauth",
+      "enabled": true,
+      "metadata": {
+        "note": "Vegvisir owns this OAuth login and stores tokens under the Vegvisir data directory. It does not require Codex CLI, capture ChatGPT passwords, or scrape web sessions."
+      }
+    },
+    {
+      "name": "openai-hbse",
+      "display_name": "OpenAI via HBSE",
+      "kind": "hbse_openai_compatible",
+      "base_url": "https://api.openai.com/v1",
+      "auth_type": "hbse",
+      "enabled": true,
+      "metadata": {
+        "hbse_secret_ref": "secret://vegvisir/providers/openai/default",
+        "hbse_consumer": "vegvisir.provider.openai-hbse",
+        "hbse_purpose": "model.chat",
+        "hbse_model_discovery_purpose": "model.discovery"
+      }
+    },
+    {
+      "name": "anthropic",
+      "display_name": "Anthropic",
+      "kind": "anthropic",
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "base_url": "https://api.anthropic.com/v1",
+      "auth_type": "api_key",
+      "enabled": true
+    },
+    {
+      "name": "anthropic-hbse",
+      "display_name": "Anthropic via HBSE",
+      "kind": "hbse_anthropic",
+      "base_url": "https://api.anthropic.com/v1",
+      "auth_type": "hbse",
+      "enabled": true,
+      "metadata": {
+        "hbse_secret_ref": "secret://vegvisir/providers/anthropic/default",
+        "hbse_consumer": "vegvisir.provider.anthropic-hbse",
+        "hbse_purpose": "model.chat",
+        "hbse_model_discovery_purpose": "model.discovery",
+        "credential_header": "x-api-key",
+        "credential_prefix": "",
+        "anthropic_version": "2023-06-01"
+      }
+    },
+    {
+      "name": "google",
+      "display_name": "Google Gemini",
+      "kind": "google",
+      "api_key_env": "GOOGLE_API_KEY",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "auth_type": "api_key",
+      "enabled": true
+    },
+    {
+      "name": "google-hbse",
+      "display_name": "Google Gemini via HBSE",
+      "kind": "hbse_google",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "auth_type": "hbse",
+      "enabled": true,
+      "metadata": {
+        "hbse_secret_ref": "secret://vegvisir/providers/google/default",
+        "hbse_consumer": "vegvisir.provider.google-hbse",
+        "hbse_purpose": "model.chat",
+        "hbse_model_discovery_purpose": "model.discovery",
+        "credential_header": "x-goog-api-key",
+        "credential_prefix": ""
+      }
+    },
+    {
+      "name": "mistral",
+      "display_name": "Mistral",
+      "kind": "openai_compatible",
+      "api_key_env": "MISTRAL_API_KEY",
+      "base_url": "https://api.mistral.ai/v1",
+      "auth_type": "api_key",
+      "enabled": true
+    },
+    {
+      "name": "mistral-hbse",
+      "display_name": "Mistral via HBSE",
+      "kind": "hbse_openai_compatible",
+      "base_url": "https://api.mistral.ai/v1",
+      "auth_type": "hbse",
+      "enabled": true,
+      "metadata": {
+        "hbse_secret_ref": "secret://vegvisir/providers/mistral/default",
+        "hbse_consumer": "vegvisir.provider.mistral-hbse",
+        "hbse_purpose": "model.chat",
+        "hbse_model_discovery_purpose": "model.discovery"
+      }
+    },
+    {
+      "name": "groq",
+      "display_name": "Groq",
+      "kind": "openai_compatible",
+      "api_key_env": "GROQ_API_KEY",
+      "base_url": "https://api.groq.com/openai/v1",
+      "auth_type": "api_key",
+      "enabled": true
+    },
+    {
+      "name": "groq-hbse",
+      "display_name": "Groq via HBSE",
+      "kind": "hbse_openai_compatible",
+      "base_url": "https://api.groq.com/openai/v1",
+      "auth_type": "hbse",
+      "enabled": true,
+      "metadata": {
+        "hbse_secret_ref": "secret://vegvisir/providers/groq/default",
+        "hbse_consumer": "vegvisir.provider.groq-hbse",
+        "hbse_purpose": "model.chat",
+        "hbse_model_discovery_purpose": "model.discovery"
+      }
+    },
+    {
+      "name": "openrouter",
+      "display_name": "OpenRouter",
+      "kind": "openai_compatible",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "base_url": "https://openrouter.ai/api/v1",
+      "auth_type": "api_key",
+      "enabled": true
+    },
+    {
+      "name": "openrouter-hbse",
+      "display_name": "OpenRouter via HBSE",
+      "kind": "hbse_openai_compatible",
+      "base_url": "https://openrouter.ai/api/v1",
+      "auth_type": "hbse",
+      "enabled": true,
+      "metadata": {
+        "hbse_secret_ref": "secret://vegvisir/providers/openrouter/default",
+        "hbse_consumer": "vegvisir.provider.openrouter-hbse",
+        "hbse_purpose": "model.chat",
+        "hbse_model_discovery_purpose": "model.discovery"
+      }
+    },
+    {
+      "name": "deepseek",
+      "display_name": "DeepSeek",
+      "kind": "openai_compatible",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "base_url": "https://api.deepseek.com/v1",
+      "auth_type": "api_key",
+      "enabled": true
+    },
+    {
+      "name": "deepseek-hbse",
+      "display_name": "DeepSeek via HBSE",
+      "kind": "hbse_openai_compatible",
+      "base_url": "https://api.deepseek.com/v1",
+      "auth_type": "hbse",
+      "enabled": true,
+      "metadata": {
+        "hbse_secret_ref": "secret://vegvisir/providers/deepseek/default",
+        "hbse_consumer": "vegvisir.provider.deepseek-hbse",
+        "hbse_purpose": "model.chat",
+        "hbse_model_discovery_purpose": "model.discovery"
+      }
+    },
+    {
+      "name": "together",
+      "display_name": "Together AI",
+      "kind": "openai_compatible",
+      "api_key_env": "TOGETHER_API_KEY",
+      "base_url": "https://api.together.xyz/v1",
+      "auth_type": "api_key",
+      "enabled": true
+    },
+    {
+      "name": "together-hbse",
+      "display_name": "Together AI via HBSE",
+      "kind": "hbse_openai_compatible",
+      "base_url": "https://api.together.xyz/v1",
+      "auth_type": "hbse",
+      "enabled": true,
+      "metadata": {
+        "hbse_secret_ref": "secret://vegvisir/providers/together/default",
+        "hbse_consumer": "vegvisir.provider.together-hbse",
+        "hbse_purpose": "model.chat",
+        "hbse_model_discovery_purpose": "model.discovery"
+      }
+    },
+    {
+      "name": "perplexity",
+      "display_name": "Perplexity",
+      "kind": "openai_compatible",
+      "api_key_env": "PERPLEXITY_API_KEY",
+      "base_url": "https://api.perplexity.ai",
+      "auth_type": "api_key",
+      "enabled": true
+    },
+    {
+      "name": "perplexity-hbse",
+      "display_name": "Perplexity via HBSE",
+      "kind": "hbse_openai_compatible",
+      "base_url": "https://api.perplexity.ai",
+      "auth_type": "hbse",
+      "enabled": true,
+      "metadata": {
+        "hbse_secret_ref": "secret://vegvisir/providers/perplexity/default",
+        "hbse_consumer": "vegvisir.provider.perplexity-hbse",
+        "hbse_purpose": "model.chat",
+        "hbse_model_discovery_purpose": "model.discovery"
+      }
+    },
+    {
+      "name": "cohere",
+      "display_name": "Cohere",
+      "kind": "cohere",
+      "api_key_env": "COHERE_API_KEY",
+      "base_url": "https://api.cohere.com/v2",
+      "auth_type": "api_key",
+      "enabled": true
+    },
+    {
+      "name": "xai",
+      "display_name": "xAI",
+      "kind": "openai_compatible",
+      "api_key_env": "XAI_API_KEY",
+      "base_url": "https://api.x.ai/v1",
+      "auth_type": "api_key",
+      "enabled": true
+    },
+    {
+      "name": "xai-hbse",
+      "display_name": "xAI via HBSE",
+      "kind": "hbse_openai_compatible",
+      "base_url": "https://api.x.ai/v1",
+      "auth_type": "hbse",
+      "enabled": true,
+      "metadata": {
+        "hbse_secret_ref": "secret://vegvisir/providers/xai/default",
+        "hbse_consumer": "vegvisir.provider.xai-hbse",
+        "hbse_purpose": "model.chat",
+        "hbse_model_discovery_purpose": "model.discovery"
+      }
+    },
+    {
+      "name": "azure-openai",
+      "display_name": "Azure OpenAI",
+      "kind": "azure_openai",
+      "api_key_env": "AZURE_OPENAI_API_KEY",
+      "auth_type": "api_key",
+      "enabled": true
+    },
+    {
+      "name": "azure-openai-hbse",
+      "display_name": "Azure OpenAI via HBSE",
+      "kind": "hbse_azure_openai",
+      "auth_type": "hbse",
+      "enabled": true,
+      "metadata": {
+        "hbse_secret_ref": "secret://vegvisir/providers/azure-openai/default",
+        "hbse_consumer": "vegvisir.provider.azure-openai-hbse",
+        "hbse_purpose": "model.chat",
+        "credential_header": "api-key",
+        "credential_prefix": "",
+        "api_version": "2024-10-21",
+        "configuration": "Set base_url or metadata.azure_endpoint to your Azure OpenAI endpoint and metadata.azure_deployment to the deployment name."
+      }
+    },
+    {
+      "name": "ollama",
+      "display_name": "Ollama Local",
+      "kind": "ollama",
+      "base_url": "http://localhost:11434",
+      "auth_type": "none",
+      "enabled": true
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+// A simple "constitutional" contract test
+contract TestConstitution {
+
+  section TaintTracking {
+    // Mark user input as untrusted
+    fact UserInput = untrusted("DELETE FROM users");
+
+    // Try to sanitize it
+    fact SafeInput = sanitize(UserInput);
+
+    // Rule: This should work - using sanitized data
+    rule SafeOperation {
+      emit log("Using safe data: ", SafeInput);
+    }
+
+    // Rule: This should trigger taint violation - using untrusted in control
+    rule DangerousOperation {
+      when UserInput contains "DELETE" {
+        emit dangerous("This uses tainted data in control flow!");
+      }
+    }
+  }
+
+  section CapabilityEnforcement {
+    // Test permit/deny based on capabilities
+    rule AllowedAction {
+      when true {
+        permit read_operation();
+      }
+    }
+
+    rule ForbiddenAction {
+      when true {
+        deny execute_code();
+      }
+    }
+  }
+
+  section FactDerivation {
+    // Simple derivation chain
+    fact A = 1 @ "input";
+    fact B = 2 @ "input";
+
+    rule DeriveC {
+      fact C = A + B @ "derived";
+    }
+
+    rule DeriveD {
+      when C > 2 {
+        fact D = "C is greater than 2" @ "conclusion";
+      }
+    }
+  }
+}

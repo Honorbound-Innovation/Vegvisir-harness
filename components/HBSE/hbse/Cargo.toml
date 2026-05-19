@@ -1,0 +1,34 @@
+[package]
+name = "hbse"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Hardware Bound Secrets Enclave"
+
+[dependencies]
+aes-gcm = "0.10"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive"] }
+ed25519-dalek = { version = "2.1", features = ["pkcs8", "pem"] }
+hmac = "0.12"
+libc = "0.2"
+pkcs8 = { version = "0.10", features = ["encryption", "pem", "getrandom"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+ureq = { version = "2.12", default-features = true }
+rand = "0.9"
+regex = "1.11"
+rusqlite = { version = "0.32", features = ["bundled"] }
+scrypt = "0.11"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha1 = "0.10"
+sha2 = "0.10"
+tempfile = "3.13"
+thiserror = "2"
+tss-esapi = "7.6"
+uuid = { version = "1.18", features = ["v4", "serde"] }
+zip = { version = "2.4", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+pretty_assertions = "1.4"

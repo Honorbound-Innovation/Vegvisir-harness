@@ -1,0 +1,46 @@
+{
+  "models": [
+    {"name": "demo-local", "provider": "demo", "display_name": "Demo Local", "context_window": 8192},
+    {"name": "demo-long-context", "provider": "demo", "display_name": "Demo Long Context", "context_window": 32768},
+
+    {"name": "gpt-5.5", "provider": "openai", "display_name": "GPT-5.5", "context_window": 400000},
+    {"name": "gpt-5.4", "provider": "openai", "display_name": "GPT-5.4", "context_window": 400000},
+    {"name": "gpt-5.4-mini", "provider": "openai", "display_name": "GPT-5.4 Mini", "context_window": 400000},
+    {"name": "gpt-5.3-codex", "provider": "openai", "display_name": "GPT-5.3 Codex", "context_window": 400000},
+    {"name": "gpt-5.3-codex-spark", "provider": "openai", "display_name": "GPT-5.3 Codex Spark", "context_window": 400000},
+    {"name": "gpt-5.2", "provider": "openai", "display_name": "GPT-5.2", "context_window": 400000},
+    {"name": "o4-mini", "provider": "openai", "display_name": "o4 Mini", "context_window": 200000},
+
+    {"name": "claude-opus-4-1", "provider": "anthropic", "display_name": "Claude Opus 4.1", "context_window": 200000},
+    {"name": "claude-sonnet-4-5", "provider": "anthropic", "display_name": "Claude Sonnet 4.5", "context_window": 200000},
+    {"name": "claude-haiku-4-5", "provider": "anthropic", "display_name": "Claude Haiku 4.5", "context_window": 200000},
+
+    {"name": "gemini-2.5-pro", "provider": "google", "display_name": "Gemini 2.5 Pro", "context_window": 1000000},
+    {"name": "gemini-2.5-flash", "provider": "google", "display_name": "Gemini 2.5 Flash", "context_window": 1000000},
+
+    {"name": "mistral-large-latest", "provider": "mistral", "display_name": "Mistral Large", "context_window": 128000},
+    {"name": "codestral-latest", "provider": "mistral", "display_name": "Codestral", "context_window": 256000},
+
+    {"name": "llama-3.3-70b-versatile", "provider": "groq", "display_name": "Llama 3.3 70B", "context_window": 128000},
+    {"name": "deepseek-r1-distill-llama-70b", "provider": "groq", "display_name": "DeepSeek R1 Distill 70B", "context_window": 128000},
+
+    {"name": "openai/gpt-5.4", "provider": "openrouter", "display_name": "OpenRouter GPT-5.4", "context_window": 400000},
+    {"name": "anthropic/claude-sonnet-4.5", "provider": "openrouter", "display_name": "OpenRouter Claude Sonnet 4.5", "context_window": 200000},
+
+    {"name": "deepseek-chat", "provider": "deepseek", "display_name": "DeepSeek Chat", "context_window": 128000},
+    {"name": "deepseek-reasoner", "provider": "deepseek", "display_name": "DeepSeek Reasoner", "context_window": 128000},
+
+    {"name": "meta-llama/Llama-3.3-70B-Instruct-Turbo", "provider": "together", "display_name": "Together Llama 3.3 70B", "context_window": 128000},
+    {"name": "Qwen/Qwen2.5-Coder-32B-Instruct", "provider": "together", "display_name": "Together Qwen2.5 Coder 32B", "context_window": 128000},
+
+    {"name": "sonar-pro", "provider": "perplexity", "display_name": "Perplexity Sonar Pro", "context_window": 200000},
+    {"name": "sonar-reasoning-pro", "provider": "perplexity", "display_name": "Perplexity Sonar Reasoning Pro", "context_window": 200000},
+
+    {"name": "command-a-03-2025", "provider": "cohere", "display_name": "Command A", "context_window": 256000},
+    {"name": "grok-4", "provider": "xai", "display_name": "Grok 4", "context_window": 256000},
+
+    {"name": "azure:gpt-5.4", "provider": "azure-openai", "display_name": "Azure GPT-5.4 Deployment", "context_window": 400000},
+    {"name": "llama3.1", "provider": "ollama", "display_name": "Ollama Llama 3.1", "context_window": 128000},
+    {"name": "qwen2.5-coder", "provider": "ollama", "display_name": "Ollama Qwen Coder", "context_window": 128000}
+  ]
+}

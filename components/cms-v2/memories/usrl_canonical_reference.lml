@@ -1,0 +1,57 @@
+memory {
+    id: "mem_2026_05_16_usrl_canonical_reference"
+    type: "reference"
+    title: "USRL canonical reference source"
+    created: "2026-05-16"
+    updated: "2026-05-16"
+    confidence: 0.98
+    source: "/mnt/storage/Projects/USRL/USRL_CANONICAL_SYNTAX_AND_LEXICON.md"
+    source_kind: "local-reference"
+
+    summary: """
+    USRL is a deterministic symbolic contract DSL whose canonical syntax is
+    C#-style braces and semicolon-terminated declarations. CMS should treat the
+    local /mnt/storage/Projects/USRL directory as the authoritative reference
+    for USRL syntax, runtime semantics, JSRT transport, and linked .pll/.cll
+    artifact formats.
+    """
+
+    claims {
+        claim {
+            id: "claim_001"
+            text: "USRL canonical authoring uses C#-style braces, explicit declarations, and semicolon-terminated statements."
+            confidence: 0.98
+            source: "/mnt/storage/Projects/USRL/USRL_CANONICAL_SYNTAX_AND_LEXICON.md"
+        }
+
+        claim {
+            id: "claim_002"
+            text: "USRL implementations must preserve determinism, evidence-first reasoning, auditability, closed-world defaults, and grammar-bound taint controls."
+            confidence: 0.98
+            source: "/mnt/storage/Projects/USRL/USRL_CANONICAL_SYNTAX_AND_LEXICON.md"
+        }
+
+        claim {
+            id: "claim_003"
+            text: "The USRL project currently includes a TypeScript parser, validator, resolver, runtime evaluator, JSRT transport, and .pll/.cll linked-library validation."
+            confidence: 0.95
+            source: "/mnt/storage/Projects/USRL/status.md"
+        }
+    }
+
+    links {
+        relates_to: "concept:USRL"
+        relates_to: "concept:JSRT"
+        relates_to: "format:.pll"
+        relates_to: "format:.cll"
+        constrains: "project:CMS"
+    }
+
+    retrieval {
+        embedding_priority: "high"
+        graph_priority: "high"
+        sql_priority: "normal"
+        reference_path: "/mnt/storage/Projects/USRL"
+        tags: ["USRL", "contract-dsl", "JSRT", "PLL", "CLL", "CMS"]
+    }
+}

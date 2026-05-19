@@ -1,0 +1,16 @@
+{
+  "Created": ["Initialized", "Terminated", "Failed", "Expired"],
+  "Initialized": ["Ready", "Terminated", "Failed", "Expired"],
+  "Ready": ["Active", "Paused", "Terminated", "Failed", "Expired"],
+  "Active": ["AwaitingInput", "AwaitingValidation", "AwaitingRemediation", "Paused", "Checkpointed", "Completed", "Failed", "Rejected", "Terminated", "Expired", "Active"],
+  "AwaitingInput": ["Active", "Paused", "Failed", "Terminated", "Expired"],
+  "AwaitingValidation": ["Active", "AwaitingRemediation", "Failed", "Rejected", "Terminated", "Expired"],
+  "AwaitingRemediation": ["Active", "Failed", "Rejected", "Terminated", "Expired"],
+  "Paused": ["Active", "Checkpointed", "Failed", "Terminated", "Expired"],
+  "Checkpointed": ["Active", "Paused", "Failed", "Terminated", "Expired"],
+  "Completed": ["Completed"],
+  "Rejected": ["Rejected"],
+  "Failed": ["Failed"],
+  "Terminated": ["Terminated"],
+  "Expired": ["Expired"]
+}

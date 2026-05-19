@@ -1,0 +1,25 @@
+{
+  "name": "usrl",
+  "version": "0.1.0",
+  "description": "USRL parser and contract runtime used by Vegvisir Agent Harness",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "usrl": "dist/src/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test dist/tests/**/*.test.js"
+  },
+  "keywords": [
+    "usrl",
+    "dsl",
+    "parser"
+  ],
+  "author": "Honorbound Innovation, LLC",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.15.17",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "skills": [
+    {"name": "code-review", "category": "engineering", "description": "Review changes for defects, regressions, and missing tests."},
+    {"name": "test-repair", "category": "engineering", "description": "Interpret failing tests and propose fixes."},
+    {"name": "repo-orientation", "category": "engineering", "description": "Map project structure before edits."},
+    {"name": "doc-drafting", "category": "documentation", "description": "Draft concise technical documentation."},
+    {"name": "session-summary", "category": "context", "description": "Summarize active context for compaction."},
+    {"name": "risk-check", "category": "safety", "description": "Identify unsafe external actions before execution."}
+  ]
+}

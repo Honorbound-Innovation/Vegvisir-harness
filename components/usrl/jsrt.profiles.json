@@ -1,0 +1,13 @@
+{
+  "profiles": [
+    "StrictDeterministic",
+    "Development",
+    "HighSecurity",
+    "OfflineBatch",
+    "LowToken",
+    "MultiAgent",
+    "ArtifactHeavy",
+    "ValidationFirst"
+  ],
+  "default": "StrictDeterministic"
+}

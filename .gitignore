@@ -1,0 +1,16 @@
+/target/
+**/target/
+**/node_modules/
+**/dist/
+**/.vegvisir/
+**/*.sqlite
+**/*.sqlite3
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/.env
+**/.env.*
+*.log
+*.tmp
+*.bak
+

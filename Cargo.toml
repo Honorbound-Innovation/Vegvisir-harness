@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = [
+    "vegvisir",
+    "components/cms-v2",
+    "components/HBSE/hbse",
+]
+

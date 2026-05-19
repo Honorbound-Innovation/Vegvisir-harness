@@ -1,0 +1,16 @@
+{
+  "tools": [
+    {"name": "read_file", "category": "filesystem", "description": "Read a UTF-8 file from the active workspace."},
+    {"name": "write_file", "category": "filesystem", "description": "Write a UTF-8 file after policy checks.", "risky": true},
+    {"name": "list_files", "category": "filesystem", "description": "List files under a workspace path."},
+    {"name": "run_command", "category": "execution", "description": "Run an allow-listed command in the workspace.", "risky": true},
+    {"name": "run_tests", "category": "verification", "description": "Run configured project tests."},
+    {"name": "audit_log", "category": "observability", "description": "Append structured audit events."},
+    {"name": "save_session", "category": "storage", "description": "Persist active session state."},
+    {"name": "cms_recall", "category": "memory", "description": "Search CMS memories for the local session user."},
+    {"name": "cms_recent", "category": "memory", "description": "Return recent CMS memories for the local session user."},
+    {"name": "cms_remember", "category": "memory", "description": "Store non-secret CMS memory for future recall."},
+    {"name": "eternium_prepare_context", "category": "context", "description": "Prepare an Eternium context packet using CMS recall and budgeting."},
+    {"name": "spawn_subagent", "category": "delegation", "description": "Delegate a bounded task to a child agent."}
+  ]
+}
