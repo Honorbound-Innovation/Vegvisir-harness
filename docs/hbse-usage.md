@@ -16,6 +16,12 @@ cargo build -p hbse
 
 ## Broker Service
 
+The easiest path is the repository root installer:
+
+```bash
+./install.sh --hbse-service user --enable-hbse-service --start-hbse-service
+```
+
 Install the broker service from the HBSE component:
 
 ```bash
@@ -108,4 +114,3 @@ hbse --vault "$HBSE_VAULT_PATH" policy test \
 ```
 
 The expected result is `allow`.
-

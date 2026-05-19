@@ -41,6 +41,24 @@ Prerequisites:
 - Node.js and npm for the USRL TypeScript package.
 - Linux is the primary runtime target for full HBSE service integration.
 
+Install the full system:
+
+```bash
+./install.sh
+```
+
+Install with a user HBSE broker service:
+
+```bash
+./install.sh --hbse-service user --enable-hbse-service --start-hbse-service
+```
+
+Uninstall:
+
+```bash
+./uninstall.sh
+```
+
 Build all Rust crates:
 
 ```bash
@@ -94,4 +112,3 @@ vegvisir --workspace /path/to/project --provider openai-hbse --model gpt-5.5 run
 This repository is distributed under the MIT License.
 
 Copyright (c) 2026 Honorbound Innovation, LLC.
-
