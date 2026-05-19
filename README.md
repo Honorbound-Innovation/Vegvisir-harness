@@ -150,6 +150,7 @@ The usage docs include command trees, explanations, and examples for the include
 - [CMS-v2 usage](docs/cms-v2-usage.md)
 - [HBSE usage](docs/hbse-usage.md)
 - [USRL usage](docs/usrl-usage.md)
+- [USRL language reference](docs/usrl-language-reference.md)
 - [MCP, tools, approvals, and security](docs/security-and-operations.md)
 - [Development and release workflow](docs/development.md)
 

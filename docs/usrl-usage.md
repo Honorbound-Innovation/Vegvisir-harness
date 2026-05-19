@@ -53,6 +53,8 @@ Commands:
 
 The current CLI prints this usage text when called with no command or an unknown command.
 
+For syntax, contract structure, expressions, built-ins, `.pll/.cll` libraries, and complete authoring examples, see [USRL language reference](usrl-language-reference.md).
+
 ## Commands
 
 ### `validate`
