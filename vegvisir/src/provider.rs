@@ -2441,7 +2441,7 @@ fn responses_payload(messages: &[ChatMessage], model: &ModelInfo) -> Value {
             "content": [{"type": "input_text", "text": fallback}],
         }));
     }
-    json!({
+    let mut payload = json!({
         "model": model.name,
         "instructions": instructions,
         "input": input,
@@ -2451,7 +2451,13 @@ fn responses_payload(messages: &[ChatMessage], model: &ModelInfo) -> Value {
         "store": false,
         "stream": true,
         "include": [],
-    })
+    });
+    if should_request_reasoning_summary(model) {
+        payload["reasoning"] = json!({
+            "summary": "auto"
+        });
+    }
+    payload
 }
 
 fn parse_response_sse_text_reader<R: BufRead>(
@@ -2460,6 +2466,8 @@ fn parse_response_sse_text_reader<R: BufRead>(
 ) -> anyhow::Result<String> {
     let mut output = String::new();
     let mut body_lines = Vec::new();
+    let mut emitted_reasoning_trace = false;
+    let mut emitted_answer_header = false;
     for line in reader.lines() {
         let line = line?;
         let line = line.trim();
@@ -2475,10 +2483,13 @@ fn parse_response_sse_text_reader<R: BufRead>(
             break;
         }
         let value: Value = serde_json::from_str(data)?;
-        if let Some(delta) = response_event_text(&value)? {
-            output.push_str(&delta);
-            on_delta(&delta);
-        }
+        handle_response_stream_text_event(
+            &value,
+            &mut output,
+            on_delta,
+            &mut emitted_reasoning_trace,
+            &mut emitted_answer_header,
+        )?;
     }
     if output.is_empty() && !body_lines.is_empty() {
         let value: Value = serde_json::from_str(&body_lines.join("\n"))?;
@@ -2507,6 +2518,8 @@ fn parse_response_sse_value_reader<R: BufRead>(
     let mut output_index_by_item_id = std::collections::BTreeMap::<String, usize>::new();
     let mut argument_deltas = std::collections::BTreeMap::<String, String>::new();
     let mut output_text = String::new();
+    let mut emitted_reasoning_trace = false;
+    let mut emitted_answer_header = false;
     for line in reader.lines() {
         let line = line?;
         let line = line.trim();
@@ -2566,12 +2579,19 @@ fn parse_response_sse_value_reader<R: BufRead>(
                     argument_deltas.insert(item_id.to_string(), arguments.to_string());
                 }
             }
-            Some("response.output_text.delta") => {
-                if let Some(delta) = value.get("delta").and_then(Value::as_str) {
-                    output_text.push_str(delta);
-                    on_delta(delta);
-                }
-            }
+            Some("response.reasoning_summary_text.delta")
+            | Some("response.reasoning_text.delta") => emit_reasoning_trace_delta(
+                value.get("delta").and_then(Value::as_str).unwrap_or(""),
+                on_delta,
+                &mut emitted_reasoning_trace,
+            ),
+            Some("response.output_text.delta") => emit_response_output_delta(
+                value.get("delta").and_then(Value::as_str).unwrap_or(""),
+                &mut output_text,
+                on_delta,
+                emitted_reasoning_trace,
+                &mut emitted_answer_header,
+            ),
             Some("response.failed") => {
                 let message = value
                     .pointer("/response/error/message")
@@ -2633,6 +2653,92 @@ fn parse_response_sse_value_reader<R: BufRead>(
         return Ok(serde_json::from_str(&body_lines.join("\n"))?);
     }
     anyhow::bail!("openai-sso response stream did not contain a completed response.");
+}
+
+fn should_request_reasoning_summary(model: &ModelInfo) -> bool {
+    model
+        .metadata
+        .get("reasoning_summary")
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| {
+            model.provider.contains("openai")
+                || model.name.starts_with("gpt-")
+                || model.name.starts_with('o')
+        })
+}
+
+fn handle_response_stream_text_event(
+    value: &Value,
+    output: &mut String,
+    on_delta: &mut dyn FnMut(&str),
+    emitted_reasoning_trace: &mut bool,
+    emitted_answer_header: &mut bool,
+) -> anyhow::Result<()> {
+    match value.get("type").and_then(Value::as_str) {
+        Some("response.reasoning_summary_text.delta") | Some("response.reasoning_text.delta") => {
+            emit_reasoning_trace_delta(
+                value.get("delta").and_then(Value::as_str).unwrap_or(""),
+                on_delta,
+                emitted_reasoning_trace,
+            );
+            Ok(())
+        }
+        Some("response.output_text.delta") => {
+            emit_response_output_delta(
+                value.get("delta").and_then(Value::as_str).unwrap_or(""),
+                output,
+                on_delta,
+                *emitted_reasoning_trace,
+                emitted_answer_header,
+            );
+            Ok(())
+        }
+        _ => {
+            if let Some(delta) = response_event_text(value)? {
+                emit_response_output_delta(
+                    &delta,
+                    output,
+                    on_delta,
+                    *emitted_reasoning_trace,
+                    emitted_answer_header,
+                );
+            }
+            Ok(())
+        }
+    }
+}
+
+fn emit_reasoning_trace_delta(
+    delta: &str,
+    on_delta: &mut dyn FnMut(&str),
+    emitted_reasoning_trace: &mut bool,
+) {
+    if delta.is_empty() {
+        return;
+    }
+    if !*emitted_reasoning_trace {
+        on_delta("\n\n**Thinking trace**\n\n");
+        *emitted_reasoning_trace = true;
+    }
+    on_delta(delta);
+}
+
+fn emit_response_output_delta(
+    delta: &str,
+    output: &mut String,
+    on_delta: &mut dyn FnMut(&str),
+    emitted_reasoning_trace: bool,
+    emitted_answer_header: &mut bool,
+) {
+    if delta.is_empty() {
+        return;
+    }
+    if emitted_reasoning_trace && !*emitted_answer_header {
+        on_delta("\n\n**Answer**\n\n");
+        *emitted_answer_header = true;
+    }
+    output.push_str(delta);
+    on_delta(delta);
 }
 
 fn response_event_text(value: &Value) -> anyhow::Result<Option<String>> {
@@ -3735,4 +3841,52 @@ fn truncate_utf8(value: &str, max_bytes: usize) -> &str {
         end -= 1;
     }
     &value[..end]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn responses_stream_surfaces_reasoning_summary_before_answer() -> anyhow::Result<()> {
+        let body = concat!(
+            "data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"Checking context.\"}\n\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Final answer.\"}\n\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"output_text\":\"Final answer.\",\"output\":[]}}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let mut visible = String::new();
+        let value = parse_response_sse_value(body, &mut |delta| visible.push_str(delta))?;
+
+        assert_eq!(
+            value.get("output_text").and_then(Value::as_str),
+            Some("Final answer.")
+        );
+        assert!(visible.contains("**Thinking trace**"));
+        assert!(visible.contains("Checking context."));
+        assert!(visible.contains("**Answer**"));
+        assert!(visible.ends_with("Final answer."));
+        Ok(())
+    }
+
+    #[test]
+    fn openai_responses_payload_requests_reasoning_summary_for_reasoning_models() {
+        let model = ModelInfo {
+            name: "gpt-5.5".to_string(),
+            provider: "openai".to_string(),
+            display_name: None,
+            context_window: Some(400000),
+            supports_streaming: true,
+            enabled: true,
+            metadata: Default::default(),
+        };
+        let payload = responses_payload(&[], &model);
+
+        assert_eq!(
+            payload
+                .pointer("/reasoning/summary")
+                .and_then(Value::as_str),
+            Some("auto")
+        );
+    }
 }

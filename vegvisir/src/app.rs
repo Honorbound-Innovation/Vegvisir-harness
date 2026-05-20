@@ -1874,6 +1874,7 @@ impl TuiApplication {
         match handle.join() {
             Ok(Ok(mut session)) => {
                 self.merge_live_tool_messages(&mut session);
+                self.merge_live_reasoning_trace(&mut session);
                 self.session = session;
                 self.pending_stream = None;
                 self.pending_cancel = None;
@@ -2057,6 +2058,29 @@ impl TuiApplication {
         completed
             .messages
             .splice(insert_at..insert_at, live_messages);
+    }
+
+    fn merge_live_reasoning_trace(&self, completed: &mut SessionState) {
+        let Some(live_content) = self
+            .session
+            .messages
+            .iter()
+            .rev()
+            .find(|message| {
+                message.role == "assistant" && message.content.contains("**Thinking trace**")
+            })
+            .map(|message| message.content.clone())
+        else {
+            return;
+        };
+        if let Some(completed_message) = completed
+            .messages
+            .iter_mut()
+            .rev()
+            .find(|message| message.role == "assistant")
+        {
+            completed_message.content = live_content;
+        }
     }
 
     fn pop_empty_assistant_placeholder(&mut self) {
