@@ -14,7 +14,8 @@ Vegvisir-harness/
 ├── components/
 │   ├── cms-v2/            # Continuum Memory System v2 runtime and CLI
 │   ├── HBSE/              # Rust Hardware Bound Secrets Enclave implementation
-│   └── usrl/              # USRL parser and contract runtime
+│   ├── usrl/              # USRL parser and contract runtime
+│   └── t3code-overlay/    # T3 Code source vendored for the Vegvisir overlay integration branch
 ├── docs/                  # Usage documentation for each included system
 ├── scripts/               # Helper scripts
 ├── install.sh             # Full-system installer
@@ -37,6 +38,7 @@ Vegvisir-harness/
 - Supports workspace/project switching with the right session and memory scope restored.
 - Renders Markdown in the TUI, including code fences and tables.
 - Exposes a JSONL app-server bridge for future overlay interfaces and desktop shells.
+- Includes a vendored T3 Code overlay source tree on the overlay integration branch.
 - Includes verification, eval, trace, and audit surfaces for production hardening.
 
 ## Install
