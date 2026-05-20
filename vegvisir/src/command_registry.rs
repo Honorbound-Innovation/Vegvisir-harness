@@ -102,6 +102,12 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
         ),
         cmd("/history", "show conversation history", "/history", &[]),
         cmd(
+            "/diff",
+            "show the current workspace git diff",
+            "/diff [--staged|--cached|--stat] [path]",
+            &[],
+        ),
+        cmd(
             "/select",
             "open plain transcript view for terminal selection",
             "/select",

@@ -2193,6 +2193,71 @@ fn tui_renders_common_language_code_fences() -> anyhow::Result<()> {
 }
 
 #[test]
+fn tui_renders_diff_fences_as_line_numbered_review_view() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+    app.renderer.viewport = Some((120, 36));
+    app.session.messages.push(ChatMessage {
+        role: "assistant".to_string(),
+        content: "```diff\ndiff --git a/src/lib.rs b/src/lib.rs\n@@ -7,2 +7,3 @@ fn demo() {\n-    let old = true;\n+    let new = true;\n+    println!(\"ok\");\n }\n```"
+            .to_string(),
+        attachments: Vec::new(),
+        created_at: Utc::now(),
+    });
+
+    let output = app.render();
+
+    assert!(output.contains("diff --git a/src/lib.rs b/src/lib.rs"));
+    assert!(output.contains("@@ -7,2 +7,3 @@ fn demo()"));
+    assert!(output.contains("    7 -"));
+    assert!(output.contains("    7 +"));
+    assert!(output.contains("    8 +"));
+    assert!(!output.contains("┌ diff"));
+    assert!(output.lines().all(|line| visible_width(line) <= 120));
+    Ok(())
+}
+
+#[test]
+fn diff_command_returns_workspace_git_diff_fence() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let home = tmp.path().join("home");
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(tmp.path())
+        .arg("init")
+        .output()?;
+    fs::write(tmp.path().join("sample.txt"), "old\n")?;
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(tmp.path())
+        .args(["add", "sample.txt"])
+        .output()?;
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(tmp.path())
+        .args([
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "user.name=Test",
+            "commit",
+            "-m",
+            "init",
+        ])
+        .output()?;
+    fs::write(tmp.path().join("sample.txt"), "new\n")?;
+
+    let mut app = TuiApplication::with_data_root(tmp.path(), &home)?;
+    let output = app.execute_command("/diff sample.txt")?.unwrap();
+
+    assert!(output.starts_with("Git diff"));
+    assert!(output.contains("```diff"));
+    assert!(output.contains("-old"));
+    assert!(output.contains("+new"));
+    Ok(())
+}
+
+#[test]
 fn command_registry_suggests_and_preserves_system_text() {
     let registry = CommandRegistry::with_defaults();
 

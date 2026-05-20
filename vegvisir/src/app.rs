@@ -391,6 +391,7 @@ impl TuiApplication {
             }
             "/cancel" => self.cancel_pending_response(),
             "/history" => self.history(),
+            "/diff" => self.diff_command(&args)?,
             "/save" => format!(
                 "Saved session to {}",
                 self.sessions.save(&self.session)?.display()
@@ -476,6 +477,68 @@ impl TuiApplication {
             })
             .collect::<Vec<_>>()
             .join("\n"))
+    }
+
+    fn diff_command(&self, args: &[String]) -> anyhow::Result<String> {
+        let staged = args
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "--staged" | "--cached" | "staged" | "cached"));
+        let stat = args
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "--stat" | "stat"));
+        let paths = args
+            .iter()
+            .filter(|arg| {
+                !matches!(
+                    arg.as_str(),
+                    "--staged" | "--cached" | "staged" | "cached" | "--stat" | "stat"
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut command = std::process::Command::new("git");
+        command
+            .arg("-C")
+            .arg(&self.cwd)
+            .arg("--no-pager")
+            .arg("diff")
+            .arg("--no-ext-diff")
+            .arg("--color=never");
+        if staged {
+            command.arg("--cached");
+        }
+        if stat {
+            command.arg("--stat");
+        }
+        if !paths.is_empty() {
+            command.arg("--");
+            for path in paths {
+                command.arg(path);
+            }
+        }
+        let output = command.output()?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!(
+                "git diff failed{}",
+                if stderr.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {stderr}")
+                }
+            );
+        }
+        let diff = String::from_utf8_lossy(&output.stdout).to_string();
+        if diff.trim().is_empty() {
+            return Ok(if staged {
+                "No staged changes.".to_string()
+            } else {
+                "No workspace changes.".to_string()
+            });
+        }
+        if stat {
+            return Ok(format!("Git diff stat\n\n```text\n{diff}\n```"));
+        }
+        Ok(format!("Git diff\n\n```diff\n{diff}\n```"))
     }
 
     fn config_command(&mut self, args: &[String]) -> anyhow::Result<String> {

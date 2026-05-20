@@ -335,6 +335,11 @@ pub mod theme {
                 "code_keyword" => "38;5;81",
                 "code_string" => "38;5;222",
                 "code_comment" => "38;5;244",
+                "diff_add" => "48;5;22;38;5;151",
+                "diff_del" => "48;5;52;38;5;224",
+                "diff_hunk" => "38;5;105",
+                "diff_header" => "38;5;75",
+                "diff_lineno" => "38;5;34",
                 "table" => "38;5;117",
                 "success" => &self.theme.success,
                 "warning" => &self.theme.warning,
@@ -1091,6 +1096,9 @@ pub mod layout {
     where
         I: Iterator<Item = &'a str>,
     {
+        if matches!(language.trim(), "diff" | "patch") {
+            return render_diff_block(lines, width, theme);
+        }
         let label = if language.is_empty() {
             "code"
         } else {
@@ -1124,6 +1132,99 @@ pub mod layout {
         }
         out.push(theme.paint(format!("└{}", "─".repeat(inner + 1)), "border"));
         out
+    }
+
+    fn render_diff_block<'a, I>(
+        lines: &mut std::iter::Peekable<I>,
+        width: usize,
+        theme: &ThemeRenderer,
+    ) -> Vec<String>
+    where
+        I: Iterator<Item = &'a str>,
+    {
+        let mut out = Vec::new();
+        let mut old_line = None::<usize>;
+        let mut new_line = None::<usize>;
+        for line in lines.by_ref() {
+            if line.trim_start().starts_with("```") {
+                break;
+            }
+            if line.starts_with("@@") {
+                let (old_start, new_start) = parse_hunk_header(line);
+                old_line = old_start;
+                new_line = new_start;
+                out.push(theme.paint(truncate(line, width), "diff_hunk"));
+                continue;
+            }
+            if line.starts_with("diff --git")
+                || line.starts_with("index ")
+                || line.starts_with("--- ")
+                || line.starts_with("+++ ")
+            {
+                out.push(theme.paint(truncate(line, width), "diff_header"));
+                continue;
+            }
+            let (number, marker, style) = if line.starts_with('-') {
+                let number = old_line;
+                old_line = old_line.map(|value| value + 1);
+                (number, "-", Some("diff_del"))
+            } else if line.starts_with('+') {
+                let number = new_line;
+                new_line = new_line.map(|value| value + 1);
+                (number, "+", Some("diff_add"))
+            } else {
+                let number = new_line.or(old_line);
+                old_line = old_line.map(|value| value + 1);
+                new_line = new_line.map(|value| value + 1);
+                (number, " ", None)
+            };
+            let content = line.strip_prefix(['-', '+', ' ']).unwrap_or(line);
+            for (index, visual) in wrap_code_line(content, width.saturating_sub(9).max(8))
+                .into_iter()
+                .enumerate()
+            {
+                let gutter = if index == 0 {
+                    format!(
+                        "{:>5} {marker} ",
+                        number.map_or(String::new(), |n| n.to_string())
+                    )
+                } else {
+                    "      | ".to_string()
+                };
+                if let Some(style) = style {
+                    let rendered = truncate(&format!("{gutter}{visual}"), width);
+                    out.push(theme.paint(pad_to_width(&rendered, width), style));
+                } else {
+                    let rendered = format!(
+                        "{}{}",
+                        theme.paint(gutter, "diff_lineno"),
+                        syntax_highlight(&visual, "rust", theme)
+                    );
+                    let rendered = truncate(&rendered, width);
+                    out.push(rendered);
+                }
+            }
+        }
+        out
+    }
+
+    fn parse_hunk_header(line: &str) -> (Option<usize>, Option<usize>) {
+        let mut old_start = None;
+        let mut new_start = None;
+        for part in line.split_whitespace() {
+            if let Some(rest) = part.strip_prefix('-') {
+                old_start = rest
+                    .split(',')
+                    .next()
+                    .and_then(|value| value.parse::<usize>().ok());
+            } else if let Some(rest) = part.strip_prefix('+') {
+                new_start = rest
+                    .split(',')
+                    .next()
+                    .and_then(|value| value.parse::<usize>().ok());
+            }
+        }
+        (old_start, new_start)
     }
 
     fn wrap_code_line(text: &str, width: usize) -> Vec<String> {
