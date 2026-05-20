@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::{Read, Write},
+    io::{BufRead, BufReader, Read, Write},
     os::unix::net::UnixStream,
     path::PathBuf,
     time::Instant,
@@ -440,10 +440,8 @@ impl OpenAICompatibleProviderAdapter {
         if let Some(api_key) = api_key {
             request = request.set("Authorization", &format!("Bearer {api_key}"));
         }
-        parse_response_sse_value(
-            &send_provider_json(request, payload, &self.config.name)?.into_string()?,
-            on_delta,
-        )
+        let response = send_provider_json(request, payload, &self.config.name)?;
+        parse_response_sse_value_reader(BufReader::new(response.into_reader()), on_delta)
     }
 
     fn post_chat_completion_streaming(
@@ -479,7 +477,7 @@ impl OpenAICompatibleProviderAdapter {
             request = request.set("Authorization", &format!("Bearer {api_key}"));
         }
         let response = send_provider_json(request, payload, &self.config.name)?;
-        parse_openai_sse_with_callback(&response.into_string()?, on_delta)
+        parse_openai_sse_reader(BufReader::new(response.into_reader()), on_delta)
     }
 
     fn post_chat_completion(
@@ -1769,7 +1767,9 @@ impl OpenAISsoProfileAdapter {
         .set("Content-Type", "application/json")
         .set("Accept", "text/event-stream");
         match request.send_json(payload) {
-            Ok(response) => parse_response_sse_value(&response.into_string()?, on_delta),
+            Ok(response) => {
+                parse_response_sse_value_reader(BufReader::new(response.into_reader()), on_delta)
+            }
             Err(ureq::Error::Status(401, _)) => {
                 anyhow::bail!("OpenAI SSO rejected the saved login. Run /auth openai-sso again.")
             }
@@ -1802,7 +1802,9 @@ impl OpenAISsoProfileAdapter {
         .set("Content-Type", "application/json")
         .set("Accept", "text/event-stream");
         match request.send_json(payload) {
-            Ok(response) => parse_response_sse_with_callback(&response.into_string()?, on_delta),
+            Ok(response) => {
+                parse_response_sse_text_reader(BufReader::new(response.into_reader()), on_delta)
+            }
             Err(ureq::Error::Status(401, _)) => {
                 anyhow::bail!("OpenAI SSO rejected the saved login. Run /auth openai-sso again.")
             }
@@ -2231,8 +2233,16 @@ fn parse_openai_sse_with_callback(
     text: &str,
     on_delta: &mut dyn FnMut(&str),
 ) -> anyhow::Result<String> {
+    parse_openai_sse_reader(BufReader::new(text.as_bytes()), on_delta)
+}
+
+fn parse_openai_sse_reader<R: BufRead>(
+    reader: R,
+    on_delta: &mut dyn FnMut(&str),
+) -> anyhow::Result<String> {
     let mut output = String::new();
-    for line in text.lines() {
+    for line in reader.lines() {
+        let line = line?;
         let line = line.trim();
         let Some(data) = line.strip_prefix("data:") else {
             continue;
@@ -2386,15 +2396,20 @@ fn responses_payload(messages: &[ChatMessage], model: &ModelInfo) -> Value {
     })
 }
 
-fn parse_response_sse_with_callback(
-    text: &str,
+fn parse_response_sse_text_reader<R: BufRead>(
+    reader: R,
     on_delta: &mut dyn FnMut(&str),
 ) -> anyhow::Result<String> {
     let mut output = String::new();
     let mut body_lines = Vec::new();
-    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+    for line in reader.lines() {
+        let line = line?;
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
         let Some(data) = line.strip_prefix("data:") else {
-            body_lines.push(line);
+            body_lines.push(line.to_string());
             continue;
         };
         let data = data.trim();
@@ -2421,15 +2436,27 @@ fn parse_response_sse_with_callback(
 }
 
 fn parse_response_sse_value(text: &str, on_delta: &mut dyn FnMut(&str)) -> anyhow::Result<Value> {
+    parse_response_sse_value_reader(BufReader::new(text.as_bytes()), on_delta)
+}
+
+fn parse_response_sse_value_reader<R: BufRead>(
+    reader: R,
+    on_delta: &mut dyn FnMut(&str),
+) -> anyhow::Result<Value> {
     let mut body_lines = Vec::new();
     let mut completed = None;
     let mut output = Vec::<Value>::new();
     let mut output_index_by_item_id = std::collections::BTreeMap::<String, usize>::new();
     let mut argument_deltas = std::collections::BTreeMap::<String, String>::new();
     let mut output_text = String::new();
-    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+    for line in reader.lines() {
+        let line = line?;
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
         let Some(data) = line.strip_prefix("data:") else {
-            body_lines.push(line);
+            body_lines.push(line.to_string());
             continue;
         };
         let data = data.trim();
