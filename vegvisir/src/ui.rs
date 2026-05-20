@@ -47,9 +47,20 @@ pub mod input {
                         .replacement
                         .as_deref()
                         .unwrap_or(&suggestion.value);
+                    let query = self
+                        .buffer
+                        .trim()
+                        .trim_start_matches('/')
+                        .to_ascii_lowercase();
+                    let replacement_search =
+                        replacement.trim_start_matches('/').to_ascii_lowercase();
+                    let description_search = suggestion.description.to_ascii_lowercase();
                     replacement.starts_with(&self.buffer)
                         || self.buffer.ends_with(' ')
                         || self.buffer.contains(' ')
+                        || (!query.is_empty()
+                            && (replacement_search.contains(&query)
+                                || description_search.contains(&query)))
                 })
                 .collect();
             self.selected_suggestion = self
@@ -83,6 +94,16 @@ pub mod input {
             let len = self.suggestions.len() as isize;
             self.selected_suggestion =
                 (self.selected_suggestion as isize + delta).rem_euclid(len) as usize;
+            true
+        }
+
+        pub fn move_selection_by_page(&mut self, delta: isize) -> bool {
+            if !self.buffer.starts_with('/') || self.suggestions.is_empty() {
+                return false;
+            }
+            let last = self.suggestions.len().saturating_sub(1) as isize;
+            let next = (self.selected_suggestion as isize + delta).clamp(0, last);
+            self.selected_suggestion = next as usize;
             true
         }
 
@@ -381,6 +402,7 @@ pub mod layout {
     use crate::{
         command_registry::CommandRegistry,
         core::{SessionState, SkillDefinition, ToolDefinition},
+        guardrails::ApprovalRequest,
         ui::{
             input::{InputState, Suggestion},
             theme::ThemeRenderer,
@@ -511,6 +533,7 @@ pub mod layout {
             suggestions: &[Suggestion],
             selected_suggestion: usize,
             chat_scroll_offset: usize,
+            pending_approvals: &[ApprovalRequest],
         ) -> String {
             let (width, height) = self
                 .viewport
@@ -541,6 +564,7 @@ pub mod layout {
                 rows.push(self.session_strip(session, width));
             }
             rows.extend(self.pending_attachments(session, width));
+            rows.extend(self.pending_approvals(pending_approvals, width));
             let autocomplete_height = if input.buffer.starts_with('/') && !suggestions.is_empty() {
                 suggestions.len().min(8) + 2
             } else {
@@ -826,6 +850,56 @@ pub mod layout {
                 })
                 .collect::<Vec<_>>();
             boxed(&lines, width, &self.theme, Some("attachments"))
+        }
+
+        fn pending_approvals(&self, approvals: &[ApprovalRequest], width: usize) -> Vec<String> {
+            let Some(request) = approvals.first() else {
+                return Vec::new();
+            };
+            let extra = approvals.len().saturating_sub(1);
+            let mut lines =
+                vec![
+                self.theme.paint(" approval required ", "warning"),
+                self.theme.paint(
+                    truncate(
+                        &format!(
+                            "? {} risk={} id={}",
+                            request.reason, request.risk_label, request.id
+                        ),
+                        width,
+                    ),
+                    "warning",
+                ),
+                truncate(
+                    &format!(
+                        "  tool={} args={}",
+                        request.tool_name,
+                        serde_json::to_string(&request.args).unwrap_or_default()
+                    ),
+                    width,
+                ),
+                self.theme.paint(
+                    truncate(
+                        "  [1] approve once and run    [2] allow for session and run    [3] deny",
+                        width,
+                    ),
+                    "heading",
+                ),
+                self.theme.paint(
+                    truncate(&format!("  inspect details: /approvals show {}", request.id), width),
+                    "dim",
+                ),
+            ];
+            if extra > 0 {
+                lines.push(self.theme.paint(
+                    truncate(
+                        &format!("  {extra} more pending approval(s). Use /approvals list."),
+                        width,
+                    ),
+                    "dim",
+                ));
+            }
+            lines
         }
 
         fn status_bar(&self, session: &SessionState, width: usize) -> String {
@@ -1887,6 +1961,10 @@ pub mod layout {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::Map;
+
+    use crate::guardrails::ApprovalRequest;
+
     use super::layout::LayoutRenderer;
 
     #[test]
@@ -1903,6 +1981,7 @@ mod tests {
             &[],
             0,
             app.chat_scroll_offset,
+            &[],
         );
 
         assert!(
@@ -1910,6 +1989,38 @@ mod tests {
                 .lines()
                 .all(|line| super::layout::visible_width(line) <= 72)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn layout_renderer_surfaces_pending_approval() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let app = crate::app::TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        let mut renderer = LayoutRenderer::default();
+        renderer.viewport = Some((96, 30));
+        let approval = ApprovalRequest {
+            id: "apr_test".to_string(),
+            reason: "Risky tool requires human approval: write_file".to_string(),
+            tool_name: "write_file".to_string(),
+            args: Map::new(),
+            risk_label: "write".to_string(),
+        };
+
+        let output = renderer.render_startup(
+            &app.session,
+            &app.commands,
+            &app.input,
+            &[],
+            0,
+            app.chat_scroll_offset,
+            &[approval],
+        );
+
+        assert!(output.contains("approval required"));
+        assert!(output.contains("[1] approve once and run"));
+        assert!(output.contains("[2] allow for session and run"));
+        assert!(output.contains("[3] deny"));
+        assert!(output.contains("/approvals show apr_test"));
         Ok(())
     }
 }

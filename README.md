@@ -41,6 +41,37 @@ Vegvisir-harness/
 - Includes a vendored T3 Code overlay source tree on the overlay integration branch.
 - Includes verification, eval, trace, and audit surfaces for production hardening.
 
+## Terminal UI
+
+The default `vegvisir` command opens the native terminal interface. The TUI is built for long-running agent work rather than a raw text stream:
+
+- Provider responses stream into the chat view as they arrive.
+- Scrolling up pauses follow mode so new output does not steal your place; `End` returns to the live bottom.
+- Mouse wheel scrolling works in the chat, command palette, inspector overlays, diff views, and approval queue.
+- `Ctrl+P` opens the command palette, and `/` opens slash command selection from an empty input.
+- Slash command selection supports arrow keys, `PageUp`, `PageDown`, `Home`, `End`, mouse wheel movement, and `Enter` to run the selected command.
+- `Ctrl+F` opens transcript search. Type a query, use `Enter` or `Down` for the next match, `Up` for the previous match, and `Esc` to close search.
+- Approval prompts are shown as an in-session modal. Use `Enter` or `A` to approve once, `S` to allow the matching action for the current session, and `D` to deny. The older `1`, `2`, and `3` shortcuts still work.
+- `Ctrl+C` cancels an in-flight model response first. If no response is running, it exits the TUI.
+- Markdown responses render with structured handling for code fences, tables, lists, diffs, and common source languages.
+- Inspector overlays keep command output readable for inventory-style commands such as `/models`, `/tools`, `/context`, `/system`, `/providers`, `/approvals`, and `/work`.
+
+Useful TUI commands:
+
+```text
+/help                 show commands and controls
+/models               list or refresh models for the active provider
+/provider             inspect or switch provider
+/model                inspect or switch model
+/workspace            switch project workspace and restore its active session
+/tools                inspect or adjust tool permissions
+/approvals            inspect pending tool approvals
+/diff                 show current workspace diff
+/work                 show recent activity, tool calls, and command events
+/system               print the active system prompt
+/context              inspect prepared context and memory behavior
+```
+
 ## Install
 
 Prerequisites:

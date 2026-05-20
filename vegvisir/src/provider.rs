@@ -20,6 +20,8 @@ use crate::{
 
 const TOOL_OBSERVATION_MODEL_MAX_BYTES: usize = 64 * 1024;
 const OPENAI_TOOL_LOOP_MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
+const DEFAULT_MAX_TOOL_ROUNDS: usize = 32;
+const HARD_MAX_TOOL_ROUNDS: usize = 256;
 
 pub fn direct_provider_auth_allowed() -> bool {
     if env_truthy("VEGVISIR_ALLOW_DIRECT_PROVIDER_AUTH") {
@@ -57,6 +59,14 @@ fn env_truthy(name: &str) -> bool {
             )
         })
         .unwrap_or(false)
+}
+
+fn max_tool_rounds() -> usize {
+    get_env("VEGVISIR_MAX_TOOL_ROUNDS")
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .map(|value| value.min(HARD_MAX_TOOL_ROUNDS))
+        .unwrap_or(DEFAULT_MAX_TOOL_ROUNDS)
 }
 
 pub trait ProviderAdapter {
@@ -374,7 +384,7 @@ impl ProviderAdapter for OpenAICompatibleProviderAdapter {
                 tools,
                 execute_tool,
                 &mut post,
-                8,
+                max_tool_rounds(),
             );
         }
         let api_key = optional_provider_env(&self.config)?;
@@ -399,7 +409,7 @@ impl ProviderAdapter for OpenAICompatibleProviderAdapter {
             tools,
             execute_tool,
             &mut post,
-            6,
+            max_tool_rounds(),
             on_delta,
         )
     }
@@ -643,7 +653,7 @@ impl ProviderAdapter for HBSEOpenAICompatibleProviderAdapter {
                 tools,
                 execute_tool,
                 &mut post,
-                8,
+                max_tool_rounds(),
             );
         }
         let mut post = |payload: Value| -> anyhow::Result<String> {
@@ -677,7 +687,7 @@ impl ProviderAdapter for HBSEOpenAICompatibleProviderAdapter {
             tools,
             execute_tool,
             &mut post,
-            6,
+            max_tool_rounds(),
             on_delta,
         )
     }
@@ -963,7 +973,7 @@ impl ProviderAdapter for HBSEAzureOpenAIProviderAdapter {
             tools,
             execute_tool,
             &mut post,
-            6,
+            max_tool_rounds(),
             on_delta,
         )
     }
@@ -1122,7 +1132,14 @@ impl ProviderAdapter for AnthropicProviderAdapter {
                 .set("Accept", "application/json");
             Ok(send_provider_json(request, payload, &self.config.name)?.into_json()?)
         };
-        anthropic_tool_loop(messages, model, tools, execute_tool, &mut post, 8)
+        anthropic_tool_loop(
+            messages,
+            model,
+            tools,
+            execute_tool,
+            &mut post,
+            max_tool_rounds(),
+        )
     }
 }
 
@@ -1238,7 +1255,7 @@ fn anthropic_tool_loop(
             .collect::<Vec<_>>();
         wire_messages.push(json!({"role": "user", "content": results}));
     }
-    anyhow::bail!("model exceeded Vegvisir tool-call round limit.")
+    anyhow::bail!("model exceeded Vegvisir tool-call round limit ({max_tool_rounds}).")
 }
 
 fn anthropic_tool_schema(tool: &Value) -> Value {
@@ -1318,7 +1335,14 @@ impl ProviderAdapter for HBSEAnthropicProviderAdapter {
             )?;
             provider_http_json_body(&self.config.name, response)
         };
-        anthropic_tool_loop(messages, model, tools, execute_tool, &mut post, 8)
+        anthropic_tool_loop(
+            messages,
+            model,
+            tools,
+            execute_tool,
+            &mut post,
+            max_tool_rounds(),
+        )
     }
 }
 
@@ -1430,7 +1454,7 @@ impl ProviderAdapter for GoogleProviderAdapter {
                 .set("Accept", "application/json");
             Ok(send_provider_json(request, payload, &self.config.name)?.into_json()?)
         };
-        google_tool_loop(messages, tools, execute_tool, &mut post, 8)
+        google_tool_loop(messages, tools, execute_tool, &mut post, max_tool_rounds())
     }
 }
 
@@ -1498,7 +1522,7 @@ impl ProviderAdapter for HBSEGoogleProviderAdapter {
             )?;
             provider_http_json_body(&self.config.name, response)
         };
-        google_tool_loop(messages, tools, execute_tool, &mut post, 8)
+        google_tool_loop(messages, tools, execute_tool, &mut post, max_tool_rounds())
     }
 }
 
@@ -1637,7 +1661,7 @@ fn google_tool_loop(
             .collect::<Vec<_>>();
         contents.push(json!({"role": "user", "parts": response_parts}));
     }
-    anyhow::bail!("model exceeded Vegvisir tool-call round limit.")
+    anyhow::bail!("model exceeded Vegvisir tool-call round limit ({max_tool_rounds}).")
 }
 
 fn google_tool_schema(tool: &Value) -> Value {
@@ -1717,7 +1741,7 @@ impl ProviderAdapter for OpenAISsoProfileAdapter {
         payload["stream"] = Value::Bool(true);
         payload["tool_choice"] = Value::String("auto".to_string());
         payload["tools"] = Value::Array(tools.iter().map(responses_tool_schema).collect());
-        for _ in 0..8 {
+        for _ in 0..max_tool_rounds() {
             let response = self.post_response_stream_json(payload.clone(), on_delta)?;
             let tool_calls = response_function_calls(&response);
             if tool_calls.is_empty() {
@@ -1747,7 +1771,10 @@ impl ProviderAdapter for OpenAISsoProfileAdapter {
                 }));
             }
         }
-        anyhow::bail!("model exceeded Vegvisir tool-call round limit.")
+        anyhow::bail!(
+            "model exceeded Vegvisir tool-call round limit ({}).",
+            max_tool_rounds()
+        )
     }
 }
 
@@ -1869,7 +1896,7 @@ fn responses_tool_loop_streaming(
             }));
         }
     }
-    anyhow::bail!("model exceeded Vegvisir tool-call round limit.")
+    anyhow::bail!("model exceeded Vegvisir tool-call round limit ({max_tool_rounds}).")
 }
 
 fn response_function_calls(response: &Value) -> Vec<ResponseFunctionCall> {
@@ -3130,7 +3157,7 @@ pub fn openai_tool_loop(
             "Tool-call round limit reached before the model produced a final answer. Latest tool observations:\n\n{summary}"
         ));
     }
-    anyhow::bail!("model exceeded Vegvisir tool-call round limit.")
+    anyhow::bail!("model exceeded Vegvisir tool-call round limit ({max_tool_rounds}).")
 }
 
 pub fn openai_tool_loop_streaming(
@@ -3199,7 +3226,7 @@ pub fn openai_tool_loop_streaming(
         on_delta(&message);
         return Ok(message);
     }
-    anyhow::bail!("model exceeded Vegvisir tool-call round limit.")
+    anyhow::bail!("model exceeded Vegvisir tool-call round limit ({max_tool_rounds}).")
 }
 
 #[derive(Default)]

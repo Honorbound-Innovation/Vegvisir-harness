@@ -27,6 +27,7 @@ pub mod sandbox;
 pub mod state;
 pub mod subagents;
 pub mod tools;
+pub mod tui2;
 pub mod types;
 pub mod ui;
 pub mod verification;

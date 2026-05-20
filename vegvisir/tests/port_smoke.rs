@@ -25,7 +25,7 @@ use vegvisir_rust::{
         ProviderConfig, ProviderRegistry, default_system_prompt,
     },
     environment::{load_environment_d, parse_environment_line},
-    guardrails::{GuardrailEngine, PermissionPolicy},
+    guardrails::{ApprovalRequest, GuardrailEngine, PermissionPolicy},
     memory::{ContextPrepareOptions, VegvisirCms, VegvisirCmsConfig, default_vegvisir_data_root},
     model::ScriptedModel,
     model_discovery::discover_provider_models,
@@ -1009,7 +1009,7 @@ fn provider_and_model_catalogs_load() -> anyhow::Result<()> {
     );
     assert_eq!(
         models.default_for_provider("xai-hbse").unwrap().name,
-        "grok-4"
+        "grok-4.3"
     );
     assert_eq!(
         models.default_for_provider("mistral-hbse").unwrap().name,
@@ -2255,6 +2255,139 @@ fn diff_command_returns_workspace_git_diff_fence() -> anyhow::Result<()> {
     assert!(output.contains("```diff"));
     assert!(output.contains("-old"));
     assert!(output.contains("+new"));
+    let overlay = app
+        .diff_overlay
+        .as_ref()
+        .expect("/diff opens review overlay");
+    assert_eq!(overlay.files_changed, 1);
+    assert_eq!(overlay.added_lines, 1);
+    assert_eq!(overlay.removed_lines, 1);
+    Ok(())
+}
+
+#[test]
+fn inspector_commands_open_tui_info_overlay() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let home = tmp.path().join("home");
+    let mut app = TuiApplication::with_data_root(tmp.path(), &home)?;
+
+    let output = app.execute_command("/models")?.unwrap();
+    assert!(output.contains("Available models for"));
+    let overlay = app
+        .info_overlay
+        .as_ref()
+        .expect("/models opens inspector overlay");
+    assert_eq!(overlay.title, "models");
+    assert!(overlay.body.contains("Available models for"));
+
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::PageUp,
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    assert!(app.info_overlay.is_some());
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Esc,
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    assert!(app.info_overlay.is_none());
+    Ok(())
+}
+
+#[test]
+fn work_command_opens_activity_overlay_and_mouse_scrolls_active_overlay() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let home = tmp.path().join("home");
+    let mut app = TuiApplication::with_data_root(tmp.path(), &home)?;
+    app.execute_command("/provider demo")?;
+    app.execute_command("/model demo-local")?;
+
+    let output = app.execute_command("/work")?.unwrap();
+    assert!(output.contains("Work activity for session"));
+    assert!(output.contains("Recent events"));
+    let overlay = app
+        .info_overlay
+        .as_ref()
+        .expect("/work opens activity overlay");
+    assert_eq!(overlay.title, "work activity");
+    assert!(overlay.body.contains("command_start"));
+
+    app.handle_mouse_event(crossterm::event::MouseEvent {
+        kind: crossterm::event::MouseEventKind::ScrollUp,
+        column: 0,
+        row: 0,
+        modifiers: crossterm::event::KeyModifiers::NONE,
+    });
+    assert_eq!(app.info_scroll_offset, 3);
+    assert_eq!(app.chat_scroll_offset, 0);
+    Ok(())
+}
+
+#[test]
+fn tui_approval_queue_selects_and_resolves_chosen_request() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let home = tmp.path().join("home");
+    let mut app = TuiApplication::with_data_root(tmp.path(), &home)?;
+    app.tool_executor
+        .guardrails
+        .approvals
+        .enqueue(ApprovalRequest {
+            id: "apr_a".to_string(),
+            reason: "Risky tool requires human approval: write_file".to_string(),
+            tool_name: "write_file".to_string(),
+            args: json!({"path": "a.txt", "content": "a"})
+                .as_object()
+                .unwrap()
+                .clone(),
+            risk_label: "write".to_string(),
+        });
+    app.tool_executor
+        .guardrails
+        .approvals
+        .enqueue(ApprovalRequest {
+            id: "apr_b".to_string(),
+            reason: "Risky tool requires human approval: run_command".to_string(),
+            tool_name: "run_command".to_string(),
+            args: json!({"command": ["echo", "ok"]})
+                .as_object()
+                .unwrap()
+                .clone(),
+            risk_label: "command".to_string(),
+        });
+
+    assert_eq!(app.approval_selected_index, 0);
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Down,
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    assert_eq!(app.approval_selected_index, 1);
+    app.handle_mouse_event(crossterm::event::MouseEvent {
+        kind: crossterm::event::MouseEventKind::ScrollUp,
+        column: 0,
+        row: 0,
+        modifiers: crossterm::event::KeyModifiers::NONE,
+    });
+    assert_eq!(app.approval_selected_index, 0);
+    app.handle_mouse_event(crossterm::event::MouseEvent {
+        kind: crossterm::event::MouseEventKind::ScrollDown,
+        column: 0,
+        row: 0,
+        modifiers: crossterm::event::KeyModifiers::NONE,
+    });
+    assert_eq!(app.approval_selected_index, 1);
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('d'),
+        crossterm::event::KeyModifiers::NONE,
+    ));
+
+    let pending = app.tool_executor.guardrails.approvals.pending_ids();
+    assert_eq!(pending, vec!["apr_a".to_string()]);
+    assert_eq!(app.approval_selected_index, 0);
+    assert!(
+        app.session
+            .messages
+            .last()
+            .is_some_and(|message| message.content.contains("Denied approval apr_b"))
+    );
     Ok(())
 }
 
@@ -2807,7 +2940,7 @@ fn tui_submit_command_appends_result_and_keeps_running() -> anyhow::Result<()> {
     app.handle_submit();
 
     assert!(app.running);
-    assert!(app.input.buffer.is_empty());
+    assert!(app.input.buffer.is_empty(), "buffer={:?}", app.input.buffer);
     assert_eq!(app.session.messages.len(), 1);
     assert_eq!(app.session.messages[0].role, "system");
     assert!(app.session.messages[0].content.contains("/models"));
@@ -3195,6 +3328,150 @@ fn tui_arrow_keys_move_input_cursor_for_text_editing() -> anyhow::Result<()> {
         crossterm::event::KeyModifiers::SHIFT,
     ));
     assert_eq!(app.input.buffer, ">helo!");
+    Ok(())
+}
+
+#[test]
+fn tui_command_palette_and_help_shortcuts_work() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let home = tmp.path().join("home");
+    let mut app = TuiApplication::with_data_root(tmp.path(), &home)?;
+
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('/'),
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    assert_eq!(app.input.buffer, "/");
+    assert!(app.command_palette_open);
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Esc,
+        crossterm::event::KeyModifiers::NONE,
+    ));
+
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('p'),
+        crossterm::event::KeyModifiers::CONTROL,
+    ));
+    assert_eq!(app.input.buffer, "/");
+    assert!(app.command_palette_open);
+    assert!(!app.input.suggestions.is_empty());
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('m'),
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    assert_eq!(app.input.buffer, "/m");
+    assert!(app.command_palette_open);
+    assert!(
+        app.input
+            .suggestions
+            .iter()
+            .any(|suggestion| suggestion.value == "/models")
+    );
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::PageDown,
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    assert!(app.input.selected_suggestion > 0);
+    app.input.selected_suggestion = 0;
+    app.handle_mouse_event(crossterm::event::MouseEvent {
+        kind: crossterm::event::MouseEventKind::ScrollDown,
+        column: 0,
+        row: 0,
+        modifiers: crossterm::event::KeyModifiers::NONE,
+    });
+    assert_eq!(app.input.selected_suggestion, 1);
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Home,
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    assert_eq!(app.input.selected_suggestion, 0);
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::End,
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    assert_eq!(
+        app.input.selected_suggestion,
+        app.input.suggestions.len().saturating_sub(1)
+    );
+    let models_index = app
+        .input
+        .suggestions
+        .iter()
+        .position(|suggestion| suggestion.value == "/models")
+        .expect("/models suggestion");
+    app.input.selected_suggestion = models_index;
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Enter,
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    assert!(!app.command_palette_open);
+    assert!(
+        app.session
+            .messages
+            .last()
+            .is_some_and(|message| message.content.contains("Available models for"))
+    );
+
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Esc,
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    assert!(app.info_overlay.is_none());
+
+    app.input.set_buffer("/models");
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Enter,
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    assert!(
+        app.session
+            .messages
+            .last()
+            .is_some_and(|message| message.content.contains("Available models for"))
+    );
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Esc,
+        crossterm::event::KeyModifiers::NONE,
+    ));
+
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('p'),
+        crossterm::event::KeyModifiers::CONTROL,
+    ));
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Esc,
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    assert!(app.input.buffer.is_empty());
+    assert!(!app.command_palette_open);
+
+    app.input.clear();
+    let message_count = app.session.messages.len();
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('?'),
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    assert!(app.help_overlay_open);
+    assert_eq!(app.session.messages.len(), message_count);
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Esc,
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    assert!(!app.help_overlay_open);
+
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('a'),
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Enter,
+        crossterm::event::KeyModifiers::SHIFT,
+    ));
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('b'),
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    assert_eq!(app.input.buffer, "a\nb");
     Ok(())
 }
 

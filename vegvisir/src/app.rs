@@ -12,10 +12,10 @@ use std::{
 };
 
 use crossterm::{
-    cursor::{Hide, MoveTo, Show},
+    cursor::{MoveTo, Show},
     event::{
-        self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyModifiers,
-        MouseEvent, MouseEventKind,
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind,
     },
     execute,
     terminal::{
@@ -35,7 +35,7 @@ use crate::{
         SessionStore, default_system_prompt, default_tool_definitions, load_skill_definitions,
     },
     environment::get_env,
-    guardrails::{GuardrailEngine, PermissionPolicy},
+    guardrails::{ApprovalRequest, GuardrailEngine, PermissionPolicy},
     mcp::{load_mcp_servers, register_mcp_tools},
     memory::{VegvisirCms, VegvisirCmsConfig, default_vegvisir_data_root},
     model_discovery::discover_provider_models,
@@ -44,6 +44,7 @@ use crate::{
     provider::{ConversationRunner, ProviderRouter, direct_provider_auth_allowed},
     subagents::{SubAgentStatus, SubAgentTaskRecord},
     tools::{ToolExecutor, ToolRegistry, build_builtin_registry_with_cms_and_mode},
+    types::ToolCall,
     ui::{
         input::{InputState, Suggestion},
         layout::LayoutRenderer,
@@ -78,10 +79,107 @@ pub struct TuiApplication {
     pending_background_jobs: Vec<JoinHandle<anyhow::Result<String>>>,
     pending_stream: Option<Receiver<StreamEvent>>,
     pending_cancel: Option<Arc<AtomicBool>>,
+    pub command_palette_open: bool,
+    pub help_overlay_open: bool,
+    pub diff_overlay: Option<DiffOverlay>,
+    pub diff_scroll_offset: usize,
+    pub info_overlay: Option<InfoOverlay>,
+    pub info_scroll_offset: usize,
+    pub approval_selected_index: usize,
+    pub search_open: bool,
+    pub search_query: String,
+    pub search_match_index: usize,
 }
 
 enum StreamEvent {
     Delta(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiffOverlay {
+    pub title: String,
+    pub diff: String,
+    pub files_changed: usize,
+    pub added_lines: usize,
+    pub removed_lines: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InfoOverlay {
+    pub title: String,
+    pub body: String,
+}
+
+fn command_matches_palette_query(name: &str, description: &str, raw: &str) -> bool {
+    let query = raw.trim().trim_start_matches('/').to_ascii_lowercase();
+    if query.is_empty() {
+        return true;
+    }
+    let name = name.to_ascii_lowercase();
+    let description = description.to_ascii_lowercase();
+    name.trim_start_matches('/').starts_with(&query)
+        || name.contains(&query)
+        || description.contains(&query)
+}
+
+fn should_refresh_suggestions_before_key(key: &KeyEvent) -> bool {
+    !matches!(
+        key.code,
+        KeyCode::Enter | KeyCode::Up | KeyCode::Down | KeyCode::Tab
+    )
+}
+
+fn diff_overlay_from_patch(title: &str, diff: &str) -> DiffOverlay {
+    let files_changed = diff
+        .lines()
+        .filter(|line| line.starts_with("diff --git "))
+        .count();
+    let added_lines = diff
+        .lines()
+        .filter(|line| line.starts_with('+') && !line.starts_with("+++"))
+        .count();
+    let removed_lines = diff
+        .lines()
+        .filter(|line| line.starts_with('-') && !line.starts_with("---"))
+        .count();
+    DiffOverlay {
+        title: title.to_string(),
+        diff: diff.to_string(),
+        files_changed,
+        added_lines,
+        removed_lines,
+    }
+}
+
+fn apply_scroll_delta(current: usize, delta: isize) -> usize {
+    if delta >= 0 {
+        current.saturating_add(delta as usize)
+    } else {
+        current.saturating_sub(delta.unsigned_abs())
+    }
+}
+
+fn should_show_info_overlay(command: &str, response: &str) -> bool {
+    if response.trim().is_empty() || response.lines().count() < 3 {
+        return false;
+    }
+    matches!(
+        command,
+        "/tools"
+            | "/skills"
+            | "/context"
+            | "/models"
+            | "/providers"
+            | "/sessions"
+            | "/projects"
+            | "/approvals"
+            | "/system"
+            | "/system-prompt"
+            | "/trace"
+            | "/config"
+            | "/mcp"
+            | "/hbse"
+    )
 }
 
 struct ProjectListEntry {
@@ -248,6 +346,16 @@ impl TuiApplication {
             pending_background_jobs: Vec::new(),
             pending_stream: None,
             pending_cancel: None,
+            command_palette_open: false,
+            help_overlay_open: false,
+            diff_overlay: None,
+            diff_scroll_offset: 0,
+            info_overlay: None,
+            info_scroll_offset: 0,
+            approval_selected_index: 0,
+            search_open: false,
+            search_query: String::new(),
+            search_match_index: 0,
         };
         app.rebuild_tooling_for_cms()?;
         let provider = app.session.current_provider.clone();
@@ -258,6 +366,7 @@ impl TuiApplication {
     pub fn render(&mut self) -> String {
         let suggestions = self.build_suggestions();
         self.input.update_suggestions(suggestions);
+        let pending_approvals = self.pending_approval_requests();
         self.renderer.render_startup(
             &self.session,
             &self.commands,
@@ -265,7 +374,17 @@ impl TuiApplication {
             &self.input.suggestions,
             self.input.selected_suggestion,
             self.chat_scroll_offset,
+            &pending_approvals,
         )
+    }
+
+    fn pending_approval_requests(&self) -> Vec<ApprovalRequest> {
+        self.tool_executor
+            .guardrails
+            .approvals
+            .pending()
+            .into_values()
+            .collect()
     }
 
     pub fn build_suggestions(&self) -> Vec<Suggestion> {
@@ -347,7 +466,9 @@ impl TuiApplication {
         self.commands
             .all()
             .into_iter()
-            .filter(|command| command.name.starts_with(raw))
+            .filter(|command| {
+                command_matches_palette_query(&command.name, &command.description, raw)
+            })
             .map(|command| {
                 Suggestion::new(
                     command.name.clone(),
@@ -430,6 +551,7 @@ impl TuiApplication {
             "/verify" => self.verify_command(&args),
             "/eval" => self.eval_command(&args)?,
             "/trace" => self.trace_command(&args)?,
+            "/work" => self.work_command(&args),
             "/subagents" => self.subagents_command(&args)?,
             "/mcp" => self.mcp_command(&args)?,
             "/hbse" => self.hbse_command(&args),
@@ -440,6 +562,7 @@ impl TuiApplication {
             }
             _ => format!("Unknown command: {command}"),
         };
+        self.update_command_overlay(&command, &response);
         self.logger.emit(
             "command_finish",
             json!({
@@ -449,6 +572,72 @@ impl TuiApplication {
             }),
         );
         Ok(Some(response))
+    }
+
+    fn update_command_overlay(&mut self, command: &str, response: &str) {
+        if should_show_info_overlay(command, response) {
+            self.info_scroll_offset = 0;
+            self.info_overlay = Some(InfoOverlay {
+                title: command.trim_start_matches('/').replace('-', " "),
+                body: response.to_string(),
+            });
+        }
+    }
+
+    fn work_command(&mut self, args: &[String]) -> String {
+        let limit = parse_limit(args, 40);
+        let body = self.work_activity_report(limit);
+        self.info_scroll_offset = 0;
+        self.info_overlay = Some(InfoOverlay {
+            title: "work activity".to_string(),
+            body: body.clone(),
+        });
+        body
+    }
+
+    fn work_activity_report(&self, limit: usize) -> String {
+        let mut events = self.logger.events();
+        if events.len() > limit {
+            events = events.split_off(events.len() - limit);
+        }
+        let mut lines = vec![
+            format!("Work activity for session {}", self.session.session_id),
+            format!("workspace: {}", self.cwd.display()),
+            format!("status: {}", self.session.status),
+            String::new(),
+        ];
+        if self.pending_send.is_some() {
+            lines.push("running: model response in progress".to_string());
+        }
+        if !self.session.activity.trim().is_empty() {
+            lines.push(format!("activity: {}", self.session.activity));
+        }
+        let pending = self.tool_executor.guardrails.approvals.pending();
+        if !pending.is_empty() {
+            lines.push(String::new());
+            lines.push("Pending approvals".to_string());
+            for approval in pending.values() {
+                lines.push(format!(
+                    "? {} {} approval_id={}",
+                    approval.risk_label, approval.tool_name, approval.id
+                ));
+            }
+        }
+        lines.push(String::new());
+        lines.push("Recent events".to_string());
+        if events.is_empty() {
+            lines.push("No trace events recorded yet.".to_string());
+        } else {
+            for event in events {
+                lines.push(format!(
+                    "{} {} {}",
+                    event.timestamp.format("%H:%M:%S"),
+                    event.name,
+                    compact_json(&event.payload)
+                ));
+            }
+        }
+        lines.join("\n")
     }
 
     fn trace_command(&self, args: &[String]) -> anyhow::Result<String> {
@@ -479,7 +668,7 @@ impl TuiApplication {
             .join("\n"))
     }
 
-    fn diff_command(&self, args: &[String]) -> anyhow::Result<String> {
+    fn diff_command(&mut self, args: &[String]) -> anyhow::Result<String> {
         let staged = args
             .iter()
             .any(|arg| matches!(arg.as_str(), "--staged" | "--cached" | "staged" | "cached"));
@@ -538,6 +727,9 @@ impl TuiApplication {
         if stat {
             return Ok(format!("Git diff stat\n\n```text\n{diff}\n```"));
         }
+        let overlay = diff_overlay_from_patch("Git diff", &diff);
+        self.diff_scroll_offset = 0;
+        self.diff_overlay = Some(overlay);
         Ok(format!("Git diff\n\n```diff\n{diff}\n```"))
     }
 
@@ -908,14 +1100,106 @@ impl TuiApplication {
     }
 
     pub fn handle_key_event(&mut self, key: KeyEvent) {
-        let suggestions = self.build_suggestions();
-        self.input.update_suggestions(suggestions);
+        if should_refresh_suggestions_before_key(&key) {
+            let suggestions = self.build_suggestions();
+            self.input.update_suggestions(suggestions);
+        }
+        if self.handle_search_key(key) {
+            self.redraw_requested = true;
+            return;
+        }
+        if self.handle_pending_approval_key(key) {
+            self.redraw_requested = true;
+            return;
+        }
+        if self.help_overlay_open {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('?') => self.help_overlay_open = false,
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.handle_ctrl_c();
+                }
+                _ => {}
+            }
+            self.redraw_requested = true;
+            return;
+        }
+        if self.diff_overlay.is_some() {
+            match key.code {
+                KeyCode::Esc => {
+                    self.diff_overlay = None;
+                    self.diff_scroll_offset = 0;
+                }
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.handle_ctrl_c();
+                }
+                KeyCode::PageUp => {
+                    self.diff_scroll_offset = self
+                        .diff_scroll_offset
+                        .saturating_add(self.chat_page_size());
+                }
+                KeyCode::PageDown => {
+                    self.diff_scroll_offset = self
+                        .diff_scroll_offset
+                        .saturating_sub(self.chat_page_size());
+                }
+                KeyCode::Home => self.diff_scroll_offset = usize::MAX / 2,
+                KeyCode::End => self.diff_scroll_offset = 0,
+                _ => {}
+            }
+            self.redraw_requested = true;
+            return;
+        }
+        if self.info_overlay.is_some() {
+            match key.code {
+                KeyCode::Esc => {
+                    self.info_overlay = None;
+                    self.info_scroll_offset = 0;
+                }
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.handle_ctrl_c();
+                }
+                KeyCode::PageUp => {
+                    self.info_scroll_offset = self
+                        .info_scroll_offset
+                        .saturating_add(self.chat_page_size());
+                }
+                KeyCode::PageDown => {
+                    self.info_scroll_offset = self
+                        .info_scroll_offset
+                        .saturating_sub(self.chat_page_size());
+                }
+                KeyCode::Home => self.info_scroll_offset = usize::MAX / 2,
+                KeyCode::End => self.info_scroll_offset = 0,
+                _ => {}
+            }
+            self.redraw_requested = true;
+            return;
+        }
         match key.code {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.running = false;
+                self.handle_ctrl_c();
+            }
+            KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.open_command_palette();
+            }
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.open_search();
+            }
+            KeyCode::Char('?') if key.modifiers.is_empty() && self.input.buffer.is_empty() => {
+                self.help_overlay_open = true;
+            }
+            KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.input.append_text("\n", false);
             }
             KeyCode::Enter => {
-                if !self.input.accept_suggestion() {
+                if self.command_palette_open {
+                    self.accept_palette_selection_for_execution();
+                    self.command_palette_open = false;
+                    self.handle_submit();
+                } else if self.should_execute_selected_slash_suggestion() {
+                    self.accept_palette_selection_for_execution();
+                    self.handle_submit();
+                } else {
                     self.handle_submit();
                 }
             }
@@ -923,6 +1207,10 @@ impl TuiApplication {
                 self.input.accept_suggestion();
             }
             KeyCode::Esc => {
+                if self.command_palette_open || self.input.buffer == "/" {
+                    self.input.clear();
+                }
+                self.command_palette_open = false;
                 self.input.update_suggestions(Vec::new());
             }
             KeyCode::Backspace => {
@@ -955,24 +1243,38 @@ impl TuiApplication {
                 self.input.move_cursor(1);
             }
             KeyCode::PageUp => {
-                self.chat_scroll_offset = self
-                    .chat_scroll_offset
-                    .saturating_add(self.chat_page_size());
+                if self.command_palette_open {
+                    self.input
+                        .move_selection_by_page(-(self.command_palette_page_size() as isize));
+                } else {
+                    self.chat_scroll_offset = self
+                        .chat_scroll_offset
+                        .saturating_add(self.chat_page_size());
+                }
             }
             KeyCode::PageDown => {
-                self.chat_scroll_offset = self
-                    .chat_scroll_offset
-                    .saturating_sub(self.chat_page_size());
+                if self.command_palette_open {
+                    self.input
+                        .move_selection_by_page(self.command_palette_page_size() as isize);
+                } else {
+                    self.chat_scroll_offset = self
+                        .chat_scroll_offset
+                        .saturating_sub(self.chat_page_size());
+                }
             }
             KeyCode::Home => {
-                if self.input.buffer.is_empty() {
+                if self.command_palette_open {
+                    self.input.selected_suggestion = 0;
+                } else if self.input.buffer.is_empty() {
                     self.chat_scroll_offset = usize::MAX / 2;
                 } else {
                     self.input.move_cursor_home();
                 }
             }
             KeyCode::End => {
-                if self.input.buffer.is_empty() {
+                if self.command_palette_open {
+                    self.input.selected_suggestion = self.input.suggestions.len().saturating_sub(1);
+                } else if self.input.buffer.is_empty() {
                     self.chat_scroll_offset = 0;
                 } else {
                     self.input.move_cursor_end();
@@ -981,15 +1283,268 @@ impl TuiApplication {
             KeyCode::Char(ch)
                 if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
             {
+                if ch == '/' && self.input.buffer.is_empty() && key.modifiers.is_empty() {
+                    self.open_command_palette();
+                    self.chat_scroll_offset = 0;
+                    self.redraw_requested = true;
+                    return;
+                }
                 self.input.append_text(&ch.to_string(), false);
                 self.chat_scroll_offset = 0;
             }
             _ => {}
         }
+        let suggestions = self.build_suggestions();
+        self.input.update_suggestions(suggestions);
         self.redraw_requested = true;
     }
 
+    fn open_command_palette(&mut self) {
+        self.input.set_buffer("/");
+        self.input.selected_suggestion = 0;
+        self.command_palette_open = true;
+        let suggestions = self.build_suggestions();
+        self.input.update_suggestions(suggestions);
+    }
+
+    fn accept_palette_selection_for_execution(&mut self) {
+        let replacement = self
+            .input
+            .suggestions
+            .get(self.input.selected_suggestion)
+            .map(|suggestion| {
+                suggestion
+                    .replacement
+                    .as_deref()
+                    .unwrap_or(&suggestion.value)
+                    .to_string()
+            });
+        if let Some(replacement) = replacement {
+            self.input.set_buffer(replacement);
+        }
+        self.input.suggestions.clear();
+        self.input.selected_suggestion = 0;
+    }
+
+    fn should_execute_selected_slash_suggestion(&self) -> bool {
+        let raw = self.input.buffer.trim();
+        if !raw.starts_with('/')
+            || raw.contains(char::is_whitespace)
+            || self.input.suggestions.is_empty()
+        {
+            return false;
+        }
+        let Some((command, _)) = self.commands.parse_with_aliases(raw) else {
+            return true;
+        };
+        self.commands.get(&command).is_none()
+    }
+
+    fn open_search(&mut self) {
+        self.search_open = true;
+        self.command_palette_open = false;
+        self.input.update_suggestions(Vec::new());
+        self.search_match_index = self
+            .search_match_index
+            .min(self.search_matches().len().saturating_sub(1));
+    }
+
+    fn handle_search_key(&mut self, key: KeyEvent) -> bool {
+        if !self.search_open {
+            return false;
+        }
+        match key.code {
+            KeyCode::Esc => {
+                self.search_open = false;
+                true
+            }
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.handle_ctrl_c();
+                true
+            }
+            KeyCode::Backspace => {
+                self.search_query.pop();
+                self.search_match_index = 0;
+                self.jump_to_search_match(0);
+                true
+            }
+            KeyCode::Enter | KeyCode::Down => {
+                self.jump_to_search_match(1);
+                true
+            }
+            KeyCode::Up => {
+                self.jump_to_search_match(-1);
+                true
+            }
+            KeyCode::Char(ch)
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+            {
+                self.search_query.push(ch);
+                self.search_match_index = 0;
+                self.jump_to_search_match(0);
+                true
+            }
+            _ => true,
+        }
+    }
+
+    pub fn search_matches(&self) -> Vec<usize> {
+        let query = self.search_query.trim().to_ascii_lowercase();
+        if query.is_empty() {
+            return Vec::new();
+        }
+        self.session
+            .messages
+            .iter()
+            .enumerate()
+            .filter_map(|(index, message)| {
+                let role_matches = message.role.to_ascii_lowercase().contains(&query);
+                let content_matches = message.content.to_ascii_lowercase().contains(&query);
+                (role_matches || content_matches).then_some(index)
+            })
+            .collect()
+    }
+
+    fn jump_to_search_match(&mut self, delta: isize) {
+        let matches = self.search_matches();
+        if matches.is_empty() {
+            self.search_match_index = 0;
+            return;
+        }
+        let len = matches.len() as isize;
+        self.search_match_index =
+            (self.search_match_index as isize + delta).rem_euclid(len) as usize;
+        let message_index = matches[self.search_match_index];
+        self.chat_scroll_offset = self.estimated_chat_scroll_offset_for_message(message_index);
+    }
+
+    fn estimated_chat_scroll_offset_for_message(&self, message_index: usize) -> usize {
+        self.session
+            .messages
+            .iter()
+            .skip(message_index + 1)
+            .map(estimated_message_line_count)
+            .sum()
+    }
+
+    fn handle_pending_approval_key(&mut self, key: KeyEvent) -> bool {
+        if !key.modifiers.is_empty() {
+            return false;
+        }
+        let pending_ids = self.tool_executor.guardrails.approvals.pending_ids();
+        if pending_ids.is_empty() {
+            return false;
+        }
+        self.approval_selected_index = self
+            .approval_selected_index
+            .min(pending_ids.len().saturating_sub(1));
+        let id = pending_ids[self.approval_selected_index].clone();
+        let message = match key.code {
+            KeyCode::Up => {
+                self.approval_selected_index = self.approval_selected_index.saturating_sub(1);
+                return true;
+            }
+            KeyCode::Down => {
+                self.approval_selected_index =
+                    (self.approval_selected_index + 1).min(pending_ids.len().saturating_sub(1));
+                return true;
+            }
+            KeyCode::Esc => {
+                self.approval_selected_index = 0;
+                return true;
+            }
+            KeyCode::Char('1') | KeyCode::Enter | KeyCode::Char('a') | KeyCode::Char('A') => {
+                match self
+                    .tool_executor
+                    .guardrails
+                    .approvals
+                    .approve_once_request(&id)
+                {
+                    Some(request) => self.execute_approved_request("Approved once", request),
+                    None => format!("Unknown pending approval: {id}"),
+                }
+            }
+            KeyCode::Char('2') | KeyCode::Char('s') | KeyCode::Char('S') => {
+                match self
+                    .tool_executor
+                    .guardrails
+                    .approvals
+                    .approve_for_session(&id)
+                {
+                    Some(request) => self.execute_approved_request(
+                        "Approved matching call for this running session",
+                        request,
+                    ),
+                    None => format!("Unknown pending approval: {id}"),
+                }
+            }
+            KeyCode::Char('3') | KeyCode::Char('d') | KeyCode::Char('D') => {
+                if self.tool_executor.guardrails.approvals.deny(&id) {
+                    format!("Denied approval {id}.")
+                } else {
+                    format!("Unknown pending approval: {id}")
+                }
+            }
+            _ => return false,
+        };
+        let remaining = self.tool_executor.guardrails.approvals.pending_len();
+        if remaining == 0 {
+            self.approval_selected_index = 0;
+        } else {
+            self.approval_selected_index = self.approval_selected_index.min(remaining - 1);
+        }
+        self.session.status = "ready".to_string();
+        self.session.activity.clear();
+        self.push_system_message(message);
+        self.autosave_session();
+        self.chat_scroll_offset = 0;
+        true
+    }
+
     pub fn handle_mouse_event(&mut self, mouse: MouseEvent) {
+        let delta = match mouse.kind {
+            MouseEventKind::ScrollUp => 3isize,
+            MouseEventKind::ScrollDown => -3isize,
+            _ => return,
+        };
+        let pending_approvals = self.tool_executor.guardrails.approvals.pending_len();
+        if pending_approvals > 0 {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    self.approval_selected_index = self.approval_selected_index.saturating_sub(1);
+                }
+                MouseEventKind::ScrollDown => {
+                    self.approval_selected_index =
+                        (self.approval_selected_index + 1).min(pending_approvals - 1);
+                }
+                _ => return,
+            }
+            self.redraw_requested = true;
+            return;
+        }
+        if self.command_palette_open {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    self.input.move_selection_by_page(-1);
+                }
+                MouseEventKind::ScrollDown => {
+                    self.input.move_selection_by_page(1);
+                }
+                _ => return,
+            }
+            self.redraw_requested = true;
+            return;
+        }
+        if self.diff_overlay.is_some() {
+            self.diff_scroll_offset = apply_scroll_delta(self.diff_scroll_offset, delta);
+            self.redraw_requested = true;
+            return;
+        }
+        if self.info_overlay.is_some() {
+            self.info_scroll_offset = apply_scroll_delta(self.info_scroll_offset, delta);
+            self.redraw_requested = true;
+            return;
+        }
         match mouse.kind {
             MouseEventKind::ScrollUp => {
                 self.chat_scroll_offset = self.chat_scroll_offset.saturating_add(3);
@@ -1004,7 +1559,10 @@ impl TuiApplication {
 
     pub fn run(&mut self) -> anyhow::Result<()> {
         let _terminal = TerminalGuard::enter()?;
-        self.paint()?;
+        let backend = ratatui::backend::CrosstermBackend::new(io::stdout());
+        let mut terminal = ratatui::Terminal::new(backend)?;
+        terminal.clear()?;
+        terminal.draw(|frame| crate::tui2::draw(frame, self))?;
         while self.running {
             if event::poll(Duration::from_millis(50))? {
                 match event::read()? {
@@ -1033,25 +1591,10 @@ impl TuiApplication {
                 || !self.pending_background_jobs.is_empty()
             {
                 self.redraw_requested = false;
-                self.paint()?;
+                terminal.draw(|frame| crate::tui2::draw(frame, self))?;
             }
         }
-        Ok(())
-    }
-
-    fn paint(&mut self) -> anyhow::Result<()> {
-        let mut stdout = io::stdout();
-        let rendered = self.render();
-        let cursor = self.input_cursor_position(&rendered);
-        execute!(stdout, Hide, MoveTo(0, 0))?;
-        write!(stdout, "{}", terminal_frame(&rendered))?;
-        execute!(
-            stdout,
-            Clear(ClearType::FromCursorDown),
-            MoveTo(cursor.0, cursor.1),
-            Show
-        )?;
-        stdout.flush()?;
+        terminal.show_cursor()?;
         Ok(())
     }
 
@@ -1068,29 +1611,6 @@ impl TuiApplication {
             .unwrap_or(80)
             .max(50);
         width.saturating_sub(2).max(1)
-    }
-
-    fn input_cursor_position(&self, rendered: &str) -> (u16, u16) {
-        let input_width = self.input_edit_width();
-        let visual_lines = self.input.visual_line_count(input_width);
-        let visible_lines = visual_lines.min(6).max(1);
-        let hidden_lines = visual_lines.saturating_sub(visible_lines);
-        let autocomplete_height =
-            if self.input.buffer.starts_with('/') && !self.input.suggestions.is_empty() {
-                self.input.suggestions.len().min(8) + 2
-            } else {
-                0
-            };
-        let rendered_lines = rendered.lines().count();
-        let input_start = rendered_lines.saturating_sub(autocomplete_height + visible_lines);
-        let (line, column) = self.input.visual_cursor_position(input_width);
-        let visible_line = line
-            .saturating_sub(hidden_lines)
-            .min(visible_lines.saturating_sub(1));
-        (
-            (2 + column.min(input_width)) as u16,
-            (input_start + visible_line) as u16,
-        )
     }
 
     fn push_system_message(&mut self, content: impl Into<String>) {
@@ -1407,6 +1927,14 @@ impl TuiApplication {
         "Cancelled in-flight model response.".to_string()
     }
 
+    fn handle_ctrl_c(&mut self) {
+        if self.pending_send.is_some() {
+            let _ = self.cancel_pending_response();
+        } else {
+            self.running = false;
+        }
+    }
+
     fn poll_stream_events(&mut self) {
         let mut deltas = Vec::new();
         if let Some(receiver) = &self.pending_stream {
@@ -1438,7 +1966,6 @@ impl TuiApplication {
                 .content
                 .push_str(&delta);
         }
-        self.chat_scroll_offset = 0;
         self.redraw_requested = true;
     }
 
@@ -1479,12 +2006,27 @@ impl TuiApplication {
             .max(5)
     }
 
+    fn command_palette_page_size(&self) -> usize {
+        self.renderer
+            .viewport
+            .map(|(_, lines)| usize::from(lines.min(12)))
+            .or_else(|| {
+                crossterm::terminal::size()
+                    .ok()
+                    .map(|(_, lines)| usize::from(lines.min(12)))
+            })
+            .unwrap_or(12)
+            .max(4)
+    }
+
     fn pulse_activity(&mut self) {
         if self.session.status != "streaming" {
             return;
         }
         self.session.activity_tick = self.session.activity_tick.saturating_add(1);
-        self.redraw_requested = true;
+        if self.session.activity_tick % 8 == 0 {
+            self.redraw_requested = true;
+        }
     }
 
     fn new_session(&mut self, args: &[String]) -> String {
@@ -3030,10 +3572,14 @@ impl TuiApplication {
                 let Some(id) = args.get(1) else {
                     return "Usage: /approvals approve <id>".to_string();
                 };
-                if self.tool_executor.guardrails.approvals.approve_once(id) {
-                    format!("Approved approval {id} for one matching tool call.")
-                } else {
-                    format!("Unknown pending approval: {id}")
+                match self
+                    .tool_executor
+                    .guardrails
+                    .approvals
+                    .approve_once_request(id)
+                {
+                    Some(request) => self.execute_approved_request("Approved once", request),
+                    None => format!("Unknown pending approval: {id}"),
                 }
             }
             Some("session")
@@ -3050,9 +3596,9 @@ impl TuiApplication {
                     .approvals
                     .approve_for_session(id)
                 {
-                    Some(request) => format!(
-                        "Approved matching {} call for this running session only.",
-                        request.tool_name
+                    Some(request) => self.execute_approved_request(
+                        "Approved matching call for this running session",
+                        request,
                     ),
                     None => format!("Unknown pending approval: {id}"),
                 }
@@ -3090,6 +3636,27 @@ impl TuiApplication {
             }
             Some(other) => format!("Unknown /approvals command: {other}"),
         }
+    }
+
+    fn execute_approved_request(
+        &mut self,
+        approval_message: &str,
+        request: ApprovalRequest,
+    ) -> String {
+        let tool_name = request.tool_name.clone();
+        let observation = self.tool_executor.execute(ToolCall {
+            name: request.tool_name,
+            args: request.args,
+        });
+        let status = if observation.ok { "ok" } else { "failed" };
+        let body = if observation.content.trim().is_empty() {
+            "(no output)".to_string()
+        } else {
+            observation.content
+        };
+        format!(
+            "{approval_message}: {tool_name}\nTool execution {status}.\n{body}\n\nIf this was part of a model task, send `continue` so the agent can inspect the result and proceed."
+        )
     }
 
     fn skills(&self) -> String {
@@ -4571,7 +5138,12 @@ impl TerminalGuard {
     fn enter() -> anyhow::Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
+        execute!(
+            stdout,
+            EnterAlternateScreen,
+            EnableBracketedPaste,
+            EnableMouseCapture
+        )?;
         stdout.flush()?;
         Ok(Self)
     }
@@ -4581,7 +5153,12 @@ impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
         let mut stdout = io::stdout();
-        let _ = execute!(stdout, DisableBracketedPaste, LeaveAlternateScreen);
+        let _ = execute!(
+            stdout,
+            DisableMouseCapture,
+            DisableBracketedPaste,
+            LeaveAlternateScreen
+        );
     }
 }
 
@@ -5326,6 +5903,17 @@ fn http_path_prefix_from_url(url: &str) -> Option<String> {
     })
 }
 
+fn estimated_message_line_count(message: &ChatMessage) -> usize {
+    let content_lines = message
+        .content
+        .lines()
+        .map(|line| (line.chars().count() / 80).saturating_add(1))
+        .sum::<usize>()
+        .max(1);
+    content_lines + 2
+}
+
+#[cfg(test)]
 pub(crate) fn terminal_frame(rendered: &str) -> String {
     rendered
         .split('\n')
@@ -5336,11 +5924,125 @@ pub(crate) fn terminal_frame(rendered: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::{StreamEvent, TuiApplication};
+    use crate::core::ChatMessage;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::sync::mpsc;
+
     #[test]
     fn terminal_frame_returns_carriage_on_each_rendered_line() {
         assert_eq!(
             super::terminal_frame("one\ntwo\nthree"),
             "one\x1b[K\r\ntwo\x1b[K\r\nthree\x1b[K"
         );
+    }
+
+    #[test]
+    fn stream_deltas_do_not_force_follow_when_user_scrolled_up() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: "existing".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        let (tx, rx) = mpsc::channel();
+        app.pending_stream = Some(rx);
+        app.chat_scroll_offset = 7;
+
+        tx.send(StreamEvent::Delta(" delta".to_string()))?;
+        app.poll_stream_events();
+
+        assert_eq!(
+            app.session.messages.last().unwrap().content,
+            "existing delta"
+        );
+        assert_eq!(app.chat_scroll_offset, 7);
+        assert!(app.redraw_requested);
+        Ok(())
+    }
+
+    #[test]
+    fn activity_pulse_throttles_idle_streaming_redraws() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.session.status = "streaming".to_string();
+        app.redraw_requested = false;
+
+        app.pulse_activity();
+        assert!(!app.redraw_requested);
+        for _ in 0..7 {
+            app.pulse_activity();
+        }
+        assert!(app.redraw_requested);
+        Ok(())
+    }
+
+    #[test]
+    fn chat_search_opens_filters_and_jumps_matches() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "first parser note".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        app.session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: "second auth note".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        app.session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: "third parser result".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        assert!(app.search_open);
+        for ch in "parser".chars() {
+            app.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        assert_eq!(app.search_query, "parser");
+        assert_eq!(app.search_matches(), vec![0, 2]);
+        assert_eq!(app.search_match_index, 0);
+        let first_offset = app.chat_scroll_offset;
+
+        app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.search_match_index, 1);
+        assert!(app.chat_scroll_offset < first_offset);
+        app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.search_open);
+        Ok(())
+    }
+
+    #[test]
+    fn ctrl_c_cancels_in_flight_response_before_quitting() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        let session = app.session.clone();
+        app.pending_send = Some(std::thread::spawn(move || Ok(session)));
+        app.session.status = "streaming".to_string();
+        app.running = true;
+
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+
+        assert!(app.running);
+        assert!(app.pending_send.is_none());
+        assert_eq!(app.session.status, "ready");
+        assert!(
+            app.session
+                .messages
+                .last()
+                .is_some_and(|message| message.content.contains("Cancelled in-flight"))
+        );
+
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(!app.running);
+        Ok(())
     }
 }

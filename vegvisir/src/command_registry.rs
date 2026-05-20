@@ -222,6 +222,12 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
             &["/traces"],
         ),
         cmd(
+            "/work",
+            "open recent work and tool activity view",
+            "/work [--limit N]",
+            &["/activity", "/timeline"],
+        ),
+        cmd(
             "/subagents",
             "inspect durable subagent task records",
             "/subagents [list|show <id-or-name>|cancel <id-or-name>]",
