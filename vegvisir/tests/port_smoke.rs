@@ -16,6 +16,7 @@ use tempfile::tempdir;
 use vegvisir_rust::{
     app::TuiApplication,
     attachments::extract_attachments,
+    bridge::{BridgeOptions, run_app_server_with_io},
     checkpoints::CheckpointStore,
     command_registry::CommandRegistry,
     context::ContextManager,
@@ -7146,6 +7147,194 @@ fn subagent_supervisor_persists_task_board_and_events() -> anyhow::Result<()> {
     assert_eq!(
         persisted.final_answer.as_deref(),
         Some("durable child result")
+    );
+    Ok(())
+}
+
+#[test]
+fn app_server_bridge_streams_demo_turn_and_reports_status() -> anyhow::Result<()> {
+    let workspace = tempdir()?;
+    let data_root = tempdir()?;
+    let input = [
+        json!({
+            "id": "start",
+            "method": "session.start",
+            "params": {
+                "workspace": workspace.path(),
+                "provider": "demo",
+                "model": "demo-local"
+            }
+        })
+        .to_string(),
+        json!({
+            "id": "turn",
+            "method": "turn.send",
+            "params": {
+                "content": "hello bridge"
+            }
+        })
+        .to_string(),
+        json!({
+            "id": "tools",
+            "method": "tools.list",
+            "params": {}
+        })
+        .to_string(),
+        json!({
+            "id": "providers",
+            "method": "providers.list",
+            "params": {}
+        })
+        .to_string(),
+        json!({
+            "id": "models",
+            "method": "models.list",
+            "params": {}
+        })
+        .to_string(),
+        json!({
+            "id": "messages",
+            "method": "session.messages",
+            "params": {}
+        })
+        .to_string(),
+        json!({
+            "id": "export",
+            "method": "session.exportMarkdown",
+            "params": {}
+        })
+        .to_string(),
+        json!({
+            "id": "memory",
+            "method": "memory.status",
+            "params": {}
+        })
+        .to_string(),
+        json!({
+            "id": "prompt",
+            "method": "system.prompt",
+            "params": {}
+        })
+        .to_string(),
+        json!({
+            "id": "status",
+            "method": "session.status",
+            "params": {}
+        })
+        .to_string(),
+        json!({
+            "id": "bye",
+            "method": "shutdown",
+            "params": {}
+        })
+        .to_string(),
+    ]
+    .join("\n");
+    let mut output = Vec::new();
+    run_app_server_with_io(
+        std::io::Cursor::new(input),
+        &mut output,
+        BridgeOptions {
+            workspace: workspace.path().to_path_buf(),
+            data_root: Some(data_root.path().to_path_buf()),
+            provider: Some("demo".to_string()),
+            model: Some("demo-local".to_string()),
+            agent: None,
+            dangerously_bypass_approvals_and_sandbox: false,
+        },
+    )?;
+
+    let output = String::from_utf8(output)?;
+    let events = output
+        .lines()
+        .map(serde_json::from_str::<Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert!(events.iter().any(|event| event["type"] == "server.ready"));
+    assert!(
+        events
+            .iter()
+            .any(|event| event["type"] == "session.started")
+    );
+    assert!(events.iter().any(|event| {
+        event["type"] == "content.delta"
+            && event["payload"]["text"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Demo response from demo-local")
+    }));
+    let completed = events
+        .iter()
+        .find(|event| event["type"] == "turn.completed")
+        .expect("turn completed event");
+    assert_eq!(completed["payload"]["session"]["provider"], "demo");
+    assert_eq!(completed["payload"]["session"]["model"], "demo-local");
+    let status = events
+        .iter()
+        .find(|event| event["type"] == "session.status" && event["id"] == "status")
+        .expect("status event");
+    assert_eq!(status["payload"]["messages"], 2);
+    let tools = events
+        .iter()
+        .find(|event| event["type"] == "tools.list")
+        .expect("tools list event");
+    assert!(
+        tools["payload"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == "read_file")
+    );
+    let providers = events
+        .iter()
+        .find(|event| event["type"] == "providers.list")
+        .expect("providers list event");
+    assert!(
+        providers["payload"]["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|provider| provider["name"] == "demo")
+    );
+    let models = events
+        .iter()
+        .find(|event| event["type"] == "models.list")
+        .expect("models list event");
+    assert!(
+        models["payload"]["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|model| model["name"] == "demo-local")
+    );
+    let messages = events
+        .iter()
+        .find(|event| event["type"] == "session.messages")
+        .expect("session messages event");
+    assert_eq!(messages["payload"]["messages"].as_array().unwrap().len(), 2);
+    let exported = events
+        .iter()
+        .find(|event| event["type"] == "session.exportMarkdown")
+        .expect("session export event");
+    assert!(
+        exported["payload"]["markdown"]
+            .as_str()
+            .unwrap()
+            .contains("hello bridge")
+    );
+    let memory = events
+        .iter()
+        .find(|event| event["type"] == "memory.status")
+        .expect("memory status event");
+    assert_eq!(memory["payload"]["cms"]["user_id"], "local-user");
+    let prompt = events
+        .iter()
+        .find(|event| event["type"] == "system.prompt")
+        .expect("system prompt event");
+    assert!(
+        prompt["payload"]["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("Vegvisir")
     );
     Ok(())
 }

@@ -750,6 +750,14 @@ impl TuiApplication {
     }
 
     pub fn send_headless(&mut self, content: &str) -> anyhow::Result<String> {
+        self.send_headless_streaming(content, &mut |_| {})
+    }
+
+    pub fn send_headless_streaming(
+        &mut self,
+        content: &str,
+        on_delta: &mut dyn FnMut(&str),
+    ) -> anyhow::Result<String> {
         let mut runner = ConversationRunner {
             provider: ProviderRouter::from_registry(&self.provider_registry)
                 .get(&self.session.current_provider)
@@ -766,7 +774,8 @@ impl TuiApplication {
             self.session.current_provider.clone(),
             self.session.current_model.clone(),
         )?;
-        let response = runner.send_with_envelope(&mut self.session, content, envelope)?;
+        let response =
+            runner.send_with_envelope_streaming(&mut self.session, content, envelope, on_delta)?;
         let _ = self.cms.complete_turn(content, &response);
         self.autosave_session();
         Ok(response)
@@ -1093,7 +1102,7 @@ impl TuiApplication {
         });
     }
 
-    fn autosave_session(&self) {
+    pub(crate) fn autosave_session(&self) {
         let _ = self.sessions.save(&self.session);
         self.remember_workspace_session(&self.cwd, &self.session.session_id);
     }

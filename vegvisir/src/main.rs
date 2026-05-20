@@ -152,6 +152,7 @@ fn main() -> anyhow::Result<()> {
             ),
             Some(Command::AppServer { workspace }) => run_app_server(BridgeOptions {
                 workspace,
+                data_root: None,
                 provider: cli.provider,
                 model: cli.model,
                 agent: cli.agent,
