@@ -1064,7 +1064,8 @@ fn draw_input(f: &mut Frame<'_>, app: &TuiApplication, area: Rect) {
         " message "
     };
     let border_style = if focused { CYAN } else { BORDER };
-    let lines = input_lines(&app.input, area.width.saturating_sub(4) as usize);
+    let max_rows = area.height.saturating_sub(2).max(1) as usize;
+    let lines = input_lines(&app.input, area.width.saturating_sub(4) as usize, max_rows);
     let paragraph = Paragraph::new(lines)
         .style(Style::default().fg(FG).bg(PANEL))
         .block(
@@ -1569,16 +1570,34 @@ fn command_palette_lines(
     lines
 }
 
-fn input_lines(input: &InputState, width: usize) -> Vec<Line<'static>> {
+fn input_lines(input: &InputState, width: usize, max_rows: usize) -> Vec<Line<'static>> {
+    let width = width.max(1);
+    let max_rows = max_rows.max(1);
     if input.buffer.is_empty() {
         return vec![Line::from(Span::styled(
             "Ask anything, @tag files/folders, use skills, or / for commands",
             Style::default().fg(DIM),
         ))];
     }
+    if should_collapse_paste(input, width) {
+        let marker = format!("[Pasted {} characters]", input.paste_char_count);
+        let mut lines = vec![Line::from(Span::styled(
+            truncate(&marker, width),
+            Style::default().fg(AMBER).add_modifier(Modifier::BOLD),
+        ))];
+        let preview_width = width.saturating_sub(2).max(1);
+        let preview = paste_tail_preview(&input.buffer, preview_width, max_rows.saturating_sub(1));
+        for line in preview {
+            lines.push(Line::from(vec![
+                Span::styled("  ", Style::default().fg(DIM)),
+                Span::styled(line, Style::default().fg(DIM)),
+            ]));
+        }
+        return tail_lines(lines, max_rows);
+    }
     let mut lines = Vec::new();
     for raw in input.buffer.lines() {
-        let wrapped = wrap_text(raw, width.max(1));
+        let wrapped = wrap_text(raw, width);
         if wrapped.is_empty() {
             lines.push(Line::from(""));
         } else {
@@ -1587,7 +1606,7 @@ fn input_lines(input: &InputState, width: usize) -> Vec<Line<'static>> {
             }
         }
     }
-    lines
+    tail_lines(lines, max_rows)
 }
 
 fn draw_status(f: &mut Frame<'_>, app: &TuiApplication, area: Rect) {
@@ -1768,6 +1787,13 @@ fn approval_arg_preview(
 
 fn set_input_cursor(f: &mut Frame<'_>, app: &TuiApplication, area: Rect) {
     let width = area.width.saturating_sub(4).max(1) as usize;
+    if should_collapse_paste(&app.input, width) {
+        let marker = format!("[Pasted {} characters]", app.input.paste_char_count);
+        let x = area.x + 2 + truncate(&marker, width).width().min(width) as u16;
+        let y = area.y + 1;
+        f.set_cursor_position(Position::new(x, y));
+        return;
+    }
     let (line, col) = app.input.visual_cursor_position(width);
     let max_content_rows = area.height.saturating_sub(2).max(1) as usize;
     let row = line.min(max_content_rows.saturating_sub(1)) as u16;
@@ -1778,8 +1804,45 @@ fn set_input_cursor(f: &mut Frame<'_>, app: &TuiApplication, area: Rect) {
 
 fn input_height(input: &InputState, terminal_width: u16) -> u16 {
     let width = terminal_width.saturating_sub(4).max(1) as usize;
+    if should_collapse_paste(input, width) {
+        return 4;
+    }
     let rows = input.visual_line_count(width).min(8).max(1) as u16;
     rows + 2
+}
+
+fn should_collapse_paste(input: &InputState, width: usize) -> bool {
+    input.paste_char_count > width.max(80)
+}
+
+fn paste_tail_preview(text: &str, width: usize, max_rows: usize) -> Vec<String> {
+    if max_rows == 0 {
+        return Vec::new();
+    }
+    let mut pieces = Vec::new();
+    for raw in text.lines() {
+        let wrapped = wrap_text(raw, width);
+        if wrapped.is_empty() {
+            pieces.push(String::new());
+        } else {
+            pieces.extend(wrapped);
+        }
+    }
+    tail_strings(pieces, max_rows)
+}
+
+fn tail_lines(mut lines: Vec<Line<'static>>, max_rows: usize) -> Vec<Line<'static>> {
+    if lines.len() > max_rows {
+        lines.drain(0..lines.len() - max_rows);
+    }
+    lines
+}
+
+fn tail_strings(mut lines: Vec<String>, max_rows: usize) -> Vec<String> {
+    if lines.len() > max_rows {
+        lines.drain(0..lines.len() - max_rows);
+    }
+    lines
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
@@ -1814,6 +1877,13 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let mut current = String::new();
     for word in text.split_whitespace() {
+        if word.width() > width {
+            if !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+            }
+            lines.extend(wrap_preserve(word, width));
+            continue;
+        }
         let next_width = if current.is_empty() {
             word.width()
         } else {
@@ -1907,6 +1977,39 @@ mod tests {
         assert!(rendered.contains("diff"));
         assert!(rendered.contains("-old"));
         assert!(rendered.contains("+new"));
+    }
+
+    #[test]
+    fn ratatui_input_collapses_large_paste_marker() {
+        let mut input = InputState::default();
+        input.append_text(&"x".repeat(240), true);
+
+        let lines = input_lines(&input, 40, 4);
+        let rendered = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("[Pasted 240 characters]"));
+        assert!(!rendered.contains(&"x".repeat(80)));
+        assert!(lines.len() <= 4);
+    }
+
+    #[test]
+    fn ratatui_wraps_unformatted_paste_without_overflow() {
+        let width = 24;
+        let wrapped = wrap_text(&"a".repeat(97), width);
+
+        assert!(wrapped.len() > 1);
+        assert!(wrapped.iter().all(|line| line.width() <= width));
+
+        let markdown = render_markdown(&"b".repeat(97), width, Style::default().fg(FG));
+        for line in markdown {
+            for span in line.spans {
+                assert!(span.content.width() <= width + 2, "{}", span.content);
+            }
+        }
     }
 
     #[test]
