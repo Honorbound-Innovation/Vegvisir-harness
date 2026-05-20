@@ -1024,7 +1024,7 @@ impl TuiApplication {
             }
         }
         terminal.clear_prompt()?;
-        writeln!(io::stdout(), "exiting Vegvisir")?;
+        terminal_write_line(&mut io::stdout(), "exiting Vegvisir")?;
         Ok(())
     }
 
@@ -4543,7 +4543,7 @@ impl TranscriptTerminal {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, EnableBracketedPaste)?;
-        writeln!(stdout)?;
+        terminal_write_line(&mut stdout, "")?;
         stdout.flush()?;
         Ok(Self {
             prompt_lines: 0,
@@ -4554,20 +4554,18 @@ impl TranscriptTerminal {
     fn print_startup(&mut self, app: &TuiApplication) -> anyhow::Result<()> {
         let mut stdout = io::stdout();
         let width = transcript_width();
-        writeln!(
-            stdout,
-            "{}",
-            ansi_bold(&format!(
+        terminal_write_line(
+            &mut stdout,
+            &ansi_bold(&format!(
                 "Vegvisir  provider={}  model={}  workspace={}",
                 app.session.current_provider,
                 app.session.current_model,
                 app.cwd.display()
-            ))
+            )),
         )?;
-        writeln!(
-            stdout,
-            "{}",
-            ansi_dim(&format!(
+        terminal_write_line(
+            &mut stdout,
+            &ansi_dim(&format!(
                 "session={}  tools={}  skills={}  /help for commands",
                 app.session.session_id,
                 app.session
@@ -4580,14 +4578,13 @@ impl TranscriptTerminal {
                     .iter()
                     .filter(|skill| skill.enabled)
                     .count()
-            ))
+            )),
         )?;
-        writeln!(stdout, "{}", ansi_dim(&"─".repeat(width.min(120))))?;
+        terminal_write_line(&mut stdout, &ansi_dim(&"─".repeat(width.min(120))))?;
         if app.session.messages.is_empty() {
-            writeln!(
-                stdout,
-                "{}",
-                ansi_dim("Ready. Type a request, paste context, or use /help.")
+            terminal_write_line(
+                &mut stdout,
+                &ansi_dim("Ready. Type a request, paste context, or use /help."),
             )?;
         } else {
             for message in &app.session.messages {
@@ -4628,17 +4625,19 @@ impl TranscriptTerminal {
             if index + 1 == visible.len() {
                 write!(stdout, "{prompt}{line}")?;
             } else {
-                writeln!(stdout, "{prompt}{line}")?;
+                terminal_write_line(&mut stdout, &format!("{prompt}{line}"))?;
             }
         }
         if app.input.buffer.starts_with('/') && !app.input.suggestions.is_empty() {
-            writeln!(stdout)?;
+            terminal_write_line(&mut stdout, "")?;
             for suggestion in app.input.suggestions.iter().take(5) {
-                writeln!(
-                    stdout,
-                    "  {}  {}",
-                    ansi_info(&suggestion.value),
-                    ansi_dim(&suggestion.description)
+                terminal_write_line(
+                    &mut stdout,
+                    &format!(
+                        "  {}  {}",
+                        ansi_info(&suggestion.value),
+                        ansi_dim(&suggestion.description)
+                    ),
                 )?;
             }
         }
@@ -4724,14 +4723,14 @@ impl TranscriptTerminal {
             write!(stdout, "{}  ", ansi_success("agent"))?;
             self.stream_open = true;
         }
-        write!(stdout, "{}", &content[previous_len..])?;
+        terminal_write_text(&mut stdout, &content[previous_len..])?;
         stdout.flush()?;
         Ok(Some((index, content.len())))
     }
 
     fn finish_stream_line(&mut self) -> anyhow::Result<()> {
         if self.stream_open {
-            writeln!(io::stdout())?;
+            terminal_write_line(&mut io::stdout(), "")?;
             self.stream_open = false;
         }
         Ok(())
@@ -4777,25 +4776,36 @@ fn print_transcript_message(
         let wrapped = transcript_wrap(logical, available);
         for line in wrapped {
             if first {
-                writeln!(stdout, "{label}  {line}")?;
+                terminal_write_line(stdout, &format!("{label}  {line}"))?;
                 first = false;
             } else {
-                writeln!(stdout, "{:<6} {line}", "")?;
+                terminal_write_line(stdout, &format!("{:<6} {line}", ""))?;
             }
         }
     }
     if first {
-        writeln!(stdout, "{label}")?;
+        terminal_write_line(stdout, &label)?;
     }
     if !message.attachments.is_empty() {
-        writeln!(
+        terminal_write_line(
             stdout,
-            "{:<6} {}",
-            "",
-            ansi_dim(&format!("{} attachment(s)", message.attachments.len()))
+            &format!(
+                "{:<6} {}",
+                "",
+                ansi_dim(&format!("{} attachment(s)", message.attachments.len()))
+            ),
         )?;
     }
     Ok(())
+}
+
+fn terminal_write_line(stdout: &mut impl Write, line: &str) -> io::Result<()> {
+    write!(stdout, "{line}\r\n")
+}
+
+fn terminal_write_text(stdout: &mut impl Write, text: &str) -> io::Result<()> {
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    write!(stdout, "{}", normalized.replace('\n', "\r\n"))
 }
 
 fn transcript_input_lines(text: &str, width: usize) -> Vec<String> {
