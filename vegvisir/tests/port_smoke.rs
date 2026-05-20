@@ -1173,6 +1173,7 @@ fn conversation_runner_preserves_selected_alias_provider() -> anyhow::Result<()>
             models: ModelRegistry::default_catalog()?,
             tools: None,
             tool_executor: None,
+            event_sink: None,
         };
         let workspace = tempdir()?;
         let mut session =
@@ -1209,6 +1210,7 @@ fn conversation_runner_does_not_send_saved_ui_notes_as_system_prompt() -> anyhow
         models: ModelRegistry::default_catalog()?,
         tools: None,
         tool_executor: None,
+        event_sink: None,
     };
     let workspace = tempdir()?;
     let mut session =
@@ -2544,6 +2546,26 @@ fn application_executes_core_commands_and_demo_runner() -> anyhow::Result<()> {
         app.execute_command("/tools status")?
             .unwrap()
             .contains("Human approval: required")
+    );
+    assert!(
+        app.execute_command("/tool-limit")?
+            .unwrap()
+            .contains("Max tool-call rounds per turn")
+    );
+    assert!(
+        app.execute_command("/tool-limit 64")?
+            .unwrap()
+            .contains("set to 64")
+    );
+    assert!(
+        app.execute_command("/tools max-rounds 65")?
+            .unwrap()
+            .contains("set to 65")
+    );
+    assert!(
+        app.execute_command("/tool-limit default")?
+            .unwrap()
+            .contains("default/environment")
     );
     assert_eq!(
         app.execute_command("/approvals")?.unwrap(),
@@ -5725,6 +5747,7 @@ fn cms_envelope_send_includes_harness_system_prompt() -> anyhow::Result<()> {
         models,
         tools: None,
         tool_executor: None,
+        event_sink: None,
     };
 
     runner.send_with_envelope(&mut session, "user turn", envelope)?;
@@ -6867,6 +6890,7 @@ fn native_tool_call_executes_through_conversation_runner_executor() -> anyhow::R
         models,
         tools: Some(tool_registry),
         tool_executor: Some(tool_executor),
+        event_sink: None,
     };
 
     let response = runner.send(&mut session, "what files are here?")?;
@@ -6925,6 +6949,7 @@ fn cms_envelope_path_exposes_tool_schemas_to_tool_capable_models() -> anyhow::Re
         models,
         tools: Some(tool_registry),
         tool_executor: Some(tool_executor),
+        event_sink: None,
     };
 
     let response = runner.send_with_envelope(&mut session, "what files are here?", envelope)?;
@@ -6964,6 +6989,7 @@ fn cms_envelope_path_preserves_recent_chat_history() -> anyhow::Result<()> {
         models: ModelRegistry::default_catalog()?,
         tools: None,
         tool_executor: None,
+        event_sink: None,
     };
     let mut session = vegvisir_rust::core::SessionState::new(tmp.path(), Vec::new(), Vec::new());
     session.messages.push(ChatMessage {
@@ -7044,6 +7070,7 @@ fn approval_required_tool_call_stops_runner_and_leaves_pending_request() -> anyh
         models,
         tools: Some(tool_registry),
         tool_executor: Some(tool_executor),
+        event_sink: None,
     };
 
     let error = runner

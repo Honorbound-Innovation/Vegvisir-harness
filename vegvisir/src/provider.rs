@@ -3,6 +3,10 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     os::unix::net::UnixStream,
     path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::Instant,
 };
 
@@ -22,6 +26,7 @@ const TOOL_OBSERVATION_MODEL_MAX_BYTES: usize = 64 * 1024;
 const OPENAI_TOOL_LOOP_MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 const DEFAULT_MAX_TOOL_ROUNDS: usize = 32;
 const HARD_MAX_TOOL_ROUNDS: usize = 256;
+static RUNTIME_MAX_TOOL_ROUNDS: AtomicUsize = AtomicUsize::new(0);
 
 pub fn direct_provider_auth_allowed() -> bool {
     if env_truthy("VEGVISIR_ALLOW_DIRECT_PROVIDER_AUTH") {
@@ -62,11 +67,37 @@ fn env_truthy(name: &str) -> bool {
 }
 
 fn max_tool_rounds() -> usize {
+    let runtime_limit = RUNTIME_MAX_TOOL_ROUNDS.load(Ordering::Relaxed);
+    if runtime_limit > 0 {
+        return runtime_limit.min(HARD_MAX_TOOL_ROUNDS);
+    }
     get_env("VEGVISIR_MAX_TOOL_ROUNDS")
         .and_then(|value| value.trim().parse::<usize>().ok())
         .filter(|value| *value > 0)
         .map(|value| value.min(HARD_MAX_TOOL_ROUNDS))
         .unwrap_or(DEFAULT_MAX_TOOL_ROUNDS)
+}
+
+pub fn configured_max_tool_rounds() -> usize {
+    max_tool_rounds()
+}
+
+pub fn max_tool_rounds_hard_limit() -> usize {
+    HARD_MAX_TOOL_ROUNDS
+}
+
+pub fn set_runtime_max_tool_rounds(limit: Option<usize>) -> usize {
+    match limit {
+        Some(limit) => {
+            let limit = limit.clamp(1, HARD_MAX_TOOL_ROUNDS);
+            RUNTIME_MAX_TOOL_ROUNDS.store(limit, Ordering::Relaxed);
+            limit
+        }
+        None => {
+            RUNTIME_MAX_TOOL_ROUNDS.store(0, Ordering::Relaxed);
+            max_tool_rounds()
+        }
+    }
 }
 
 pub trait ProviderAdapter {
@@ -3334,6 +3365,21 @@ pub struct ConversationRunner<P: ProviderAdapter> {
     pub models: crate::core::ModelRegistry,
     pub tools: Option<ToolRegistry>,
     pub tool_executor: Option<ToolExecutor>,
+    pub event_sink: Option<Arc<dyn Fn(ProviderRunEvent) + Send + Sync>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProviderRunEvent {
+    Activity(String),
+    ToolStart {
+        name: String,
+        args: String,
+    },
+    ToolEnd {
+        name: String,
+        ok: bool,
+        summary: String,
+    },
 }
 
 fn session_conversation_messages(session: &SessionState) -> Vec<ChatMessage> {
@@ -3517,6 +3563,9 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
         if let Some(limit) = model.context_window {
             session.context_limit = limit;
         }
+        self.emit_event(ProviderRunEvent::Activity(
+            "using CMS-v2 prepared model request".to_string(),
+        ));
         let mut envelope = envelope;
         apply_system_prompt_to_envelope(&mut envelope, &session.system_prompt);
         let mut provider_messages = session_conversation_messages(session);
@@ -3537,20 +3586,39 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
             && self.tool_executor.is_some()
         {
             session.activity = "thinking through tool use".to_string();
+            self.emit_event(ProviderRunEvent::Activity(
+                "thinking through tool use".to_string(),
+            ));
             let tools = self
                 .tools
                 .as_ref()
                 .map(ToolRegistry::schemas)
                 .unwrap_or_default();
             let executor = self.tool_executor.as_mut().expect("checked above");
+            let event_sink = self.event_sink.clone();
             let mut approval_required = None::<String>;
             let mut execute_tool = |name: &str, args: Map<String, Value>| -> String {
                 session.activity = format!("using tool {name}");
+                emit_provider_event(
+                    &event_sink,
+                    ProviderRunEvent::ToolStart {
+                        name: name.to_string(),
+                        args: summarize_tool_args(&args),
+                    },
+                );
                 let observation = executor.execute(ToolCall {
                     name: name.to_string(),
                     args,
                 });
                 session.activity = format!("finished tool {name}");
+                emit_provider_event(
+                    &event_sink,
+                    ProviderRunEvent::ToolEnd {
+                        name: name.to_string(),
+                        ok: observation.ok,
+                        summary: summarize_observation(&observation),
+                    },
+                );
                 if approval_required_observation(&observation) {
                     approval_required = Some(observation.content.clone());
                 }
@@ -3600,6 +3668,47 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
         session.activity.clear();
         Ok(response)
     }
+
+    fn emit_event(&self, event: ProviderRunEvent) {
+        emit_provider_event(&self.event_sink, event);
+    }
+}
+
+fn emit_provider_event(
+    sink: &Option<Arc<dyn Fn(ProviderRunEvent) + Send + Sync>>,
+    event: ProviderRunEvent,
+) {
+    if let Some(sink) = sink {
+        sink(event);
+    }
+}
+
+fn summarize_tool_args(args: &Map<String, Value>) -> String {
+    let raw = serde_json::to_string(args).unwrap_or_else(|_| "{}".to_string());
+    truncate_summary(&raw.replace('\n', " "), 240)
+}
+
+fn summarize_observation(observation: &Observation) -> String {
+    let status = if observation.ok { "ok" } else { "error" };
+    let content = observation.content.replace('\n', " ");
+    let detail = if content.trim().is_empty() {
+        observation.error.clone().unwrap_or_default()
+    } else {
+        content
+    };
+    truncate_summary(&format!("{status}: {detail}"), 240)
+}
+
+fn truncate_summary(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let mut out = value
+        .chars()
+        .take(max_chars.saturating_sub(1))
+        .collect::<String>();
+    out.push('…');
+    out
 }
 
 fn apply_system_prompt_to_envelope(envelope: &mut CachedPromptEnvelope, system_prompt: &str) {

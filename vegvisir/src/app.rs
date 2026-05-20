@@ -41,7 +41,10 @@ use crate::{
     model_discovery::discover_provider_models,
     observability::EventLogger,
     policy::RuntimePolicy,
-    provider::{ConversationRunner, ProviderRouter, direct_provider_auth_allowed},
+    provider::{
+        ConversationRunner, ProviderRouter, ProviderRunEvent, configured_max_tool_rounds,
+        direct_provider_auth_allowed, max_tool_rounds_hard_limit, set_runtime_max_tool_rounds,
+    },
     subagents::{SubAgentStatus, SubAgentTaskRecord},
     tools::{ToolExecutor, ToolRegistry, build_builtin_registry_with_cms_and_mode},
     types::ToolCall,
@@ -93,6 +96,16 @@ pub struct TuiApplication {
 
 enum StreamEvent {
     Delta(String),
+    Activity(String),
+    ToolStart {
+        name: String,
+        args: String,
+    },
+    ToolEnd {
+        name: String,
+        ok: bool,
+        summary: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -536,6 +549,7 @@ impl TuiApplication {
             "/attach" => self.attach_command(&args)?,
             "/help" => self.help(),
             "/tools" => self.tools_command(&args),
+            "/tool-limit" => self.tool_limit_command(&args),
             "/approvals" => self.approvals_command(&args),
             "/skills" => self.skills(),
             "/recall" => self.recall_command(&args)?,
@@ -929,6 +943,7 @@ impl TuiApplication {
             models: self.models.clone(),
             tools: None,
             tool_executor: None,
+            event_sink: None,
         };
         let envelope = self.cms.prepare_cached_prompt(
             content,
@@ -960,6 +975,7 @@ impl TuiApplication {
             models: self.models.clone(),
             tools: Some(self.tool_registry.clone()),
             tool_executor: Some(self.tool_executor.clone()),
+            event_sink: None,
         };
         let envelope = self.cms.prepare_cached_prompt(
             content,
@@ -1805,6 +1821,21 @@ impl TuiApplication {
                 models,
                 tools: Some(tool_registry),
                 tool_executor: Some(tool_executor),
+                event_sink: Some(Arc::new({
+                    let stream_tx = stream_tx.clone();
+                    move |event| {
+                        let event = match event {
+                            ProviderRunEvent::Activity(activity) => StreamEvent::Activity(activity),
+                            ProviderRunEvent::ToolStart { name, args } => {
+                                StreamEvent::ToolStart { name, args }
+                            }
+                            ProviderRunEvent::ToolEnd { name, ok, summary } => {
+                                StreamEvent::ToolEnd { name, ok, summary }
+                            }
+                        };
+                        let _ = stream_tx.send(event);
+                    }
+                })),
             };
             let envelope = cms.prepare_cached_prompt(
                 &display_content,
@@ -1841,7 +1872,8 @@ impl TuiApplication {
             return false;
         }
         match handle.join() {
-            Ok(Ok(session)) => {
+            Ok(Ok(mut session)) => {
+                self.merge_live_tool_messages(&mut session);
                 self.session = session;
                 self.pending_stream = None;
                 self.pending_cancel = None;
@@ -1936,37 +1968,95 @@ impl TuiApplication {
     }
 
     fn poll_stream_events(&mut self) {
-        let mut deltas = Vec::new();
+        let mut events = Vec::new();
         if let Some(receiver) = &self.pending_stream {
             while let Ok(event) = receiver.try_recv() {
-                match event {
-                    StreamEvent::Delta(delta) => deltas.push(delta),
+                events.push(event);
+            }
+        }
+        if events.is_empty() {
+            return;
+        }
+        for event in events {
+            match event {
+                StreamEvent::Delta(delta) => {
+                    let assistant_index = self
+                        .session
+                        .messages
+                        .iter()
+                        .rposition(|message| message.role == "assistant")
+                        .unwrap_or_else(|| {
+                            self.session.messages.push(ChatMessage {
+                                role: "assistant".to_string(),
+                                content: String::new(),
+                                attachments: Vec::new(),
+                                created_at: chrono::Utc::now(),
+                            });
+                            self.session.messages.len() - 1
+                        });
+                    self.session.messages[assistant_index]
+                        .content
+                        .push_str(&delta);
+                }
+                StreamEvent::Activity(activity) => {
+                    self.session.activity = activity;
+                }
+                StreamEvent::ToolStart { name, args } => {
+                    self.session.activity = format!("using tool {name}");
+                    self.push_live_tool_message(format!("Running tool: {name} {args}"));
+                }
+                StreamEvent::ToolEnd { name, ok, summary } => {
+                    self.session.activity = format!("finished tool {name}");
+                    let status = if ok { "finished" } else { "failed" };
+                    self.push_live_tool_message(format!("Tool {status}: {name} - {summary}"));
                 }
             }
         }
-        if deltas.is_empty() {
+        self.redraw_requested = true;
+    }
+
+    fn push_live_tool_message(&mut self, content: String) {
+        if self
+            .session
+            .messages
+            .last()
+            .map(|message| message.role == "system" && message.content == content)
+            .unwrap_or(false)
+        {
             return;
         }
-        let assistant_index = self
+        self.session.messages.push(ChatMessage {
+            role: "system".to_string(),
+            content,
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+    }
+
+    fn merge_live_tool_messages(&self, completed: &mut SessionState) {
+        let live_messages = self
             .session
             .messages
             .iter()
-            .rposition(|message| message.role == "assistant")
-            .unwrap_or_else(|| {
-                self.session.messages.push(ChatMessage {
-                    role: "assistant".to_string(),
-                    content: String::new(),
-                    attachments: Vec::new(),
-                    created_at: chrono::Utc::now(),
-                });
-                self.session.messages.len() - 1
-            });
-        for delta in deltas {
-            self.session.messages[assistant_index]
-                .content
-                .push_str(&delta);
+            .filter(|message| message.role == "system" && is_live_tool_message(&message.content))
+            .filter(|message| {
+                !completed.messages.iter().any(|existing| {
+                    existing.role == message.role && existing.content == message.content
+                })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if live_messages.is_empty() {
+            return;
         }
-        self.redraw_requested = true;
+        let insert_at = completed
+            .messages
+            .iter()
+            .rposition(|message| message.role == "assistant")
+            .unwrap_or(completed.messages.len());
+        completed
+            .messages
+            .splice(insert_at..insert_at, live_messages);
     }
 
     fn pop_empty_assistant_placeholder(&mut self) {
@@ -3428,6 +3518,12 @@ impl TuiApplication {
     }
 
     fn tools_command(&mut self, args: &[String]) -> String {
+        if matches!(
+            args.first().map(String::as_str),
+            Some("max-rounds" | "tool-rounds" | "tool-limit" | "limit")
+        ) {
+            return self.tool_limit_command(&args[1..]);
+        }
         if let Some(action) = args.first().map(|arg| arg.as_str()) {
             match action {
                 "allow-risky" | "enable-risky" | "deny-risky" | "disable-risky"
@@ -3521,6 +3617,35 @@ impl TuiApplication {
             },
             self.tool_executor.guardrails.approvals.pending_len()
         )
+    }
+
+    fn tool_limit_command(&mut self, args: &[String]) -> String {
+        match args.first().map(String::as_str) {
+            None | Some("show") | Some("status") => format!(
+                "Max tool-call rounds per turn: {}\nHard limit: {}\nUsage: /tool-limit <rounds>|default",
+                configured_max_tool_rounds(),
+                max_tool_rounds_hard_limit()
+            ),
+            Some("default") | Some("reset") | Some("clear") => {
+                let effective = set_runtime_max_tool_rounds(None);
+                format!("Max tool-call rounds reset to default/environment value: {effective}.")
+            }
+            Some(raw) => match raw.parse::<usize>() {
+                Ok(0) => "Tool-call round limit must be at least 1.".to_string(),
+                Ok(limit) => {
+                    let effective = set_runtime_max_tool_rounds(Some(limit));
+                    let clamped = if effective != limit {
+                        format!(" Requested value was clamped to the hard limit {effective}.")
+                    } else {
+                        String::new()
+                    };
+                    format!(
+                        "Max tool-call rounds per turn set to {effective} for this running session.{clamped}"
+                    )
+                }
+                Err(_) => "Usage: /tool-limit <rounds>|default".to_string(),
+            },
+        }
     }
 
     fn approvals_command(&mut self, args: &[String]) -> String {
@@ -5913,6 +6038,12 @@ fn estimated_message_line_count(message: &ChatMessage) -> usize {
     content_lines + 2
 }
 
+fn is_live_tool_message(content: &str) -> bool {
+    content.starts_with("Running tool: ")
+        || content.starts_with("Tool finished: ")
+        || content.starts_with("Tool failed: ")
+}
+
 #[cfg(test)]
 pub(crate) fn terminal_frame(rendered: &str) -> String {
     rendered
@@ -5960,6 +6091,73 @@ mod tests {
         );
         assert_eq!(app.chat_scroll_offset, 7);
         assert!(app.redraw_requested);
+        Ok(())
+    }
+
+    #[test]
+    fn tool_events_update_live_chat_and_activity() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        let (tx, rx) = mpsc::channel();
+        app.pending_stream = Some(rx);
+
+        tx.send(StreamEvent::Activity(
+            "thinking through tool use".to_string(),
+        ))?;
+        tx.send(StreamEvent::ToolStart {
+            name: "write_file".to_string(),
+            args: r#"{"path":"src/lib.rs"}"#.to_string(),
+        })?;
+        tx.send(StreamEvent::ToolEnd {
+            name: "write_file".to_string(),
+            ok: true,
+            summary: "ok: Wrote src/lib.rs".to_string(),
+        })?;
+        app.poll_stream_events();
+
+        assert_eq!(app.session.activity, "finished tool write_file");
+        let transcript = app
+            .session
+            .messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(transcript.contains("Running tool: write_file"));
+        assert!(transcript.contains("Tool finished: write_file"));
+        assert!(app.redraw_requested);
+        Ok(())
+    }
+
+    #[test]
+    fn completed_turn_preserves_live_tool_messages() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.push_live_tool_message("Running tool: read_file {\"path\":\"src/lib.rs\"}".to_string());
+        app.push_live_tool_message("Tool finished: read_file - ok: read 20 bytes".to_string());
+
+        let mut completed = app.session.clone();
+        completed
+            .messages
+            .retain(|message| message.role != "system");
+        completed.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: "done".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+
+        app.merge_live_tool_messages(&mut completed);
+
+        let transcript = completed
+            .messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(transcript.contains("Running tool: read_file"));
+        assert!(transcript.contains("Tool finished: read_file"));
+        assert!(completed.messages.last().unwrap().content.contains("done"));
         Ok(())
     }
 

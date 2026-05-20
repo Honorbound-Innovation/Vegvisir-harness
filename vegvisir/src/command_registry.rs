@@ -153,8 +153,14 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
         cmd(
             "/tools",
             "show available tools",
-            "/tools [status|allow-risky|deny-risky|require-approval|no-approval]",
+            "/tools [status|allow-risky|deny-risky|require-approval|no-approval|max-rounds <rounds>|max-rounds default]",
             &[],
+        ),
+        cmd(
+            "/tool-limit",
+            "show or set max tool-call rounds per model turn",
+            "/tool-limit [show|<rounds>|default]",
+            &["/tool-rounds", "/max-tools"],
         ),
         cmd(
             "/approvals",
