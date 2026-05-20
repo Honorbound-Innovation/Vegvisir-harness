@@ -285,11 +285,11 @@ mod tests {
             "/opt/hbse/bin/hbse-broker",
             "/home/alice/.local/share/hbse/vault.db",
             "%t/hbse/broker.sock",
-            900.0,
+            0.0,
             None,
         )
         .unwrap();
-        assert!(service.contains("ExecStart=/opt/hbse/bin/hbse-broker --vault /home/alice/.local/share/hbse/vault.db --socket %t/hbse/broker.sock --idle-timeout-seconds 900"));
+        assert!(service.contains("ExecStart=/opt/hbse/bin/hbse-broker --vault /home/alice/.local/share/hbse/vault.db --socket %t/hbse/broker.sock --idle-timeout-seconds 0"));
         assert!(service.contains("ReadWritePaths="));
     }
 

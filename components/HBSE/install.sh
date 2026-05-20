@@ -17,7 +17,7 @@ Options:
   --vault <path>                  Vault path for broker service.
                                   Default: $HOME/.local/share/hbse/vault.db
   --socket <path>                 Broker socket path for service.
-  --idle-timeout-seconds <n>      Broker idle timeout. Default: 900
+  --idle-timeout-seconds <n>      Broker idle timeout. Default: 0 (disabled)
   --service-user <user>           User for system service.
   -h, --help                      Show this help.
 
@@ -37,7 +37,7 @@ enable_service=0
 start_service=0
 vault_path="${HBSE_VAULT_PATH:-$HOME/.local/share/hbse/vault.db}"
 socket_path=""
-idle_timeout_seconds="900"
+idle_timeout_seconds="0"
 service_user=""
 
 while [[ $# -gt 0 ]]; do

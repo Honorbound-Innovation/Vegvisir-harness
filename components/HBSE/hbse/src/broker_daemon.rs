@@ -370,27 +370,46 @@ fn brokered_http_request(
         .get("credential_prefix")
         .and_then(Value::as_str)
         .unwrap_or("Bearer ");
+    let credential =
+        if let Some(field) = request.get("credential_json_field").and_then(Value::as_str) {
+            let secret_json: Value = serde_json::from_slice(&secret)?;
+            json_string_path(&secret_json, field)?
+        } else {
+            String::from_utf8_lossy(&secret).to_string()
+        };
     headers.insert(
         credential_header,
-        Value::String(format!(
-            "{}{}",
-            credential_prefix,
-            String::from_utf8_lossy(&secret)
-        )),
+        Value::String(format!("{}{}", credential_prefix, credential)),
     );
+    if let Some(extra_headers) = request
+        .get("credential_json_headers")
+        .and_then(Value::as_object)
+    {
+        let secret_json: Value = serde_json::from_slice(&secret)?;
+        for (header, field) in extra_headers {
+            let Some(field) = field.as_str() else {
+                continue;
+            };
+            headers.insert(
+                header.clone(),
+                Value::String(json_string_path(&secret_json, field)?),
+            );
+        }
+    }
 
     let timeout = request
         .get("timeout_seconds")
         .and_then(Value::as_f64)
-        .unwrap_or(30.0);
+        .unwrap_or(0.0);
     let max_response_bytes = request
         .get("max_response_bytes")
         .and_then(Value::as_u64)
         .unwrap_or(10 * 1024 * 1024) as usize;
     let agent = Agent::new();
-    let mut req = agent
-        .request(&method, url)
-        .timeout(Duration::from_secs_f64(timeout));
+    let mut req = agent.request(&method, url);
+    if timeout > 0.0 {
+        req = req.timeout(Duration::from_secs_f64(timeout));
+    }
     for (key, value) in &headers {
         if let Some(value) = value.as_str() {
             req = req.set(key, value);
@@ -850,6 +869,19 @@ fn assert_no_secret_leak(
         }
     }
     Ok(())
+}
+
+fn json_string_path(value: &Value, path: &str) -> Result<String, BrokerError> {
+    let mut current = value;
+    for segment in path.split('.') {
+        current = current
+            .get(segment)
+            .ok_or_else(|| BrokerError::Http(format!("credential JSON field not found: {path}")))?;
+    }
+    current
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| BrokerError::Http(format!("credential JSON field is not a string: {path}")))
 }
 
 fn redact_known_secret(value: &str, secret: &[u8]) -> (String, bool) {

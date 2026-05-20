@@ -797,8 +797,8 @@ export default function ChatView(props: ChatViewProps) {
             threadId,
             draftThread,
             fallbackDraftProject?.defaultModelSelection ?? {
-              instanceId: ProviderInstanceId.make("codex"),
-              model: DEFAULT_MODEL,
+              instanceId: ProviderInstanceId.make("vegvisir"),
+              model: "openai-sso/gpt-5.5",
             },
             localDraftError,
           )

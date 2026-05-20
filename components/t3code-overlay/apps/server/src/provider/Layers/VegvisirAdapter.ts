@@ -71,6 +71,21 @@ const nonEmpty = (value: string | undefined): string | undefined => {
   return trimmed.length > 0 ? trimmed : undefined;
 };
 
+const splitQualifiedModel = (
+  value: string | undefined,
+): { readonly provider?: string; readonly model?: string } => {
+  const normalized = nonEmpty(value);
+  if (!normalized) return {};
+  const separator = normalized.indexOf("/");
+  if (separator <= 0 || separator === normalized.length - 1) {
+    return { model: normalized };
+  }
+  return {
+    provider: normalized.slice(0, separator),
+    model: normalized.slice(separator + 1),
+  };
+};
+
 const bridgeSnapshot = (event: VegvisirBridgeEvent): VegvisirBridgeSessionSnapshot => {
   const payload = event.payload;
   if (!payload || typeof payload !== "object") return {};
@@ -216,6 +231,10 @@ export const makeVegvisirAdapter = Effect.fn("makeVegvisirAdapter")(function* (
       return;
     }
 
+    if (event.type === "turn.started") {
+      return;
+    }
+
     if (!event.id) return;
     const pending = ctx.pendingRequests.get(event.id);
     if (!pending) return;
@@ -244,12 +263,13 @@ export const makeVegvisirAdapter = Effect.fn("makeVegvisirAdapter")(function* (
       }
 
       const cwd = input.cwd ?? process.cwd();
+      const requested = splitQualifiedModel(input.modelSelection?.model ?? settings.defaultModel);
+      const providerOverride = nonEmpty(settings.defaultProvider) ?? requested.provider;
+      const modelOverride = requested.model;
       const args = [
         ...(settings.dangerousBypass ? ["--dangerously-bypass-approvals-and-sandbox"] : []),
-        ...(nonEmpty(settings.defaultProvider) ? ["--provider", settings.defaultProvider] : []),
-        ...(nonEmpty(input.modelSelection?.model ?? settings.defaultModel)
-          ? ["--model", input.modelSelection?.model ?? settings.defaultModel]
-          : []),
+        ...(providerOverride ? ["--provider", providerOverride] : []),
+        ...(modelOverride ? ["--model", modelOverride] : []),
         ...(nonEmpty(settings.defaultAgent) ? ["--agent", settings.defaultAgent] : []),
         "app-server",
         "--workspace",
@@ -299,6 +319,10 @@ export const makeVegvisirAdapter = Effect.fn("makeVegvisirAdapter")(function* (
           updatedAt: DateTime.formatIso(DateTime.nowUnsafe()),
         };
         ctx.stopped = true;
+        for (const pending of ctx.pendingRequests.values()) {
+          pending.reject(new Error("Vegvisir session exited before completing the request."));
+        }
+        ctx.pendingRequests.clear();
       });
       child.on("error", (error) => {
         ctx.session = {

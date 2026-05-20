@@ -3,6 +3,7 @@ pub mod attachments;
 pub mod bridge;
 pub mod checkpoints;
 pub mod command_registry;
+pub mod compat_server;
 pub mod context;
 pub mod core;
 pub mod environment;

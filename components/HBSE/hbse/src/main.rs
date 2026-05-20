@@ -637,7 +637,7 @@ enum BrokerCommand {
         credential_header: String,
         #[arg(long, default_value = "Bearer ")]
         credential_prefix: String,
-        #[arg(long, default_value_t = 30.0)]
+        #[arg(long, default_value_t = 0.0)]
         timeout_seconds: f64,
         #[arg(long, default_value_t = 10 * 1024 * 1024)]
         max_response_bytes: u64,
@@ -653,7 +653,7 @@ enum BrokerCommand {
         unit_dir: Option<PathBuf>,
         #[arg(long)]
         socket: Option<String>,
-        #[arg(long, default_value_t = 900.0)]
+        #[arg(long, default_value_t = 0.0)]
         idle_timeout_seconds: f64,
         #[arg(long)]
         broker_executable: Option<String>,
@@ -2504,7 +2504,7 @@ fn model_provider_gateway_command(
     listen: &str,
 ) -> String {
     format!(
-        "hbse-broker --vault \"$HOME/.local/share/hbse/vault.db\" --socket \"$XDG_RUNTIME_DIR/hbse/broker.sock\" --idle-timeout-seconds 900 --http-listen {listen} --http-upstream-base-url {base_url} --http-secret-ref {secret_ref} --http-consumer {consumer} --http-purpose {purpose} --http-model-discovery-purpose {model_discovery_purpose} --http-credential-header '{}' --http-credential-prefix '{}'",
+        "hbse-broker --vault \"$HOME/.local/share/hbse/vault.db\" --socket \"$XDG_RUNTIME_DIR/hbse/broker.sock\" --idle-timeout-seconds 0 --http-listen {listen} --http-upstream-base-url {base_url} --http-secret-ref {secret_ref} --http-consumer {consumer} --http-purpose {purpose} --http-model-discovery-purpose {model_discovery_purpose} --http-credential-header '{}' --http-credential-prefix '{}'",
         shell_single_quote(credential_header),
         shell_single_quote(credential_prefix)
     )
@@ -2624,6 +2624,7 @@ fn parse_secret_type(value: &str) -> Result<SecretType, Box<dyn std::error::Erro
         "api_key" => Ok(SecretType::ApiKey),
         "access_token" => Ok(SecretType::AccessToken),
         "refresh_token" => Ok(SecretType::RefreshToken),
+        "sso_token_bundle" | "oauth_token_bundle" => Ok(SecretType::SsoTokenBundle),
         "password" => Ok(SecretType::Password),
         "passphrase" | "pass_phrase" => Ok(SecretType::Passphrase),
         "token" => Ok(SecretType::Token),

@@ -21,7 +21,7 @@ Options:
   --start-hbse-service               Start HBSE broker service/socket.
   --hbse-vault <path>                HBSE vault path.
   --hbse-socket <path>               HBSE broker socket path.
-  --hbse-idle-timeout-seconds <n>    HBSE broker idle timeout. Default: 900
+  --hbse-idle-timeout-seconds <n>    HBSE broker idle timeout. Default: 0 (disabled)
   --hbse-service-user <user>         User for system HBSE service.
   -h, --help                         Show this help.
 
@@ -45,7 +45,7 @@ enable_hbse_service=0
 start_hbse_service=0
 hbse_vault=""
 hbse_socket=""
-hbse_idle_timeout_seconds="900"
+hbse_idle_timeout_seconds="0"
 hbse_service_user=""
 
 while [[ $# -gt 0 ]]; do
@@ -194,6 +194,9 @@ fi
 
 install -m 0755 "$app_dir/target/release/vegvisir-rust" "$bin_dir/vegvisir-rust"
 ln -sfn "vegvisir-rust" "$bin_dir/vegvisir"
+if [[ -f "$app_dir/scripts/hbse-provider-onboard.sh" ]]; then
+  install -m 0755 "$app_dir/scripts/hbse-provider-onboard.sh" "$bin_dir/vegvisir-hbse-provider-onboard"
+fi
 
 if [[ "$install_cms_cli" -eq 1 ]]; then
   install -m 0755 "$cms_dir/target/release/cms" "$bin_dir/cms-v2"
@@ -326,6 +329,9 @@ fi
 if [[ "$install_hbse" -eq 1 ]]; then
   echo "  $bin_dir/hbse"
   echo "  $bin_dir/hbse-broker"
+  if [[ -f "$bin_dir/vegvisir-hbse-provider-onboard" ]]; then
+    echo "  $bin_dir/vegvisir-hbse-provider-onboard"
+  fi
 fi
 if [[ "$install_usrl" -eq 1 ]]; then
   echo "  $bin_dir/usrl"

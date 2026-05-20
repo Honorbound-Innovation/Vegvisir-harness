@@ -2,7 +2,6 @@
 
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime";
 import {
-  DEFAULT_MODEL,
   type EnvironmentId,
   type FilesystemBrowseResult,
   type ProjectId,
@@ -1139,8 +1138,8 @@ function OpenCommandPaletteDialog() {
           workspaceRoot: cwd,
           createWorkspaceRootIfMissing: true,
           defaultModelSelection: {
-            instanceId: ProviderInstanceId.make("codex"),
-            model: DEFAULT_MODEL,
+            instanceId: ProviderInstanceId.make("vegvisir"),
+            model: "openai-sso/gpt-5.5",
           },
           createdAt: new Date().toISOString(),
         });

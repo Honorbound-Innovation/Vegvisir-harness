@@ -20,10 +20,6 @@
  *
  * @module provider/builtInDrivers
  */
-import { ClaudeDriver, type ClaudeDriverEnv } from "./Drivers/ClaudeDriver.ts";
-import { CodexDriver, type CodexDriverEnv } from "./Drivers/CodexDriver.ts";
-import { CursorDriver, type CursorDriverEnv } from "./Drivers/CursorDriver.ts";
-import { OpenCodeDriver, type OpenCodeDriverEnv } from "./Drivers/OpenCodeDriver.ts";
 import { VegvisirDriver, type VegvisirDriverEnv } from "./Drivers/VegvisirDriver.ts";
 import type { AnyProviderDriver } from "./ProviderDriver.ts";
 
@@ -33,11 +29,7 @@ import type { AnyProviderDriver } from "./ProviderDriver.ts";
  * layer must provide every service in this union.
  */
 export type BuiltInDriversEnv =
-  | ClaudeDriverEnv
-  | CodexDriverEnv
-  | CursorDriverEnv
-  | OpenCodeDriverEnv
-  | VegvisirDriverEnv;
+  VegvisirDriverEnv;
 
 /**
  * Ordered list of built-in drivers. Order matters only for tie-breaking in
@@ -45,9 +37,5 @@ export type BuiltInDriversEnv =
  * iteration order has no functional effect on instance lookup.
  */
 export const BUILT_IN_DRIVERS: ReadonlyArray<AnyProviderDriver<BuiltInDriversEnv>> = [
-  CodexDriver,
-  ClaudeDriver,
-  CursorDriver,
-  OpenCodeDriver,
   VegvisirDriver,
 ];

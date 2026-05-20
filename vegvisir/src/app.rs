@@ -3530,7 +3530,7 @@ impl TuiApplication {
         lines.join("\n")
     }
 
-    fn refresh_provider_models(&mut self, provider_name: &str) -> Option<String> {
+    pub(crate) fn refresh_provider_models(&mut self, provider_name: &str) -> Option<String> {
         let provider = self.provider_registry.get(provider_name)?.clone();
         if provider.kind == "demo" {
             return None;
@@ -3564,6 +3564,23 @@ impl TuiApplication {
             }
             Err(error) => Some(error.to_string()),
         }
+    }
+
+    pub(crate) fn refresh_all_provider_models(&mut self) -> Vec<String> {
+        let provider_names: Vec<String> = self
+            .provider_registry
+            .list()
+            .into_iter()
+            .filter(|provider| provider.enabled && provider.kind != "demo")
+            .map(|provider| provider.name.clone())
+            .collect();
+        provider_names
+            .into_iter()
+            .filter_map(|provider| {
+                self.refresh_provider_models(&provider)
+                    .map(|note| format!("{provider}: {note}"))
+            })
+            .collect()
     }
 
     fn auth_command(&self, args: &[String]) -> String {
@@ -4289,9 +4306,13 @@ impl TuiApplication {
                     .collect::<Vec<_>>()
                     .join("\n");
                 format!(
-                    "HBSE is the auth/secrets layer. Vegvisir only handles secret refs and broker policies; plaintext secrets must be entered into HBSE.\n{providers}\nregistered_services={}\nUsage: /hbse provider <openai|xai|openrouter|groq|mistral|deepseek|together|perplexity|anthropic>\nUsage: /hbse mcp <server> [url] [consumer] [purpose]\nUsage: /hbse service <name> [consumer] [purpose]\nUsage: /hbse service add <name> <secret_ref> [consumer] [purpose]\nUsage: /hbse services",
+                    "HBSE is the auth/secrets layer. Vegvisir only handles secret refs and broker policies; plaintext secrets must be entered into HBSE.\n{providers}\nregistered_services={}\nUsage: /hbse onboard [provider|all]\nUsage: /hbse provider <openai|xai|openrouter|groq|mistral|deepseek|together|perplexity|anthropic|google>\nUsage: /hbse mcp <server> [url] [consumer] [purpose]\nUsage: /hbse service <name> [consumer] [purpose]\nUsage: /hbse service add <name> <secret_ref> [consumer] [purpose]\nUsage: /hbse services",
                     self.hbse_services.len()
                 )
+            }
+            Some("onboard") | Some("setup") => {
+                let provider = args.get(1).map(String::as_str).unwrap_or("all");
+                hbse_onboarding_script_setup(provider)
             }
             Some("provider") => {
                 let Some(provider_id) = args.get(1) else {
@@ -5165,7 +5186,13 @@ fn hbse_model_provider_setup(provider_id: &str) -> String {
         other => format!("vegvisir.provider.{other}-hbse"),
     };
     format!(
-        "Vegvisir will not read or store the provider secret. Run this in a trusted terminal and paste the secret into HBSE stdin, then press Ctrl-D:\n\nhbse model-provider setup {provider_id} --stdin --secret-ref {secret_ref} --consumer {consumer} --purpose model.chat --model-discovery-purpose model.discovery\n\nAfter setup, select the HBSE-routed provider in Vegvisir, for example /provider {provider_id}-hbse when that provider exists in the catalog."
+        "Vegvisir will not read or store the provider secret. Prefer the deterministic onboarding helper when available:\n\nscripts/hbse-provider-onboard.sh {provider_id}\n\nManual equivalent:\n\nhbse model-provider setup {provider_id} --stdin --secret-ref {secret_ref} --consumer {consumer} --purpose model.chat --model-discovery-purpose model.discovery\n\nAfter setup, select the HBSE-routed provider in Vegvisir, for example /provider {provider_id}-hbse when that provider exists in the catalog."
+    )
+}
+
+fn hbse_onboarding_script_setup(provider: &str) -> String {
+    format!(
+        "Use the deterministic HBSE onboarding helper from the Vegvisir repo root:\n\nscripts/hbse-provider-onboard.sh {provider}\n\nIt prompts for provider secrets outside model chat, writes them into HBSE, installs chat/discovery broker policies, and verifies model.discovery policy access. T3 can call the same onboarding metadata through the hbse.onboarding.providers bridge method."
     )
 }
 

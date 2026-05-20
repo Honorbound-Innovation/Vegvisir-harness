@@ -130,6 +130,14 @@ function createBaseServerConfig(): ServerConfig {
           serverPassword: "",
           customModels: [],
         },
+        vegvisir: {
+          enabled: true,
+          binaryPath: "vegvisir",
+          defaultProvider: "",
+          defaultModel: "",
+          defaultAgent: "",
+          dangerousBypass: false,
+        },
       },
     },
   };

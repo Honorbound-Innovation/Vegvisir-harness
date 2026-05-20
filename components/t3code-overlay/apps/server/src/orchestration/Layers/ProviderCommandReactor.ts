@@ -9,6 +9,7 @@ import {
   type OrchestrationSession,
   ThreadId,
   type ProviderSession,
+  ProviderInstanceId,
   type RuntimeMode,
   type TurnId,
 } from "@t3tools/contracts";
@@ -41,6 +42,8 @@ import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
+const VEGVISIR_INSTANCE_ID = ProviderInstanceId.make("vegvisir");
+const DEFAULT_VEGVISIR_MODEL = "openai-sso/gpt-5.5";
 
 type ProviderIntentEvent = Extract<
   OrchestrationEvent,
@@ -58,6 +61,17 @@ type ProviderIntentEvent = Extract<
 function toNonEmptyProviderInput(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeVegvisirModelSelection(selection: ModelSelection): ModelSelection {
+  if (selection.instanceId === VEGVISIR_INSTANCE_ID) {
+    return selection;
+  }
+  return {
+    instanceId: VEGVISIR_INSTANCE_ID,
+    model: DEFAULT_VEGVISIR_MODEL,
+    ...(selection.options !== undefined ? { options: selection.options } : {}),
+  };
 }
 
 function mapProviderSessionStatusToOrchestrationStatus(
@@ -328,14 +342,16 @@ const make = Effect.gen(function* () {
         detail: `Thread '${threadId}' has an active provider session without a provider instance id.`,
       });
     }
+    const desiredModelSelection = normalizeVegvisirModelSelection(
+      requestedModelSelection ?? thread.modelSelection,
+    );
+    const desiredInstanceId = desiredModelSelection.instanceId;
     const currentInstanceId =
       activeThreadSession !== null &&
       activeSession !== undefined &&
       activeSession.providerInstanceId !== undefined
         ? activeSession.providerInstanceId
-        : thread.modelSelection.instanceId;
-    const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
-    const desiredInstanceId = desiredModelSelection.instanceId;
+        : desiredInstanceId;
     const currentInfo = yield* providerService.getInstanceInfo(currentInstanceId).pipe(
       Effect.mapError(
         () =>
@@ -532,7 +548,7 @@ const make = Effect.gen(function* () {
       input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {},
     );
     if (input.modelSelection !== undefined) {
-      threadModelSelections.set(input.threadId, input.modelSelection);
+      threadModelSelections.set(input.threadId, normalizeVegvisirModelSelection(input.modelSelection));
     }
     const normalizedInput = toNonEmptyProviderInput(input.messageText);
     const normalizedAttachments = input.attachments ?? [];
@@ -552,8 +568,9 @@ const make = Effect.gen(function* () {
             })
           : (yield* providerService.getCapabilities(activeSession.providerInstanceId))
               .sessionModelSwitch;
-    const requestedModelSelection =
-      input.modelSelection ?? threadModelSelections.get(input.threadId) ?? thread.modelSelection;
+    const requestedModelSelection = normalizeVegvisirModelSelection(
+      input.modelSelection ?? threadModelSelections.get(input.threadId) ?? thread.modelSelection,
+    );
     const modelForTurn =
       sessionModelSwitch === "unsupported" && input.modelSelection === undefined
         ? activeSession?.model !== undefined
@@ -1002,6 +1019,51 @@ const make = Effect.gen(function* () {
         return yield* worker.enqueue(event);
       }
     });
+
+    const shouldRecoverTurnStart = Effect.fn("shouldRecoverTurnStart")(function* (
+      event: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
+    ) {
+      const thread = yield* resolveThread(event.payload.threadId);
+      if (!thread) return false;
+
+      const message = thread.messages.find((entry) => entry.id === event.payload.messageId);
+      if (!message || message.role !== "user") return false;
+
+      const messageTime = Date.parse(message.createdAt);
+      const hasLaterAssistantMessage = thread.messages.some(
+        (entry) =>
+          entry.role === "assistant" &&
+          Number.isFinite(messageTime) &&
+          Date.parse(entry.createdAt) >= messageTime,
+      );
+      if (hasLaterAssistantMessage) return false;
+
+      const hasLaterUserMessage = thread.messages.some(
+        (entry) =>
+          entry.role === "user" &&
+          entry.id !== message.id &&
+          Number.isFinite(messageTime) &&
+          Date.parse(entry.createdAt) > messageTime,
+      );
+      return !hasLaterUserMessage;
+    });
+
+    yield* Effect.forkScoped(
+      Stream.runForEach(orchestrationEngine.readEvents(0), (event) =>
+        Effect.gen(function* () {
+          if (event.type !== "thread.turn-start-requested") return;
+          if (yield* shouldRecoverTurnStart(event)) {
+            yield* worker.enqueue(event);
+          }
+        }),
+      ).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("provider command reactor failed to recover pending turn starts", {
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      ),
+    );
 
     yield* Effect.forkScoped(
       Stream.runForEach(orchestrationEngine.streamDomainEvents, processEvent),

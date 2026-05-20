@@ -29,7 +29,7 @@ struct Cli {
     http_credential_header: String,
     #[arg(long, default_value = "Bearer ")]
     http_credential_prefix: String,
-    #[arg(long, default_value_t = 120.0)]
+    #[arg(long, default_value_t = 0.0)]
     http_timeout_seconds: f64,
     #[arg(long, default_value_t = 10 * 1024 * 1024)]
     http_max_response_bytes: u64,

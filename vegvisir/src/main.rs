@@ -5,6 +5,7 @@ use vegvisir_rust::{
     AgentHarness, AgentTask, ScriptedModel,
     app::{TuiApplication, run_tui_with_dangerous_bypass, workspace_project_id},
     bridge::{BridgeOptions, run_app_server},
+    compat_server::{CompatServerOptions, run_openai_compat_server},
     evals::{format_eval_results, run_builtin_evals, run_eval_file},
     memory::{VegvisirCms, VegvisirCmsConfig, default_vegvisir_data_root},
 };
@@ -89,6 +90,14 @@ enum Command {
         #[arg(long, default_value_os_t = current_workspace())]
         workspace: PathBuf,
     },
+    OpenAiCompatServer {
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        #[arg(long, default_value_t = 11435)]
+        port: u16,
+        #[arg(long, default_value_os_t = current_workspace())]
+        workspace: PathBuf,
+    },
 }
 
 fn current_workspace() -> PathBuf {
@@ -153,6 +162,20 @@ fn main() -> anyhow::Result<()> {
             Some(Command::AppServer { workspace }) => run_app_server(BridgeOptions {
                 workspace,
                 data_root: None,
+                provider: cli.provider,
+                model: cli.model,
+                agent: cli.agent,
+                dangerously_bypass_approvals_and_sandbox: cli
+                    .dangerously_bypass_approvals_and_sandbox,
+            }),
+            Some(Command::OpenAiCompatServer {
+                host,
+                port,
+                workspace,
+            }) => run_openai_compat_server(CompatServerOptions {
+                host,
+                port,
+                workspace,
                 provider: cli.provider,
                 model: cli.model,
                 agent: cli.agent,

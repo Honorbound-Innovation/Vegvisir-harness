@@ -37,6 +37,7 @@
     {"name": "sonar-reasoning-pro", "provider": "perplexity", "display_name": "Perplexity Sonar Reasoning Pro", "context_window": 200000},
 
     {"name": "command-a-03-2025", "provider": "cohere", "display_name": "Command A", "context_window": 256000},
+    {"name": "grok-4.3", "provider": "xai", "display_name": "Grok 4.3", "context_window": 1000000},
     {"name": "grok-4", "provider": "xai", "display_name": "Grok 4", "context_window": 256000},
 
     {"name": "azure:gpt-5.4", "provider": "azure-openai", "display_name": "Azure GPT-5.4 Deployment", "context_window": 400000},

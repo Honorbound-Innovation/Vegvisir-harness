@@ -98,6 +98,16 @@ impl ApprovalLedger {
         approved
     }
 
+    pub fn approve_once_request(&mut self, id: &str) -> Option<ApprovalRequest> {
+        let request = self.state.lock().ok().and_then(|mut state| {
+            let request = state.pending.get(id)?.clone();
+            state.approved_once.insert(id.to_string());
+            Some(request)
+        });
+        self.save();
+        request
+    }
+
     pub fn approve_for_session(&mut self, id: &str) -> Option<ApprovalRequest> {
         let request = self.state.lock().ok().and_then(|mut state| {
             let request = state.pending.remove(id)?;

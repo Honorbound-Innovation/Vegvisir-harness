@@ -1,5 +1,4 @@
 import {
-  DEFAULT_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_GIT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
   type ModelSelection,
@@ -25,7 +24,7 @@ import { sortModelsForProviderInstance } from "./modelOrdering";
 
 const MAX_CUSTOM_MODEL_COUNT = 32;
 export const MAX_CUSTOM_MODEL_LENGTH = 256;
-const DEFAULT_TEXT_GENERATION_INSTANCE_ID = ProviderInstanceId.make("codex");
+const DEFAULT_TEXT_GENERATION_INSTANCE_ID = ProviderInstanceId.make("vegvisir");
 
 /**
  * Resolve the custom-model list for a given instance, preferring the
@@ -60,7 +59,7 @@ function readInstanceCustomModels(
   if (instanceId !== defaultInstanceId) {
     return [];
   }
-  const legacyProviders = settings.providers as Record<
+  const legacyProviders = settings.providers as unknown as Record<
     string,
     { readonly customModels: ReadonlyArray<string> } | undefined
   >;
@@ -275,7 +274,7 @@ export function resolveAppModelSelectionState(
 ): ModelSelection {
   const selection = settings.textGenerationModelSelection ?? {
     instanceId: DEFAULT_TEXT_GENERATION_INSTANCE_ID,
-    model: DEFAULT_GIT_TEXT_GENERATION_MODEL,
+    model: "openai-sso/gpt-5.5",
   };
   const entries = deriveProviderInstanceEntries(providers);
   const selectedEntry = entries.find(

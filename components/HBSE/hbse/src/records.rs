@@ -23,6 +23,7 @@ pub enum SecretType {
     ApiKey,
     AccessToken,
     RefreshToken,
+    SsoTokenBundle,
     Password,
     Passphrase,
     Token,

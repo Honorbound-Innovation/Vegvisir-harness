@@ -140,6 +140,11 @@ fn hbse_model_discovery_request(
         .get("hbse_model_discovery_purpose")
         .and_then(Value::as_str)
         .unwrap_or("model.discovery");
+    let timeout_seconds = provider
+        .metadata
+        .get("timeout_seconds")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
     let payload = json!({
         "command": "provider_http",
         "secret_ref": secret_ref,
@@ -151,7 +156,7 @@ fn hbse_model_discovery_request(
         "body": body,
         "credential_header": provider.metadata.get("credential_header").and_then(Value::as_str).unwrap_or("Authorization"),
         "credential_prefix": provider.metadata.get("credential_prefix").and_then(Value::as_str).unwrap_or("Bearer "),
-        "timeout_seconds": 30,
+        "timeout_seconds": timeout_seconds,
     });
     let response = hbse_request(provider, payload)?;
     let status = response

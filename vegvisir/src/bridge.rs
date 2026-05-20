@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::app::TuiApplication;
+use crate::types::ToolCall;
 
 #[derive(Debug, Deserialize)]
 struct BridgeRequest {
@@ -55,6 +56,11 @@ struct DiffParams {
 #[derive(Debug, Deserialize)]
 struct SystemPromptSetParams {
     prompt: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelsListParams {
+    refresh: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -256,6 +262,17 @@ fn handle_request(
                 Err(error) => {
                     let pending = pending_approvals(app);
                     if !pending.is_empty() {
+                        if app
+                            .session
+                            .messages
+                            .last()
+                            .map(|message| {
+                                message.role == "user" && message.content == params.content
+                            })
+                            .unwrap_or(false)
+                        {
+                            app.session.messages.pop();
+                        }
                         emit(
                             stdout,
                             BridgeEvent {
@@ -328,6 +345,13 @@ fn handle_request(
             )?;
         }
         "models.list" => {
+            let params: ModelsListParams = serde_json::from_value(request.params)
+                .unwrap_or(ModelsListParams { refresh: None });
+            let refresh_notes = if params.refresh.unwrap_or(false) {
+                app.refresh_all_provider_models()
+            } else {
+                Vec::new()
+            };
             emit(
                 stdout,
                 BridgeEvent {
@@ -336,6 +360,22 @@ fn handle_request(
                     payload: json!({
                         "current_model": app.session.current_model,
                         "models": app.models.list(),
+                        "provider_models": provider_models(app),
+                        "refresh_notes": refresh_notes,
+                    }),
+                },
+            )?;
+        }
+        "hbse.onboarding.providers" => {
+            emit(
+                stdout,
+                BridgeEvent {
+                    kind: "hbse.onboarding.providers",
+                    id: request.id,
+                    payload: json!({
+                        "providers": hbse_onboarding_providers(app),
+                        "script": "scripts/hbse-provider-onboard.sh",
+                        "note": "Secrets must be entered through deterministic HBSE onboarding, not through model chat.",
                     }),
                 },
             )?;
@@ -374,6 +414,34 @@ fn handle_request(
                 .approve_once(&params.id);
             emit_approval_mutation(stdout, request.id, ok, app)?;
         }
+        "approvals.approveOnceAndExecute" => {
+            let params: ApprovalIdParams = serde_json::from_value(request.params)?;
+            let approved = app
+                .tool_executor
+                .guardrails
+                .approvals
+                .approve_once_request(&params.id);
+            let observation = approved.as_ref().map(|approval| {
+                app.tool_executor.execute(ToolCall {
+                    name: approval.tool_name.clone(),
+                    args: approval.args.clone(),
+                })
+            });
+            emit(
+                stdout,
+                BridgeEvent {
+                    kind: "approval.executed",
+                    id: request.id,
+                    payload: json!({
+                        "ok": approved.is_some(),
+                        "approval": approved,
+                        "observation": observation,
+                        "approvals": pending_approvals(app),
+                        "session": snapshot(app),
+                    }),
+                },
+            )?;
+        }
         "approvals.approveSession" => {
             let params: ApprovalIdParams = serde_json::from_value(request.params)?;
             let ok = app
@@ -383,6 +451,34 @@ fn handle_request(
                 .approve_for_session(&params.id)
                 .is_some();
             emit_approval_mutation(stdout, request.id, ok, app)?;
+        }
+        "approvals.approveSessionAndExecute" => {
+            let params: ApprovalIdParams = serde_json::from_value(request.params)?;
+            let approved = app
+                .tool_executor
+                .guardrails
+                .approvals
+                .approve_for_session(&params.id);
+            let observation = approved.as_ref().map(|approval| {
+                app.tool_executor.execute(ToolCall {
+                    name: approval.tool_name.clone(),
+                    args: approval.args.clone(),
+                })
+            });
+            emit(
+                stdout,
+                BridgeEvent {
+                    kind: "approval.executed",
+                    id: request.id,
+                    payload: json!({
+                        "ok": approved.is_some(),
+                        "approval": approved,
+                        "observation": observation,
+                        "approvals": pending_approvals(app),
+                        "session": snapshot(app),
+                    }),
+                },
+            )?;
         }
         "approvals.deny" => {
             let params: ApprovalIdParams = serde_json::from_value(request.params)?;
@@ -592,6 +688,70 @@ fn pending_approvals(app: &TuiApplication) -> Vec<Value> {
         .into_values()
         .map(|request| json!(request))
         .collect()
+}
+
+fn provider_models(app: &TuiApplication) -> Vec<Value> {
+    let mut out = Vec::new();
+    for provider in app.provider_registry.list() {
+        if !provider.enabled {
+            continue;
+        }
+        for model in app.models.by_provider(&provider.name) {
+            out.push(json!({
+                "id": format!("{}/{}", provider.name, model.name),
+                "provider": provider.name,
+                "model": model.name,
+                "display_name": model.display_name.as_deref().unwrap_or(&model.name),
+                "context_window": model.context_window,
+                "supports_streaming": model.supports_streaming,
+                "source": model.metadata.get("source").and_then(Value::as_str).unwrap_or("catalog"),
+            }));
+        }
+    }
+    out
+}
+
+fn hbse_onboarding_providers(app: &TuiApplication) -> Vec<Value> {
+    let mut providers: Vec<Value> = app
+        .provider_registry
+        .list()
+        .into_iter()
+        .filter(|provider| provider.enabled && provider.auth_type == "hbse")
+        .map(|provider| {
+            let setup_provider = provider
+                .name
+                .strip_suffix("-hbse")
+                .unwrap_or(&provider.name)
+                .to_string();
+            json!({
+                "provider": setup_provider,
+                "hbse_provider": provider.name,
+                "display_name": provider.display_name.as_deref().unwrap_or(&provider.name),
+                "kind": provider.kind,
+                "base_url": provider.base_url,
+                "secret_ref": provider.metadata.get("hbse_secret_ref").and_then(Value::as_str).unwrap_or(""),
+                "consumer": provider.metadata.get("hbse_consumer").and_then(Value::as_str).unwrap_or(""),
+                "chat_purpose": provider.metadata.get("hbse_purpose").and_then(Value::as_str).unwrap_or("model.chat"),
+                "discovery_purpose": provider.metadata.get("hbse_model_discovery_purpose").and_then(Value::as_str).unwrap_or("model.discovery"),
+                "credential_header": provider.metadata.get("credential_header").and_then(Value::as_str).unwrap_or("Authorization"),
+                "credential_prefix": provider.metadata.get("credential_prefix").and_then(Value::as_str).unwrap_or("Bearer "),
+            })
+        })
+        .collect();
+    providers.push(json!({
+        "provider": "openai-sso",
+        "hbse_provider": "openai-sso-hbse",
+        "display_name": "OpenAI SSO token bundle via HBSE",
+        "kind": "openai_sso_hbse",
+        "base_url": "https://chatgpt.com/backend-api/codex",
+        "secret_ref": "secret://vegvisir/providers/openai-sso/tokens",
+        "consumer": "vegvisir.provider.openai-sso-hbse",
+        "chat_purpose": "model.chat",
+        "discovery_purpose": "model.discovery",
+        "credential_json_field": "tokens.access_token",
+        "credential_json_headers": { "ChatGPT-Account-ID": "tokens.account_id" },
+    }));
+    providers
 }
 
 fn transcript_markdown(app: &TuiApplication) -> String {

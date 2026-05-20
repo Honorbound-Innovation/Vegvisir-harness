@@ -306,7 +306,7 @@ fn hbse_mcp_json_rpc(
         "body": serde_json::to_string(&rpc)?,
         "credential_header": server.metadata.get("credential_header").and_then(Value::as_str).unwrap_or("Authorization"),
         "credential_prefix": server.metadata.get("credential_prefix").and_then(Value::as_str).unwrap_or("Bearer "),
-        "timeout_seconds": server.metadata.get("timeout_seconds").and_then(Value::as_f64).unwrap_or(30.0),
+        "timeout_seconds": server.metadata.get("timeout_seconds").and_then(Value::as_f64).unwrap_or(0.0),
         "max_response_bytes": server.metadata.get("max_response_bytes").and_then(Value::as_u64).unwrap_or(10 * 1024 * 1024),
     });
     let response = hbse_broker_request(server, payload)?;
