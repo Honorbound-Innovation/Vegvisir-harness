@@ -153,7 +153,7 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
         cmd(
             "/approvals",
             "inspect and manage pending risky tool approvals",
-            "/approvals [list|show <id>|approve <id>|approve-pattern <id>|edit <id> <json-args>|deny <id>]",
+            "/approvals [list|show <id>|approve <id>|session <id>|edit <id> <json-args>|deny <id>]",
             &["/approval"],
         ),
         cmd("/skills", "show available skills", "/skills", &[]),

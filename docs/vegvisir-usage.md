@@ -394,7 +394,7 @@ Run `/help` inside the TUI to print the live command reference. The current tree
 /attach [path|clear]
 /help
 /tools [status|allow-risky|deny-risky|require-approval|no-approval]
-/approvals [list|show <id>|approve <id>|approve-pattern <id>|edit <id> <json-args>|deny <id>]
+/approvals [list|show <id>|approve <id>|session <id>|edit <id> <json-args>|deny <id>]
 /skills
 /recall [--limit N] [--global] <query>
 /memory [status|recent|import-chatgpt <path>] [--global] [--limit N]
@@ -534,7 +534,7 @@ CMS-v2 is scoped by user, project/workspace, session, and active agent. Vegvisir
 /approvals list
 /approvals show <id>
 /approvals approve <id>
-/approvals approve-pattern <id>
+/approvals session <id>
 /approvals edit <id> <json-args>
 /approvals deny <id>
 ```

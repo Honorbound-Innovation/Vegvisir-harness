@@ -15,7 +15,7 @@ use crate::{
     environment::get_env,
     openai_sso::{codex_base_url, load_fresh_tokens_for_metadata},
     tools::{ToolExecutor, ToolRegistry},
-    types::ToolCall,
+    types::{Observation, ToolCall},
 };
 
 const TOOL_OBSERVATION_MODEL_MAX_BYTES: usize = 64 * 1024;
@@ -1738,7 +1738,7 @@ impl ProviderAdapter for OpenAISsoProfileAdapter {
                 .and_then(Value::as_array_mut)
                 .ok_or_else(|| anyhow::anyhow!("openai-sso payload input was not an array"))?;
             if let Some(output) = response.get("output").and_then(Value::as_array) {
-                input.extend(output.iter().cloned());
+                input.extend(output.iter().map(response_output_item_for_followup));
             }
             for call in tool_calls {
                 let result = truncate_model_observation(&execute_tool(&call.name, call.args));
@@ -1856,7 +1856,7 @@ fn responses_tool_loop_streaming(
             .and_then(Value::as_array_mut)
             .ok_or_else(|| anyhow::anyhow!("responses payload input was not an array"))?;
         if let Some(output) = response.get("output").and_then(Value::as_array) {
-            input.extend(output.iter().cloned());
+            input.extend(output.iter().map(response_output_item_for_followup));
         }
         for call in tool_calls {
             let result = truncate_model_observation(&execute_tool(&call.name, call.args));
@@ -1887,6 +1887,14 @@ fn response_function_calls(response: &Value) -> Vec<ResponseFunctionCall> {
             })
         })
         .collect()
+}
+
+fn response_output_item_for_followup(item: &Value) -> Value {
+    let mut item = item.clone();
+    if let Value::Object(object) = &mut item {
+        object.remove("id");
+    }
+    item
 }
 
 fn responses_tool_schema(tool: &Value) -> Value {
@@ -3274,6 +3282,23 @@ pub struct ConversationRunner<P: ProviderAdapter> {
     pub tool_executor: Option<ToolExecutor>,
 }
 
+fn session_conversation_messages(session: &SessionState) -> Vec<ChatMessage> {
+    session
+        .messages
+        .iter()
+        .filter(|message| message.role != "system")
+        .cloned()
+        .collect()
+}
+
+fn approval_required_observation(observation: &Observation) -> bool {
+    observation.error.as_deref() == Some("ApprovalRequired")
+        || observation.content.contains("approval_id=")
+        || observation
+            .content
+            .contains("Risky tool requires permission:")
+}
+
 impl<P: ProviderAdapter> ConversationRunner<P> {
     pub fn send(&mut self, session: &mut SessionState, content: &str) -> anyhow::Result<String> {
         self.send_with_context(session, content, None)
@@ -3306,7 +3331,7 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
         if let Some(limit) = model.context_window {
             session.context_limit = limit;
         }
-        let mut provider_messages = session.messages.clone();
+        let mut provider_messages = session_conversation_messages(session);
         if !session.system_prompt.is_empty() {
             provider_messages.insert(
                 0,
@@ -3349,6 +3374,7 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
                 .unwrap_or_default();
             let executor = self.tool_executor.as_mut().expect("checked above");
             let session_id = session.session_id.clone();
+            let mut approval_required = None::<String>;
             let mut execute_tool = |name: &str, args: Map<String, Value>| -> String {
                 session.activity = format!("using tool {name}");
                 let observation = executor.execute(ToolCall {
@@ -3356,6 +3382,9 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
                     args,
                 });
                 session.activity = format!("finished tool {name}");
+                if approval_required_observation(&observation) {
+                    approval_required = Some(observation.content.clone());
+                }
                 if observation.ok {
                     observation.content
                 } else {
@@ -3367,13 +3396,17 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
                 }
             };
             let _ = session_id;
-            self.provider.complete_with_tools(
+            let response = self.provider.complete_with_tools(
                 &provider_messages,
                 model,
                 &tools,
                 &mut execute_tool,
                 &session.current_provider,
-            )?
+            )?;
+            if let Some(message) = approval_required {
+                anyhow::bail!("{message}");
+            }
+            response
         } else {
             self.provider
                 .complete(&provider_messages, model, &session.current_provider)?
@@ -3432,6 +3465,16 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
         }
         let mut envelope = envelope;
         apply_system_prompt_to_envelope(&mut envelope, &session.system_prompt);
+        let mut provider_messages = session_conversation_messages(session);
+        provider_messages.insert(
+            0,
+            ChatMessage {
+                role: "system".to_string(),
+                content: envelope.model_request.prompt.clone(),
+                attachments: Vec::new(),
+                created_at: chrono::Utc::now(),
+            },
+        );
         let started = Instant::now();
         let response = if self
             .provider
@@ -3446,6 +3489,7 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
                 .map(ToolRegistry::schemas)
                 .unwrap_or_default();
             let executor = self.tool_executor.as_mut().expect("checked above");
+            let mut approval_required = None::<String>;
             let mut execute_tool = |name: &str, args: Map<String, Value>| -> String {
                 session.activity = format!("using tool {name}");
                 let observation = executor.execute(ToolCall {
@@ -3453,6 +3497,9 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
                     args,
                 });
                 session.activity = format!("finished tool {name}");
+                if approval_required_observation(&observation) {
+                    approval_required = Some(observation.content.clone());
+                }
                 if observation.ok {
                     observation.content
                 } else {
@@ -3463,31 +3510,24 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
                     )
                 }
             };
-            let provider_messages = vec![
-                ChatMessage {
-                    role: "system".to_string(),
-                    content: envelope.model_request.prompt.clone(),
-                    attachments: Vec::new(),
-                    created_at: chrono::Utc::now(),
-                },
-                ChatMessage {
-                    role: "user".to_string(),
-                    content: content.to_string(),
-                    attachments: Vec::new(),
-                    created_at: chrono::Utc::now(),
-                },
-            ];
-            self.provider.complete_with_tools_streaming(
+            let response = self.provider.complete_with_tools_streaming(
                 &provider_messages,
                 model,
                 &tools,
                 &mut execute_tool,
                 &session.current_provider,
                 on_delta,
-            )?
+            )?;
+            if let Some(message) = approval_required {
+                anyhow::bail!("{message}");
+            }
+            response
         } else {
-            self.provider
-                .stream_envelope(&envelope, model, &session.current_provider, on_delta)?
+            let response =
+                self.provider
+                    .complete(&provider_messages, model, &session.current_provider)?;
+            on_delta(&response);
+            response
         };
         session.last_prompt_cache_key = Some(envelope.manifest.prompt_cache_key.clone());
         session.last_prompt_manifest_id = Some(envelope.manifest.manifest_id.clone());

@@ -28,7 +28,7 @@ Vegvisir-harness/
 - Streams provider output into the harness when the provider supports streaming.
 - Supports OpenAI, OpenAI-compatible providers, OpenAI SSO, HBSE-brokered OpenAI-compatible requests, Anthropic, Google, Azure OpenAI, and local/demo providers.
 - Exposes workspace-scoped tools for file IO, command execution, tests, memory recall, MCP calls, and runtime plugins.
-- Uses an approval queue for risky operations, with approve-once, approve-pattern, edit, and deny flows.
+- Uses an approval queue for risky operations, with approve-once, approve-for-session, edit, and deny flows.
 - Includes a startup-only dangerous bypass mode for explicitly trusted high-risk sessions.
 - Uses CMS-v2 as the memory system, with global, user, project, workspace, session, and agent scopes.
 - Uses HBSE for secret and auth isolation so provider and service credentials can stay outside the harness.

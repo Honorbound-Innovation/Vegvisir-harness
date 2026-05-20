@@ -67,12 +67,12 @@ Approval workflow:
 /approvals
 /approvals show <id>
 /approvals approve <id>
-/approvals approve-pattern <id>
+/approvals session <id>
 /approvals edit <id> <json-args>
 /approvals deny <id>
 ```
 
-Use approve-once for one action. Use approve-pattern only when the same action shape should be allowed again in the current session. Use edit when the proposed tool call is right in intent but wrong in arguments.
+Use approve-once for one execution. Use session approval when the same tool and arguments should be allowed again for this running Vegvisir session only. Use edit when the proposed tool call is right in intent but wrong in arguments.
 
 ## Dangerous Bypass Mode
 

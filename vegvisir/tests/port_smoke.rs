@@ -107,6 +107,89 @@ impl ProviderAdapter for RecordingProvider {
     }
 }
 
+#[derive(Clone, Debug)]
+struct MessageRecordingProvider {
+    config: ProviderConfig,
+    messages: Arc<Mutex<Vec<ChatMessage>>>,
+}
+
+impl ProviderAdapter for MessageRecordingProvider {
+    fn config(&self) -> &ProviderConfig {
+        &self.config
+    }
+
+    fn complete(
+        &self,
+        messages: &[ChatMessage],
+        _model: &ModelInfo,
+        _selected_provider: &str,
+    ) -> anyhow::Result<String> {
+        *self.messages.lock().unwrap() = messages.to_vec();
+        Ok("ok".to_string())
+    }
+}
+
+#[derive(Clone, Debug)]
+struct RiskyToolCallingProvider {
+    config: ProviderConfig,
+}
+
+impl ProviderAdapter for RiskyToolCallingProvider {
+    fn config(&self) -> &ProviderConfig {
+        &self.config
+    }
+
+    fn complete(
+        &self,
+        _messages: &[ChatMessage],
+        _model: &ModelInfo,
+        _selected_provider: &str,
+    ) -> anyhow::Result<String> {
+        anyhow::bail!("risky tool provider should use complete_with_tools")
+    }
+
+    fn supports_tool_calls(&self, _model: &ModelInfo, _selected_provider: &str) -> bool {
+        true
+    }
+
+    fn complete_with_tools(
+        &self,
+        messages: &[ChatMessage],
+        model: &ModelInfo,
+        tools: &[Value],
+        execute_tool: &mut dyn FnMut(&str, Map<String, Value>) -> String,
+        selected_provider: &str,
+    ) -> anyhow::Result<String> {
+        self.complete_with_tools_streaming(
+            messages,
+            model,
+            tools,
+            execute_tool,
+            selected_provider,
+            &mut |_| {},
+        )
+    }
+
+    fn complete_with_tools_streaming(
+        &self,
+        _messages: &[ChatMessage],
+        _model: &ModelInfo,
+        _tools: &[Value],
+        execute_tool: &mut dyn FnMut(&str, Map<String, Value>) -> String,
+        _selected_provider: &str,
+        _on_delta: &mut dyn FnMut(&str),
+    ) -> anyhow::Result<String> {
+        let _ = execute_tool(
+            "write_file",
+            json!({"path": "approval.txt", "content": "needs approval"})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        Ok("tool request submitted".to_string())
+    }
+}
+
 fn write_sso_auth(
     root: &std::path::Path,
     access_token: &str,
@@ -568,6 +651,122 @@ fn risky_tools_use_pending_approval_queue() -> anyhow::Result<()> {
 }
 
 #[test]
+fn approval_queue_can_allow_matching_action_for_current_session_only() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let registry = build_builtin_registry(tmp.path())?;
+    let mut executor = vegvisir_rust::tools::ToolExecutor {
+        registry,
+        guardrails: GuardrailEngine {
+            policy: PermissionPolicy {
+                require_human_approval: true,
+                ..PermissionPolicy::default()
+            },
+            ..GuardrailEngine::default()
+        },
+        runtime_policy: vegvisir_rust::policy::RuntimePolicy::default(),
+        logger: vegvisir_rust::observability::EventLogger::default(),
+    };
+    let call = vegvisir_rust::types::ToolCall {
+        name: "run_command".to_string(),
+        args: json!({"command": ["pwd"]}).as_object().unwrap().clone(),
+    };
+    let different_call = vegvisir_rust::types::ToolCall {
+        name: "run_command".to_string(),
+        args: json!({"command": ["pwd"], "timeout": 1})
+            .as_object()
+            .unwrap()
+            .clone(),
+    };
+
+    let blocked = executor.execute(call.clone());
+    assert!(!blocked.ok);
+    let approval_id = executor
+        .guardrails
+        .approvals
+        .pending_ids()
+        .first()
+        .cloned()
+        .expect("pending approval");
+    let session_request = executor
+        .guardrails
+        .approvals
+        .approve_for_session(&approval_id)
+        .expect("session approval");
+    assert_eq!(session_request.tool_name, "run_command");
+    assert_eq!(executor.guardrails.approvals.pending_len(), 0);
+
+    let first = executor.execute(call.clone());
+    assert!(first.ok, "{}", first.content);
+    let second = executor.execute(call);
+    assert!(second.ok, "{}", second.content);
+    let different = executor.execute(different_call);
+    assert!(!different.ok);
+    assert!(different.content.contains("approval_id="));
+    Ok(())
+}
+
+#[test]
+fn session_approvals_are_not_persisted_across_restarts() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let approval_path = tmp.path().join("approvals.json");
+    let registry = build_builtin_registry(tmp.path())?;
+    let approvals = vegvisir_rust::guardrails::ApprovalLedger::new_persisted(&approval_path)?;
+    let mut executor = vegvisir_rust::tools::ToolExecutor {
+        registry: registry.clone(),
+        guardrails: GuardrailEngine {
+            policy: PermissionPolicy {
+                require_human_approval: true,
+                ..PermissionPolicy::default()
+            },
+            approvals,
+        },
+        runtime_policy: vegvisir_rust::policy::RuntimePolicy::default(),
+        logger: vegvisir_rust::observability::EventLogger::default(),
+    };
+    let call = vegvisir_rust::types::ToolCall {
+        name: "run_command".to_string(),
+        args: json!({"command": ["pwd"]}).as_object().unwrap().clone(),
+    };
+
+    let blocked = executor.execute(call.clone());
+    assert!(!blocked.ok);
+    let approval_id = executor
+        .guardrails
+        .approvals
+        .pending_ids()
+        .first()
+        .cloned()
+        .expect("pending approval");
+    assert!(
+        executor
+            .guardrails
+            .approvals
+            .approve_for_session(&approval_id)
+            .is_some()
+    );
+    assert!(executor.execute(call.clone()).ok);
+
+    let reloaded_approvals =
+        vegvisir_rust::guardrails::ApprovalLedger::new_persisted(&approval_path)?;
+    let mut reloaded_executor = vegvisir_rust::tools::ToolExecutor {
+        registry,
+        guardrails: GuardrailEngine {
+            policy: PermissionPolicy {
+                require_human_approval: true,
+                ..PermissionPolicy::default()
+            },
+            approvals: reloaded_approvals,
+        },
+        runtime_policy: vegvisir_rust::policy::RuntimePolicy::default(),
+        logger: vegvisir_rust::observability::EventLogger::default(),
+    };
+    let blocked_after_reload = reloaded_executor.execute(call);
+    assert!(!blocked_after_reload.ok);
+    assert!(blocked_after_reload.content.contains("approval_id="));
+    Ok(())
+}
+
+#[test]
 fn approval_queue_can_edit_arguments_before_approval() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let registry = build_builtin_registry(tmp.path())?;
@@ -986,6 +1185,51 @@ fn conversation_runner_preserves_selected_alias_provider() -> anyhow::Result<()>
         assert_eq!(selected_provider.lock().unwrap().as_deref(), Some(provider));
         assert_eq!(session.current_provider, provider);
     }
+    Ok(())
+}
+
+#[test]
+fn conversation_runner_does_not_send_saved_ui_notes_as_system_prompt() -> anyhow::Result<()> {
+    let recorded_messages = Arc::new(Mutex::new(Vec::new()));
+    let mut runner = ConversationRunner {
+        provider: MessageRecordingProvider {
+            config: ProviderConfig {
+                name: "demo".to_string(),
+                display_name: None,
+                kind: "test".to_string(),
+                api_key_env: None,
+                base_url: None,
+                auth_type: "none".to_string(),
+                enabled: true,
+                metadata: Default::default(),
+            },
+            messages: recorded_messages.clone(),
+        },
+        models: ModelRegistry::default_catalog()?,
+        tools: None,
+        tool_executor: None,
+    };
+    let workspace = tempdir()?;
+    let mut session =
+        vegvisir_rust::core::SessionState::new(workspace.path(), Vec::new(), Vec::new());
+    session.system_prompt = "real harness prompt".to_string();
+    session.messages.push(ChatMessage {
+        role: "system".to_string(),
+        content: "note from /system show that should stay out of provider input".to_string(),
+        attachments: Vec::new(),
+        created_at: Utc::now(),
+    });
+
+    runner.send(&mut session, "hello")?;
+
+    let messages = recorded_messages.lock().unwrap();
+    assert_eq!(messages[0].role, "system");
+    assert_eq!(messages[0].content, "real harness prompt");
+    assert!(
+        !messages
+            .iter()
+            .any(|message| message.content.contains("note from /system show"))
+    );
     Ok(())
 }
 
@@ -1582,6 +1826,7 @@ fn openai_sso_provider_runs_responses_tool_loop() -> anyhow::Result<()> {
     assert!(requests[0].contains("\"tool_choice\":\"auto\""));
     assert!(requests[0].contains("\"stream\":true"));
     assert!(requests[1].contains("\"type\":\"function_call_output\""));
+    assert!(!requests[1].contains("\"id\":\"fc_1\""));
     assert!(requests[1].contains("Cargo.toml"));
     Ok(())
 }
@@ -1855,9 +2100,12 @@ fn startup_dashboard_renders_inventory() -> anyhow::Result<()> {
     let output = app.render();
 
     assert!(output.contains("Vegvisir Console 0.1.0"));
-    assert!(output.contains("┌ status"));
-    assert!(output.contains("┌ dashboard"));
-    assert!(output.contains("┌ chat"));
+    assert!(output.contains("status"));
+    assert!(output.contains("dashboard"));
+    assert!(!output.contains("┌ status"));
+    assert!(!output.contains("┌ dashboard"));
+    assert!(output.contains(" chat "));
+    assert!(!output.contains("┌ notice"));
     assert!(output.contains("tools"));
     assert!(output.contains("skills"));
     assert!(output.contains("read_file"));
@@ -1984,7 +2232,7 @@ fn application_executes_core_commands_and_demo_runner() -> anyhow::Result<()> {
     assert!(
         app.session
             .system_prompt
-            .contains("contract vegvisir_default_agent_contract v1")
+            .contains("contract VegvisirDefaultAgentContract")
     );
     assert!(
         app.execute_command("/system-prompt")?
@@ -2025,11 +2273,7 @@ fn application_executes_core_commands_and_demo_runner() -> anyhow::Result<()> {
         "Harness system prompt reset to the Vegvisir default."
     );
     assert_eq!(app.session.system_prompt, default_system_prompt());
-    assert!(
-        app.session
-            .system_prompt
-            .contains("on provider.call -> enforce R6 and C2")
-    );
+    assert!(app.session.system_prompt.contains("trigger ProviderCall"));
     assert!(
         app.execute_command("/system show")?
             .unwrap()
@@ -2038,13 +2282,11 @@ fn application_executes_core_commands_and_demo_runner() -> anyhow::Result<()> {
     assert!(
         app.execute_command("/system print")?
             .unwrap()
-            .contains("contract vegvisir_default_agent_contract v1")
+            .contains("contract VegvisirDefaultAgentContract")
     );
 
     let response = app.send_demo("hello")?;
     assert!(response.contains("Demo response from demo-local"));
-    assert!(response.contains("CMS-v2 model request"));
-    assert!(response.contains("cache key"));
     assert!(app.session.last_prompt_cache_key.is_some());
     assert!(app.session.last_prompt_manifest_id.is_some());
     assert!(home.join("cms-v2.sqlite3").exists());
@@ -2131,6 +2373,7 @@ fn application_executes_core_commands_and_demo_runner() -> anyhow::Result<()> {
         .unwrap();
     assert!(approval_detail.contains("\"tool\": \"run_command\""));
     assert!(approval_detail.contains("\"approve_once\""));
+    assert!(approval_detail.contains("\"approve_for_session\""));
     app.execute_command(&format!("/approvals deny {approval_id}"))?
         .unwrap();
     assert!(
@@ -3495,13 +3738,57 @@ fn application_creates_specialized_agents_from_templates() -> anyhow::Result<()>
             "run_tests",
             "cms_recall",
             "cms_remember",
-            "eternium_prepare_context",
+            "cms_prepare_context",
             "audit_log"
         ]
         .into_iter()
         .map(str::to_string)
         .collect::<Vec<_>>()
     );
+    Ok(())
+}
+
+#[test]
+fn natural_agent_template_request_creates_agent_without_provider_roundtrip() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let home = tmp.path().join("home");
+    let mut app = TuiApplication::with_data_root(tmp.path(), &home)?;
+
+    app.input.set_buffer("using the agent-red template make an adversarial offensive security auditing agent. specializing in owasp and ai-owasp security auditing, bug discovery, vulnerability assessments.");
+    app.handle_submit();
+
+    assert!(app.pending_send.is_none());
+    assert!(
+        home.join("agents")
+            .join("agent-red-security-auditor.json")
+            .exists()
+    );
+    assert_eq!(app.session.messages[0].role, "user");
+    assert_eq!(app.session.messages[1].role, "system");
+    assert!(
+        app.session.messages[1]
+            .content
+            .contains("Created agent agent-red-security-auditor")
+    );
+    let shown = app
+        .execute_command("/agent show agent-red-security-auditor")?
+        .unwrap();
+    assert!(shown.contains("mode: agent-red"));
+    assert!(shown.contains("owasp and ai-owasp"));
+    Ok(())
+}
+
+#[test]
+fn agent_command_typo_reports_unknown_command_or_agent() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let home = tmp.path().join("home");
+    let mut app = TuiApplication::with_data_root(tmp.path(), &home)?;
+
+    let result = app.execute_command("/agent tempates")?.unwrap();
+
+    assert!(result.contains("Unknown /agent command or agent id: tempates"));
+    assert!(result.contains("/agent templates"));
+    assert!(!result.contains("os error"));
     Ok(())
 }
 
@@ -4543,17 +4830,17 @@ fn builtin_registry_exposes_cms_tools() -> anyhow::Result<()> {
     assert!(prepared.ok, "{}", prepared.content);
     assert!(prepared.content.contains("CMS tool memory"));
 
-    let eternium_context = executor.execute(vegvisir_rust::types::ToolCall {
+    let legacy_context = executor.execute(vegvisir_rust::types::ToolCall {
         name: "eternium_prepare_context".to_string(),
         args: json!({"user_message": "Continue tool execution memory work", "mode": "balanced"})
             .as_object()
             .unwrap()
             .clone(),
     });
-    assert!(eternium_context.ok, "{}", eternium_context.content);
-    assert!(eternium_context.content.contains("context_prompt"));
+    assert!(legacy_context.ok, "{}", legacy_context.content);
+    assert!(legacy_context.content.contains("context_prompt"));
     assert!(
-        eternium_context
+        legacy_context
             .data
             .get("context_prompt")
             .and_then(Value::as_str)
@@ -5102,7 +5389,7 @@ fn cms_envelope_send_includes_harness_system_prompt() -> anyhow::Result<()> {
     let request = server.join().expect("server thread completed")?;
     assert!(request.contains("Harness system prompt"));
     assert!(request.contains("Always answer in uppercase."));
-    assert!(!request.contains("prior private turn not sent by default"));
+    assert!(request.contains("prior private turn not sent by default"));
     Ok(())
 }
 
@@ -6301,6 +6588,135 @@ fn cms_envelope_path_exposes_tool_schemas_to_tool_capable_models() -> anyhow::Re
 
     assert!(response.contains("alpha.txt"));
     assert_eq!(session.messages.last().unwrap().role, "assistant");
+    Ok(())
+}
+
+#[test]
+fn cms_envelope_path_preserves_recent_chat_history() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let mut cms = VegvisirCms::open(VegvisirCmsConfig {
+        db_path: tmp.path().join("cms.sqlite3"),
+        user_id: "tester".to_string(),
+        project_id: Some("Vegvisir".to_string()),
+        context_mode: cms_v2::ecm::ContextMode::Project,
+        commit_writebacks: true,
+    })?;
+    let envelope =
+        cms.prepare_cached_prompt("what did I ask you to remember?", "demo", "demo-local")?;
+    let recorded_messages = Arc::new(Mutex::new(Vec::new()));
+    let mut runner = ConversationRunner {
+        provider: MessageRecordingProvider {
+            config: ProviderConfig {
+                name: "demo".to_string(),
+                display_name: None,
+                kind: "test".to_string(),
+                api_key_env: None,
+                base_url: None,
+                auth_type: "none".to_string(),
+                enabled: true,
+                metadata: Default::default(),
+            },
+            messages: recorded_messages.clone(),
+        },
+        models: ModelRegistry::default_catalog()?,
+        tools: None,
+        tool_executor: None,
+    };
+    let mut session = vegvisir_rust::core::SessionState::new(tmp.path(), Vec::new(), Vec::new());
+    session.messages.push(ChatMessage {
+        role: "user".to_string(),
+        content: "remember the codename is blue lantern".to_string(),
+        attachments: Vec::new(),
+        created_at: Utc::now(),
+    });
+    session.messages.push(ChatMessage {
+        role: "assistant".to_string(),
+        content: "I will remember that for this chat.".to_string(),
+        attachments: Vec::new(),
+        created_at: Utc::now(),
+    });
+
+    runner.send_with_envelope(&mut session, "what did I ask you to remember?", envelope)?;
+
+    let messages = recorded_messages.lock().unwrap();
+    assert_eq!(messages[0].role, "system");
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.content.contains("blue lantern"))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.content == "what did I ask you to remember?")
+    );
+    Ok(())
+}
+
+#[test]
+fn approval_required_tool_call_stops_runner_and_leaves_pending_request() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let tool_registry = build_builtin_registry(tmp.path())?;
+    let tool_executor = vegvisir_rust::tools::ToolExecutor {
+        registry: tool_registry.clone(),
+        guardrails: GuardrailEngine {
+            policy: PermissionPolicy {
+                allow_risky_tools: false,
+                require_human_approval: true,
+                bypass_approvals_and_sandbox: false,
+                allowed_commands: Default::default(),
+                denied_tools: Default::default(),
+            },
+            approvals: Default::default(),
+        },
+        runtime_policy: vegvisir_rust::policy::RuntimePolicy::default(),
+        logger: vegvisir_rust::observability::EventLogger::default(),
+    };
+    let mut models = ModelRegistry::default();
+    models.register(ModelInfo {
+        name: "tool-model".to_string(),
+        provider: "test-tools".to_string(),
+        display_name: None,
+        context_window: Some(8192),
+        supports_streaming: true,
+        enabled: true,
+        metadata: Default::default(),
+    });
+    let mut session = vegvisir_rust::core::SessionState::new(tmp.path(), Vec::new(), Vec::new());
+    session.current_provider = "test-tools".to_string();
+    session.current_model = "tool-model".to_string();
+    let mut runner = ConversationRunner {
+        provider: RiskyToolCallingProvider {
+            config: ProviderConfig {
+                name: "test-tools".to_string(),
+                display_name: None,
+                kind: "test".to_string(),
+                api_key_env: None,
+                base_url: None,
+                auth_type: "none".to_string(),
+                enabled: true,
+                metadata: Default::default(),
+            },
+        },
+        models,
+        tools: Some(tool_registry),
+        tool_executor: Some(tool_executor),
+    };
+
+    let error = runner
+        .send(&mut session, "write the file")
+        .expect_err("approval should stop the model turn");
+
+    assert!(error.to_string().contains("approval_id="));
+    let pending = runner
+        .tool_executor
+        .as_ref()
+        .unwrap()
+        .guardrails
+        .approvals
+        .pending();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(session.messages.last().unwrap().role, "user");
     Ok(())
 }
 

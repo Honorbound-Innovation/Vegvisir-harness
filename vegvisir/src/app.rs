@@ -14,8 +14,8 @@ use std::{
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
     event::{
-        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind,
+        self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyModifiers,
+        MouseEvent, MouseEventKind,
     },
     execute,
     terminal::{
@@ -182,6 +182,7 @@ impl TuiApplication {
             guardrails: GuardrailEngine {
                 policy: PermissionPolicy {
                     allow_risky_tools: dangerously_bypass_approvals_and_sandbox,
+                    require_human_approval: !dangerously_bypass_approvals_and_sandbox,
                     bypass_approvals_and_sandbox: dangerously_bypass_approvals_and_sandbox,
                     ..PermissionPolicy::default()
                 },
@@ -759,7 +760,79 @@ impl TuiApplication {
             content = "Please review the attached file(s).".to_string();
         }
 
+        if attachments.is_empty()
+            && let Some(response) = self.try_handle_natural_agent_template_request(&content)
+        {
+            self.session.messages.push(ChatMessage {
+                role: "user".to_string(),
+                content,
+                attachments: Vec::new(),
+                created_at: chrono::Utc::now(),
+            });
+            self.push_system_message(response);
+            self.autosave_session();
+            self.chat_scroll_offset = 0;
+            self.redraw_requested = true;
+            return;
+        }
+
         self.start_background_send(content, attachments);
+    }
+
+    fn try_handle_natural_agent_template_request(&mut self, content: &str) -> Option<String> {
+        let lower = content.to_ascii_lowercase();
+        if !lower.contains("template")
+            || !lower.contains("agent")
+            || !(lower.contains("create") || lower.contains("make"))
+        {
+            return None;
+        }
+        let template = agent_templates()
+            .into_iter()
+            .find(|template| lower.contains(&format!("{} template", template.mode)))?;
+        let specialization = natural_agent_specialization(content);
+        let display_name = natural_agent_display_name(&template, &specialization);
+        let id = natural_agent_id(&template, &specialization);
+        let mut profile = AgentProfile::new(&id, &display_name, &template.system_prompt).ok()?;
+        profile.mode = template.mode.clone();
+        profile.description = if specialization.is_empty() {
+            template.description.clone()
+        } else {
+            format!(
+                "{} Specialization: {}.",
+                template.description, specialization
+            )
+        };
+        profile.system_prompt = if specialization.is_empty() {
+            template.system_prompt.clone()
+        } else {
+            format!(
+                "{}\n\nSpecialization: {}. Stay within authorized scope, produce concrete findings and mitigations, and do not request or expose secrets.",
+                template.system_prompt, specialization
+            )
+        };
+        profile.enabled_tools = template.enabled_tools.clone();
+        profile.enabled_skills = template.enabled_skills.clone();
+        profile.usrl_contracts = template.usrl_contracts.clone();
+        profile.memory_policy = template.memory_policy.clone();
+        profile
+            .metadata
+            .insert("template".to_string(), Value::String(template.mode.clone()));
+        profile
+            .metadata
+            .insert("created_from_natural_request".to_string(), json!(true));
+        let path = match self.agents.save(&profile) {
+            Ok(path) => path,
+            Err(error) => return Some(format!("Command failed: {error}")),
+        };
+        Some(format!(
+            "Created agent {} from template {} at {}\nUse /agent use {} to activate it, or /agent show {} to inspect it.",
+            profile.id,
+            template.mode,
+            path.display(),
+            profile.id,
+            profile.id
+        ))
     }
 
     pub fn handle_key_event(&mut self, key: KeyEvent) {
@@ -1685,7 +1758,6 @@ impl TuiApplication {
             stdout,
             Show,
             DisableBracketedPaste,
-            DisableMouseCapture,
             LeaveAlternateScreen,
             Clear(ClearType::All),
             MoveTo(0, 0)
@@ -1701,12 +1773,7 @@ impl TuiApplication {
         let mut line = String::new();
         let _ = io::stdin().read_line(&mut line);
         enable_raw_mode()?;
-        execute!(
-            stdout,
-            EnterAlternateScreen,
-            EnableBracketedPaste,
-            EnableMouseCapture
-        )?;
+        execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
         stdout.flush()?;
         self.redraw_requested = true;
         Ok(())
@@ -2306,10 +2373,12 @@ impl TuiApplication {
                 }
                 Ok(format!("Deleted agent {id} at {}", path.display()))
             }
-            Some(other) => {
-                let profile = self.agents.load(other)?;
-                self.apply_agent_profile(&profile)
-            }
+            Some(other) => match self.agents.load(other) {
+                Ok(profile) => self.apply_agent_profile(&profile),
+                Err(_) => Ok(format!(
+                    "Unknown /agent command or agent id: {other}\nUse /agent templates to list templates, /agent list to list saved agents, or /agent use <id> to activate an agent."
+                )),
+            },
         }
     }
 
@@ -2760,6 +2829,7 @@ impl TuiApplication {
                 "allow-risky" | "enable-risky" => {
                     self.risky_tools_enabled = true;
                     self.tool_executor.guardrails.policy.allow_risky_tools = true;
+                    self.tool_executor.guardrails.policy.require_human_approval = false;
                     return "Risky tools enabled for this running session.".to_string();
                 }
                 "deny-risky" | "disable-risky" => {
@@ -2877,7 +2947,7 @@ impl TuiApplication {
                     "args": request.args,
                     "actions": {
                         "approve_once": format!("/approvals approve {}", request.id),
-                        "approve_pattern": format!("/approvals approve-pattern {}", request.id),
+                        "approve_for_session": format!("/approvals session {}", request.id),
                         "edit": format!("/approvals edit {} <json-args>", request.id),
                         "deny": format!("/approvals deny {}", request.id),
                     }
@@ -2894,12 +2964,24 @@ impl TuiApplication {
                     format!("Unknown pending approval: {id}")
                 }
             }
-            Some("approve-pattern") | Some("allow-pattern") => {
+            Some("session")
+            | Some("approve-session")
+            | Some("allow-session")
+            | Some("approve-pattern")
+            | Some("allow-pattern") => {
                 let Some(id) = args.get(1) else {
-                    return "Usage: /approvals approve-pattern <id>".to_string();
+                    return "Usage: /approvals session <id>".to_string();
                 };
-                match self.tool_executor.guardrails.approvals.approve_pattern(id) {
-                    Some(tool) => format!("Approved future risky calls for tool pattern {tool}."),
+                match self
+                    .tool_executor
+                    .guardrails
+                    .approvals
+                    .approve_for_session(id)
+                {
+                    Some(request) => format!(
+                        "Approved matching {} call for this running session only.",
+                        request.tool_name
+                    ),
                     None => format!("Unknown pending approval: {id}"),
                 }
             }
@@ -4396,12 +4478,7 @@ impl TerminalGuard {
     fn enter() -> anyhow::Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(
-            stdout,
-            EnterAlternateScreen,
-            EnableBracketedPaste,
-            EnableMouseCapture
-        )?;
+        execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
         stdout.flush()?;
         Ok(Self)
     }
@@ -4411,12 +4488,7 @@ impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
         let mut stdout = io::stdout();
-        let _ = execute!(
-            stdout,
-            DisableMouseCapture,
-            DisableBracketedPaste,
-            LeaveAlternateScreen
-        );
+        let _ = execute!(stdout, DisableBracketedPaste, LeaveAlternateScreen);
     }
 }
 
@@ -4732,7 +4804,7 @@ fn agent_templates() -> Vec<AgentTemplate> {
                 "read_file",
                 "cms_recall",
                 "cms_recent",
-                "eternium_prepare_context",
+                "cms_prepare_context",
                 "save_session",
             ],
         ),
@@ -4747,7 +4819,7 @@ fn agent_templates() -> Vec<AgentTemplate> {
                 "cms_recall",
                 "cms_recent",
                 "cms_remember",
-                "eternium_prepare_context",
+                "cms_prepare_context",
             ],
         ),
         template(
@@ -4760,7 +4832,7 @@ fn agent_templates() -> Vec<AgentTemplate> {
                 "read_file",
                 "cms_recall",
                 "cms_recent",
-                "eternium_prepare_context",
+                "cms_prepare_context",
                 "spawn_subagent",
                 "save_session",
                 "audit_log",
@@ -4779,7 +4851,7 @@ fn agent_templates() -> Vec<AgentTemplate> {
                 "run_tests",
                 "cms_recall",
                 "cms_remember",
-                "eternium_prepare_context",
+                "cms_prepare_context",
                 "audit_log",
             ],
         ),
@@ -4826,11 +4898,75 @@ fn agent_templates() -> Vec<AgentTemplate> {
                 "run_tests",
                 "cms_recall",
                 "cms_remember",
-                "eternium_prepare_context",
+                "cms_prepare_context",
                 "audit_log",
             ],
         ),
     ]
+}
+
+fn natural_agent_specialization(content: &str) -> String {
+    let lower = content.to_ascii_lowercase();
+    let start = lower
+        .find("specializing in")
+        .map(|index| index + "specializing in".len())
+        .or_else(|| {
+            lower
+                .find("specialized in")
+                .map(|index| index + "specialized in".len())
+        })
+        .or_else(|| {
+            lower
+                .find("focused on")
+                .map(|index| index + "focused on".len())
+        });
+    start
+        .map(|index| {
+            content[index..]
+                .trim()
+                .trim_matches(|ch: char| ch == '.' || ch == ',' || ch == ';' || ch.is_whitespace())
+                .to_string()
+        })
+        .unwrap_or_default()
+}
+
+fn natural_agent_display_name(template: &AgentTemplate, specialization: &str) -> String {
+    if template.mode == "agent-red" && specialization.to_ascii_lowercase().contains("security") {
+        "Agent Red Security Auditor".to_string()
+    } else if specialization.is_empty() {
+        template.display_name.clone()
+    } else {
+        let words = specialization
+            .split(|ch: char| !ch.is_ascii_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .take(4)
+            .map(|word| {
+                let mut chars = word.chars();
+                match chars.next() {
+                    Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str()),
+                    None => String::new(),
+                }
+            })
+            .collect::<Vec<_>>();
+        if words.is_empty() {
+            template.display_name.clone()
+        } else {
+            format!("{} {}", template.display_name, words.join(" "))
+        }
+    }
+}
+
+fn natural_agent_id(template: &AgentTemplate, specialization: &str) -> String {
+    if template.mode == "agent-red" && specialization.to_ascii_lowercase().contains("security") {
+        "agent-red-security-auditor".to_string()
+    } else {
+        let suffix = crate::core::normalize_agent_id(specialization);
+        if suffix.is_empty() {
+            template.mode.clone()
+        } else {
+            format!("{}-{}", template.mode, suffix)
+        }
+    }
 }
 
 fn template(

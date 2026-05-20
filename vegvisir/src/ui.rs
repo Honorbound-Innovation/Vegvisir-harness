@@ -281,6 +281,10 @@ pub mod theme {
         pub dim: String,
         pub active_bg: String,
         pub active_fg: String,
+        pub success: String,
+        pub warning: String,
+        pub error: String,
+        pub info: String,
         pub color_enabled: bool,
     }
 
@@ -292,8 +296,12 @@ pub mod theme {
                 heading: "38;5;39".to_string(),
                 normal: "38;5;250".to_string(),
                 dim: "38;5;241".to_string(),
-                active_bg: "48;5;33".to_string(),
-                active_fg: "38;5;16".to_string(),
+                active_bg: "48;5;24".to_string(),
+                active_fg: "38;5;231".to_string(),
+                success: "38;5;114".to_string(),
+                warning: "38;5;179".to_string(),
+                error: "38;5;203".to_string(),
+                info: "38;5;81".to_string(),
                 color_enabled: supports_color(),
             }
         }
@@ -321,12 +329,18 @@ pub mod theme {
             let code = match style {
                 "border" => &self.theme.border,
                 "heading" => &self.theme.heading,
+                "title" => "1;38;5;231",
                 "dim" => &self.theme.dim,
                 "code" => "38;5;151",
                 "code_keyword" => "38;5;81",
                 "code_string" => "38;5;222",
                 "code_comment" => "38;5;244",
                 "table" => "38;5;117",
+                "success" => &self.theme.success,
+                "warning" => &self.theme.warning,
+                "error" => &self.theme.error,
+                "info" => &self.theme.info,
+                "status" => "7",
                 _ => &self.theme.normal,
             };
             format!("\x1b[{code}m{text}\x1b[0m")
@@ -496,39 +510,43 @@ pub mod layout {
             let (width, height) = self
                 .viewport
                 .unwrap_or_else(|| (terminal_columns(), terminal_lines()));
-            let width = width.max(50);
-            let height = height.max(18);
+            if width < 50 || height < 18 {
+                return self.too_small(width, height);
+            }
             let mut rows = Vec::new();
-            if width >= 104 {
-                let left_w = (width / 4).clamp(24, 30);
-                let main_w = width - left_w - 1;
-                let left = self.identity_panel(session, left_w);
-                let main = self.dashboard_panel(session, main_w);
-                for index in 0..left.len().max(main.len()) {
-                    rows.push(format!(
-                        "{} {}",
-                        pad_to_width(left.get(index).map(String::as_str).unwrap_or(""), left_w),
-                        main.get(index).map(String::as_str).unwrap_or("")
-                    ));
+            rows.push(self.header_bar(session, width));
+            if session.messages.is_empty() {
+                if width >= 104 {
+                    let left_w = (width / 4).clamp(24, 30);
+                    let main_w = width - left_w - 1;
+                    let left = self.identity_panel(session, left_w);
+                    let main = self.dashboard_panel(session, main_w);
+                    for index in 0..left.len().max(main.len()) {
+                        rows.push(format!(
+                            "{} {}",
+                            pad_to_width(left.get(index).map(String::as_str).unwrap_or(""), left_w),
+                            main.get(index).map(String::as_str).unwrap_or("")
+                        ));
+                    }
+                } else {
+                    rows.extend(self.identity_panel(session, width));
+                    rows.extend(self.dashboard_panel(session, width));
                 }
             } else {
-                rows.extend(self.identity_panel(session, width));
-                rows.extend(self.dashboard_panel(session, width));
+                rows.push(self.session_strip(session, width));
             }
             rows.extend(self.pending_attachments(session, width));
-            if session.messages.is_empty() {
-                rows.extend(self.welcome(width));
-            }
             let autocomplete_height = if input.buffer.starts_with('/') && !suggestions.is_empty() {
                 suggestions.len().min(8) + 2
             } else {
                 0
             };
             let input_lines = self.input_lines(input, width.saturating_sub(2));
-            let fixed_tail = 1 + input_lines.len() + autocomplete_height;
+            let fixed_tail = 2 + input_lines.len() + autocomplete_height;
             let chat_height = height.saturating_sub(rows.len() + fixed_tail).max(6);
             rows.extend(self.chat(session, width, chat_height, chat_scroll_offset));
             rows.push(self.status_bar(session, width));
+            rows.push(self.key_hint_bar(width));
             for (index, line) in input_lines.into_iter().enumerate() {
                 let prompt = if index == 0 { "› " } else { "  " };
                 rows.push(format!("{}{}", self.theme.paint(prompt, "heading"), line));
@@ -537,6 +555,60 @@ pub mod layout {
                 rows.extend(self.autocomplete(suggestions, commands, selected_suggestion, width));
             }
             rows.join("\n")
+        }
+
+        fn too_small(&self, width: usize, height: usize) -> String {
+            let required = "Vegvisir needs at least 50x18.";
+            [
+                self.theme.paint("Vegvisir", "title"),
+                format!("terminal: {width}x{height}"),
+                required.to_string(),
+                "Resize the terminal to continue.".to_string(),
+            ]
+            .join("\n")
+        }
+
+        fn header_bar(&self, session: &SessionState, width: usize) -> String {
+            let title = self.theme.paint(" Vegvisir ", "title");
+            let cwd = truncate(&session.cwd, width / 3);
+            let meta = format!(
+                " provider={} model={} workspace={} ",
+                session.current_provider, session.current_model, cwd
+            );
+            let line = format!("{title}{}", self.theme.paint(truncate(&meta, width), "dim"));
+            truncate(&line, width)
+        }
+
+        fn session_strip(&self, session: &SessionState, width: usize) -> String {
+            let state_style = match session.status.as_str() {
+                "ready" => "success",
+                "streaming" => "info",
+                "error" => "error",
+                _ => "warning",
+            };
+            let tools = session
+                .enabled_tools
+                .iter()
+                .filter(|tool| tool.enabled)
+                .count();
+            let skills = session
+                .enabled_skills
+                .iter()
+                .filter(|skill| skill.enabled)
+                .count();
+            truncate(
+                &format!(
+                    "{}  {}  {}  {}  {}",
+                    self.theme.paint(format!("{} tools", tools), "dim"),
+                    self.theme.paint(format!("{} skills", skills), "dim"),
+                    self.theme
+                        .paint(format!("state {}", session.status), state_style),
+                    self.theme
+                        .paint(format!("session {}", session.session_id), "dim"),
+                    self.theme.paint("/status /tools /skills /select", "dim"),
+                ),
+                width,
+            )
         }
 
         fn input_lines(&self, input: &InputState, width: usize) -> Vec<String> {
@@ -569,56 +641,62 @@ pub mod layout {
         }
 
         fn identity_panel(&self, session: &SessionState, width: usize) -> Vec<String> {
-            boxed(
-                &[
-                    format!("provider {}", session.current_provider),
-                    format!("model    {}", session.current_model),
-                    format!(
-                        "cwd      {}",
-                        truncate(&session.cwd, width.saturating_sub(9))
-                    ),
-                    format!("id       {}", session.session_id),
-                    format!("state    {}", session.status),
-                ],
-                width,
-                &self.theme,
-                Some("status"),
-            )
+            let state_style = match session.status.as_str() {
+                "ready" => "success",
+                "streaming" => "info",
+                "error" => "error",
+                _ => "warning",
+            };
+            [
+                self.theme.paint("status", "heading"),
+                format!(
+                    "provider {}",
+                    self.theme.paint(&session.current_provider, "info")
+                ),
+                format!(
+                    "model    {}",
+                    self.theme.paint(&session.current_model, "info")
+                ),
+                format!(
+                    "cwd      {}",
+                    self.theme
+                        .paint(truncate(&session.cwd, width.saturating_sub(9)), "dim")
+                ),
+                format!("id       {}", session.session_id),
+                format!(
+                    "state    {}",
+                    self.theme.paint(&session.status, state_style)
+                ),
+            ]
+            .into_iter()
+            .map(|line| truncate(&line, width))
+            .collect()
         }
 
         fn dashboard_panel(&self, session: &SessionState, width: usize) -> Vec<String> {
-            boxed(
-                &[
-                    "Vegvisir Console 0.1.0".to_string(),
-                    format!(
-                        "tools  {} enabled: {}",
-                        session.enabled_tools.len(),
-                        name_preview_tools(&session.enabled_tools, width.saturating_sub(24))
-                    ),
-                    format!(
-                        "skills {} enabled: {}",
-                        session.enabled_skills.len(),
-                        name_preview_skills(&session.enabled_skills, width.saturating_sub(24))
-                    ),
-                    "/help commands | /tools inventory | /skills inventory".to_string(),
-                ],
-                width,
-                &self.theme,
-                Some("dashboard"),
-            )
-        }
-
-        fn welcome(&self, width: usize) -> Vec<String> {
-            boxed(
-                &[
-                    "Welcome. Type a message for the active agent, or type / for commands."
-                        .to_string(),
-                    "Demo provider is active until a provider adapter is configured.".to_string(),
-                ],
-                width,
-                &self.theme,
-                Some("notice"),
-            )
+            [
+                self.theme.paint("dashboard", "heading"),
+                self.theme.paint("Vegvisir Console 0.1.0", "title"),
+                format!(
+                    "tools  {} enabled: {}",
+                    self.theme
+                        .paint(session.enabled_tools.len().to_string(), "success"),
+                    name_preview_tools(&session.enabled_tools, width.saturating_sub(24))
+                ),
+                format!(
+                    "skills {} enabled: {}",
+                    self.theme
+                        .paint(session.enabled_skills.len().to_string(), "success"),
+                    name_preview_skills(&session.enabled_skills, width.saturating_sub(24))
+                ),
+                self.theme.paint(
+                    "/help commands | /tools inventory | /skills inventory",
+                    "dim",
+                ),
+            ]
+            .into_iter()
+            .map(|line| truncate(&line, width))
+            .collect()
         }
 
         fn chat(
@@ -628,12 +706,15 @@ pub mod layout {
             height: usize,
             scroll_offset: usize,
         ) -> Vec<String> {
-            let inner_height = height.saturating_sub(2).max(1);
+            let inner_height = height.max(1);
             let mut lines = Vec::new();
             if session.messages.is_empty() {
-                lines.push("No messages yet.".to_string());
+                lines.push(self.theme.paint("No messages yet.", "dim"));
             }
-            for message in &session.messages {
+            for (message_index, message) in session.messages.iter().enumerate() {
+                if message_index > 0 {
+                    lines.push(String::new());
+                }
                 let label = match message.role.as_str() {
                     "user" => "you",
                     "assistant" => "agent",
@@ -674,7 +755,17 @@ pub mod layout {
             } else {
                 format!("chat {}-{}/{}", start + 1, end, lines.len())
             };
-            boxed(&visible, width, &self.theme, Some(&title))
+            let mut out = vec![self.theme.paint(format!(" {title} "), "heading")];
+            out.extend(
+                visible
+                    .into_iter()
+                    .take(inner_height.saturating_sub(1))
+                    .map(|line| truncate(&line, width)),
+            );
+            while out.len() < height {
+                out.push(String::new());
+            }
+            out
         }
 
         fn message_lines(
@@ -696,7 +787,16 @@ pub mod layout {
                 .map(|(index, line)| {
                     let prefix = if index == 0 { label } else { "" };
                     let end = if index == 0 { suffix } else { "" };
-                    format!("{prefix:<6} {line}{end}")
+                    let style = match label {
+                        "you" => "info",
+                        "agent" => "success",
+                        "note" => "warning",
+                        _ => "dim",
+                    };
+                    format!(
+                        "{} {line}{end}",
+                        self.theme.paint(format!("{prefix:<6}"), style)
+                    )
                 })
                 .collect()
         }
@@ -725,12 +825,19 @@ pub mod layout {
 
         fn status_bar(&self, session: &SessionState, width: usize) -> String {
             let mut segments = vec![
-                format!("provider {}", session.current_provider),
-                format!("model {}", session.current_model),
+                format!(
+                    "{} {}",
+                    self.theme.paint("provider", "dim"),
+                    session.current_provider
+                ),
+                format!(
+                    "{} {}",
+                    self.theme.paint("model", "dim"),
+                    session.current_model
+                ),
                 format!("ctx {}/{}", session.tokens_used, session.context_limit),
-                format!("Worked for {}", format_duration(session.last_latency_ms)),
+                format!("worked {}", format_duration(session.last_latency_ms)),
                 format!("session {}", session.session_id),
-                "PgUp/PgDn chat".to_string(),
             ];
             if let Some(activity) = self.activity_label(session) {
                 segments.insert(2, activity);
@@ -748,6 +855,16 @@ pub mod layout {
                     width,
                 ),
                 "heading",
+            )
+        }
+
+        fn key_hint_bar(&self, width: usize) -> String {
+            self.theme.paint(
+                truncate(
+                    "[Enter] send  [PgUp/PgDn] chat  [/] commands  [/select] copy transcript  [?] help  [Ctrl+C] quit",
+                    width,
+                ),
+                "dim",
             )
         }
 

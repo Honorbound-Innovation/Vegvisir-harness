@@ -170,11 +170,17 @@ impl ToolExecutor {
         match result {
             Ok(observation) => observation,
             Err(error) => {
+                let error_text = error.to_string();
+                let error_kind = if error_text.contains("approval_id=") {
+                    "ApprovalRequired"
+                } else {
+                    "ToolError"
+                };
                 self.logger.emit(
                     "tool_error",
-                    json!({"tool": call.name, "error": error.to_string()}),
+                    json!({"tool": call.name, "error": error_text}),
                 );
-                Observation::err(error.to_string(), "ToolError")
+                Observation::err(error_text, error_kind)
             }
         }
     }
@@ -659,7 +665,7 @@ pub fn build_builtin_registry_with_cms_and_mode(
     ))?;
 
     let context_config = cms_config;
-    let eternium_config = context_config.clone();
+    let legacy_context_config = context_config.clone();
     let cached_prompt_config = context_config.clone();
     registry.register(Tool::new(
         "cms_prepare_context",
@@ -702,7 +708,7 @@ pub fn build_builtin_registry_with_cms_and_mode(
 
     registry.register(Tool::new(
         "eternium_prepare_context",
-        "Prepare an Eternium context packet for a user message using CMS-v2 recall and context budgeting.",
+        "Compatibility alias for cms_prepare_context. Prepare CMS-v2 context for a user message using recall and budgeting.",
         Arc::new(move |args| {
             let Some(message) = args
                 .get("user_message")
@@ -712,7 +718,7 @@ pub fn build_builtin_registry_with_cms_and_mode(
                 return Observation::err("Missing user_message", "ValueError");
             };
             let options = context_options_from_args(&args);
-            match VegvisirCms::open(eternium_config.clone())
+            match VegvisirCms::open(legacy_context_config.clone())
                 .and_then(|mut cms| cms.prepare_context_with_options(message, options))
             {
                 Ok(prepared) => {
