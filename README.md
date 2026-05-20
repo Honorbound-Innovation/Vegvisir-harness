@@ -1,10 +1,12 @@
 # Vegvisir Agent Harness
 
-Vegvisir Agent Harness is a secure Rust agent runtime for people who want a powerful coding and operations assistant without handing the harness every secret, every memory, and every permission by default.
+Vegvisir Agent Harness is a secure Rust software development harness for people who want a powerful coding and engineering assistant without handing the harness every secret, every memory, and every permission by default.
 
 It brings the main pieces of the system into one repository: the Vegvisir Rust harness, CMS-v2 memory, HBSE secret brokering, USRL contracts, MCP client support, custom agents, skills, approvals, and workspace-aware sessions.
 
-The goal is straightforward: make high-capability agent work practical, inspectable, and controlled. Vegvisir can run interactively in a terminal UI, run headlessly on an agent server, switch between projects, use persistent memory, call tools, and route provider or MCP credentials through HBSE instead of storing plaintext secrets in the harness.
+The goal is straightforward: make high-capability software development work practical, inspectable, and controlled. Vegvisir can run interactively in a terminal UI, run headlessly on an agent server, switch between projects, use persistent memory, call development tools, and route provider or MCP credentials through HBSE instead of storing plaintext secrets in the harness.
+
+Vegvisir is not a general AI automation assistant in the style of broad task automation systems. It is designed first as a secure software development system: project workspaces, coding workflows, controlled tool access, memory scoped to engineering context, auditable actions, approval gates, and zero-knowledge secret handling. It can support automation inside those development workflows, but it should not be classified as a general-purpose automation agent harness.
 
 ## What Is Included
 
@@ -29,7 +31,9 @@ Vegvisir-harness/
 - Streams provider output into the harness when the provider supports streaming.
 - Supports OpenAI, OpenAI-compatible providers, OpenAI SSO, HBSE-brokered OpenAI-compatible requests, Anthropic, Google, Azure OpenAI, and local/demo providers.
 - Exposes workspace-scoped tools for file IO, command execution, tests, memory recall, MCP calls, and runtime plugins.
-- Uses an approval queue for risky operations, with approve-once, approve-for-session, edit, and deny flows.
+- Keeps risky tools disabled by default. Risky file, command, external, destructive, or privileged actions must be manually enabled for the current session before they can be used.
+- Treats risky-tool enablement and action approval as separate controls. If risky tools are not enabled for the session, the agent cannot run those tools even when the user approves or asks for the action.
+- Uses an approval queue for risky operations when risky tools are enabled, with approve-once, approve-for-session, edit, and deny flows.
 - Includes a startup-only dangerous bypass mode for explicitly trusted high-risk sessions.
 - Uses CMS-v2 as the memory system, with global, user, project, workspace, session, and agent scopes.
 - Uses HBSE for secret and auth isolation so provider and service credentials can stay outside the harness.
