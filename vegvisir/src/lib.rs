@@ -1,5 +1,6 @@
 pub mod app;
 pub mod attachments;
+pub mod bridge;
 pub mod checkpoints;
 pub mod command_registry;
 pub mod context;

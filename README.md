@@ -36,6 +36,7 @@ Vegvisir-harness/
 - Supports persistent custom agents with their own prompts, modes, memory scopes, tool permissions, skills, USRL bindings, MCP access, provider defaults, and model defaults.
 - Supports workspace/project switching with the right session and memory scope restored.
 - Renders Markdown in the TUI, including code fences and tables.
+- Exposes a JSONL app-server bridge for future overlay interfaces and desktop shells.
 - Includes verification, eval, trace, and audit surfaces for production hardening.
 
 ## Install
@@ -116,6 +117,12 @@ Run headlessly:
 vegvisir --workspace /path/to/project --provider openai-hbse --model gpt-5.5 run "Summarize this repository"
 ```
 
+Run the app-server bridge for an external overlay:
+
+```bash
+vegvisir --provider openai-hbse --model gpt-5.5 app-server --workspace /path/to/project
+```
+
 Check the installation:
 
 ```bash
@@ -151,6 +158,7 @@ The usage docs include command trees, explanations, and examples for the include
 - [HBSE usage](docs/hbse-usage.md)
 - [USRL usage](docs/usrl-usage.md)
 - [USRL language reference](docs/usrl-language-reference.md)
+- [Overlay integration](docs/overlay-integration.md)
 - [MCP, tools, approvals, and security](docs/security-and-operations.md)
 - [Development and release workflow](docs/development.md)
 
