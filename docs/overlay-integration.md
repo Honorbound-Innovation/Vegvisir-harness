@@ -24,6 +24,18 @@ git switch vegvisir-overlay-integration
 
 Keep `main` releasable while the overlay protocol and UI integration mature.
 
+## Vendored T3 Code Overlay
+
+The integration branch includes the T3 Code source tree under:
+
+```text
+components/t3code-overlay
+```
+
+That source tree now contains a `vegvisir` provider driver. The driver starts `vegvisir app-server`, sends user turns through the JSONL protocol, streams assistant deltas into the overlay runtime, and maps Vegvisir approval requests into overlay approval events.
+
+The overlay must stay a presentation and workflow layer. It must not call provider APIs, read HBSE secrets, execute tools, or mutate CMS-v2 state directly.
+
 ## App Server Command
 
 Vegvisir now exposes a JSONL app-server bridge:

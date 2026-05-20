@@ -331,6 +331,59 @@ export const OpenCodeSettings = makeProviderSettingsSchema(
 );
 export type OpenCodeSettings = typeof OpenCodeSettings.Type;
 
+export const VegvisirSettings = makeProviderSettingsSchema(
+  {
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(true)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("vegvisir").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the Vegvisir binary used by this overlay instance.",
+        providerSettingsForm: { placeholder: "vegvisir", clearWhenEmpty: "omit" },
+      }),
+    ),
+    defaultProvider: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Default provider",
+        description: "Optional Vegvisir provider override, such as openai-hbse or openai-sso.",
+        providerSettingsForm: { placeholder: "openai-hbse", clearWhenEmpty: "omit" },
+      }),
+    ),
+    defaultModel: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Default model",
+        description: "Optional Vegvisir model override.",
+        providerSettingsForm: { placeholder: "gpt-5.5", clearWhenEmpty: "omit" },
+      }),
+    ),
+    defaultAgent: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Default agent",
+        description: "Optional Vegvisir agent id to activate for new overlay sessions.",
+        providerSettingsForm: { placeholder: "agent-red", clearWhenEmpty: "omit" },
+      }),
+    ),
+    dangerousBypass: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({
+        title: "Dangerous bypass",
+        description:
+          "Launch Vegvisir with --dangerously-bypass-approvals-and-sandbox. Use only for explicitly trusted sessions.",
+        providerSettingsForm: { control: "switch" },
+      }),
+    ),
+  },
+  {
+    order: ["binaryPath", "defaultProvider", "defaultModel", "defaultAgent", "dangerousBypass"],
+  },
+);
+export type VegvisirSettings = typeof VegvisirSettings.Type;
+
 export const ObservabilitySettings = Schema.Struct({
   otlpTracesUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   otlpMetricsUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
@@ -370,6 +423,7 @@ export const ServerSettings = Schema.Struct({
     claudeAgent: ClaudeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     cursor: CursorSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     opencode: OpenCodeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    vegvisir: VegvisirSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   }).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // New driver-agnostic instance map. Keyed by `ProviderInstanceId`; values
   // are `ProviderInstanceConfig` envelopes. The driver-specific config blob
@@ -445,6 +499,15 @@ const OpenCodeSettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
+const VegvisirSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  binaryPath: Schema.optionalKey(TrimmedString),
+  defaultProvider: Schema.optionalKey(TrimmedString),
+  defaultModel: Schema.optionalKey(TrimmedString),
+  defaultAgent: Schema.optionalKey(TrimmedString),
+  dangerousBypass: Schema.optionalKey(Schema.Boolean),
+});
+
 export const ServerSettingsPatch = Schema.Struct({
   // Server settings
   enableAssistantStreaming: Schema.optionalKey(Schema.Boolean),
@@ -464,6 +527,7 @@ export const ServerSettingsPatch = Schema.Struct({
       claudeAgent: Schema.optionalKey(ClaudeSettingsPatch),
       cursor: Schema.optionalKey(CursorSettingsPatch),
       opencode: Schema.optionalKey(OpenCodeSettingsPatch),
+      vegvisir: Schema.optionalKey(VegvisirSettingsPatch),
     }),
   ),
   // Whole-map replacement for the new instance config. Patching individual
