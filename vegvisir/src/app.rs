@@ -519,8 +519,9 @@ impl TuiApplication {
                 "Screen cleared.".to_string()
             }
             "/redraw" => {
+                self.clear_requested = true;
                 self.redraw_requested = true;
-                "Redraw requested.".to_string()
+                "Full redraw requested.".to_string()
             }
             "/cancel" => self.cancel_pending_response(),
             "/history" => self.history(),
@@ -1585,8 +1586,10 @@ impl TuiApplication {
             self.poll_background_jobs();
             self.pulse_activity();
             if self.clear_requested {
+                terminal.clear()?;
                 self.chat_scroll_offset = 0;
                 self.clear_requested = false;
+                self.redraw_requested = true;
             }
             if self.redraw_requested
                 || self.pending_send.is_some()

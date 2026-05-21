@@ -3372,6 +3372,20 @@ fn tui_keypress_requests_redraw_immediately() -> anyhow::Result<()> {
 }
 
 #[test]
+fn redraw_command_requests_full_terminal_clear() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let home = tmp.path().join("home");
+    let mut app = TuiApplication::with_data_root(tmp.path(), &home)?;
+
+    let response = app.execute_command("/redraw")?.unwrap();
+
+    assert_eq!(response, "Full redraw requested.");
+    assert!(app.redraw_requested);
+    assert!(app.clear_requested);
+    Ok(())
+}
+
+#[test]
 fn tui_arrow_keys_move_input_cursor_for_text_editing() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let home = tmp.path().join("home");
