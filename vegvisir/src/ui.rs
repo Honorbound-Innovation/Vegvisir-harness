@@ -634,7 +634,7 @@ pub mod layout {
                         .paint(format!("state {}", session.status), state_style),
                     self.theme
                         .paint(format!("session {}", session.session_id), "dim"),
-                    self.theme.paint("/status /tools /skills /select", "dim"),
+                    self.theme.paint("/status /tools /skills /history", "dim"),
                 ),
                 width,
             )
@@ -940,7 +940,7 @@ pub mod layout {
         fn key_hint_bar(&self, width: usize) -> String {
             self.theme.paint(
                 truncate(
-                    "[Enter] send  [PgUp/PgDn] chat  [/] commands  [/select] copy transcript  [?] help  [Ctrl+C] quit",
+                    "[Enter] send  [PgUp/PgDn] chat  [/] commands  [drag] select text  [?] help  [Ctrl+C] quit",
                     width,
                 ),
                 "dim",

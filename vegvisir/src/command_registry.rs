@@ -107,12 +107,6 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
             "/diff [--staged|--cached|--stat] [path]",
             &[],
         ),
-        cmd(
-            "/select",
-            "open plain transcript view for terminal selection",
-            "/select",
-            &["/transcript"],
-        ),
         cmd("/save", "save the current session", "/save", &[]),
         cmd("/retry", "retry last assistant response", "/retry", &[]),
         cmd("/undo", "remove last exchange", "/undo", &[]),

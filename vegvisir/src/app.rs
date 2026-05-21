@@ -12,16 +12,12 @@ use std::{
 };
 
 use crossterm::{
-    cursor::{MoveTo, Show},
     event::{
-        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind,
+        self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyModifiers,
+        MouseEvent, MouseEventKind,
     },
     execute,
-    terminal::{
-        Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
-        enable_raw_mode,
-    },
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use serde_json::{Value, json};
 
@@ -1005,19 +1001,6 @@ impl TuiApplication {
         self.input.update_suggestions(Vec::new());
 
         if raw.starts_with('/') {
-            if self
-                .commands
-                .parse_with_aliases(&raw)
-                .map(|(command, _)| command)
-                == Some("/select".to_string())
-            {
-                if let Err(error) = self.open_selection_view() {
-                    self.push_system_message(format!("Command failed: {error}"));
-                    self.autosave_session();
-                }
-                self.redraw_requested = true;
-                return;
-            }
             match self.execute_command(&raw) {
                 Ok(Some(response)) if !response.is_empty() => {
                     self.push_system_message(response);
@@ -2476,38 +2459,6 @@ impl TuiApplication {
             .map(|message| format!("{}: {}", message.role, message.content))
             .collect::<Vec<_>>()
             .join("\n")
-    }
-
-    fn open_selection_view(&mut self) -> anyhow::Result<()> {
-        if !io::stdout().is_terminal() {
-            self.push_system_message(self.transcript_text());
-            return Ok(());
-        }
-        disable_raw_mode()?;
-        let mut stdout = io::stdout();
-        execute!(
-            stdout,
-            Show,
-            DisableBracketedPaste,
-            LeaveAlternateScreen,
-            Clear(ClearType::All),
-            MoveTo(0, 0)
-        )?;
-        writeln!(
-            stdout,
-            "Vegvisir transcript selection view\nSession: {}\nWorkspace: {}\n\n{}\n\n-- Select/copy with your terminal. Press Enter to return to Vegvisir. --",
-            self.session.session_id,
-            self.cwd.display(),
-            self.transcript_text()
-        )?;
-        stdout.flush()?;
-        let mut line = String::new();
-        let _ = io::stdin().read_line(&mut line);
-        enable_raw_mode()?;
-        execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
-        stdout.flush()?;
-        self.redraw_requested = true;
-        Ok(())
     }
 
     fn retry(&mut self) -> anyhow::Result<String> {
@@ -5394,12 +5345,7 @@ impl TerminalGuard {
     fn enter() -> anyhow::Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(
-            stdout,
-            EnterAlternateScreen,
-            EnableBracketedPaste,
-            EnableMouseCapture
-        )?;
+        execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
         stdout.flush()?;
         Ok(Self)
     }
@@ -5409,12 +5355,7 @@ impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
         let mut stdout = io::stdout();
-        let _ = execute!(
-            stdout,
-            DisableMouseCapture,
-            DisableBracketedPaste,
-            LeaveAlternateScreen
-        );
+        let _ = execute!(stdout, DisableBracketedPaste, LeaveAlternateScreen);
     }
 }
 

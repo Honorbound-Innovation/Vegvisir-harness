@@ -51,9 +51,10 @@ The default `vegvisir` command opens the native terminal interface. The TUI is b
 
 - Provider responses stream into the chat view as they arrive.
 - Scrolling up pauses follow mode so new output does not steal your place; `End` returns to the live bottom.
-- Mouse wheel scrolling works in the chat, command palette, inspector overlays, diff views, and approval queue.
+- Native terminal text selection is enabled by default, so model output can be selected and copied with the terminal's normal mouse and context-menu behavior.
+- Use `PageUp`, `PageDown`, `Home`, and `End` to move through long chat output without taking over terminal text selection.
 - `Ctrl+P` opens the command palette, and `/` opens slash command selection from an empty input.
-- Slash command selection supports arrow keys, `PageUp`, `PageDown`, `Home`, `End`, mouse wheel movement, and `Enter` to run the selected command.
+- Slash command selection supports arrow keys, `PageUp`, `PageDown`, `Home`, `End`, and `Enter` to run the selected command.
 - `Ctrl+F` opens transcript search. Type a query, use `Enter` or `Down` for the next match, `Up` for the previous match, and `Esc` to close search.
 - Approval prompts are shown as an in-session modal. Use `Enter` or `A` to approve once, `S` to allow the matching action for the current session, and `D` to deny. The older `1`, `2`, and `3` shortcuts still work.
 - `Ctrl+C` cancels an in-flight model response first. If no response is running, it exits the TUI.

@@ -380,7 +380,6 @@ Run `/help` inside the TUI to print the live command reference. The current tree
 /redraw
 /cancel
 /history
-/select
 /save
 /retry
 /undo
@@ -435,7 +434,6 @@ Use these for project movement and conversation lifecycle:
 /undo
 /branch [name]
 /compress [topic]
-/select
 ```
 
 Examples:
@@ -445,7 +443,7 @@ Examples:
 /projects name vegvisir /mnt/storage/Projects/Vegvisir-harness
 /projects use vegvisir
 /new Test Secret Project
-/select
+/history
 ```
 
 `/workspace` changes the active workspace, retargets workspace-scoped tools, and moves CMS project recall to that workspace scope.

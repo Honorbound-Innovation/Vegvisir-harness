@@ -2575,7 +2575,7 @@ fn application_executes_core_commands_and_demo_runner() -> anyhow::Result<()> {
             .unwrap()
             .contains("user: hello")
     );
-    assert!(app.execute_command("/help")?.unwrap().contains("/select"));
+    assert!(!app.execute_command("/help")?.unwrap().contains("/select"));
     assert!(app.execute_command("/help")?.unwrap().contains("/cancel"));
     assert_eq!(
         app.execute_command("/cancel")?.unwrap(),
