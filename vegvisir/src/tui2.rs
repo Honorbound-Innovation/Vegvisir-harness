@@ -44,16 +44,7 @@ pub fn draw(f: &mut Frame<'_>, app: &mut TuiApplication) {
         .split(area);
 
     draw_header(f, app, chunks[0]);
-    if should_use_sidebar(area.width) {
-        let body = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(30), Constraint::Min(20)])
-            .split(chunks[1]);
-        draw_sidebar(f, app, body[0]);
-        draw_main_pane(f, app, body[1], area.width);
-    } else {
-        draw_chat(f, app, chunks[1]);
-    }
+    draw_chat(f, app, chunks[1]);
     if activity_height > 0 {
         draw_activity_strip(f, app, pending.as_ref(), chunks[2]);
     }
@@ -83,14 +74,6 @@ pub fn draw(f: &mut Frame<'_>, app: &mut TuiApplication) {
     set_input_cursor(f, app, chunks[3]);
 }
 
-fn should_use_sidebar(width: u16) -> bool {
-    width >= 112
-}
-
-fn should_use_work_log(width: u16) -> bool {
-    width >= 140
-}
-
 fn activity_strip_height(app: &TuiApplication, pending: Option<&ApprovalRequest>) -> u16 {
     let has_activity = pending.is_some()
         || app.session.status == "streaming"
@@ -100,19 +83,6 @@ fn activity_strip_height(app: &TuiApplication, pending: Option<&ApprovalRequest>
         (true, true) => 4,
         (true, false) | (false, true) => 3,
         (false, false) => 0,
-    }
-}
-
-fn draw_main_pane(f: &mut Frame<'_>, app: &TuiApplication, area: Rect, terminal_width: u16) {
-    if should_use_work_log(terminal_width) && area.height >= 18 {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(8), Constraint::Length(8)])
-            .split(area);
-        draw_chat(f, app, chunks[0]);
-        draw_work_log(f, app, chunks[1]);
-    } else {
-        draw_chat(f, app, area);
     }
 }
 
@@ -139,112 +109,6 @@ fn draw_header(f: &mut Frame<'_>, app: &TuiApplication, area: Rect) {
         .style(Style::default().fg(FG).bg(BG))
         .block(Block::default().borders(Borders::BOTTOM).border_style(DIM));
     f.render_widget(paragraph, area);
-}
-
-fn draw_sidebar(f: &mut Frame<'_>, app: &TuiApplication, area: Rect) {
-    let pending = app.tool_executor.guardrails.approvals.pending_len();
-    let bypass = if app.dangerously_bypass_approvals_and_sandbox {
-        "dangerous bypass"
-    } else if app.risky_tools_enabled {
-        "risky enabled"
-    } else {
-        "approval gated"
-    };
-    let cwd = app.session.cwd.as_str();
-    let cwd = if cwd.len() > 23 {
-        format!("...{}", &cwd[cwd.len().saturating_sub(20)..])
-    } else {
-        cwd.to_string()
-    };
-    let lines = vec![
-        Line::from(vec![
-            Span::styled("state ", Style::default().fg(DIM)),
-            Span::styled(app.session.status.clone(), state_style(&app.session.status)),
-        ]),
-        Line::from(vec![
-            Span::styled("provider ", Style::default().fg(DIM)),
-            Span::styled(
-                app.session.current_provider.clone(),
-                Style::default().fg(CYAN),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("model ", Style::default().fg(DIM)),
-            Span::styled(
-                app.session.current_model.clone(),
-                Style::default().fg(GREEN),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("workspace ", Style::default().fg(DIM)),
-            Span::styled(cwd, Style::default().fg(FG)),
-        ]),
-        Line::from(vec![
-            Span::styled("session ", Style::default().fg(DIM)),
-            Span::styled(app.session.session_id.clone(), Style::default().fg(FG)),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("tools ", Style::default().fg(DIM)),
-            Span::styled(
-                app.session.enabled_tools.len().to_string(),
-                Style::default().fg(CYAN),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("skills ", Style::default().fg(DIM)),
-            Span::styled(
-                app.session.enabled_skills.len().to_string(),
-                Style::default().fg(CYAN),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("approvals ", Style::default().fg(DIM)),
-            Span::styled(
-                pending.to_string(),
-                if pending > 0 {
-                    Style::default().fg(AMBER).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(DIM)
-                },
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("policy ", Style::default().fg(DIM)),
-            Span::styled(
-                bypass,
-                Style::default().fg(if app.dangerously_bypass_approvals_and_sandbox {
-                    RED
-                } else {
-                    AMBER
-                }),
-            ),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled("/help commands", Style::default().fg(DIM))),
-        Line::from(Span::styled("/tools inventory", Style::default().fg(DIM))),
-        Line::from(Span::styled("/models switch", Style::default().fg(DIM))),
-        Line::from(Span::styled("/workspace path", Style::default().fg(DIM))),
-    ];
-    let paragraph = Paragraph::new(lines)
-        .style(Style::default().fg(FG).bg(BG))
-        .block(
-            Block::default()
-                .title(" status ")
-                .borders(Borders::RIGHT)
-                .border_style(Style::default().fg(BORDER))
-                .padding(Padding::right(1)),
-        );
-    f.render_widget(paragraph, area);
-}
-
-fn state_style(state: &str) -> Style {
-    match state {
-        "ready" => Style::default().fg(GREEN),
-        "streaming" => Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
-        "error" => Style::default().fg(RED),
-        _ => Style::default().fg(AMBER),
-    }
 }
 
 fn draw_chat(f: &mut Frame<'_>, app: &TuiApplication, area: Rect) {
@@ -439,24 +303,7 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
-fn draw_work_log(f: &mut Frame<'_>, app: &TuiApplication, area: Rect) {
-    let mut lines = work_log_lines(app, area.width.saturating_sub(2) as usize);
-    let visible_height = area.height.saturating_sub(2).max(1) as usize;
-    if lines.len() > visible_height {
-        lines = lines[lines.len().saturating_sub(visible_height)..].to_vec();
-    }
-    let paragraph = Paragraph::new(lines)
-        .style(Style::default().fg(FG).bg(BG))
-        .block(
-            Block::default()
-                .title(" work log ")
-                .borders(Borders::TOP)
-                .border_style(Style::default().fg(BORDER)),
-        )
-        .wrap(Wrap { trim: false });
-    f.render_widget(paragraph, area);
-}
-
+#[cfg(test)]
 fn work_log_lines(app: &TuiApplication, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     if app.pending_send.is_some() {
@@ -513,6 +360,7 @@ fn work_log_lines(app: &TuiApplication, width: usize) -> Vec<Line<'static>> {
     lines
 }
 
+#[cfg(test)]
 fn work_log_line(label: &str, detail: &str, color: Color, width: usize) -> Line<'static> {
     let detail_width = width.saturating_sub(label.len() + 5).max(8);
     Line::from(vec![
@@ -2020,11 +1868,33 @@ mod tests {
     }
 
     #[test]
-    fn ratatui_layout_uses_sidebar_only_when_wide() {
-        assert!(!should_use_sidebar(111));
-        assert!(should_use_sidebar(112));
-        assert!(!should_use_work_log(139));
-        assert!(should_use_work_log(140));
+    fn ratatui_layout_keeps_chat_body_full_width_for_native_selection() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app =
+            crate::app::TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))
+                .unwrap();
+        app.session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: "copyable chat body".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 32)).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<Vec<_>>()
+            .join("");
+
+        assert!(rendered.contains("copyable chat body"));
+        assert!(!rendered.contains("state ready"));
+        assert!(!rendered.contains("work log"));
     }
 
     #[test]

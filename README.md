@@ -51,7 +51,7 @@ The default `vegvisir` command opens the native terminal interface. The TUI is b
 
 - Provider responses stream into the chat view as they arrive.
 - Scrolling up pauses follow mode so new output does not steal your place; `End` returns to the live bottom.
-- Native terminal text selection is enabled by default, so model output can be selected and copied with the terminal's normal mouse and context-menu behavior.
+- Native terminal text selection is enabled by default, so model output can be selected and copied with the terminal's normal mouse and context-menu behavior. The default TUI keeps the conversation in one full-width body so normal drag selection does not cross into status or work-log panes.
 - Use `PageUp`, `PageDown`, `Home`, and `End` to move through long chat output without taking over terminal text selection.
 - `Ctrl+P` opens the command palette, and `/` opens slash command selection from an empty input.
 - Slash command selection supports arrow keys, `PageUp`, `PageDown`, `Home`, `End`, and `Enter` to run the selected command.
