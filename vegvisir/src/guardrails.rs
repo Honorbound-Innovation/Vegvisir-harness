@@ -206,13 +206,40 @@ impl Default for PermissionPolicy {
             allow_risky_tools: false,
             require_human_approval: false,
             bypass_approvals_and_sandbox: false,
-            allowed_commands: ["pytest", "python", "ls", "pwd"]
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
+            allowed_commands: default_allowed_commands(),
             denied_tools: BTreeSet::new(),
         }
     }
+}
+
+pub fn default_allowed_commands() -> BTreeSet<String> {
+    [
+        "awk", "cargo", "cat", "find", "git", "grep", "head", "ls", "nl", "node", "npm", "python",
+        "python3", "pytest", "pwd", "rg", "sed", "tail", "test", "wc",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+pub fn normalize_command_name(command: &str) -> Option<String> {
+    let command = command.trim();
+    if command.is_empty()
+        || command.starts_with('-')
+        || command.contains('/')
+        || command.contains('\\')
+    {
+        return None;
+    }
+    Some(command.to_string())
+}
+
+pub fn command_name_from_args(args: &Map<String, Value>) -> Option<String> {
+    args.get("command")
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+        .and_then(Value::as_str)
+        .and_then(normalize_command_name)
 }
 
 #[derive(Clone, Debug, Default)]
@@ -230,6 +257,32 @@ impl GuardrailEngine {
             anyhow::bail!("Tool is denied by policy: {}", tool.name);
         }
         let mut approval_granted = false;
+        if tool.name == "run_command"
+            && let Some(executable) = command_name_from_args(args)
+            && !self.policy.allowed_commands.contains(&executable)
+        {
+            let request_id = approval_request_id(&tool.name, args);
+            if self
+                .approvals
+                .consume_approval(&request_id, &tool.name, args)
+            {
+                approval_granted = true;
+            } else {
+                let request = ApprovalRequest {
+                    id: request_id,
+                    reason: format!(
+                        "Shell command is not allow-listed: {executable}. Approve once or allow this command for the session."
+                    ),
+                    tool_name: tool.name.clone(),
+                    args: args.clone(),
+                    risk_label: "command-allow".to_string(),
+                };
+                let id = request.id.clone();
+                let reason = request.reason.clone();
+                self.approvals.enqueue(request);
+                anyhow::bail!("{reason}; approval_id={id}");
+            }
+        }
         if self.policy.require_human_approval && tool.risky && !self.policy.allow_risky_tools {
             let request_id = approval_request_id(&tool.name, args);
             if self
@@ -254,7 +307,7 @@ impl GuardrailEngine {
         if tool.risky && !self.policy.allow_risky_tools && !approval_granted {
             anyhow::bail!("Risky tool requires permission: {}", tool.name);
         }
-        if tool.name == "run_command" {
+        if tool.name == "run_command" && !approval_granted {
             let executable = args
                 .get("command")
                 .and_then(Value::as_array)

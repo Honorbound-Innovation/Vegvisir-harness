@@ -393,7 +393,8 @@ Run `/help` inside the TUI to print the live command reference. The current tree
 /agent [list|templates|create|design|create-template|clone|import|export|use|show|delete|mode|provider|model|prompt|describe|allow-tool|revoke-tool|enable-skill|disable-skill|bind-usrl|unbind-usrl|allow-mcp|revoke-mcp|clear] [id]
 /attach [path|clear]
 /help
-/tools [status|allow-risky|deny-risky|require-approval|no-approval]
+/tools [status|allow-risky|deny-risky|require-approval|no-approval|commands]
+/tools commands [list|add <cmd...>|remove <cmd...>|reset]
 /approvals [list|show <id>|approve <id>|session <id>|edit <id> <json-args>|deny <id>]
 /skills
 /recall [--limit N] [--global] <query>

@@ -523,6 +523,7 @@ fn sandbox_and_guardrails_block_risky_actions() -> anyhow::Result<()> {
 #[test]
 fn command_allow_list_blocks_unknown_executables() -> anyhow::Result<()> {
     let tmp = tempdir()?;
+    fs::write(tmp.path().join("sample.txt"), "needle\n")?;
     let mut registry = build_builtin_registry(tmp.path())?;
     let mut executor = vegvisir_rust::tools::ToolExecutor {
         registry: registry.clone(),
@@ -536,6 +537,16 @@ fn command_allow_list_blocks_unknown_executables() -> anyhow::Result<()> {
         runtime_policy: vegvisir_rust::policy::RuntimePolicy::default(),
         logger: vegvisir_rust::observability::EventLogger::default(),
     };
+    let grep = executor.execute(vegvisir_rust::types::ToolCall {
+        name: "run_command".to_string(),
+        args: json!({"command": ["grep", "needle", "sample.txt"]})
+            .as_object()
+            .unwrap()
+            .clone(),
+    });
+    assert!(grep.ok, "{}", grep.content);
+    assert!(grep.content.contains("needle"));
+
     let obs = executor.execute(vegvisir_rust::types::ToolCall {
         name: "run_command".to_string(),
         args: json!({"command": ["rm", "-rf", "."]})
@@ -544,7 +555,8 @@ fn command_allow_list_blocks_unknown_executables() -> anyhow::Result<()> {
             .clone(),
     });
     assert!(!obs.ok);
-    assert!(obs.content.contains("Command is not allow-listed"));
+    assert!(obs.content.contains("Shell command is not allow-listed"));
+    assert!(obs.content.contains("approval_id="));
     registry.register(Tool::new(
         "noop",
         "noop",
@@ -552,6 +564,61 @@ fn command_allow_list_blocks_unknown_executables() -> anyhow::Result<()> {
         json!({}),
         false,
     ))?;
+    Ok(())
+}
+
+#[test]
+fn command_allow_list_can_be_managed_and_approved_from_tui() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+    let commands = app.execute_command("/tools commands")?.unwrap();
+    assert!(commands.contains("grep"), "{commands}");
+    assert!(commands.contains("rg"), "{commands}");
+
+    let removed = app.execute_command("/tools commands remove grep")?.unwrap();
+    assert!(removed.contains("grep"));
+    let commands = app.execute_command("/tools commands")?.unwrap();
+    assert!(!commands.contains("grep,"));
+    let added = app.execute_command("/tools commands add grep")?.unwrap();
+    assert!(added.contains("grep"));
+
+    app.execute_command("/tools allow-risky")?;
+    let blocked = app.tool_executor.execute(vegvisir_rust::types::ToolCall {
+        name: "run_command".to_string(),
+        args: json!({"command": ["sh", "-c", "printf approved-command"]})
+            .as_object()
+            .unwrap()
+            .clone(),
+    });
+    assert!(!blocked.ok);
+    assert!(
+        blocked
+            .content
+            .contains("Shell command is not allow-listed")
+    );
+    let approval_id = app
+        .tool_executor
+        .guardrails
+        .approvals
+        .pending_ids()
+        .first()
+        .cloned()
+        .expect("pending command approval");
+    let approved = app
+        .execute_command(&format!("/approvals session {approval_id}"))?
+        .unwrap();
+    assert!(
+        approved.contains("allowed shell command `sh`"),
+        "{approved}"
+    );
+    assert!(approved.contains("approved-command"), "{approved}");
+    assert!(
+        app.tool_executor
+            .guardrails
+            .policy
+            .allowed_commands
+            .contains("sh")
+    );
     Ok(())
 }
 

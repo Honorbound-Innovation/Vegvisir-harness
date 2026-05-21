@@ -1696,7 +1696,14 @@ fn draw_approval_modal(
         Line::from(vec![
             Span::styled("[Enter/A] Approve once", Style::default().fg(GREEN)),
             Span::raw("   "),
-            Span::styled("[S] Allow session", Style::default().fg(CYAN)),
+            Span::styled(
+                if approval.risk_label == "command-allow" {
+                    "[S] Allow command this session"
+                } else {
+                    "[S] Allow session"
+                },
+                Style::default().fg(CYAN),
+            ),
             Span::raw("   "),
             Span::styled("[D] Deny", Style::default().fg(RED)),
             Span::raw("   "),

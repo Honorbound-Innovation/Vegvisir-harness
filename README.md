@@ -69,6 +69,7 @@ Useful TUI commands:
 /model                inspect or switch model
 /workspace            switch project workspace and restore its active session
 /tools                inspect or adjust tool permissions
+/tools commands       list, add, remove, or reset allowed shell commands
 /tool-limit           show or set max tool-call rounds per model turn
 /approvals            inspect pending tool approvals
 /diff                 show current workspace diff

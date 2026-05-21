@@ -35,7 +35,10 @@ use crate::{
         SessionStore, default_system_prompt, default_tool_definitions, load_skill_definitions,
     },
     environment::get_env,
-    guardrails::{ApprovalRequest, GuardrailEngine, PermissionPolicy},
+    guardrails::{
+        ApprovalRequest, GuardrailEngine, PermissionPolicy, command_name_from_args,
+        default_allowed_commands, normalize_command_name,
+    },
     mcp::{load_mcp_servers, register_mcp_tools},
     memory::{VegvisirCms, VegvisirCmsConfig, default_vegvisir_data_root},
     model_discovery::discover_provider_models,
@@ -3548,6 +3551,12 @@ impl TuiApplication {
         ) {
             return self.tool_limit_command(&args[1..]);
         }
+        if matches!(
+            args.first().map(String::as_str),
+            Some("commands" | "command" | "allowed-commands" | "allow-command")
+        ) {
+            return self.tool_commands_command(&args[1..]);
+        }
         if let Some(action) = args.first().map(|arg| arg.as_str()) {
             match action {
                 "allow-risky" | "enable-risky" | "deny-risky" | "disable-risky"
@@ -3572,8 +3581,17 @@ impl TuiApplication {
                     return "Risky tools disabled for this running session.".to_string();
                 }
                 "status" => {
+                    let mut commands = self
+                        .tool_executor
+                        .guardrails
+                        .policy
+                        .allowed_commands
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    commands.sort();
                     return format!(
-                        "Risky tools: {}\nHuman approval: {}\nDangerous bypass: {}\nPending approvals: {}",
+                        "Risky tools: {}\nHuman approval: {}\nDangerous bypass: {}\nPending approvals: {}\nAllowed shell commands: {}",
                         if self.tool_executor.guardrails.policy.allow_risky_tools {
                             "enabled"
                         } else {
@@ -3594,7 +3612,8 @@ impl TuiApplication {
                         } else {
                             "disabled"
                         },
-                        self.tool_executor.guardrails.approvals.pending_len()
+                        self.tool_executor.guardrails.approvals.pending_len(),
+                        commands.join(", ")
                     );
                 }
                 "require-approval" | "approval" => {
@@ -3618,7 +3637,7 @@ impl TuiApplication {
             .collect::<Vec<_>>()
             .join("\n");
         format!(
-            "{inventory}\nRisky tools: {}\nHuman approval: {}\nDangerous bypass: {}\nPending approvals: {}",
+            "{inventory}\nRisky tools: {}\nHuman approval: {}\nDangerous bypass: {}\nPending approvals: {}\nAllowed shell commands: use /tools commands",
             if self.tool_executor.guardrails.policy.allow_risky_tools {
                 "enabled"
             } else {
@@ -3641,6 +3660,81 @@ impl TuiApplication {
             },
             self.tool_executor.guardrails.approvals.pending_len()
         )
+    }
+
+    fn tool_commands_command(&mut self, args: &[String]) -> String {
+        match args.first().map(String::as_str) {
+            None | Some("list") | Some("show") | Some("status") => {
+                let mut commands = self
+                    .tool_executor
+                    .guardrails
+                    .policy
+                    .allowed_commands
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>();
+                commands.sort();
+                format!(
+                    "Allowed shell commands:\n{}\nUsage: /tools commands add <cmd...> | remove <cmd...> | reset",
+                    commands.join(", ")
+                )
+            }
+            Some("add") | Some("allow") => {
+                if args.len() < 2 {
+                    return "Usage: /tools commands add <cmd...>".to_string();
+                }
+                let mut added = Vec::new();
+                let mut rejected = Vec::new();
+                for command in args.iter().skip(1) {
+                    match normalize_command_name(command) {
+                        Some(command) => {
+                            if self
+                                .tool_executor
+                                .guardrails
+                                .policy
+                                .allowed_commands
+                                .insert(command.clone())
+                            {
+                                added.push(command);
+                            }
+                        }
+                        None => rejected.push(command.clone()),
+                    }
+                }
+                tool_command_update_message("Allowed", "added", added, rejected)
+            }
+            Some("remove") | Some("revoke") | Some("deny") => {
+                if args.len() < 2 {
+                    return "Usage: /tools commands remove <cmd...>".to_string();
+                }
+                let mut removed = Vec::new();
+                let mut rejected = Vec::new();
+                for command in args.iter().skip(1) {
+                    match normalize_command_name(command) {
+                        Some(command) => {
+                            if self
+                                .tool_executor
+                                .guardrails
+                                .policy
+                                .allowed_commands
+                                .remove(&command)
+                            {
+                                removed.push(command);
+                            }
+                        }
+                        None => rejected.push(command.clone()),
+                    }
+                }
+                tool_command_update_message("Removed", "removed", removed, rejected)
+            }
+            Some("reset") | Some("default") => {
+                self.tool_executor.guardrails.policy.allowed_commands = default_allowed_commands();
+                "Allowed shell commands reset to Vegvisir defaults.".to_string()
+            }
+            Some(_) => {
+                "Usage: /tools commands [list|add <cmd...>|remove <cmd...>|reset]".to_string()
+            }
+        }
     }
 
     fn tool_limit_command(&mut self, args: &[String]) -> String {
@@ -3745,10 +3839,23 @@ impl TuiApplication {
                     .approvals
                     .approve_for_session(id)
                 {
-                    Some(request) => self.execute_approved_request(
-                        "Approved matching call for this running session",
-                        request,
-                    ),
+                    Some(request) => {
+                        let mut prefix =
+                            "Approved matching call for this running session".to_string();
+                        if request.risk_label == "command-allow"
+                            && let Some(command) = command_name_from_args(&request.args)
+                        {
+                            self.tool_executor
+                                .guardrails
+                                .policy
+                                .allowed_commands
+                                .insert(command.clone());
+                            prefix = format!(
+                                "Approved matching call and allowed shell command `{command}` for this running session"
+                            );
+                        }
+                        self.execute_approved_request(&prefix, request)
+                    }
                     None => format!("Unknown pending approval: {id}"),
                 }
             }
@@ -5316,6 +5423,34 @@ fn join_or(args: &[String], default: &str) -> String {
         default.to_string()
     } else {
         args.join(" ")
+    }
+}
+
+fn tool_command_update_message(
+    action: &str,
+    empty_action: &str,
+    changed: Vec<String>,
+    rejected: Vec<String>,
+) -> String {
+    let mut lines = Vec::new();
+    if !changed.is_empty() {
+        lines.push(format!(
+            "{action} shell command{} for this running session: {}",
+            if changed.len() == 1 { "" } else { "s" },
+            changed.join(", ")
+        ));
+    }
+    if !rejected.is_empty() {
+        lines.push(format!(
+            "Rejected invalid command name{}: {}",
+            if rejected.len() == 1 { "" } else { "s" },
+            rejected.join(", ")
+        ));
+    }
+    if lines.is_empty() {
+        format!("No shell commands were {empty_action}.")
+    } else {
+        lines.join("\n")
     }
 }
 
