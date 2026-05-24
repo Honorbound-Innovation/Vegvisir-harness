@@ -762,6 +762,13 @@ pub mod layout {
                     width.saturating_sub(12).max(20),
                 ));
             }
+            if session
+                .messages
+                .last()
+                .is_some_and(|message| message.role == "assistant" && !message.content.is_empty())
+            {
+                lines.push(String::new());
+            }
             if session.status == "streaming" {
                 if let Some(activity) = self.activity_label(session) {
                     lines.push(format!(
