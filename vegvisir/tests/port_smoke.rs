@@ -6918,7 +6918,7 @@ fn openai_tool_loop_returns_last_observations_on_round_limit() -> anyhow::Result
 }
 
 #[test]
-fn builtin_file_tools_bound_model_visible_outputs() -> anyhow::Result<()> {
+fn builtin_file_tools_bound_list_files_and_read_full_file_outputs() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     for index in 0..550 {
         std::fs::write(tmp.path().join(format!("file-{index:03}.txt")), "x")?;
@@ -6947,8 +6947,15 @@ fn builtin_file_tools_bound_model_visible_outputs() -> anyhow::Result<()> {
         args: json!({"path": "large.txt"}).as_object().unwrap().clone(),
     });
     assert!(read.ok);
-    assert!(read.content.contains("read_file truncated"));
-    assert!(read.content.len() < 70 * 1024);
+    assert_eq!(read.content.len(), 80 * 1024);
+    assert_eq!(
+        read.data.get("output_truncated").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        read.data.get("bytes").and_then(Value::as_u64),
+        Some(80 * 1024)
+    );
     Ok(())
 }
 

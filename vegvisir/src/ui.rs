@@ -1,4 +1,6 @@
 pub mod input {
+    use unicode_width::UnicodeWidthChar;
+
     #[derive(Clone, Debug, Default, PartialEq, Eq)]
     pub struct Suggestion {
         pub value: String,
@@ -153,6 +155,17 @@ pub mod input {
             visual_line_spans(&self.buffer, width).len()
         }
 
+        pub fn visible_visual_cursor_position(
+            &self,
+            width: usize,
+            max_rows: usize,
+        ) -> (usize, usize) {
+            let (line, col) = self.visual_cursor_position(width);
+            let total = self.visual_line_count(width);
+            let hidden_rows = total.saturating_sub(max_rows.max(1));
+            (line.saturating_sub(hidden_rows), col)
+        }
+
         pub fn visual_cursor_position(&self, width: usize) -> (usize, usize) {
             visual_cursor_position(&self.buffer, self.cursor, width)
         }
@@ -162,7 +175,8 @@ pub mod input {
             if spans.len() <= 1 {
                 return false;
             }
-            let (line, column) = visual_cursor_position_from_spans(&spans, self.cursor);
+            let (line, column) =
+                visual_cursor_position_from_spans(&self.buffer, &spans, self.cursor);
             let target_line = line as isize + delta;
             if target_line < 0 || target_line >= spans.len() as isize {
                 return false;
@@ -170,7 +184,7 @@ pub mod input {
             let preferred = self.preferred_column.unwrap_or(column);
             self.preferred_column = Some(preferred);
             let (start, len) = spans[target_line as usize];
-            self.cursor = start + preferred.min(len);
+            self.cursor = cursor_for_display_column(&self.buffer, start, len, preferred);
             true
         }
 
@@ -242,16 +256,17 @@ pub mod input {
 
     fn visual_cursor_position(value: &str, cursor: usize, width: usize) -> (usize, usize) {
         let spans = visual_line_spans(value, width);
-        visual_cursor_position_from_spans(&spans, cursor)
+        visual_cursor_position_from_spans(value, &spans, cursor)
     }
 
     fn visual_cursor_position_from_spans(
+        value: &str,
         spans: &[(usize, usize)],
         cursor: usize,
     ) -> (usize, usize) {
         for (line, (start, len)) in spans.iter().copied().enumerate() {
             if cursor >= start && cursor <= start + len {
-                return (line, cursor.saturating_sub(start).min(len));
+                return (line, display_width_between(value, start, cursor));
             }
         }
         spans
@@ -259,10 +274,31 @@ pub mod input {
             .map(|(start, len)| {
                 (
                     spans.len().saturating_sub(1),
-                    cursor.saturating_sub(*start).min(*len),
+                    display_width_between(value, *start, cursor.min(*start + *len)),
                 )
             })
             .unwrap_or((0, 0))
+    }
+
+    fn cursor_for_display_column(value: &str, start: usize, len: usize, column: usize) -> usize {
+        let mut used = 0;
+        for (offset, ch) in value.chars().skip(start).take(len).enumerate() {
+            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if used + ch_width > column {
+                return start + offset;
+            }
+            used += ch_width;
+        }
+        start + len
+    }
+
+    fn display_width_between(value: &str, start: usize, end: usize) -> usize {
+        value
+            .chars()
+            .skip(start)
+            .take(end.saturating_sub(start))
+            .map(|ch| UnicodeWidthChar::width(ch).unwrap_or(0))
+            .sum()
     }
 
     fn visual_line_spans(value: &str, width: usize) -> Vec<(usize, usize)> {
@@ -273,22 +309,56 @@ pub mod input {
         let mut spans = Vec::new();
         let mut start = 0;
         let mut len = 0;
+        let mut current_width = 0;
         for (index, ch) in value.chars().enumerate() {
             if ch == '\n' {
                 spans.push((start, len));
                 start = index + 1;
                 len = 0;
+                current_width = 0;
                 continue;
             }
-            if len >= width {
+            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if current_width + ch_width > width && len > 0 {
                 spans.push((start, len));
                 start = index;
                 len = 0;
+                current_width = 0;
             }
             len += 1;
+            current_width += ch_width;
         }
         spans.push((start, len));
         spans
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::InputState;
+
+        #[test]
+        fn visual_cursor_tracks_multiline_input_with_tail_clipping() {
+            let mut input = InputState::default();
+            input.append_text(
+                "one
+two
+three
+four",
+                false,
+            );
+
+            assert_eq!(input.visual_line_count(20), 4);
+            assert_eq!(input.visual_cursor_position(20), (3, 4));
+            assert_eq!(input.visible_visual_cursor_position(20, 3), (2, 4));
+        }
+
+        #[test]
+        fn visual_cursor_uses_display_width_for_wide_characters() {
+            let mut input = InputState::default();
+            input.append_text("a界b", false);
+
+            assert_eq!(input.visual_cursor_position(20), (0, 4));
+        }
     }
 }
 
