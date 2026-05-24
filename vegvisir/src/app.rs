@@ -13,8 +13,8 @@ use std::{
 
 use crossterm::{
     event::{
-        self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyModifiers,
-        MouseEvent, MouseEventKind,
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -110,6 +110,7 @@ enum StreamEvent {
         name: String,
         ok: bool,
         summary: String,
+        detail: Option<String>,
     },
 }
 
@@ -1555,19 +1556,6 @@ impl TuiApplication {
             self.redraw_requested = true;
             return;
         }
-        if self.command_palette_open {
-            match mouse.kind {
-                MouseEventKind::ScrollUp => {
-                    self.input.move_selection_by_page(-1);
-                }
-                MouseEventKind::ScrollDown => {
-                    self.input.move_selection_by_page(1);
-                }
-                _ => return,
-            }
-            self.redraw_requested = true;
-            return;
-        }
         if self.diff_overlay.is_some() {
             self.diff_scroll_offset = apply_scroll_delta(self.diff_scroll_offset, delta);
             self.redraw_requested = true;
@@ -1851,9 +1839,17 @@ impl TuiApplication {
                             ProviderRunEvent::ToolStart { name, args } => {
                                 StreamEvent::ToolStart { name, args }
                             }
-                            ProviderRunEvent::ToolEnd { name, ok, summary } => {
-                                StreamEvent::ToolEnd { name, ok, summary }
-                            }
+                            ProviderRunEvent::ToolEnd {
+                                name,
+                                ok,
+                                summary,
+                                detail,
+                            } => StreamEvent::ToolEnd {
+                                name,
+                                ok,
+                                summary,
+                                detail,
+                            },
                         };
                         let _ = stream_tx.send(event);
                     }
@@ -2058,10 +2054,20 @@ impl TuiApplication {
                     self.session.activity = format!("using tool {name}");
                     self.push_live_tool_message(format!("Running tool: {name} {args}"));
                 }
-                StreamEvent::ToolEnd { name, ok, summary } => {
+                StreamEvent::ToolEnd {
+                    name,
+                    ok,
+                    summary,
+                    detail,
+                } => {
                     self.session.activity = format!("finished tool {name}");
                     let status = if ok { "finished" } else { "failed" };
-                    self.push_live_tool_message(format!("Tool {status}: {name} - {summary}"));
+                    let mut content = format!("Tool {status}: {name} - {summary}");
+                    if let Some(detail) = detail.filter(|detail| !detail.trim().is_empty()) {
+                        content.push_str("\n\n");
+                        content.push_str(&detail);
+                    }
+                    self.push_live_tool_message(content);
                 }
             }
         }
@@ -6115,7 +6121,12 @@ impl TerminalGuard {
     fn enter() -> anyhow::Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
+        execute!(
+            stdout,
+            EnterAlternateScreen,
+            EnableBracketedPaste,
+            EnableMouseCapture
+        )?;
         stdout.flush()?;
         Ok(Self)
     }
@@ -6125,7 +6136,12 @@ impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
         let mut stdout = io::stdout();
-        let _ = execute!(stdout, DisableBracketedPaste, LeaveAlternateScreen);
+        let _ = execute!(
+            stdout,
+            DisableMouseCapture,
+            DisableBracketedPaste,
+            LeaveAlternateScreen
+        );
     }
 }
 
@@ -7138,7 +7154,7 @@ pub(crate) fn terminal_frame(rendered: &str) -> String {
 mod tests {
     use super::{StreamEvent, TuiApplication};
     use crate::core::ChatMessage;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
     use std::sync::mpsc;
 
     #[test]
@@ -7147,6 +7163,28 @@ mod tests {
             super::terminal_frame("one\ntwo\nthree"),
             "one\x1b[K\r\ntwo\x1b[K\r\nthree\x1b[K"
         );
+    }
+
+    #[test]
+    fn mouse_wheel_scrolls_chat_when_command_palette_is_open() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.open_command_palette();
+        app.chat_scroll_offset = 0;
+        app.input.selected_suggestion = 3;
+
+        app.handle_mouse_event(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        assert_eq!(app.chat_scroll_offset, 3);
+        assert_eq!(app.input.selected_suggestion, 3);
+        assert!(app.command_palette_open);
+        assert!(app.redraw_requested);
+        Ok(())
     }
 
     #[test]
@@ -7193,6 +7231,7 @@ mod tests {
             name: "write_file".to_string(),
             ok: true,
             summary: "ok: Wrote src/lib.rs".to_string(),
+            detail: None,
         })?;
         app.poll_stream_events();
 

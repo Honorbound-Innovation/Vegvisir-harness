@@ -1452,8 +1452,8 @@ fn input_lines(input: &InputState, width: usize, max_rows: usize) -> Vec<Line<'s
         return tail_lines(lines, max_rows);
     }
     let mut lines = Vec::new();
-    for raw in input.buffer.lines() {
-        let wrapped = wrap_text(raw, width);
+    for raw in input.buffer.split('\n') {
+        let wrapped = wrap_preserve(raw, width);
         if wrapped.is_empty() {
             lines.push(Line::from(""));
         } else {
@@ -1657,8 +1657,10 @@ fn set_input_cursor(f: &mut Frame<'_>, app: &TuiApplication, area: Rect) {
         f.set_cursor_position(Position::new(x, y));
         return;
     }
-    let (line, col) = app.input.visual_cursor_position(width);
     let max_content_rows = area.height.saturating_sub(2).max(1) as usize;
+    let (line, col) = app
+        .input
+        .visible_visual_cursor_position(width, max_content_rows);
     let row = line.min(max_content_rows.saturating_sub(1)) as u16;
     let x = area.x + 2 + (col.min(width) as u16);
     let y = area.y + 1 + row;
@@ -1683,8 +1685,8 @@ fn paste_tail_preview(text: &str, width: usize, max_rows: usize) -> Vec<String> 
         return Vec::new();
     }
     let mut pieces = Vec::new();
-    for raw in text.lines() {
-        let wrapped = wrap_text(raw, width);
+    for raw in text.split('\n') {
+        let wrapped = wrap_preserve(raw, width);
         if wrapped.is_empty() {
             pieces.push(String::new());
         } else {
@@ -1730,40 +1732,6 @@ fn search_rect(area: Rect) -> Rect {
         width,
         height: 3,
     }
-}
-
-fn wrap_text(text: &str, width: usize) -> Vec<String> {
-    let width = width.max(1);
-    if text.is_empty() {
-        return Vec::new();
-    }
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    for word in text.split_whitespace() {
-        if word.width() > width {
-            if !current.is_empty() {
-                lines.push(std::mem::take(&mut current));
-            }
-            lines.extend(wrap_preserve(word, width));
-            continue;
-        }
-        let next_width = if current.is_empty() {
-            word.width()
-        } else {
-            current.width() + 1 + word.width()
-        };
-        if !current.is_empty() && next_width > width {
-            lines.push(std::mem::take(&mut current));
-        }
-        if !current.is_empty() {
-            current.push(' ');
-        }
-        current.push_str(word);
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    lines
 }
 
 fn wrap_preserve(text: &str, width: usize) -> Vec<String> {
@@ -1860,9 +1828,60 @@ mod tests {
     }
 
     #[test]
+    fn ratatui_input_preserves_multiline_spacing() {
+        let mut input = InputState::default();
+        input.append_text(
+            "hello   world
+second line
+",
+            false,
+        );
+
+        let lines = input_lines(&input, 40, 8);
+        let rendered = lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(rendered, vec!["hello   world", "second line", ""]);
+    }
+
+    #[test]
+    fn ratatui_input_cursor_matches_tail_clipped_rendered_row() {
+        let mut input = InputState::default();
+        input.append_text(
+            "one
+two
+three
+four",
+            false,
+        );
+
+        let rendered = input_lines(&input, 20, 3);
+        let rendered_text = rendered
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        let (row, col) = input.visible_visual_cursor_position(20, 3);
+
+        assert_eq!(rendered_text, vec!["two", "three", "four"]);
+        assert_eq!((row, col), (2, 4));
+    }
+
+    #[test]
     fn ratatui_wraps_unformatted_paste_without_overflow() {
         let width = 24;
-        let wrapped = wrap_text(&"a".repeat(97), width);
+        let wrapped = wrap_preserve(&"a".repeat(97), width);
 
         assert!(wrapped.len() > 1);
         assert!(wrapped.iter().all(|line| line.width() <= width));

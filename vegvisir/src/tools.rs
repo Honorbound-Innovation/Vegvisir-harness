@@ -21,8 +21,6 @@ use crate::{
 
 const LIST_FILES_DEFAULT_LIMIT: usize = 500;
 const LIST_FILES_MAX_LIMIT: usize = 2_000;
-const READ_FILE_DEFAULT_MAX_BYTES: usize = 64 * 1024;
-const READ_FILE_MAX_BYTES: usize = 256 * 1024;
 
 pub type ToolHandler = Arc<dyn Fn(Map<String, Value>) -> Observation + Send + Sync>;
 
@@ -277,29 +275,13 @@ pub fn build_builtin_registry_with_cms_and_mode(
             let Some(path) = args.get("path").and_then(Value::as_str) else {
                 return Observation::err("Missing path", "ValueError");
             };
-            let max_bytes = args
-                .get("max_bytes")
-                .and_then(Value::as_u64)
-                .map(|value| value as usize)
-                .unwrap_or(READ_FILE_DEFAULT_MAX_BYTES)
-                .clamp(1, READ_FILE_MAX_BYTES);
             match read_sandbox.read_text(path) {
-                Ok(raw_content) => {
-                    let original_bytes = raw_content.len();
-                    let truncated = original_bytes > max_bytes;
-                    let content = if truncated {
-                        format!(
-                            "{}\n[read_file truncated at {max_bytes} of {original_bytes} bytes; narrow the request or raise max_bytes up to {READ_FILE_MAX_BYTES}]",
-                            truncate_utf8(&raw_content, max_bytes)
-                        )
-                    } else {
-                        raw_content
-                    };
+                Ok(content) => {
+                    let original_bytes = content.len();
                     let mut data = Map::new();
                     data.insert("path".to_string(), json!(path));
                     data.insert("bytes".to_string(), json!(original_bytes));
-                    data.insert("max_bytes".to_string(), json!(max_bytes));
-                    data.insert("output_truncated".to_string(), json!(truncated));
+                    data.insert("output_truncated".to_string(), json!(false));
                     Observation {
                         ok: true,
                         content,
@@ -310,7 +292,7 @@ pub fn build_builtin_registry_with_cms_and_mode(
                 Err(error) => Observation::err(error.to_string(), "ReadError"),
             }
         }),
-        json!({"required": ["path"], "properties": {"path": "string", "max_bytes": "integer"}}),
+        json!({"required": ["path"], "properties": {"path": "string"}}),
         false,
     ))?;
 
@@ -325,12 +307,29 @@ pub fn build_builtin_registry_with_cms_and_mode(
             let Some(content) = args.get("content").and_then(Value::as_str) else {
                 return Observation::err("Missing content", "ValueError");
             };
+            let previous_content = write_sandbox.read_text(path).ok();
             match write_sandbox.write_text(path, content) {
                 Ok(target) => {
                     let relative = target.strip_prefix(&write_sandbox.root).unwrap_or(&target);
                     let mut data = Map::new();
                     data.insert("path".to_string(), json!(path));
-                    Observation { ok: true, content: format!("Wrote {}", relative.display()), data, error: None }
+                    data.insert("bytes".to_string(), json!(content.len()));
+                    if previous_content.as_deref() != Some(content) {
+                        data.insert(
+                            "diff".to_string(),
+                            json!(simple_unified_diff(
+                                &relative.display().to_string(),
+                                previous_content.as_deref().unwrap_or(""),
+                                content,
+                            )),
+                        );
+                    }
+                    Observation {
+                        ok: true,
+                        content: format!("Wrote {}", relative.display()),
+                        data,
+                        error: None,
+                    }
                 }
                 Err(error) => Observation::err(error.to_string(), "WriteError"),
             }
@@ -828,13 +827,27 @@ fn parse_context_mode(mode: &str) -> (cms_v2::ecm::ContextMode, bool) {
     }
 }
 
-fn truncate_utf8(value: &str, max_bytes: usize) -> &str {
-    if value.len() <= max_bytes {
-        return value;
+fn simple_unified_diff(path: &str, old: &str, new: &str) -> String {
+    let old_lines = old.lines().collect::<Vec<_>>();
+    let new_lines = new.lines().collect::<Vec<_>>();
+    let mut diff = String::new();
+    diff.push_str(&format!("diff --git a/{path} b/{path}\n"));
+    diff.push_str(&format!("--- a/{path}\n"));
+    diff.push_str(&format!("+++ b/{path}\n"));
+    diff.push_str(&format!(
+        "@@ -1,{} +1,{} @@\n",
+        old_lines.len(),
+        new_lines.len()
+    ));
+    for line in old_lines {
+        diff.push('-');
+        diff.push_str(line);
+        diff.push('\n');
     }
-    let mut end = max_bytes;
-    while end > 0 && !value.is_char_boundary(end) {
-        end -= 1;
+    for line in new_lines {
+        diff.push('+');
+        diff.push_str(line);
+        diff.push('\n');
     }
-    &value[..end]
+    diff
 }

@@ -3444,6 +3444,17 @@ fn enforce_openai_payload_budget(payload: &Value) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn truncate_utf8(value: &str, max_bytes: usize) -> &str {
+    if value.len() <= max_bytes {
+        return value;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
+}
+
 fn truncate_model_observation(value: &str) -> String {
     if value.len() <= TOOL_OBSERVATION_MODEL_MAX_BYTES {
         return value.to_string();
@@ -3485,6 +3496,7 @@ pub enum ProviderRunEvent {
         name: String,
         ok: bool,
         summary: String,
+        detail: Option<String>,
     },
 }
 
@@ -3723,6 +3735,7 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
                         name: name.to_string(),
                         ok: observation.ok,
                         summary: summarize_observation(&observation),
+                        detail: tool_display_detail(&name, &observation),
                     },
                 );
                 if approval_required_observation(&observation) {
@@ -3805,6 +3818,57 @@ fn summarize_observation(observation: &Observation) -> String {
     truncate_summary(&format!("{status}: {detail}"), 240)
 }
 
+fn tool_display_detail(name: &str, observation: &Observation) -> Option<String> {
+    if !observation.ok {
+        return None;
+    }
+    if let Some(diff) = observation.data.get("diff").and_then(Value::as_str) {
+        if !diff.trim().is_empty() {
+            return Some(format!("```diff\n{}\n```", diff.trim_end()));
+        }
+    }
+    if name == "read_file" {
+        let path = observation
+            .data
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or("file");
+        let language = language_for_path(path);
+        return Some(format!(
+            "```{}\n{}\n```",
+            language,
+            observation.content.trim_end()
+        ));
+    }
+    None
+}
+
+fn language_for_path(path: &str) -> &'static str {
+    match std::path::Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "rs" => "rust",
+        "py" => "python",
+        "js" => "javascript",
+        "ts" => "typescript",
+        "tsx" => "tsx",
+        "jsx" => "jsx",
+        "json" => "json",
+        "toml" => "toml",
+        "yaml" | "yml" => "yaml",
+        "md" => "markdown",
+        "html" => "html",
+        "css" => "css",
+        "sh" | "bash" => "bash",
+        "diff" | "patch" => "diff",
+        _ => "text",
+    }
+}
+
 fn truncate_summary(value: &str, max_chars: usize) -> String {
     if value.chars().count() <= max_chars {
         return value.to_string();
@@ -3830,17 +3894,6 @@ fn apply_system_prompt_to_envelope(envelope: &mut CachedPromptEnvelope, system_p
         .manifest
         .total_prompt_tokens
         .saturating_add(system_prompt.split_whitespace().count());
-}
-
-fn truncate_utf8(value: &str, max_bytes: usize) -> &str {
-    if value.len() <= max_bytes {
-        return value;
-    }
-    let mut end = max_bytes;
-    while end > 0 && !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    &value[..end]
 }
 
 #[cfg(test)]
