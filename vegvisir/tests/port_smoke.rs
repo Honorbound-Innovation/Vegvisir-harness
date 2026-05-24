@@ -4378,12 +4378,95 @@ fn application_loads_markdown_and_usrl_skills_from_filesystem() -> anyhow::Resul
         skill_dir.join("regulated-release.usrl"),
         "contract regulated_release {\n  require approvals >= 2\n}",
     )?;
+    fs::write(
+        skill_dir.join("cryptography.lsl"),
+        r#"
+        library cryptography {
+            meta { id: "cryptography"; name: "Cryptography"; version: "1.0.0"; }
+            subskill cryptography.secure_randomness {
+                id: cryptography.secure_randomness;
+                title: "Secure Randomness";
+                summary: "CSPRNG and nonce safety.";
+                type: procedure;
+                tags: [rng, nonce];
+                load {
+                    card: """Use a CSPRNG.""";
+                    body: """Use operating-system cryptographic randomness.""";
+                }
+                verification: ["Random source is cryptographic."];
+                eval_refs: [cryptography.secure_randomness.eval.basic];
+            }
+            eval cryptography.secure_randomness.eval.basic {
+                target: cryptography.secure_randomness;
+                task: "Check secure randomness guidance.";
+                expected: ["CSPRNG"];
+                forbidden: ["math.random"];
+            }
+        }
+        "#,
+    )?;
 
     let mut app = TuiApplication::with_data_root(tmp.path(), &home)?;
     let skills = app.execute_command("/skills")?.unwrap();
     assert!(skills.contains("filesystem: planner - Planning Mode"));
     assert!(skills.contains("regulated-workflow: regulated-release"));
     assert!(skills.contains("[contracts: regulated_release]"));
+    assert!(skills.contains("linked-skill/procedure: cryptography.secure_randomness"));
+
+    let compiled = app.execute_command("/skills compile")?.unwrap();
+    assert!(compiled.contains("Compiled 1 LSL libraries, 1 sub-skills"));
+    assert!(
+        tmp.path()
+            .join(".vegvisir/compiled/index/subskills.json")
+            .exists()
+    );
+    let status = app.execute_command("/skills status")?.unwrap();
+    assert!(status.contains("compiled_exists: true"));
+    assert!(status.contains("fresh: true"));
+
+    let routed = app
+        .execute_command("/skills route cryptographic randomness nonce")?
+        .unwrap();
+    assert!(routed.contains("cryptography.secure_randomness"));
+
+    let loaded = app
+        .execute_command("/skills load --tokens 200 cryptographic randomness")?
+        .unwrap();
+    assert!(loaded.contains("Loaded 1 sub-skills"));
+    assert!(loaded.contains("Use operating-system cryptographic randomness."));
+    let evals = app.execute_command("/skills eval")?.unwrap();
+    assert!(evals.contains("cryptography.secure_randomness.eval.basic"));
+    assert!(evals.contains("passed"));
+
+    let forged = app
+        .execute_command(
+            "/skills forge software_engineering.rust_nextest | Rust Nextest | Use cargo nextest for Rust test execution. | Use cargo nextest for Rust test execution. Run cargo nextest and inspect failing test output. | tags=rust,nextest",
+        )?
+        .unwrap();
+    assert!(forged.contains("Forged candidate sub-skill software_engineering.rust_nextest"));
+    let forged_status = fs::read_to_string(tmp.path().join("skills/software_engineering.lsl"))?;
+    assert!(forged_status.contains("status: candidate;"));
+    let patched = app
+        .execute_command(
+            "/skills patch software_engineering.rust_nextest | append_list_items | verification | Nextest output is inspected",
+        )?
+        .unwrap();
+    assert!(patched.contains("Patched software_engineering.rust_nextest"));
+    let promoted = app
+        .execute_command("/skills promote software_engineering.rust_nextest")?
+        .unwrap();
+    assert!(promoted.contains("status to active"));
+    let forged_status = fs::read_to_string(tmp.path().join("skills/software_engineering.lsl"))?;
+    assert!(forged_status.contains("status: active;"));
+    assert!(forged_status.contains("Nextest output is inspected"));
+    app.execute_command("/skills route no-such-obscure-framework")?;
+    app.execute_command("/skills route no-such-obscure-framework")?;
+    let detected = app.execute_command("/skills detect")?.unwrap();
+    assert!(detected.contains("no-such-obscure-framework"));
+    let curated = app.execute_command("/skills curate")?.unwrap();
+    assert!(curated.contains("total_subskills:"));
+    let trace = app.execute_command("/skills trace")?.unwrap();
+    assert!(trace.contains("route no-such-obscure-framework"));
 
     let planner = app
         .session

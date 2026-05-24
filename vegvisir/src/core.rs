@@ -4,11 +4,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use anyhow::Context;
 use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
+
+use crate::lsl::{parse_lsl, subskill_metadata};
 
 fn now_iso() -> DateTime<Utc> {
     Utc::now()
@@ -909,15 +912,43 @@ fn collect_filesystem_skills(
             continue;
         };
         let extension = extension.to_ascii_lowercase();
-        if extension != "md" && extension != "usrl" {
+        if extension != "md" && extension != "usrl" && extension != "lsl" {
             continue;
         }
         let content = fs::read_to_string(&path)?;
-        let format = if extension == "usrl" {
-            "usrl"
-        } else {
-            "markdown"
+        let format = match extension.as_str() {
+            "usrl" => "usrl",
+            "lsl" => "lsl",
+            _ => "markdown",
         };
+        if format == "lsl" {
+            let library = parse_lsl(&content).with_context(|| {
+                format!("failed to parse linked skill library {}", path.display())
+            })?;
+            for subskill in &library.subskills {
+                let mut metadata =
+                    subskill_metadata(&library, subskill, &path.display().to_string(), &content);
+                metadata.insert("format".to_string(), Value::String("lsl".to_string()));
+                skills.push(SkillDefinition {
+                    name: subskill.id.clone(),
+                    category: format!(
+                        "linked-skill/{}",
+                        subskill.skill_type.as_deref().unwrap_or("subskill")
+                    ),
+                    description: subskill
+                        .summary
+                        .clone()
+                        .or_else(|| subskill.title.clone())
+                        .unwrap_or_else(|| {
+                            format!("linked sub-skill loaded from {}", path.display())
+                        }),
+                    kind: "lsl_subskill".to_string(),
+                    enabled: subskill.status.as_deref() != Some("archived"),
+                    metadata,
+                });
+            }
+            continue;
+        }
         let name = filesystem_skill_name(root, &path, format);
         let mut metadata = BTreeMap::new();
         metadata.insert(
@@ -1087,4 +1118,69 @@ pub fn normalize_agent_id(value: &str) -> String {
         normalized.pop();
     }
     normalized
+}
+
+#[cfg(test)]
+mod tests {
+    use super::load_skill_definitions;
+
+    #[test]
+    fn loads_lsl_subskills_from_workspace_skills() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let skills_dir = tmp.path().join("skills");
+        std::fs::create_dir_all(&skills_dir)?;
+        std::fs::write(
+            skills_dir.join("cryptography.lsl"),
+            r#"
+            library cryptography {
+                meta {
+                    id: "cryptography";
+                    name: "Cryptography";
+                    version: "1.0.0";
+                    status: active;
+                    risk: high;
+                }
+
+                subskill cryptography.secure_randomness {
+                    id: cryptography.secure_randomness;
+                    title: "Secure Randomness";
+                    summary: "CSPRNG and nonce safety.";
+                    type: procedure;
+                    risk: medium;
+                    tags: [rng, nonce];
+                    load {
+                        card: """Use a CSPRNG.""";
+                        body: """Use operating-system cryptographic randomness.""";
+                    }
+                    verification: ["Random source is cryptographic."];
+                }
+            }
+            "#,
+        )?;
+
+        let skills = load_skill_definitions(tmp.path(), tmp.path().join("data"))?;
+        let skill = skills
+            .iter()
+            .find(|skill| skill.name == "cryptography.secure_randomness")
+            .expect("lsl subskill loaded");
+
+        assert_eq!(skill.kind, "lsl_subskill");
+        assert_eq!(skill.category, "linked-skill/procedure");
+        assert_eq!(
+            skill
+                .metadata
+                .get("library_id")
+                .and_then(|value| value.as_str()),
+            Some("cryptography")
+        );
+        assert!(
+            skill
+                .metadata
+                .get("body")
+                .and_then(|value| value.as_str())
+                .unwrap()
+                .contains("Use operating-system cryptographic randomness.")
+        );
+        Ok(())
+    }
 }
