@@ -1,4 +1,4 @@
-# Vegvisir Agent Harness
+# Vegvisir Agent Harness (RC-1: Usable but stll a little rough)
 
 Vegvisir Agent Harness is a secure Rust software development harness for people who want a powerful coding and engineering assistant without handing the harness every secret, every memory, and every permission by default.
 
