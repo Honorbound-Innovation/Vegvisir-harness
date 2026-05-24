@@ -10,6 +10,7 @@ pub mod environment;
 pub mod evals;
 pub mod guardrails;
 pub mod hooks;
+pub mod lsl;
 pub mod mcp;
 pub mod memory;
 pub mod model;

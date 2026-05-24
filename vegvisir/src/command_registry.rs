@@ -162,7 +162,12 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
             "/approvals [list|show <id>|approve <id>|session <id>|edit <id> <json-args>|deny <id>]",
             &["/approval"],
         ),
-        cmd("/skills", "show available skills", "/skills", &[]),
+        cmd(
+            "/skills",
+            "show, compile, route, or load skills",
+            "/skills [status|compile|route <query>|load [--tokens N] <query-or-subskill>|eval [target-or-eval]|forge <id> | <title> | <summary> | <body>|patch <id> | <op> | <path> | <value>|curate|detect|trace|promote <id>|archive <id>]",
+            &[],
+        ),
         cmd(
             "/recall",
             "retrieve memories from CMS-v2",

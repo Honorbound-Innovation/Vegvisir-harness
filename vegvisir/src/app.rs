@@ -19,7 +19,7 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::{
     attachments::{attachment_for, extract_attachments},
@@ -34,6 +34,12 @@ use crate::{
     guardrails::{
         ApprovalRequest, GuardrailEngine, PermissionPolicy, command_name_from_args,
         default_allowed_commands, normalize_command_name,
+    },
+    lsl::{
+        LslPatchRequest, LslSkillDraft, LslSkillTrace, append_skill_trace, compile_lsl_roots,
+        curate_registry, detect_missing_skill_candidates, forge_candidate_subskill,
+        load_or_compile_lsl_roots, lsl_registry_status, patch_subskill, read_skill_traces,
+        transition_subskill_status, update_skill_metrics_for_load,
     },
     mcp::{load_mcp_servers, register_mcp_tools},
     memory::{VegvisirCms, VegvisirCmsConfig, default_vegvisir_data_root},
@@ -192,6 +198,17 @@ fn should_show_info_overlay(command: &str, response: &str) -> bool {
             | "/mcp"
             | "/hbse"
     )
+}
+
+#[derive(Clone, Debug)]
+struct LslRuntimeConfig {
+    mode: String,
+    token_budget: usize,
+    max_primary_subskills: usize,
+    max_total_subskills: usize,
+    max_dependency_depth: usize,
+    allow_extended: bool,
+    semantic_router: bool,
 }
 
 struct ProjectListEntry {
@@ -551,7 +568,7 @@ impl TuiApplication {
             "/tools" => self.tools_command(&args),
             "/tool-limit" => self.tool_limit_command(&args),
             "/approvals" => self.approvals_command(&args),
-            "/skills" => self.skills(),
+            "/skills" => self.skills_command(&args)?,
             "/recall" => self.recall_command(&args)?,
             "/memory" => self.memory_command(&args)?,
             "/remember" => self.remember_command(&args)?,
@@ -816,6 +833,7 @@ impl TuiApplication {
                 };
                 self.select_model(&["--global".to_string(), model.clone()])
             }
+            Some("skills") | Some("lsl") => self.skills_config_command(&args[1..]),
             Some("path") => Ok(self.config.path.display().to_string()),
             Some(other) => Ok(format!("Unknown /config command: {other}")),
         }
@@ -945,12 +963,16 @@ impl TuiApplication {
             tool_executor: None,
             event_sink: None,
         };
+        let (model_content, skill_trace) = self.prepare_lsl_for_content(content)?;
         let envelope = self.cms.prepare_cached_prompt(
-            content,
+            &model_content,
             self.session.current_provider.clone(),
             self.session.current_model.clone(),
         )?;
-        let response = runner.send_with_envelope(&mut self.session, content, envelope)?;
+        let response = runner.send_with_envelope(&mut self.session, &model_content, envelope)?;
+        if let Some(trace) = skill_trace {
+            let _ = append_skill_trace(&self.skill_trace_path(), trace);
+        }
         let _ = self.cms.complete_turn(content, &response);
         self.autosave_session();
         Ok(response)
@@ -977,13 +999,21 @@ impl TuiApplication {
             tool_executor: Some(self.tool_executor.clone()),
             event_sink: None,
         };
+        let (model_content, skill_trace) = self.prepare_lsl_for_content(content)?;
         let envelope = self.cms.prepare_cached_prompt(
-            content,
+            &model_content,
             self.session.current_provider.clone(),
             self.session.current_model.clone(),
         )?;
-        let response =
-            runner.send_with_envelope_streaming(&mut self.session, content, envelope, on_delta)?;
+        let response = runner.send_with_envelope_streaming(
+            &mut self.session,
+            &model_content,
+            envelope,
+            on_delta,
+        )?;
+        if let Some(trace) = skill_trace {
+            let _ = append_skill_trace(&self.skill_trace_path(), trace);
+        }
         let _ = self.cms.complete_turn(content, &response);
         self.autosave_session();
         Ok(response)
@@ -1791,6 +1821,9 @@ impl TuiApplication {
         let tool_registry = self.tool_registry.clone();
         let tool_executor = self.tool_executor.clone();
         let mut cms_config = self.cms.config.clone();
+        let cwd = self.cwd.clone();
+        let data_root = self.data_root.clone();
+        let lsl_config = self.lsl_runtime_config();
         let (stream_tx, stream_rx) = mpsc::channel();
         let cancel_token = Arc::new(AtomicBool::new(false));
         let worker_cancel_token = Arc::clone(&cancel_token);
@@ -1826,8 +1859,15 @@ impl TuiApplication {
                     }
                 })),
             };
-            let envelope = cms.prepare_cached_prompt(
+            let (model_content, skill_trace) = prepare_lsl_augmented_content(
+                &cwd,
+                &data_root,
                 &display_content,
+                &worker_session,
+                &lsl_config,
+            )?;
+            let envelope = cms.prepare_cached_prompt(
+                &model_content,
                 worker_session.current_provider.clone(),
                 worker_session.current_model.clone(),
             )?;
@@ -1838,12 +1878,35 @@ impl TuiApplication {
             };
             let response = runner.send_with_envelope_streaming(
                 &mut worker_session,
-                &display_content,
+                &model_content,
                 envelope,
                 &mut on_delta,
             )?;
             if worker_cancel_token.load(Ordering::SeqCst) {
                 anyhow::bail!("Cancelled");
+            }
+            if skill_trace
+                .as_ref()
+                .is_some_and(|trace| trace.event == "auto_load")
+            {
+                let _ = update_skill_metrics_for_load(
+                    &cwd.join("skills"),
+                    &compiled_lsl_selected_from_trace(
+                        &cwd,
+                        &data_root,
+                        &display_content,
+                        &lsl_config,
+                    ),
+                    Some(true),
+                );
+            }
+            if let Some(trace) = skill_trace {
+                let _ = append_skill_trace(
+                    &cwd.join(".vegvisir")
+                        .join("compiled")
+                        .join("skill_traces.json"),
+                    trace,
+                );
             }
             let _ = cms.complete_turn(&display_content, &response);
             Ok(worker_session)
@@ -3330,7 +3393,9 @@ impl TuiApplication {
             })
             .filter(|skill| {
                 skill.kind == "markdown"
+                    || skill.kind == "lsl_subskill"
                     || skill.metadata.get("format").and_then(Value::as_str) == Some("markdown")
+                    || skill.metadata.get("format").and_then(Value::as_str) == Some("lsl")
             })
             .filter_map(|skill| {
                 let body = skill.metadata.get("body").and_then(Value::as_str)?;
@@ -3874,6 +3939,52 @@ impl TuiApplication {
         )
     }
 
+    fn prepare_lsl_for_content(
+        &mut self,
+        content: &str,
+    ) -> anyhow::Result<(String, Option<LslSkillTrace>)> {
+        let cfg = self.lsl_runtime_config();
+        let (model_content, trace) = prepare_lsl_augmented_content(
+            &self.cwd,
+            &self.data_root,
+            content,
+            &self.session,
+            &cfg,
+        )?;
+        Ok((model_content, trace))
+    }
+
+    fn skills_command(&mut self, args: &[String]) -> anyhow::Result<String> {
+        if args.is_empty() {
+            return Ok(self.skills());
+        }
+        match args[0].as_str() {
+            "compile" => self.compile_skills_command(),
+            "eval" => self.eval_skills_command(args.get(1).map(String::as_str)),
+            "forge" => self.forge_skill_command(&args[1..]),
+            "curate" => self.curate_skills_command(),
+            "detect" => self.detect_missing_skills_command(),
+            "patch" => self.patch_skill_command(&args[1..]),
+            "trace" => self.skill_trace_command(),
+            "config" => self.skills_config_command(&args[1..]),
+            "explain" => self.explain_skills_command(&args[1..]),
+            "invoke" => self.invoke_skill_command(&args[1..]),
+            "promote" => self.set_skill_status_command(&args[1..], "active"),
+            "evaluate" | "evaluated" => self.set_skill_status_command(&args[1..], "evaluated"),
+            "sandbox" => self.set_skill_status_command(&args[1..], "sandboxed"),
+            "archive" => self.set_skill_status_command(&args[1..], "archived"),
+            "status" => self.skills_status_command(),
+            "route" => {
+                if args.len() < 2 {
+                    return Ok("Usage: /skills route <query>".to_string());
+                }
+                self.route_skills_command(&args[1..].join(" "))
+            }
+            "load" => self.load_skills_command(&args[1..]),
+            _ => Ok(self.skills()),
+        }
+    }
+
     fn skills(&self) -> String {
         self.session
             .enabled_skills
@@ -3899,6 +4010,655 @@ impl TuiApplication {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn compile_skills_command(&mut self) -> anyhow::Result<String> {
+        let compiled = compile_lsl_roots(&self.skill_roots(), &self.compiled_skill_root())?;
+        self.session.enabled_skills = load_skill_definitions(&self.cwd, &self.data_root)?;
+        Ok(format!(
+            "Compiled {} LSL libraries, {} sub-skills, {} links, {} policies, {} evals.\nArtifacts: {}",
+            compiled.registry.libraries.len(),
+            compiled.registry.subskills.len(),
+            compiled.registry.links.len(),
+            compiled.registry.policies.len(),
+            compiled.registry.evals.len(),
+            self.compiled_skill_root().display()
+        ))
+    }
+
+    fn forge_skill_command(&mut self, args: &[String]) -> anyhow::Result<String> {
+        if args.is_empty() {
+            return Ok(
+                "Usage: /skills forge <library.subskill> | <title> | <summary> | <body> [| tags=a,b]"
+                    .to_string(),
+            );
+        }
+        let raw = args.join(" ");
+        let parts = raw
+            .split('|')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>();
+        if parts.len() < 4 {
+            return Ok(
+                "Usage: /skills forge <library.subskill> | <title> | <summary> | <body> [| tags=a,b]"
+                    .to_string(),
+            );
+        }
+        let tags = parts
+            .iter()
+            .skip(4)
+            .find_map(|part| part.strip_prefix("tags="))
+            .map(comma_items)
+            .unwrap_or_else(|| {
+                parts[0]
+                    .split('.')
+                    .skip(1)
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            });
+        let path = forge_candidate_subskill(
+            &self.cwd.join("skills"),
+            LslSkillDraft {
+                id: parts[0].to_string(),
+                title: parts[1].to_string(),
+                summary: parts[2].to_string(),
+                body: parts[3].to_string(),
+                provenance: format!(
+                    "forged via /skills forge in session {}",
+                    self.session.session_id
+                ),
+                tags,
+            },
+        )?;
+        let compiled = compile_lsl_roots(&self.skill_roots(), &self.compiled_skill_root())?;
+        self.session.enabled_skills = load_skill_definitions(&self.cwd, &self.data_root)?;
+        Ok(format!(
+            "Forged candidate sub-skill {} in {}.\nCompiled {} LSL libraries. Run `/skills eval {}` then `/skills promote {}` when it passes.",
+            parts[0],
+            path.display(),
+            compiled.registry.libraries.len(),
+            parts[0],
+            parts[0]
+        ))
+    }
+
+    fn set_skill_status_command(
+        &mut self,
+        args: &[String],
+        status: &str,
+    ) -> anyhow::Result<String> {
+        let Some(id) = args.first() else {
+            return Ok(format!("Usage: /skills {status} <library.subskill>"));
+        };
+        let compiled = load_or_compile_lsl_roots(&self.skill_roots(), &self.compiled_skill_root())?;
+        let reports = compiled.registry.eval_hooks(Some(id));
+        let direct_active_override = status == "active";
+        if matches!(status, "evaluated" | "active") {
+            if reports.is_empty() {
+                return Ok(format!(
+                    "No eval hooks found for {id}; refusing transition to {status}."
+                ));
+            }
+            let failed = reports
+                .iter()
+                .filter(|report| !report.passed)
+                .map(|report| format!("{} ({:.2})", report.eval_id, report.score))
+                .collect::<Vec<_>>();
+            if !failed.is_empty() {
+                return Ok(format!(
+                    "Transition to {status} blocked for {id}; failing evals: {}",
+                    failed.join(", ")
+                ));
+            }
+        }
+        let path = match transition_subskill_status(
+            &self.cwd.join("skills"),
+            id,
+            status,
+            &reports,
+            direct_active_override,
+        ) {
+            Ok(path) => path,
+            Err(error) => return Ok(format!("Status change blocked for {id}: {error}")),
+        };
+        compile_lsl_roots(&self.skill_roots(), &self.compiled_skill_root())?;
+        self.session.enabled_skills = load_skill_definitions(&self.cwd, &self.data_root)?;
+        Ok(format!(
+            "Set {id} status to {status} in {}.",
+            path.display()
+        ))
+    }
+
+    fn skills_status_command(&self) -> anyhow::Result<String> {
+        let status = lsl_registry_status(&self.skill_roots(), &self.compiled_skill_root())?;
+        let mut lines = vec![
+            format!("compiled_exists: {}", status.compiled_exists),
+            format!("fresh: {}", status.fresh),
+            format!("source_count: {}", status.source_count),
+            format!("compiled_source_count: {}", status.compiled_source_count),
+            format!("artifacts: {}", self.compiled_skill_root().display()),
+            format!("automatic_loading: {}", self.lsl_runtime_config().mode),
+            format!(
+                "skill_token_budget: {}",
+                self.lsl_runtime_config().token_budget
+            ),
+            format!(
+                "max_primary_subskills: {}",
+                self.lsl_runtime_config().max_primary_subskills
+            ),
+            format!(
+                "max_total_subskills: {}",
+                self.lsl_runtime_config().max_total_subskills
+            ),
+            format!(
+                "max_dependency_depth: {}",
+                self.lsl_runtime_config().max_dependency_depth
+            ),
+        ];
+        if !status.stale_sources.is_empty() {
+            lines.push(format!(
+                "stale_sources: {}",
+                status.stale_sources.join(", ")
+            ));
+        }
+        if !status.missing_sources.is_empty() {
+            lines.push(format!(
+                "missing_sources: {}",
+                status.missing_sources.join(", ")
+            ));
+        }
+        if !status.extra_compiled_sources.is_empty() {
+            lines.push(format!(
+                "extra_compiled_sources: {}",
+                status.extra_compiled_sources.join(", ")
+            ));
+        }
+        Ok(lines.join("\n"))
+    }
+
+    fn route_skills_command(&self, query: &str) -> anyhow::Result<String> {
+        let compiled = load_or_compile_lsl_roots(&self.skill_roots(), &self.compiled_skill_root())?;
+        if !compiled.registry.issues.is_empty() {
+            return Ok(format!(
+                "LSL registry has issues:\n{}",
+                compiled.registry.issues.join("\n")
+            ));
+        }
+        let candidates = compiled.registry.route_candidates(query, 8);
+        let routed = candidates
+            .iter()
+            .filter(|candidate| !candidate.excluded)
+            .map(|candidate| candidate.id.clone())
+            .collect::<Vec<_>>();
+        self.record_skill_trace("route", query, routed, 0)?;
+        if candidates.is_empty() {
+            return Ok("No LSL sub-skills matched.".to_string());
+        }
+        Ok(candidates
+            .into_iter()
+            .map(|candidate| {
+                let entry = compiled
+                    .registry
+                    .subskills
+                    .get(&candidate.id)
+                    .expect("routed id exists");
+                format!(
+                    "{}: {} [score {}; {}; {}]",
+                    candidate.id,
+                    entry
+                        .subskill
+                        .summary
+                        .as_deref()
+                        .or(entry.subskill.title.as_deref())
+                        .unwrap_or("No summary provided."),
+                    candidate.score,
+                    if candidate.excluded {
+                        "excluded"
+                    } else {
+                        "eligible"
+                    },
+                    if candidate.signals.is_empty() {
+                        candidate.reason
+                    } else {
+                        candidate.signals.join(",")
+                    }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n"))
+    }
+
+    fn load_skills_command(&mut self, args: &[String]) -> anyhow::Result<String> {
+        if args.is_empty() {
+            return Ok("Usage: /skills load [--tokens N] <query-or-subskill>".to_string());
+        }
+        let mut tokens = 3500usize;
+        let mut query_parts = Vec::new();
+        let mut index = 0;
+        while index < args.len() {
+            if args[index] == "--tokens" {
+                let Some(value) = args.get(index + 1) else {
+                    return Ok("Usage: /skills load [--tokens N] <query-or-subskill>".to_string());
+                };
+                tokens = value.parse().unwrap_or(tokens);
+                index += 2;
+                continue;
+            }
+            query_parts.push(args[index].clone());
+            index += 1;
+        }
+        if query_parts.is_empty() {
+            return Ok("Usage: /skills load [--tokens N] <query-or-subskill>".to_string());
+        }
+        let query = query_parts.join(" ");
+        let compiled = load_or_compile_lsl_roots(&self.skill_roots(), &self.compiled_skill_root())?;
+        if !compiled.registry.issues.is_empty() {
+            return Ok(format!(
+                "LSL registry has issues:\n{}",
+                compiled.registry.issues.join("\n")
+            ));
+        }
+        let selected = if compiled.registry.subskills.contains_key(&query) {
+            vec![query.clone()]
+        } else {
+            compiled.registry.route(&query, 3)
+        };
+        if selected.is_empty() {
+            return Ok("No LSL sub-skills matched.".to_string());
+        }
+        let context = compiled
+            .registry
+            .load_context_for_query(&selected, &query, tokens, 2);
+        let approval_queued = self.enqueue_lsl_approval_if_needed(&query, &context);
+        let _ = update_skill_metrics_for_load(&self.cwd.join("skills"), &context.selected, None);
+        self.record_skill_trace(
+            "load",
+            &query,
+            context
+                .selected
+                .iter()
+                .map(|loaded| loaded.id.clone())
+                .collect(),
+            context.used_tokens,
+        )?;
+        let mut sections = vec![format!(
+            "Loaded {} sub-skills. tokens used {}/{}.",
+            context.selected.len(),
+            context.used_tokens,
+            context.available_tokens
+        )];
+        if approval_queued {
+            sections.push("Approval required sub-skills were queued in /approvals.".to_string());
+        }
+        if !context.blocked.is_empty() {
+            sections.push(format!(
+                "Blocked/approval-required: {}",
+                context
+                    .blocked
+                    .iter()
+                    .map(|decision| format!("{} ({})", decision.id, decision.reason))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        if !context.excluded.is_empty() {
+            sections.push(format!(
+                "Excluded: {}",
+                context
+                    .excluded
+                    .iter()
+                    .map(|decision| format!("{} ({})", decision.id, decision.reason))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        if !context.not_loaded_relevant.is_empty() {
+            sections.push(format!(
+                "Not loaded: {}",
+                context
+                    .not_loaded_relevant
+                    .iter()
+                    .map(|decision| format!("{} ({})", decision.id, decision.reason))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        sections.extend(context.selected.into_iter().map(|loaded| {
+            format!(
+                "== {} [{}; ~{} tokens]\n{}",
+                loaded.id, loaded.mode, loaded.token_estimate, loaded.text
+            )
+        }));
+        Ok(sections.join("\n\n"))
+    }
+
+    fn explain_skills_command(&self, args: &[String]) -> anyhow::Result<String> {
+        if args.is_empty() {
+            return Ok("Usage: /skills explain <query-or-subskill>".to_string());
+        }
+        let query = args.join(" ");
+        let compiled = load_or_compile_lsl_roots(&self.skill_roots(), &self.compiled_skill_root())?;
+        let selected = if compiled.registry.subskills.contains_key(&query) {
+            vec![query.clone()]
+        } else {
+            compiled
+                .registry
+                .route(&query, self.lsl_runtime_config().max_primary_subskills)
+        };
+        let context = compiled.registry.load_context_for_query(
+            &selected,
+            &query,
+            self.lsl_runtime_config().token_budget,
+            self.lsl_runtime_config().max_dependency_depth,
+        );
+        Ok(serde_json::to_string_pretty(&json!({
+            "query": query,
+            "selected": context.selected.iter().map(|item| json!({"id": item.id, "mode": item.mode, "reason": item.reason, "tokens": item.token_estimate})).collect::<Vec<_>>(),
+            "blocked": context.blocked,
+            "excluded": context.excluded,
+            "not_loaded": context.not_loaded_relevant,
+            "policy": context.policy_decisions,
+            "tokens": {"used": context.used_tokens, "available": context.available_tokens, "remaining": context.remaining_tokens}
+        }))?)
+    }
+
+    fn invoke_skill_command(&self, args: &[String]) -> anyhow::Result<String> {
+        let Some(id) = args.first() else {
+            return Ok("Usage: /skills invoke <subskill-id> [json-input]".to_string());
+        };
+        let input = args.get(1).cloned().unwrap_or_else(|| "{}".to_string());
+        let compiled = load_or_compile_lsl_roots(&self.skill_roots(), &self.compiled_skill_root())?;
+        let Some(entry) = compiled.registry.subskills.get(id) else {
+            return Ok(format!("Unknown LSL sub-skill: {id}"));
+        };
+        let missing = entry
+            .subskill
+            .inputs
+            .iter()
+            .filter(|field| field.required && !input.contains(&format!("\"{}\"", field.name)))
+            .map(|field| field.name.clone())
+            .collect::<Vec<_>>();
+        let mut sections = vec![
+            format!("Callable sub-skill: {id}"),
+            format!("Input: {input}"),
+        ];
+        if !missing.is_empty() {
+            sections.push(format!("Missing required inputs: {}", missing.join(", ")));
+        }
+        sections.push(crate::lsl::materialize_subskill(&entry.subskill, "body"));
+        Ok(sections.join("\n\n"))
+    }
+
+    fn skills_config_command(&mut self, args: &[String]) -> anyhow::Result<String> {
+        if args.is_empty()
+            || matches!(
+                args.first().map(String::as_str),
+                Some("show") | Some("status")
+            )
+        {
+            let cfg = self.lsl_runtime_config();
+            return Ok(format!(
+                "LSL runtime config\nmode={}\ntoken_budget={}\nmax_primary_subskills={}\nmax_total_subskills={}\nmax_dependency_depth={}\nallow_extended={}\nsemantic_router={}",
+                cfg.mode,
+                cfg.token_budget,
+                cfg.max_primary_subskills,
+                cfg.max_total_subskills,
+                cfg.max_dependency_depth,
+                cfg.allow_extended,
+                cfg.semantic_router
+            ));
+        }
+        if args.first().map(String::as_str) != Some("set") || args.len() < 3 {
+            return Ok("Usage: /skills config [show|set <key> <value>]".to_string());
+        }
+        let mut defaults = self.config.load().unwrap_or_default();
+        let key = format!("lsl_{}", args[1]);
+        let value = parse_config_value(&args[2]);
+        defaults.insert(key.clone(), value);
+        self.config.save(&defaults)?;
+        Ok(format!("Set {key}."))
+    }
+
+    fn patch_skill_command(&mut self, args: &[String]) -> anyhow::Result<String> {
+        let raw = args.join(" ");
+        let parts = raw
+            .split('|')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>();
+        if parts.len() < 4 {
+            return Ok("Usage: /skills patch <id> | <operation> | <path> | <value>".to_string());
+        }
+        let path = patch_subskill(
+            &self.cwd.join("skills"),
+            LslPatchRequest {
+                target: parts[0].to_string(),
+                operation: parts[1].to_string(),
+                path: parts[2].to_string(),
+                value: parts[3].to_string(),
+            },
+        )?;
+        compile_lsl_roots(&self.skill_roots(), &self.compiled_skill_root())?;
+        self.session.enabled_skills = load_skill_definitions(&self.cwd, &self.data_root)?;
+        Ok(format!("Patched {} in {}.", parts[0], path.display()))
+    }
+
+    fn curate_skills_command(&self) -> anyhow::Result<String> {
+        let compiled = load_or_compile_lsl_roots(&self.skill_roots(), &self.compiled_skill_root())?;
+        let traces = read_skill_traces(&self.skill_trace_path())?;
+        let evals = compiled.registry.eval_hooks(None);
+        let report = curate_registry(&compiled.registry, &traces, &evals);
+        Ok(format!(
+            "total_subskills: {}\nactive_subskills: {}\ncandidate_subskills: {}\nstale_subskills: {}\narchived_subskills: {}\nduplicate_summary_groups: {}\nfailing_evals: {}\nleast_used_subskills: {}\nmissing_skill_candidates: {}
+recommendations: {}",
+            report.total_subskills,
+            report.active_subskills,
+            list_or_dash(&report.candidate_subskills),
+            list_or_dash(&report.stale_subskills),
+            list_or_dash(&report.archived_subskills),
+            if report.duplicate_summary_groups.is_empty() {
+                "-".to_string()
+            } else {
+                report
+                    .duplicate_summary_groups
+                    .iter()
+                    .map(|group| group.join(","))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            },
+            list_or_dash(&report.failing_evals),
+            list_or_dash(&report.least_used_subskills),
+            list_or_dash(&report.missing_skill_candidates),
+            if report.recommendations.is_empty() {
+                "-".to_string()
+            } else {
+                report.recommendations.iter().map(|rec| format!("{}:{} ({})", rec.kind, rec.target, rec.suggested_action)).collect::<Vec<_>>().join("; ")
+            }
+        ))
+    }
+
+    fn detect_missing_skills_command(&self) -> anyhow::Result<String> {
+        let traces = read_skill_traces(&self.skill_trace_path())?;
+        let candidates = detect_missing_skill_candidates(&traces);
+        if candidates.is_empty() {
+            Ok("No missing skill candidates detected.".to_string())
+        } else {
+            Ok(format!(
+                "Missing skill candidates:\n{}",
+                candidates.join("\n")
+            ))
+        }
+    }
+
+    fn skill_trace_command(&self) -> anyhow::Result<String> {
+        let traces = read_skill_traces(&self.skill_trace_path())?;
+        if traces.is_empty() {
+            return Ok("No skill traces recorded.".to_string());
+        }
+        Ok(traces
+            .iter()
+            .rev()
+            .take(10)
+            .map(|trace| {
+                format!(
+                    "{} {} -> {} (~{} tokens)",
+                    trace.event,
+                    trace.query,
+                    if trace.selected.is_empty() {
+                        "-".to_string()
+                    } else {
+                        trace.selected.join(",")
+                    },
+                    trace.token_estimate
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n"))
+    }
+
+    fn eval_skills_command(&self, target: Option<&str>) -> anyhow::Result<String> {
+        let compiled = load_or_compile_lsl_roots(&self.skill_roots(), &self.compiled_skill_root())?;
+        if !compiled.registry.issues.is_empty() {
+            return Ok(format!(
+                "LSL registry has issues:\n{}",
+                compiled.registry.issues.join("\n")
+            ));
+        }
+        let reports = compiled.registry.eval_hooks(target);
+        if reports.is_empty() {
+            return Ok("No LSL eval hooks matched.".to_string());
+        }
+        Ok(reports
+            .into_iter()
+            .map(|report| {
+                let mut line = format!(
+                    "{} -> {}: {} ({:.2})",
+                    report.eval_id,
+                    report.target,
+                    if report.passed { "passed" } else { "failed" },
+                    report.score
+                );
+                if !report.missing_expected.is_empty() {
+                    line.push_str(&format!(
+                        "\n  missing expected: {}",
+                        report.missing_expected.join("; ")
+                    ));
+                }
+                if !report.present_forbidden.is_empty() {
+                    line.push_str(&format!(
+                        "\n  present forbidden: {}",
+                        report.present_forbidden.join("; ")
+                    ));
+                }
+                line
+            })
+            .collect::<Vec<_>>()
+            .join("\n"))
+    }
+
+    fn lsl_runtime_config(&self) -> LslRuntimeConfig {
+        let defaults = self.config.load().unwrap_or_default();
+        LslRuntimeConfig {
+            mode: defaults
+                .get("lsl_mode")
+                .and_then(Value::as_str)
+                .unwrap_or("suggestions")
+                .to_string(),
+            token_budget: defaults
+                .get("lsl_token_budget")
+                .and_then(Value::as_u64)
+                .unwrap_or(3500) as usize,
+            max_primary_subskills: defaults
+                .get("lsl_max_primary_subskills")
+                .and_then(Value::as_u64)
+                .unwrap_or(3) as usize,
+            max_total_subskills: defaults
+                .get("lsl_max_total_subskills")
+                .and_then(Value::as_u64)
+                .unwrap_or(8) as usize,
+            max_dependency_depth: defaults
+                .get("lsl_max_dependency_depth")
+                .and_then(Value::as_u64)
+                .unwrap_or(2) as usize,
+            allow_extended: defaults
+                .get("lsl_allow_extended")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            semantic_router: defaults
+                .get("lsl_semantic_router")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        }
+    }
+
+    fn skill_roots(&self) -> Vec<PathBuf> {
+        vec![
+            self.cwd.join(".vegvisir").join("skills"),
+            self.cwd.join("skills"),
+            self.data_root.join("skills"),
+        ]
+    }
+
+    fn compiled_skill_root(&self) -> PathBuf {
+        self.cwd.join(".vegvisir").join("compiled")
+    }
+
+    fn skill_trace_path(&self) -> PathBuf {
+        self.compiled_skill_root().join("skill_traces.json")
+    }
+
+    fn record_skill_trace(
+        &self,
+        event: &str,
+        query: &str,
+        selected: Vec<String>,
+        token_estimate: usize,
+    ) -> anyhow::Result<()> {
+        append_skill_trace(
+            &self.skill_trace_path(),
+            LslSkillTrace {
+                event: event.to_string(),
+                query: query.to_string(),
+                selected,
+                token_estimate,
+                created_at: chrono::Utc::now().to_rfc3339(),
+                ..LslSkillTrace::default()
+            },
+        )
+    }
+
+    fn enqueue_lsl_approval_if_needed(
+        &mut self,
+        query: &str,
+        context: &crate::lsl::LoadedSkillContext,
+    ) -> bool {
+        let mut queued = false;
+        for decision in context
+            .blocked
+            .iter()
+            .filter(|decision| decision.decision == "approval_required")
+        {
+            let mut args = Map::new();
+            args.insert("subskill".to_string(), Value::String(decision.id.clone()));
+            args.insert(
+                "query".to_string(),
+                Value::String(redact_trace_query(query)),
+            );
+            let id = lsl_approval_request_id(&decision.id, query);
+            self.tool_executor
+                .guardrails
+                .approvals
+                .enqueue(ApprovalRequest {
+                    id,
+                    reason: decision.reason.clone(),
+                    tool_name: "lsl.load".to_string(),
+                    args,
+                    risk_label: "lsl-policy-approval".to_string(),
+                });
+            queued = true;
+        }
+        queued
     }
 
     fn recall_command(&mut self, args: &[String]) -> anyhow::Result<String> {
@@ -4067,8 +4827,10 @@ impl TuiApplication {
         if args.is_empty() {
             return Ok("Usage: /model-request <message>".to_string());
         }
+        let content = args.join(" ");
+        let (model_content, _) = self.prepare_lsl_for_content(&content)?;
         let envelope = self.cms.prepare_cached_prompt(
-            args.join(" "),
+            model_content,
             self.session.current_provider.clone(),
             self.session.current_model.clone(),
         )?;
@@ -5403,6 +6165,179 @@ fn tool_command_update_message(
     }
 }
 
+fn prepare_lsl_augmented_content(
+    cwd: &Path,
+    data_root: &Path,
+    content: &str,
+    session: &SessionState,
+    config: &LslRuntimeConfig,
+) -> anyhow::Result<(String, Option<LslSkillTrace>)> {
+    if matches!(config.mode.as_str(), "off" | "manual" | "manual_only") {
+        return Ok((content.to_string(), None));
+    }
+    let roots = vec![
+        cwd.join(".vegvisir").join("skills"),
+        cwd.join("skills"),
+        data_root.join("skills"),
+    ];
+    let compiled_root = cwd.join(".vegvisir").join("compiled");
+    let compiled = match load_or_compile_lsl_roots(&roots, &compiled_root) {
+        Ok(compiled) => compiled,
+        Err(_) => return Ok((content.to_string(), None)),
+    };
+    if !compiled.registry.issues.is_empty() {
+        return Ok((content.to_string(), None));
+    }
+    let selected = compiled
+        .registry
+        .route(content, config.max_primary_subskills)
+        .into_iter()
+        .take(config.max_primary_subskills)
+        .collect::<Vec<_>>();
+    if selected.is_empty() {
+        return Ok((
+            content.to_string(),
+            Some(LslSkillTrace {
+                event: "auto_no_match".to_string(),
+                query: redact_trace_query(content),
+                selected: Vec::new(),
+                token_estimate: 0,
+                available_tokens: config.token_budget,
+                remaining_tokens: config.token_budget,
+                provider: Some(session.current_provider.clone()),
+                model: Some(session.current_model.clone()),
+                created_at: chrono::Utc::now().to_rfc3339(),
+                ..LslSkillTrace::default()
+            }),
+        ));
+    }
+    let context = compiled.registry.load_context_for_query(
+        &selected,
+        content,
+        config.token_budget,
+        config.max_dependency_depth,
+    );
+    if context.selected.is_empty() || config.mode == "suggestions" {
+        let trace_selected = context
+            .selected
+            .iter()
+            .map(|item| item.id.clone())
+            .collect::<Vec<_>>();
+        return Ok((
+            content.to_string(),
+            Some(LslSkillTrace {
+                event: if trace_selected.is_empty() {
+                    "auto_blocked"
+                } else {
+                    "auto_suggest"
+                }
+                .to_string(),
+                query: redact_trace_query(content),
+                selected: trace_selected,
+                token_estimate: context.used_tokens,
+                available_tokens: context.available_tokens,
+                remaining_tokens: context.remaining_tokens,
+                load_modes: context
+                    .selected
+                    .iter()
+                    .map(|item| (item.id.clone(), item.mode.clone()))
+                    .collect(),
+                policy_decisions: context.policy_decisions.clone(),
+                blocked: context.blocked.clone(),
+                excluded: context.excluded.clone(),
+                not_loaded_relevant: context.not_loaded_relevant.clone(),
+                provider: Some(session.current_provider.clone()),
+                model: Some(session.current_model.clone()),
+                created_at: chrono::Utc::now().to_rfc3339(),
+                ..LslSkillTrace::default()
+            }),
+        ));
+    }
+    let already_enabled = session
+        .active_agent_id
+        .is_some()
+        .then(|| {
+            session
+                .enabled_skills
+                .iter()
+                .map(|skill| skill.name.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let skill_sections = context
+        .selected
+        .iter()
+        .filter(|loaded| !already_enabled.contains(&loaded.id))
+        .map(|loaded| {
+            format!(
+                "== {} [{}; {}]\n{}",
+                loaded.id, loaded.mode, loaded.reason, loaded.text
+            )
+        })
+        .collect::<Vec<_>>();
+    if skill_sections.is_empty() {
+        return Ok((content.to_string(), None));
+    }
+    let augmented = format!(
+        "{content}\n\nLinked Skill Library context (auto-selected; tokens {}/{}):\n{}",
+        context.used_tokens,
+        context.available_tokens,
+        skill_sections.join("\n\n")
+    );
+    Ok((
+        augmented,
+        Some(LslSkillTrace {
+            event: "auto_load".to_string(),
+            query: redact_trace_query(content),
+            selected: context
+                .selected
+                .iter()
+                .map(|item| item.id.clone())
+                .collect(),
+            token_estimate: context.used_tokens,
+            available_tokens: context.available_tokens,
+            remaining_tokens: context.remaining_tokens,
+            load_modes: context
+                .selected
+                .iter()
+                .map(|item| (item.id.clone(), item.mode.clone()))
+                .collect(),
+            policy_decisions: context.policy_decisions.clone(),
+            blocked: context.blocked.clone(),
+            excluded: context.excluded.clone(),
+            not_loaded_relevant: context.not_loaded_relevant.clone(),
+            provider: Some(session.current_provider.clone()),
+            model: Some(session.current_model.clone()),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            ..LslSkillTrace::default()
+        }),
+    ))
+}
+
+fn redact_trace_query(content: &str) -> String {
+    let compact = content
+        .split_whitespace()
+        .take(24)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if compact.len() > 240 {
+        format!("{}…", &compact[..240])
+    } else {
+        compact
+    }
+}
+
+fn parse_config_value(raw: &str) -> Value {
+    if let Ok(value) = raw.parse::<u64>() {
+        return json!(value);
+    }
+    match raw {
+        "true" => json!(true),
+        "false" => json!(false),
+        other => json!(other),
+    }
+}
+
 fn list_or_dash(items: &[String]) -> String {
     if items.is_empty() {
         "-".to_string()
@@ -5518,6 +6453,44 @@ fn parse_limit(args: &[String], default_limit: usize) -> usize {
         }
     }
     limit
+}
+
+fn compiled_lsl_selected_from_trace(
+    cwd: &Path,
+    data_root: &Path,
+    content: &str,
+    config: &LslRuntimeConfig,
+) -> Vec<crate::lsl::LoadedSubskill> {
+    let roots = vec![
+        cwd.join(".vegvisir").join("skills"),
+        cwd.join("skills"),
+        data_root.join("skills"),
+    ];
+    let compiled_root = cwd.join(".vegvisir").join("compiled");
+    let Ok(compiled) = load_or_compile_lsl_roots(&roots, &compiled_root) else {
+        return Vec::new();
+    };
+    let selected = compiled
+        .registry
+        .route(content, config.max_primary_subskills);
+    compiled
+        .registry
+        .load_context_for_query(
+            &selected,
+            content,
+            config.token_budget,
+            config.max_dependency_depth,
+        )
+        .selected
+}
+
+fn lsl_approval_request_id(subskill: &str, query: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    "lsl.load".hash(&mut hasher);
+    subskill.hash(&mut hasher);
+    redact_trace_query(query).hash(&mut hasher);
+    format!("apr_lsl_{:016x}", hasher.finish())
 }
 
 fn compact_json(value: &Value) -> String {
