@@ -2054,9 +2054,14 @@ impl TuiApplication {
             .session
             .messages
             .iter()
-            .rev()
-            .find(|message| {
-                message.role == "assistant" && message.content.contains("**Thinking trace**")
+            .rposition(|message| message.role == "user")
+            .and_then(|last_user_index| {
+                self.session.messages[last_user_index + 1..]
+                    .iter()
+                    .find(|message| {
+                        message.role == "assistant"
+                            && message.content.contains("**Thinking trace**")
+                    })
             })
             .map(|message| message.content.clone())
         else {
@@ -6261,6 +6266,88 @@ mod tests {
         assert!(transcript.contains("Running tool: read_file"));
         assert!(transcript.contains("Tool finished: read_file"));
         assert!(completed.messages.last().unwrap().content.contains("done"));
+        Ok(())
+    }
+
+    #[test]
+    fn completed_turn_does_not_reuse_previous_reasoning_trace() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "tell me a story".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        app.session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: "**Thinking trace**\n\nold story response".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        app.session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "do you like Goblins?".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        app.session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: String::new(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+
+        let mut completed = app.session.clone();
+        completed.messages.pop();
+        completed.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: "Yes, in fantasy stories.".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+
+        app.merge_live_reasoning_trace(&mut completed);
+
+        assert_eq!(
+            completed.messages.last().unwrap().content,
+            "Yes, in fantasy stories."
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn completed_turn_keeps_current_reasoning_trace() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "do you like Goblins?".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        app.session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: "**Thinking trace**\n\ncurrent trace\n\n**Answer**\n\nYes.".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+
+        let mut completed = app.session.clone();
+        completed.messages.pop();
+        completed.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: "Yes.".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+
+        app.merge_live_reasoning_trace(&mut completed);
+
+        assert_eq!(
+            completed.messages.last().unwrap().content,
+            "**Thinking trace**\n\ncurrent trace\n\n**Answer**\n\nYes."
+        );
         Ok(())
     }
 

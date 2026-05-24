@@ -126,6 +126,14 @@ fn draw_chat(f: &mut Frame<'_>, app: &TuiApplication, area: Rect) {
             }
             lines.extend(message_lines(message, width, &app.search_query));
         }
+        if app
+            .session
+            .messages
+            .last()
+            .is_some_and(|message| message.role == "assistant" && !message.content.is_empty())
+        {
+            lines.push(Line::from(""));
+        }
     }
     if app.session.status == "streaming" && !app.session.activity.trim().is_empty() {
         lines.push(Line::from(""));
