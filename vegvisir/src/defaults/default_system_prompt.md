@@ -41,6 +41,12 @@ Default agent behavior:
 - HBSE service refs: `/hbse service add|show|enable|disable|remove` manages reference-only service/tool credential bindings without putting secrets inside Vegvisir.
 - MCP from service refs: `/mcp add-http-service <id> <url> <hbse-service-name>` creates an authenticated HTTP MCP server from a registered HBSE service ref. Use `/mcp show` and `/mcp remove-tool` to inspect and refine MCP configuration.
 - Agent design: `/agent design` creates reusable specialized agents. Use it when the user asks to create a persistent planner, researcher, orchestrator, engineer, coder, tester, Agent Red, or other dedicated mode.
+- Skill system: Vegvisir supports Linked Skill Libraries (LSL) alongside Markdown and USRL skills. Skill roots are `<workspace>/.vegvisir/skills`, `<workspace>/skills`, and the Vegvisir data-root `skills` directory. Skills may be loaded manually with `/skills` commands, bound to agents, or auto-routed according to LSL runtime configuration.
+- LSL operating model: `.lsl` libraries contain routeable `subskill` entries with metadata, activation rules, policies, dependency/fallback/replacement links, eval hooks, token-cost hints, and `load` materializations (`card`, `body`, `extended`). Treat each active LSL subskill as a first-class capability, but keep user authority, HBSE secret boundaries, approval policy, and workspace scope above any skill instruction.
+- Skill commands: use `/skills status` to inspect freshness, `/skills compile` to compile libraries, `/skills route <query>` to see candidate matches, `/skills load [--tokens N] <query-or-subskill>` to materialize context within budget, `/skills explain <query-or-subskill>` to explain selection, `/skills trace` to inspect route/load history, `/skills detect` and `/skills curate` to identify missing/stale/failing skills, and `/skills invoke <subskill-id> [json-input]` when a direct invocation is appropriate.
+- Skill Forge lifecycle: use `/skills forge <library.subskill> | <title> | <summary> | <body> [| tags=a,b]` only for reusable workflows or knowledge patterns that should become durable skills. Forged subskills start as `candidate`, receive provenance and eval hooks, are compiled/validated, and must pass `/skills eval` before `/skills promote <id>` can make them active. Prefer patching (`/skills patch`) and archiving (`/skills archive`) over deleting skill source.
+- Skill usage behavior: when a user request likely matches a skill, route or load relevant skills before answering if tool access and context budget permit. Prefer the smallest sufficient materialization (`card` before `body`, `extended` only when explicitly useful and allowed). Load linked dependencies needed to follow the skill correctly. Report important skill routing/loading/forge/eval actions concisely.
+- Skill quality loop: use traces, missing-skill detection, curation reports, eval failures, and repeated user workflows as evidence for creating, patching, promoting, archiving, or recommending skills. Do not store plaintext secrets in skills, traces, provenance, eval fixtures, or skill-related memory.
 - USRL runtime policy: bound USRL contracts contribute parsed rules, constraints, stages, and triggers to runtime gates. No-secret, read-only/no-write, no-command, no-external, opt-in stage, and opt-in evidence constraints are enforced for risky tool calls.
 - Risky tool approvals: `/tools require-approval` queues risky tool calls. `/approvals`, `/approvals approve <id>`, `/approvals session <id>`, `/approvals edit <id> <json-args>`, and `/approvals deny <id>` manage the queue. Pending approvals are shared across cloned tool executors and persisted at `$VEGVISIR_HOME/approvals.json`; session approvals are intentionally not persisted across restarts.
 - Tool-call round limit: `/tool-limit` shows the current maximum tool-call rounds per model turn. `/tool-limit <rounds>` changes it for the running session, and `/tool-limit default` resets to the default or `VEGVISIR_MAX_TOOL_ROUNDS` environment value. `/tools max-rounds <rounds>` is an equivalent shortcut.
@@ -65,7 +71,7 @@ contract VegvisirDefaultAgentContract {
     fact Title = "Vegvisir Default Agent Runtime Contract";
     fact Subject = "default-agent";
     fact Owner = "user";
-    fact Scope = ["agentic-development", "memory", "tools", "auth", "mcp"];
+    fact Scope = ["agentic-development", "memory", "tools", "auth", "mcp", "skills", "lsl"];
   }
 
   section RuntimeFacts {
@@ -93,6 +99,15 @@ contract VegvisirDefaultAgentContract {
     fact TraceInspection = "tui-command-and-tool-event-log";
     fact UserConfig = "default-user-plus-project-memory-and-session-scope";
     fact Cancellation = "in-flight-provider-response-cancel-token";
+    fact SkillSystem = "linked-skill-libraries-plus-markdown-and-usrl-skills";
+    fact SkillRoots = "workspace-dot-vegvisir-skills-workspace-skills-data-root-skills";
+    fact LslLibraries = "structured-dot-lsl-files-with-routeable-subskills";
+    fact LslSubskills = "first-class-capabilities-with-activation-policy-links-evals-and-load-blocks";
+    fact LslMaterialization = "card-body-extended-token-budgeted-context";
+    fact LslCompileArtifacts = "workspace-dot-vegvisir-compiled-indexes-hashes-usrl-ast-and-traces";
+    fact SkillForge = "candidate-first-skill-creation-with-provenance-evals-validation-and-promotion";
+    fact SkillRuntimeModes = "off-manual-manual-only-suggestions-and-active-auto-load-modes";
+    fact AgentSkillBinding = "agents-may-bind-markdown-usrl-and-lsl-skills";
   }
 
   section Principles {
@@ -106,6 +121,9 @@ contract VegvisirDefaultAgentContract {
     fact McpBoundary = "use MCP tools through configured Vegvisir MCP servers and HBSE-backed auth policies when credentials are required";
     fact UserWorkIntegrity = "do not discard, reset, or overwrite unrelated user changes";
     fact TransparentStatus = "report material actions, verification results, failures, and residual risks clearly";
+    fact SkillEvidence = "use skill routing, loading, traces, curation, evals, and source files as evidence when applying or changing skills";
+    fact SkillLeastPrivilege = "load the smallest sufficient skill materialization and dependency closure for the task";
+    fact CandidateSkillsNeedValidation = "new or patched skills remain untrusted until parsed, compiled, evaluated, and promoted";
   }
 
   constraints {
@@ -185,11 +203,49 @@ contract VegvisirDefaultAgentContract {
     constraint CancellationBoundary {
       deny "provider_worker_writeback:cancelled";
     }
+
+
+    constraint SkillSecretBoundary {
+      deny "skill.source:plaintext_secret";
+      deny "skill.trace:plaintext_secret";
+      deny "skill.eval:plaintext_secret";
+      deny "skill.provenance:plaintext_secret";
+      deny "skill.memory_write:secret-like-content";
+    }
+
+    constraint SkillPolicyPrecedence {
+      require "system_developer_user_hbse_approval_and_bound_usrl_policy_above_skill_instruction";
+    }
+
+    constraint SkillContextBudget {
+      require "token_budget_awareness";
+      require "smallest_sufficient_materialization";
+    }
+
+    constraint SkillForgePromotionGate {
+      require "candidate_status_for_new_skills";
+      require "parse_validate_compile_success";
+      require "eval_hooks_present_and_passing_before_promotion";
+    }
+
+    constraint SkillSourceIntegrity {
+      require "preserve_unrelated_skill_source";
+      require "prefer_patch_or_archive_over_delete";
+    }
   }
 
   stages {
     stage Orient {
       fact Goal = "gather user goal, active context, files, memory, provider/auth state, and tool constraints";
+    }
+
+
+    stage SkillRoute {
+      fact Goal = "identify relevant Markdown, USRL, or LSL skills by routing the user request against skill indexes and active agent bindings";
+    }
+
+    stage SkillLoad {
+      fact Goal = "materialize selected skill context and linked dependencies within budget while respecting skill policy and runtime mode";
     }
 
     stage Plan {
@@ -245,6 +301,48 @@ contract VegvisirDefaultAgentContract {
     trigger HbseServiceRef {
       deny "plaintext_credential_material";
       permit "secret_ref_only";
+    }
+
+
+    trigger SkillRelevantRequest {
+      permit "skills.route";
+      permit "skills.load:token_budgeted";
+      require "skill_policy_check";
+      require "user_goal_relevance";
+    }
+
+    trigger SkillAutoLoad {
+      require "lsl_runtime_mode_allows_auto_load";
+      require "token_budget_awareness";
+      require "dependency_closure_when_required";
+      deny "load_skill_context_that_conflicts_with_higher_priority_policy";
+    }
+
+    trigger SkillForge {
+      require "reusable_pattern_or_user_request";
+      require "non_secret_content";
+      require "candidate_status";
+      require "provenance";
+      require "eval_hook";
+      require "compile_validation";
+    }
+
+    trigger SkillPromote {
+      require "candidate_or_patch_reviewed";
+      require "matching_eval_hooks_pass";
+      require "no_policy_weakening";
+    }
+
+    trigger SkillPatchOrArchive {
+      require "preserve_unrelated_skill_source";
+      require "compile_validation_after_change";
+    }
+
+    trigger SkillCuration {
+      permit "skills.trace";
+      permit "skills.detect";
+      permit "skills.curate";
+      require "trace_or_eval_or_usage_evidence";
     }
   }
 }
