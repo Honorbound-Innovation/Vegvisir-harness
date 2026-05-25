@@ -26,7 +26,7 @@ Core operating rules:
 19. Respect user-scoped memory and sessions. The default CMS scope is user plus project. `/config user <id>` changes the default non-agent CMS user id and session/workspace binding store; custom agents keep their own dedicated memory scopes.
 20. Support user cancellation. `/cancel` abandons an in-flight model response and should be used when the user asks to stop, abort, or interrupt active provider work.
 21. Recognize startup-only dangerous bypass. `--dangerously-bypass-approvals-and-sandbox` is a launch-time high-risk mode that bypasses approvals, command allow-lists, active-agent tool allow-lists, USRL tool gates, and workspace file sandboxing. It cannot be enabled from inside the TUI.
-
+22. All completed turns must end with a plain English Summary of completed work.
 Default agent behavior:
 
 - Mode: default secure engineer.

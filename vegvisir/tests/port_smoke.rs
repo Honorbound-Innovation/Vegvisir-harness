@@ -966,11 +966,7 @@ fn run_command_enforces_timeout_and_output_limit() -> anyhow::Result<()> {
             .clone(),
     });
     assert!(truncated.ok, "{}", truncated.content);
-    assert!(
-        truncated
-            .content
-            .contains("[output truncated at 1024 bytes]")
-    );
+    assert!(truncated.content.contains("[output compacted:"));
     assert_eq!(truncated.data.get("output_truncated"), Some(&json!(true)));
     Ok(())
 }
@@ -7048,8 +7044,110 @@ fn openai_tool_loop_truncates_tool_observation_before_resend() -> anyhow::Result
         .pointer("/messages/2/content")
         .and_then(Value::as_str)
         .expect("tool observation in second request");
-    assert!(tool_content.contains("tool observation truncated"));
+    assert!(tool_content.contains("tool observation compacted"));
     assert!(tool_content.len() < 70 * 1024);
+    Ok(())
+}
+
+#[test]
+fn tool_executor_normalizes_safe_argument_shapes_and_classifies_errors() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    std::fs::write(tmp.path().join("alpha.txt"), "alpha")?;
+    let mut executor = vegvisir_rust::tools::ToolExecutor {
+        registry: build_builtin_registry(tmp.path())?,
+        guardrails: GuardrailEngine::default(),
+        runtime_policy: vegvisir_rust::policy::RuntimePolicy::default(),
+        logger: vegvisir_rust::observability::EventLogger::default(),
+    };
+
+    let read = executor.execute(vegvisir_rust::types::ToolCall {
+        name: "read_file".to_string(),
+        args: json!({"path": 123}).as_object().unwrap().clone(),
+    });
+    assert!(!read.ok);
+    assert_eq!(read.error.as_deref(), Some("ReadError"));
+
+    let listed = executor.execute(vegvisir_rust::types::ToolCall {
+        name: "list_files".to_string(),
+        args: json!({"limit": "1"}).as_object().unwrap().clone(),
+    });
+    assert!(listed.ok, "{}", listed.content);
+    assert_eq!(listed.data.get("output_truncated"), Some(&json!(false)));
+
+    let unknown = executor.execute(vegvisir_rust::types::ToolCall {
+        name: "not_a_tool".to_string(),
+        args: Map::new(),
+    });
+    assert!(!unknown.ok);
+    assert_eq!(unknown.error.as_deref(), Some("UnknownTool"));
+    Ok(())
+}
+
+#[test]
+fn openai_tool_loop_repairs_markdown_wrapped_tool_arguments_and_compacts_observation()
+-> anyhow::Result<()> {
+    let payloads = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let payloads_for_post = Arc::clone(&payloads);
+    let mut calls = 0;
+    let mut post = move |payload: Value| -> anyhow::Result<Value> {
+        calls += 1;
+        payloads_for_post.lock().unwrap().push(payload);
+        if calls == 1 {
+            Ok(json!({
+                "choices": [{
+                    "message": {
+                        "content": "",
+                        "tool_calls": [{
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {
+                                "name": "read_file",
+                                "arguments": "```json\n{\"path\":\"alpha.txt\"}\n```"
+                            }
+                        }]
+                    }
+                }]
+            }))
+        } else {
+            Ok(json!({"choices": [{"message": {"content": "done"}}]}))
+        }
+    };
+    let messages = vec![ChatMessage {
+        role: "user".to_string(),
+        content: "read".to_string(),
+        attachments: Vec::new(),
+        created_at: Utc::now(),
+    }];
+    let tools = vec![json!({
+        "name": "read_file",
+        "description": "Read file.",
+        "parameters": {"properties": {"path": "string"}}
+    })];
+    let mut seen_args = Map::new();
+    let mut execute_tool = |_: &str, args: Map<String, Value>| {
+        seen_args = args;
+        format!("{}ERROR: important tail", "z".repeat(80 * 1024))
+    };
+
+    let result = openai_tool_loop(
+        "gpt-test",
+        &messages,
+        &tools,
+        &mut execute_tool,
+        &mut post,
+        2,
+    )?;
+
+    assert_eq!(result, "done");
+    assert_eq!(seen_args.get("path"), Some(&json!("alpha.txt")));
+    let captured = payloads.lock().unwrap();
+    let tool_content = captured[1]
+        .pointer("/messages/2/content")
+        .and_then(Value::as_str)
+        .expect("tool observation in second request");
+    assert!(tool_content.contains("tool observation compacted"));
+    assert!(tool_content.contains("ERROR: important tail"));
+    assert!(tool_content.len() < 30 * 1024);
     Ok(())
 }
 

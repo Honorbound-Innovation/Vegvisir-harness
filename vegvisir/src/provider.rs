@@ -22,7 +22,7 @@ use crate::{
     types::{Observation, ToolCall},
 };
 
-const TOOL_OBSERVATION_MODEL_MAX_BYTES: usize = 64 * 1024;
+const TOOL_OBSERVATION_MODEL_MAX_BYTES: usize = 24 * 1024;
 const OPENAI_TOOL_LOOP_MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 const DEFAULT_MAX_TOOL_ROUNDS: usize = 32;
 const HARD_MAX_TOOL_ROUNDS: usize = 256;
@@ -3456,25 +3456,64 @@ fn truncate_utf8(value: &str, max_bytes: usize) -> &str {
 }
 
 fn truncate_model_observation(value: &str) -> String {
-    if value.len() <= TOOL_OBSERVATION_MODEL_MAX_BYTES {
+    compact_tool_observation(value, TOOL_OBSERVATION_MODEL_MAX_BYTES)
+}
+
+fn compact_tool_observation(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
         return value.to_string();
     }
+    let head_bytes = max_bytes.saturating_mul(2) / 3;
+    let tail_bytes = max_bytes.saturating_sub(head_bytes).saturating_sub(256);
+    let head = truncate_utf8(value, head_bytes);
+    let tail_start = value.len().saturating_sub(tail_bytes);
+    let mut tail_start = tail_start;
+    while tail_start < value.len() && !value.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
+    let tail = &value[tail_start..];
     format!(
-        "{}\n[tool observation truncated at {} of {} bytes before model resend]",
-        truncate_utf8(value, TOOL_OBSERVATION_MODEL_MAX_BYTES),
-        TOOL_OBSERVATION_MODEL_MAX_BYTES,
-        value.len()
+        "{head}\n[tool observation compacted: omitted {} bytes from middle; showing head and tail; original {} bytes, budget {} bytes]\n{tail}",
+        value.len().saturating_sub(head.len() + tail.len()),
+        value.len(),
+        max_bytes
     )
 }
 
 fn parse_tool_arguments(value: Option<&Value>) -> Map<String, Value> {
     match value {
-        Some(Value::String(raw)) => {
-            serde_json::from_str::<Map<String, Value>>(raw).unwrap_or_default()
-        }
+        Some(Value::String(raw)) => parse_tool_arguments_str(raw),
         Some(Value::Object(object)) => object.clone(),
         _ => Map::new(),
     }
+}
+
+fn parse_tool_arguments_str(raw: &str) -> Map<String, Value> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Map::new();
+    }
+    if let Ok(args) = serde_json::from_str::<Map<String, Value>>(raw) {
+        return args;
+    }
+    let unwrapped = raw
+        .strip_prefix("```json")
+        .or_else(|| raw.strip_prefix("```"))
+        .and_then(|text| text.strip_suffix("```"))
+        .map(str::trim);
+    if let Some(unwrapped) = unwrapped
+        && let Ok(args) = serde_json::from_str::<Map<String, Value>>(unwrapped)
+    {
+        return args;
+    }
+    if let Some(start) = raw.find('{')
+        && let Some(end) = raw.rfind('}')
+        && start < end
+        && let Ok(args) = serde_json::from_str::<Map<String, Value>>(&raw[start..=end])
+    {
+        return args;
+    }
+    Map::new()
 }
 
 pub struct ConversationRunner<P: ProviderAdapter> {

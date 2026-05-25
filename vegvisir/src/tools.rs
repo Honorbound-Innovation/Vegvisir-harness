@@ -96,6 +96,51 @@ impl Tool {
         }
         Ok(())
     }
+
+    pub fn normalize_args(&self, args: Map<String, Value>) -> Map<String, Value> {
+        let properties = self
+            .schema
+            .get("properties")
+            .unwrap_or(&self.schema)
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        args.into_iter()
+            .map(|(key, value)| {
+                let expected = properties.get(&key).and_then(|spec| {
+                    spec.as_str()
+                        .map(str::to_string)
+                        .or_else(|| spec.get("type").and_then(Value::as_str).map(str::to_string))
+                });
+                let value = match expected.as_deref() {
+                    Some("string") if !value.is_string() && !value.is_null() => {
+                        Value::String(match value {
+                            Value::Bool(value) => value.to_string(),
+                            Value::Number(value) => value.to_string(),
+                            other => serde_json::to_string(&other).unwrap_or_default(),
+                        })
+                    }
+                    Some("integer") if value.is_string() => value
+                        .as_str()
+                        .and_then(|raw| raw.trim().parse::<i64>().ok())
+                        .map(|number| json!(number))
+                        .unwrap_or(value),
+                    Some("array") if value.is_string() => value
+                        .as_str()
+                        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+                        .filter(Value::is_array)
+                        .unwrap_or(value),
+                    Some("object") if value.is_string() => value
+                        .as_str()
+                        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+                        .filter(Value::is_object)
+                        .unwrap_or(value),
+                    _ => value,
+                };
+                (key, value)
+            })
+            .collect()
+    }
 }
 
 #[derive(Default, Clone)]
@@ -149,16 +194,17 @@ impl ToolExecutor {
     pub fn execute(&mut self, call: ToolCall) -> Observation {
         let result = (|| {
             let tool = self.registry.get(&call.name)?;
-            tool.validate_args(&call.args)?;
-            self.guardrails.authorize_tool(tool, &call.args)?;
+            let args = tool.normalize_args(call.args);
+            tool.validate_args(&args)?;
+            self.guardrails.authorize_tool(tool, &args)?;
             if !self.guardrails.policy.bypass_approvals_and_sandbox {
                 self.runtime_policy
-                    .authorize_tool(&tool.name, &call.args, &self.logger)
+                    .authorize_tool(&tool.name, &args, &self.logger)
                     .map_err(anyhow::Error::msg)?;
             }
             self.logger
-                .emit("tool_start", json!({"tool": call.name, "args": call.args}));
-            let observation = (tool.handler)(call.args.clone());
+                .emit("tool_start", json!({"tool": call.name, "args": args}));
+            let observation = (tool.handler)(args.clone());
             self.logger.emit(
                 "tool_end",
                 json!({"tool": call.name, "ok": observation.ok, "error": observation.error}),
@@ -171,6 +217,16 @@ impl ToolExecutor {
                 let error_text = error.to_string();
                 let error_kind = if error_text.contains("approval_id=") {
                     "ApprovalRequired"
+                } else if error_text.starts_with("Unknown tool:") {
+                    "UnknownTool"
+                } else if error_text.contains("Missing required argument") {
+                    "InvalidToolArguments"
+                } else if error_text.contains(" must be ") {
+                    "InvalidToolArguments"
+                } else if error_text.contains("not allowed")
+                    || error_text.contains("requires human approval")
+                {
+                    "PermissionDenied"
                 } else {
                     "ToolError"
                 };
@@ -182,6 +238,33 @@ impl ToolExecutor {
             }
         }
     }
+}
+
+fn compact_text_middle(value: &str, max_bytes: usize, label: &str) -> String {
+    if value.len() <= max_bytes {
+        return value.to_string();
+    }
+    let marker_budget = 160usize;
+    let head_bytes = max_bytes.saturating_mul(2) / 3;
+    let tail_bytes = max_bytes
+        .saturating_sub(head_bytes)
+        .saturating_sub(marker_budget);
+    let mut head_end = head_bytes.min(value.len());
+    while head_end > 0 && !value.is_char_boundary(head_end) {
+        head_end -= 1;
+    }
+    let mut tail_start = value.len().saturating_sub(tail_bytes);
+    while tail_start < value.len() && !value.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
+    let head = &value[..head_end];
+    let tail = &value[tail_start..];
+    format!(
+        "{head}\n[{label} compacted: omitted {} bytes from middle; original {} bytes, budget {} bytes]\n{tail}",
+        value.len().saturating_sub(head.len() + tail.len()),
+        value.len(),
+        max_bytes
+    )
 }
 
 pub fn build_builtin_registry(workspace: impl AsRef<Path>) -> anyhow::Result<ToolRegistry> {
@@ -393,11 +476,7 @@ pub fn build_builtin_registry_with_cms_and_mode(
                     content.push_str(&String::from_utf8_lossy(&output.stderr));
                     let truncated = content.len() > output_limit;
                     if truncated {
-                        content = format!(
-                            "{}\n[output truncated at {} bytes]",
-                            content.chars().take(output_limit).collect::<String>(),
-                            output_limit
-                        );
+                        content = compact_text_middle(&content, output_limit, "output");
                     }
                     let mut data = Map::new();
                     data.insert(
@@ -497,11 +576,7 @@ pub fn build_builtin_registry_with_cms_and_mode(
                     content.push_str(&String::from_utf8_lossy(&output.stderr));
                     let truncated = content.len() > output_limit;
                     if truncated {
-                        content = format!(
-                            "{}\n[output truncated at {} bytes]",
-                            content.chars().take(output_limit).collect::<String>(),
-                            output_limit
-                        );
+                        content = compact_text_middle(&content, output_limit, "output");
                     }
                     let mut data = Map::new();
                     data.insert("command".to_string(), json!(parts));

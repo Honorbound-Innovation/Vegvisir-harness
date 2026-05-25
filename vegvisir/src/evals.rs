@@ -301,9 +301,7 @@ fn eval_command_timeout_and_output_limit() -> anyhow::Result<EvalResult> {
         passed: !timed_out.ok
             && timed_out.error.as_deref() == Some("CommandTimeout")
             && truncated.ok
-            && truncated
-                .content
-                .contains("[output truncated at 1024 bytes]"),
+            && truncated.content.contains("[output compacted:"),
         details: "run_command enforces timeout and output_limit".to_string(),
     })
 }
