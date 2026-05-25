@@ -1,5 +1,5 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off - Vegvisir app-server is a local stdio JSONL process.
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn as defaultSpawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import * as readline from "node:readline";
 import crypto from "node:crypto";
 
@@ -41,6 +41,27 @@ interface VegvisirBridgeSessionSnapshot {
   readonly model?: string | undefined;
   readonly status?: string | undefined;
 }
+
+const bridgePayloadRecord = (event: VegvisirBridgeEvent): Record<string, unknown> =>
+  event.payload && typeof event.payload === "object"
+    ? (event.payload as Record<string, unknown>)
+    : {};
+
+const bridgeTextOutput = (event: VegvisirBridgeEvent): string => {
+  const payload = bridgePayloadRecord(event);
+  if (typeof payload.output === "string") return payload.output;
+  if (typeof payload.answer === "string") return payload.answer;
+  if (typeof payload.diff === "string") return payload.diff;
+
+  const observation = payload.observation;
+  if (observation && typeof observation === "object") {
+    const record = observation as Record<string, unknown>;
+    if (typeof record.content === "string") return record.content;
+    if (typeof record.message === "string") return record.message;
+  }
+
+  return "";
+};
 
 interface PendingRequest {
   readonly resolve: (event: VegvisirBridgeEvent) => void;
@@ -116,12 +137,14 @@ export const makeVegvisirAdapter = Effect.fn("makeVegvisirAdapter")(function* (
   options: {
     readonly instanceId?: ProviderInstanceId;
     readonly environment?: NodeJS.ProcessEnv;
+    readonly spawn?: typeof defaultSpawn;
   } = {},
 ) {
   const runtimeEvents = yield* Queue.unbounded<ProviderRuntimeEvent>();
   const sessions = new Map<string, VegvisirSessionContext>();
   const instanceId = options.instanceId;
   const env = { ...process.env, ...(options.environment ?? {}) };
+  const spawnProcess = options.spawn ?? defaultSpawn;
 
   const offer = (event: ProviderRuntimeEvent) =>
     Queue.offer(runtimeEvents, event).pipe(Effect.asVoid);
@@ -228,6 +251,11 @@ export const makeVegvisirAdapter = Effect.fn("makeVegvisirAdapter")(function* (
           ),
         );
       }
+      ctx.session = {
+        ...ctx.session,
+        status: "running",
+        updatedAt: DateTime.formatIso(DateTime.nowUnsafe()),
+      };
       return;
     }
 
@@ -275,7 +303,7 @@ export const makeVegvisirAdapter = Effect.fn("makeVegvisirAdapter")(function* (
         "--workspace",
         cwd,
       ];
-      const child = spawn(settings.binaryPath, args, {
+      const child = spawnProcess(settings.binaryPath, args, {
         cwd,
         env,
         stdio: ["pipe", "pipe", "pipe"],
@@ -396,16 +424,35 @@ export const makeVegvisirAdapter = Effect.fn("makeVegvisirAdapter")(function* (
           payload: { model: ctx.session.model },
         }),
       );
+      const bridgeMethod = prompt.startsWith("/") ? "command.run" : "turn.send";
+      const bridgeParams = prompt.startsWith("/") ? { command: prompt } : { content: prompt };
       const completed = yield* Effect.tryPromise({
-        try: () => sendBridgeRequest(ctx, "turn.send", { content: prompt }),
+        try: () => sendBridgeRequest(ctx, bridgeMethod, bridgeParams),
         catch: (cause) =>
           new ProviderAdapterRequestError({
             provider: PROVIDER,
-            method: "turn.send",
+            method: bridgeMethod,
             detail: cause instanceof Error ? cause.message : String(cause),
             cause,
           }),
       });
+      const commandOutput = bridgeMethod === "command.run" ? bridgeTextOutput(completed) : "";
+      if (commandOutput.trim().length > 0) {
+        yield* offer(
+          makeRuntimeEvent({
+            type: "content.delta",
+            provider: PROVIDER,
+            ...(instanceId ? { providerInstanceId: instanceId } : {}),
+            threadId: input.threadId,
+            turnId,
+            payload: {
+              streamKind: "assistant_text",
+              delta: commandOutput,
+            },
+            raw: { source: "acp.vegvisir.extension", payload: completed },
+          }),
+        );
+      }
       ctx.turns.push({ id: turnId, items: [completed.payload] });
       ctx.session = {
         ...ctx.session,
@@ -440,27 +487,63 @@ export const makeVegvisirAdapter = Effect.fn("makeVegvisirAdapter")(function* (
     respondToRequest: (threadId, requestId, decision) =>
       requireSession(threadId).pipe(
         Effect.flatMap((ctx) =>
-          Effect.tryPromise({
-            try: () =>
-              sendBridgeRequest(
-                ctx,
-                decision === "acceptForSession"
-                  ? "approvals.approveSession"
-                  : decision === "accept"
-                    ? "approvals.approveOnce"
-                    : "approvals.deny",
-                { id: requestId },
-              ),
-            catch: (cause) =>
-              new ProviderAdapterRequestError({
+          Effect.gen(function* () {
+            const method =
+              decision === "acceptForSession"
+                ? "approvals.approveSessionAndExecute"
+                : decision === "accept"
+                  ? "approvals.approveOnceAndExecute"
+                  : "approvals.deny";
+            const response = yield* Effect.tryPromise({
+              try: () => sendBridgeRequest(ctx, method, { id: requestId }),
+              catch: (cause) =>
+                new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method: "approvals.respond",
+                  detail: cause instanceof Error ? cause.message : String(cause),
+                  cause,
+                }),
+            });
+            yield* offer(
+              makeRuntimeEvent({
+                type: "request.resolved",
                 provider: PROVIDER,
-                method: "approvals.respond",
-                detail: cause instanceof Error ? cause.message : String(cause),
-                cause,
+                ...(instanceId ? { providerInstanceId: instanceId } : {}),
+                threadId: ctx.session.threadId,
+                ...(ctx.activeTurnId ? { turnId: ctx.activeTurnId } : {}),
+                requestId: RuntimeRequestId.make(String(requestId)),
+                payload: {
+                  requestType: "dynamic_tool_call",
+                  decision,
+                  resolution: response.payload,
+                },
+                raw: { source: "acp.vegvisir.extension", payload: response },
               }),
+            );
+            const output = bridgeTextOutput(response);
+            if (output.trim().length > 0) {
+              yield* offer(
+                makeRuntimeEvent({
+                  type: "content.delta",
+                  provider: PROVIDER,
+                  ...(instanceId ? { providerInstanceId: instanceId } : {}),
+                  threadId: ctx.session.threadId,
+                  ...(ctx.activeTurnId ? { turnId: ctx.activeTurnId } : {}),
+                  payload: {
+                    streamKind: "assistant_text",
+                    delta: output,
+                  },
+                  raw: { source: "acp.vegvisir.extension", payload: response },
+                }),
+              );
+            }
+            ctx.session = {
+              ...ctx.session,
+              status: "ready",
+              updatedAt: yield* nowIso,
+            };
           }),
         ),
-        Effect.asVoid,
       ),
     respondToUserInput: () => Effect.void,
     stopSession: (threadId) =>
