@@ -69,6 +69,8 @@ pub struct AccessPolicy {
     #[serde(default)]
     pub require_mfa: bool,
     #[serde(default)]
+    pub allow_unbound_plaintext_export: bool,
+    #[serde(default)]
     pub expires_at: Option<DateTime<Utc>>,
 }
 
@@ -240,6 +242,13 @@ impl PolicyEngine {
         if request.raw_export_requested && !policy.exportable {
             deny!("raw export not allowed");
         }
+        if request.raw_export_requested
+            && matches!(request.delivery_mode, DeliveryMode::Raw | DeliveryMode::TerminalPrint)
+            && !policy.allow_unbound_plaintext_export
+            && !policy_has_peer_binding(policy)
+        {
+            deny!("raw plaintext export requires a non-spoofable peer binding");
+        }
         if assurance_rank(&request.provider_assurance)
             < assurance_rank(&policy.minimum_provider_assurance)
         {
@@ -338,6 +347,12 @@ impl PolicyEngine {
     }
 }
 
+fn policy_has_peer_binding(policy: &AccessPolicy) -> bool {
+    !policy.allowed_os_uids.is_empty()
+        || !policy.allowed_executable_paths.is_empty()
+        || !policy.allowed_executable_sha256.is_empty()
+}
+
 fn assurance_rank(level: &str) -> i32 {
     match level {
         "A0" => 0,
@@ -393,11 +408,35 @@ mod tests {
             allowed_purposes: vec!["deploy".to_string()],
             allowed_delivery_modes: vec![DeliveryMode::TerminalPrint],
             exportable: true,
+            allow_unbound_plaintext_export: true,
             ..serde_json::from_value(serde_json::json!({"policy_id":"defaults"})).unwrap()
         };
 
         assert!(PolicyEngine::new(vec![policy])
             .evaluate(&request())
+            .allowed());
+    }
+
+    #[test]
+    fn raw_plaintext_export_requires_peer_binding_by_default() {
+        let policy = AccessPolicy {
+            policy_id: "p1".to_string(),
+            secret_refs: vec!["secret://default/api".to_string()],
+            allowed_consumers: vec!["cli".to_string()],
+            allowed_purposes: vec!["deploy".to_string()],
+            allowed_delivery_modes: vec![DeliveryMode::TerminalPrint],
+            exportable: true,
+            ..serde_json::from_value(serde_json::json!({"policy_id":"defaults"})).unwrap()
+        };
+        let engine = PolicyEngine::new(vec![policy.clone()]);
+        assert_eq!(engine.evaluate(&request()).decision, PolicyDecision::Deny);
+
+        let mut bound_policy = policy;
+        bound_policy.allowed_os_uids = vec![1000];
+        let mut bound_request = request();
+        bound_request.os_uid = Some(1000);
+        assert!(PolicyEngine::new(vec![bound_policy])
+            .evaluate(&bound_request)
             .allowed());
     }
 
@@ -410,6 +449,7 @@ mod tests {
             allowed_purposes: vec!["deploy".to_string()],
             allowed_delivery_modes: vec![DeliveryMode::TerminalPrint],
             exportable: true,
+            allow_unbound_plaintext_export: true,
             require_mfa: true,
             ..serde_json::from_value(serde_json::json!({"policy_id":"defaults"})).unwrap()
         };

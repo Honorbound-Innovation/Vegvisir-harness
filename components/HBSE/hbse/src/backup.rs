@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io::{Read, Write};
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
 use chrono::Utc;
@@ -67,8 +69,9 @@ pub fn create_backup(
     let destination = destination.as_ref();
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)?;
+        harden_dir_permissions(parent)?;
     }
-    let file = File::create(destination)?;
+    let file = create_private_file(destination)?;
     let mut archive = ZipWriter::new(file);
     let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
     archive.start_file("manifest.json", options)?;
@@ -108,6 +111,7 @@ pub fn restore_backup(
     let destination_db = destination_db.as_ref();
     if let Some(parent) = destination_db.parent() {
         fs::create_dir_all(parent)?;
+        harden_dir_permissions(parent)?;
     }
     let tmp = destination_db.with_extension(format!(
         "{}tmp",
@@ -117,8 +121,49 @@ pub fn restore_backup(
             .unwrap_or("")
     ));
     fs::write(&tmp, db_data)?;
-    fs::rename(tmp, destination_db)?;
+    harden_file_permissions(&tmp)?;
+    fs::rename(&tmp, destination_db)?;
+    harden_file_permissions(destination_db)?;
     Ok(manifest)
+}
+
+#[cfg(unix)]
+fn create_private_file(path: &Path) -> Result<File, BackupError> {
+    use std::fs::OpenOptions;
+    let file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    Ok(file)
+}
+
+#[cfg(not(unix))]
+fn create_private_file(path: &Path) -> Result<File, BackupError> {
+    Ok(File::create(path)?)
+}
+
+#[cfg(unix)]
+fn harden_dir_permissions(path: &Path) -> Result<(), BackupError> {
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn harden_dir_permissions(_path: &Path) -> Result<(), BackupError> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn harden_file_permissions(path: &Path) -> Result<(), BackupError> {
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn harden_file_permissions(_path: &Path) -> Result<(), BackupError> {
+    Ok(())
 }
 
 fn checkpoint_database(path: &Path) -> Result<(), BackupError> {

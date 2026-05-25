@@ -1264,6 +1264,7 @@ mod tests {
             allowed_purposes: vec!["deploy".to_string()],
             allowed_delivery_modes: vec![DeliveryMode::TerminalPrint],
             exportable: true,
+            allow_unbound_plaintext_export: true,
             max_ticket_ttl_seconds: 60,
             max_uses: 1,
             ..serde_json::from_value(serde_json::json!({"policy_id":"defaults"})).unwrap()

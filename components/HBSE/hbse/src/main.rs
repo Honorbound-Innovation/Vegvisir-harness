@@ -179,6 +179,8 @@ enum VaultCommand {
         recovery_secret: Option<String>,
         #[arg(long)]
         mnemonic: bool,
+        #[arg(long)]
+        show_recovery_secret: bool,
     },
     RecoveryInspect {
         package: PathBuf,
@@ -558,6 +560,8 @@ enum MfaCommand {
         account: Option<String>,
         #[arg(long)]
         passphrase: Option<String>,
+        #[arg(long)]
+        show_secret: bool,
     },
     VerifyTotp {
         code: String,
@@ -799,6 +803,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 passphrase,
                 recovery_secret,
                 mnemonic,
+                show_recovery_secret,
             } => {
                 let passphrase = unlock_passphrase(&vault, passphrase)?;
                 if mnemonic && recovery_secret.is_some() {
@@ -819,15 +824,24 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         "recovery_secret_format": if mnemonic { "hbse-mnemonic-v1" } else { "secret" },
                     });
                     if mnemonic {
-                        output["recovery_mnemonic"] =
-                            serde_json::Value::String(recovery_secret.clone());
+                        output["recovery_secret_display"] = serde_json::Value::String(
+                            if show_recovery_secret { "included" } else { "suppressed" }.to_string(),
+                        );
+                        if show_recovery_secret {
+                            output["recovery_mnemonic"] =
+                                serde_json::Value::String(recovery_secret.clone());
+                        }
                     }
                     println!("{}", serde_json::to_string_pretty(&output)?);
                 } else {
                     println!("recovery package created: {}", destination.display());
                     if mnemonic {
-                        println!("recovery_mnemonic: {recovery_secret}");
-                        println!("Store this mnemonic separately. It is shown only now.");
+                        if show_recovery_secret {
+                            println!("recovery_mnemonic: {recovery_secret}");
+                            println!("Store this mnemonic separately. It is shown only now.");
+                        } else {
+                            println!("recovery_mnemonic: suppressed (rerun with --show-recovery-secret only in a private terminal)");
+                        }
                     }
                 }
             }
@@ -1654,6 +1668,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     allowed_executable_sha256: vec![],
                     denied_executable_sha256: vec![],
                     exportable: false,
+                    allow_unbound_plaintext_export: false,
                     max_ticket_ttl_seconds: 60,
                     max_uses: 1,
                     minimum_provider_assurance: "A1".to_string(),
@@ -1704,6 +1719,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 issuer,
                 account,
                 passphrase,
+                show_secret,
             } => {
                 let passphrase = unlock_passphrase(&vault, passphrase)?;
                 let account = account.unwrap_or_else(|| {
@@ -1714,13 +1730,31 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 });
                 let enrollment = vault.enroll_totp_mfa(&passphrase, &issuer, &account)?;
                 if cli.json {
-                    println!("{}", serde_json::to_string_pretty(&enrollment)?);
+                    if show_secret {
+                        println!("{}", serde_json::to_string_pretty(&enrollment)?);
+                    } else {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&json!({
+                                "issuer": enrollment.issuer,
+                                "account": enrollment.account,
+                                "secret_display": "suppressed",
+                                "hint": "rerun with --show-secret only in a private terminal to display enrollment material"
+                            }))?
+                        );
+                    }
                 } else {
                     println!("TOTP MFA enrolled");
                     println!("issuer: {}", enrollment.issuer);
                     println!("account: {}", enrollment.account);
-                    println!("secret_base32: {}", enrollment.secret_base32);
-                    println!("otpauth_uri: {}", enrollment.otpauth_uri);
+                    if show_secret {
+                        println!("secret_base32: {}", enrollment.secret_base32);
+                        println!("otpauth_uri: {}", enrollment.otpauth_uri);
+                    } else {
+                        println!("secret_base32: suppressed");
+                        println!("otpauth_uri: suppressed");
+                        println!("rerun with --show-secret only in a private terminal to display enrollment material");
+                    }
                 }
             }
             MfaCommand::VerifyTotp { code, passphrase } => {
@@ -1812,7 +1846,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 allow_plaintext,
             } => {
                 require_plaintext_export_confirmation(allow_plaintext)?;
-                print_broker_response(broker_daemon::request(
+                print_broker_materialize_response(broker_daemon::request(
                     socket,
                     &json!({
                         "command": "materialize",
@@ -2264,6 +2298,24 @@ fn print_broker_response(value: serde_json::Value) -> Result<(), Box<dyn std::er
     Ok(())
 }
 
+fn print_broker_materialize_response(
+    value: serde_json::Value,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if !value
+        .get("ok")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        return print_broker_response(value);
+    }
+    let secret = value
+        .get("secret")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("broker response did not include a secret")?;
+    print!("{secret}");
+    Ok(())
+}
+
 fn print_secret_update(
     record: &hbse::records::SecretRecord,
     action: &str,
@@ -2504,7 +2556,7 @@ fn model_provider_gateway_command(
     listen: &str,
 ) -> String {
     format!(
-        "hbse-broker --vault \"$HOME/.local/share/hbse/vault.db\" --socket \"$XDG_RUNTIME_DIR/hbse/broker.sock\" --idle-timeout-seconds 0 --http-listen {listen} --http-upstream-base-url {base_url} --http-secret-ref {secret_ref} --http-consumer {consumer} --http-purpose {purpose} --http-model-discovery-purpose {model_discovery_purpose} --http-credential-header '{}' --http-credential-prefix '{}'",
+        "hbse-broker --vault \"$HOME/.local/share/hbse/vault.db\" --socket \"$XDG_RUNTIME_DIR/hbse/broker.sock\" --idle-timeout-seconds 0 --http-listen {listen} --http-upstream-base-url {base_url} --http-secret-ref {secret_ref} --http-consumer {consumer} --http-purpose {purpose} --http-model-discovery-purpose {model_discovery_purpose} --http-credential-header '{}' --http-credential-prefix '{}' --http-max-request-body-bytes 1048576",
         shell_single_quote(credential_header),
         shell_single_quote(credential_prefix)
     )
@@ -2679,9 +2731,9 @@ fn build_access_request(
         http_method,
         http_path,
         http_request_body_bytes,
-        os_uid: None,
-        executable_path: None,
-        executable_sha256: None,
+        os_uid: current_os_uid(),
+        executable_path: current_executable_path(),
+        executable_sha256: current_executable_sha256(),
         mfa_verified: false,
         broker_session_id: None,
         now: chrono::Utc::now(),
@@ -2743,13 +2795,43 @@ fn materialization_request(
         http_method: None,
         http_path: None,
         http_request_body_bytes: None,
-        os_uid: None,
-        executable_path: None,
-        executable_sha256: None,
+        os_uid: current_os_uid(),
+        executable_path: current_executable_path(),
+        executable_sha256: current_executable_sha256(),
         mfa_verified,
         broker_session_id: None,
         now: chrono::Utc::now(),
     })
+}
+
+fn current_os_uid() -> Option<u32> {
+    #[cfg(unix)]
+    {
+        Some(unsafe { libc::geteuid() })
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
+fn current_executable_path() -> Option<String> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.to_str().map(ToString::to_string))
+}
+
+fn current_executable_sha256() -> Option<String> {
+    use sha2::{Digest, Sha256};
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| fs::read(path).ok())
+        .map(|bytes| {
+            Sha256::digest(bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect()
+        })
 }
 
 fn exec_child(

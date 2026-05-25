@@ -1,3 +1,5 @@
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, TransactionBehavior};
@@ -70,8 +72,10 @@ impl SQLiteVaultStore {
     pub fn initialize_schema(&self) -> Result<(), StoreError> {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
+            harden_dir_permissions(parent)?;
         }
         let conn = self.connect()?;
+        harden_vault_file_permissions(&self.path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.execute_batch(
             r#"
@@ -506,6 +510,36 @@ impl SQLiteVaultStore {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         Ok(conn)
     }
+}
+
+#[cfg(unix)]
+fn harden_dir_permissions(path: &Path) -> Result<(), StoreError> {
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn harden_dir_permissions(_path: &Path) -> Result<(), StoreError> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn harden_vault_file_permissions(path: &Path) -> Result<(), StoreError> {
+    for candidate in [
+        path.to_path_buf(),
+        PathBuf::from(format!("{}-wal", path.display())),
+        PathBuf::from(format!("{}-shm", path.display())),
+    ] {
+        if candidate.exists() {
+            std::fs::set_permissions(candidate, std::fs::Permissions::from_mode(0o600))?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn harden_vault_file_permissions(_path: &Path) -> Result<(), StoreError> {
+    Ok(())
 }
 
 fn get_metadata(conn: &Connection, key: &str) -> Result<Option<String>, StoreError> {

@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{IpAddr, TcpListener, TcpStream};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -47,6 +47,10 @@ pub enum BrokerError {
     ResponseTooLarge,
     #[error("http error: {0}")]
     Http(String),
+    #[error("HTTP gateway remote listen address requires explicit allow_remote")]
+    RemoteHttpGatewayNotAllowed,
+    #[error("brokered HTTP request body too large")]
+    RequestBodyTooLarge,
 }
 
 #[derive(Debug, Clone)]
@@ -72,6 +76,8 @@ pub struct HttpGatewayConfig {
     pub credential_prefix: String,
     pub timeout_seconds: f64,
     pub max_response_bytes: u64,
+    pub max_request_body_bytes: u64,
+    pub allow_remote: bool,
 }
 
 impl BrokerState {
@@ -130,6 +136,7 @@ pub fn serve_with_http_gateway(
         idle_timeout_seconds,
     )));
     if let Some(config) = http_gateway {
+        validate_http_gateway_listen(&config)?;
         let http_listener = TcpListener::bind(&config.listen)?;
         let http_state = Arc::clone(&state);
         thread::spawn(move || {
@@ -185,10 +192,8 @@ fn handle_connection(
             "ok": true,
             "unlocked": state.unlocked,
             "mfa_verified": state.mfa_verified,
-            "broker_session_id": state.broker_session_id,
             "idle_timeout_seconds": state.idle_timeout_seconds,
             "last_activity": state.last_activity.and_then(system_time_millis),
-            "peer": peer,
         })),
         "unlock" => {
             validate_unlock(state, request.get("passphrase").and_then(Value::as_str))?;
@@ -208,7 +213,7 @@ fn handle_connection(
             state.broker_session_id = Some(Uuid::new_v4().to_string());
             mark_activity(state);
             Ok(
-                json!({"ok": true, "unlocked": true, "mfa_verified": state.mfa_verified, "broker_session_id": state.broker_session_id}),
+                json!({"ok": true, "unlocked": true, "mfa_verified": state.mfa_verified}),
             )
         }
         "mfa_verify" => {
@@ -452,6 +457,21 @@ fn brokered_http_request(
     })
 }
 
+fn validate_http_gateway_listen(config: &HttpGatewayConfig) -> Result<(), BrokerError> {
+    if config.allow_remote {
+        return Ok(());
+    }
+    let addr = config
+        .listen
+        .parse::<std::net::SocketAddr>()
+        .map_err(|err| BrokerError::Http(format!("invalid HTTP gateway listen address: {err}")))?;
+    match addr.ip() {
+        IpAddr::V4(ip) if ip.is_loopback() => Ok(()),
+        IpAddr::V6(ip) if ip.is_loopback() => Ok(()),
+        _ => Err(BrokerError::RemoteHttpGatewayNotAllowed),
+    }
+}
+
 fn serve_http_gateway(
     listener: TcpListener,
     state: Arc<Mutex<BrokerState>>,
@@ -466,6 +486,7 @@ fn serve_http_gateway(
                     BrokerError::Locked => 423,
                     BrokerError::Vault(_) => 403,
                     BrokerError::RequestContainsSecret => 400,
+                    BrokerError::RequestBodyTooLarge => 413,
                     BrokerError::ResponseTooLarge => 502,
                     _ => 500,
                 },
@@ -488,7 +509,7 @@ fn handle_http_gateway_connection(
     state: &Arc<Mutex<BrokerState>>,
     config: &HttpGatewayConfig,
 ) -> Result<HttpGatewayResponse, BrokerError> {
-    let request = read_http_gateway_request(stream)?;
+    let request = read_http_gateway_request(stream, config.max_request_body_bytes as usize)?;
     if request.method == "GET" && request.path == "/health" {
         return Ok(HttpGatewayResponse {
             status_code: 200,
@@ -508,12 +529,21 @@ fn handle_http_gateway_connection(
             }))?,
         });
     }
-    let mut state = state
-        .lock()
-        .map_err(|_| BrokerError::Http("broker state lock poisoned".to_string()))?;
-    require_unlocked(&mut state)?;
     let peer = http_gateway_peer_identity();
-    let vault = state.vault();
+    let vault;
+    let passphrase;
+    let mfa_verified;
+    let broker_session_id;
+    {
+        let mut state = state
+            .lock()
+            .map_err(|_| BrokerError::Http("broker state lock poisoned".to_string()))?;
+        require_unlocked(&mut state)?;
+        vault = state.vault();
+        passphrase = state.unlocked_passphrase.clone().unwrap_or_default();
+        mfa_verified = state.mfa_verified;
+        broker_session_id = state.broker_session_id.clone();
+    }
     let upstream_url = http_gateway_upstream_url(&config.upstream_base_url, &request.path);
     let purpose = if request.path.starts_with("/v1/models") {
         &config.model_discovery_purpose
@@ -536,13 +566,18 @@ fn handle_http_gateway_connection(
     });
     let response = brokered_http_request(
         &vault,
-        state.unlocked_passphrase.as_deref().unwrap_or(""),
+        &passphrase,
         &broker_request,
         &peer,
-        state.mfa_verified,
-        state.broker_session_id.clone(),
+        mfa_verified,
+        broker_session_id,
     )?;
-    mark_activity(&mut state);
+    {
+        let mut state = state
+            .lock()
+            .map_err(|_| BrokerError::Http("broker state lock poisoned".to_string()))?;
+        mark_activity(&mut state);
+    }
     let headers = response
         .headers
         .into_iter()
@@ -574,7 +609,10 @@ struct HttpGatewayResponse {
     body: Vec<u8>,
 }
 
-fn read_http_gateway_request(stream: &TcpStream) -> Result<HttpGatewayRequest, BrokerError> {
+fn read_http_gateway_request(
+    stream: &TcpStream,
+    max_body_bytes: usize,
+) -> Result<HttpGatewayRequest, BrokerError> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut request_line = String::new();
     reader.read_line(&mut request_line)?;
@@ -603,6 +641,9 @@ fn read_http_gateway_request(stream: &TcpStream) -> Result<HttpGatewayRequest, B
         let value = value.trim();
         if name.eq_ignore_ascii_case("content-length") {
             content_length = value.parse::<usize>().unwrap_or(0);
+            if content_length > max_body_bytes {
+                return Err(BrokerError::RequestBodyTooLarge);
+            }
             continue;
         }
         if matches!(
@@ -660,6 +701,7 @@ fn http_reason(status_code: u16) -> &'static str {
         400 => "Bad Request",
         403 => "Forbidden",
         404 => "Not Found",
+        413 => "Payload Too Large",
         423 => "Locked",
         500 => "Internal Server Error",
         502 => "Bad Gateway",
@@ -1017,6 +1059,8 @@ fn error_code(err: &BrokerError) -> &'static str {
         BrokerError::RequestContainsSecret => "SECRET_LEAK_BLOCKED",
         BrokerError::ResponseTooLarge => "RESPONSE_TOO_LARGE",
         BrokerError::Http(_) => "HTTP_ERROR",
+        BrokerError::RemoteHttpGatewayNotAllowed => "REMOTE_HTTP_GATEWAY_NOT_ALLOWED",
+        BrokerError::RequestBodyTooLarge => "REQUEST_BODY_TOO_LARGE",
         BrokerError::Vault(_) => "VAULT_ERROR",
         BrokerError::Io(_) => "IO_ERROR",
         BrokerError::Json(_) => "JSON_ERROR",
@@ -1060,5 +1104,35 @@ mod tests {
             http_gateway_upstream_url("https://api.openai.com", "/v1/models"),
             "https://api.openai.com/v1/models"
         );
+    }
+
+    #[test]
+    fn http_gateway_rejects_remote_bind_by_default() {
+        let config = HttpGatewayConfig {
+            listen: "0.0.0.0:8080".to_string(),
+            upstream_base_url: "https://api.example.test".to_string(),
+            secret_ref: "secret://api".to_string(),
+            consumer: "hbse.http-gateway".to_string(),
+            purpose: "model.chat".to_string(),
+            model_discovery_purpose: "model.discovery".to_string(),
+            credential_header: "Authorization".to_string(),
+            credential_prefix: "Bearer ".to_string(),
+            timeout_seconds: 0.0,
+            max_response_bytes: 1024,
+            max_request_body_bytes: 1024,
+            allow_remote: false,
+        };
+        assert!(matches!(
+            validate_http_gateway_listen(&config),
+            Err(BrokerError::RemoteHttpGatewayNotAllowed)
+        ));
+
+        let mut loopback = config.clone();
+        loopback.listen = "127.0.0.1:8080".to_string();
+        assert!(validate_http_gateway_listen(&loopback).is_ok());
+
+        let mut explicitly_remote = config;
+        explicitly_remote.allow_remote = true;
+        assert!(validate_http_gateway_listen(&explicitly_remote).is_ok());
     }
 }
