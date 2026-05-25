@@ -1,3 +1,5 @@
+use std::thread;
+
 use super::super::*;
 
 impl TuiApplication {
