@@ -414,6 +414,22 @@ fn message_lines(message: &ChatMessage, width: usize, search_query: &str) -> Vec
     let role_label = message_label(message.role.as_str(), system_kind);
     let timestamp = message.created_at.format("%H:%M:%S").to_string();
     let is_match = message_matches_search(message, search_query);
+
+    if message.role == "system"
+        && matches!(system_kind, Some(SystemMessageKind::Tool | SystemMessageKind::Note))
+    {
+        return vec![compact_system_message_line(
+            marker,
+            role_label,
+            &timestamp,
+            &message.content,
+            style,
+            content_style,
+            is_match,
+            width,
+        )];
+    }
+
     let mut header_spans = vec![
         Span::styled(format!("{marker} "), style),
         Span::styled(role_label.to_string(), style),
@@ -436,6 +452,44 @@ fn message_lines(message: &ChatMessage, width: usize, search_query: &str) -> Vec
         out.push(Line::from(spans));
     }
     out
+}
+
+fn compact_system_message_line(
+    marker: &str,
+    role_label: &str,
+    timestamp: &str,
+    content: &str,
+    marker_style: Style,
+    content_style: Style,
+    is_match: bool,
+    width: usize,
+) -> Line<'static> {
+    let prefix_width = marker.width() + 1 + role_label.width() + 2 + timestamp.width() + 2;
+    let match_width = if is_match { " match".width() } else { 0 };
+    let detail_width = width.saturating_sub(prefix_width + match_width).max(12);
+    let detail = summarize_system_inline(content, detail_width);
+    let mut spans = vec![
+        Span::styled(format!("{marker} "), marker_style),
+        Span::styled(role_label.to_string(), marker_style),
+        Span::styled("  ", Style::default().fg(DIM)),
+        Span::styled(timestamp.to_string(), Style::default().fg(DIM)),
+        Span::styled("  ", Style::default().fg(DIM)),
+        Span::styled(detail, content_style),
+    ];
+    if is_match {
+        spans.push(Span::styled(" match", Style::default().fg(AMBER)));
+    }
+    Line::from(spans)
+}
+
+fn summarize_system_inline(content: &str, width: usize) -> String {
+    let normalized = content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("  ");
+    truncate(&normalized, width)
 }
 
 fn message_matches_search(message: &ChatMessage, search_query: &str) -> bool {
@@ -791,10 +845,9 @@ fn render_code_block(out: &mut Vec<Line<'static>>, language: &str, code: &str, w
             } else {
                 "     │ ".to_string()
             };
-            out.push(Line::from(vec![
-                Span::styled(prefix, Style::default().fg(DIM).bg(PANEL)),
-                Span::styled(piece, line_style.bg(PANEL)),
-            ]));
+            let mut spans = vec![Span::styled(prefix, Style::default().fg(DIM).bg(PANEL))];
+            spans.extend(highlight_code_piece(language, &piece, line_style));
+            out.push(Line::from(spans));
         }
     }
     out.push(Line::from(Span::styled(
@@ -857,6 +910,171 @@ fn code_line_style(language: &str, line: &str) -> Style {
         }
     }
     Style::default().fg(Color::Rgb(185, 190, 200))
+}
+
+fn highlight_code_piece(language: &str, piece: &str, fallback: Style) -> Vec<Span<'static>> {
+    let fallback = fallback.bg(PANEL);
+    if matches!(language, "diff" | "patch") {
+        return vec![Span::styled(piece.to_string(), fallback)];
+    }
+    if matches!(language, "json" | "jsonc") {
+        return highlight_json_piece(piece, fallback);
+    }
+    if !is_code_language(language) {
+        return vec![Span::styled(piece.to_string(), fallback)];
+    }
+    let trimmed = piece.trim_start();
+    if trimmed.starts_with("//") || trimmed.starts_with('#') {
+        return vec![Span::styled(piece.to_string(), Style::default().fg(DIM).bg(PANEL).add_modifier(Modifier::ITALIC))];
+    }
+    highlight_language_piece(piece, fallback)
+}
+
+fn is_code_language(language: &str) -> bool {
+    matches!(
+        language,
+        "rust" | "rs" | "python" | "py" | "typescript" | "ts" | "tsx" | "javascript" | "js"
+            | "jsx" | "java" | "csharp" | "cs" | "cpp" | "c++" | "c" | "go" | "html" | "css"
+            | "toml" | "yaml" | "yml" | "bash" | "sh" | "shell"
+    )
+}
+
+fn highlight_language_piece(piece: &str, fallback: Style) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut chars = piece.char_indices().peekable();
+    while let Some((start, ch)) = chars.next() {
+        if ch == '"' || ch == '\'' || ch == '`' {
+            let quote = ch;
+            let mut end = start + ch.len_utf8();
+            let mut escaped = false;
+            for (idx, next) in chars.by_ref() {
+                end = idx + next.len_utf8();
+                if escaped {
+                    escaped = false;
+                } else if next == '\\' {
+                    escaped = true;
+                } else if next == quote {
+                    break;
+                }
+            }
+            spans.push(Span::styled(piece[start..end].to_string(), Style::default().fg(GREEN).bg(PANEL)));
+        } else if ch.is_ascii_digit() {
+            let mut end = start + ch.len_utf8();
+            while let Some((idx, next)) = chars.peek().copied() {
+                if next.is_ascii_digit() || next == '.' || next == '_' {
+                    chars.next();
+                    end = idx + next.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            spans.push(Span::styled(piece[start..end].to_string(), Style::default().fg(AMBER).bg(PANEL)));
+        } else if is_ident_start(ch) {
+            let mut end = start + ch.len_utf8();
+            while let Some((idx, next)) = chars.peek().copied() {
+                if is_ident_continue(next) {
+                    chars.next();
+                    end = idx + next.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            let token = &piece[start..end];
+            let style = if is_keyword(token) {
+                Style::default().fg(CYAN).bg(PANEL).add_modifier(Modifier::BOLD)
+            } else if is_literal(token) {
+                Style::default().fg(AMBER).bg(PANEL)
+            } else {
+                fallback
+            };
+            spans.push(Span::styled(token.to_string(), style));
+        } else {
+            spans.push(Span::styled(ch.to_string(), fallback));
+        }
+    }
+    spans
+}
+
+fn highlight_json_piece(piece: &str, fallback: Style) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut chars = piece.char_indices().peekable();
+    while let Some((start, ch)) = chars.next() {
+        if ch == '"' {
+            let mut end = start + 1;
+            let mut escaped = false;
+            for (idx, next) in chars.by_ref() {
+                end = idx + next.len_utf8();
+                if escaped {
+                    escaped = false;
+                } else if next == '\\' {
+                    escaped = true;
+                } else if next == '"' {
+                    break;
+                }
+            }
+            let rest = piece[end..].trim_start();
+            let style = if rest.starts_with(':') {
+                Style::default().fg(CYAN).bg(PANEL)
+            } else {
+                Style::default().fg(GREEN).bg(PANEL)
+            };
+            spans.push(Span::styled(piece[start..end].to_string(), style));
+        } else if ch.is_ascii_digit() || ch == '-' {
+            let mut end = start + ch.len_utf8();
+            while let Some((idx, next)) = chars.peek().copied() {
+                if next.is_ascii_digit() || matches!(next, '.' | 'e' | 'E' | '+' | '-') {
+                    chars.next();
+                    end = idx + next.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            spans.push(Span::styled(piece[start..end].to_string(), Style::default().fg(AMBER).bg(PANEL)));
+        } else if is_ident_start(ch) {
+            let mut end = start + ch.len_utf8();
+            while let Some((idx, next)) = chars.peek().copied() {
+                if is_ident_continue(next) {
+                    chars.next();
+                    end = idx + next.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            let token = &piece[start..end];
+            let style = if matches!(token, "true" | "false" | "null") {
+                Style::default().fg(AMBER).bg(PANEL)
+            } else {
+                fallback
+            };
+            spans.push(Span::styled(token.to_string(), style));
+        } else {
+            spans.push(Span::styled(ch.to_string(), fallback));
+        }
+    }
+    spans
+}
+
+fn is_ident_start(ch: char) -> bool {
+    ch == '_' || ch.is_ascii_alphabetic()
+}
+
+fn is_ident_continue(ch: char) -> bool {
+    ch == '_' || ch.is_ascii_alphanumeric()
+}
+
+fn is_keyword(token: &str) -> bool {
+    matches!(
+        token,
+        "as" | "async" | "await" | "break" | "case" | "class" | "const" | "continue" | "def"
+            | "else" | "enum" | "export" | "extends" | "false" | "fn" | "for" | "from" | "function"
+            | "if" | "impl" | "import" | "in" | "interface" | "let" | "loop" | "match" | "mod"
+            | "mut" | "new" | "private" | "pub" | "public" | "return" | "self" | "static" | "struct"
+            | "super" | "switch" | "this" | "trait" | "true" | "type" | "use" | "var" | "while"
+    )
+}
+
+fn is_literal(token: &str) -> bool {
+    matches!(token, "true" | "false" | "null" | "None" | "Some" | "Ok" | "Err")
 }
 
 fn render_table(out: &mut Vec<Line<'static>>, table: &TableRenderState, width: usize) {
@@ -1808,6 +2026,52 @@ mod tests {
         assert!(rendered.contains("diff"));
         assert!(rendered.contains("-old"));
         assert!(rendered.contains("+new"));
+    }
+
+    #[test]
+    fn ratatui_code_blocks_apply_token_level_highlighting() {
+        let markdown = [
+            "```rust",
+            "fn main() {",
+            r#"    let value = "hello";"#,
+            "}",
+            "```",
+        ]
+        .join("\n");
+
+        let lines = render_markdown(&markdown, 80, Style::default().fg(FG));
+        let fn_span = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content.as_ref() == "fn")
+            .expect("keyword span");
+        let string_span = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content.as_ref() == r#""hello""#)
+            .expect("string span");
+
+        assert_eq!(fn_span.style.fg, Some(CYAN));
+        assert_eq!(string_span.style.fg, Some(GREEN));
+    }
+
+    #[test]
+    fn ratatui_tool_and_note_messages_render_compactly() {
+        let message = ChatMessage {
+            role: "system".to_string(),
+            content: "Tool finished: read_file - ok: read 20 bytes\n\nfull detail that should be summarized".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        };
+        let lines = message_lines(&message, 72, "");
+        let rendered = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect::<String>();
+
+        assert_eq!(lines.len(), 1);
+        assert!(rendered.contains("tool"));
+        assert!(rendered.contains("Tool finished: read_file"));
     }
 
     #[test]
