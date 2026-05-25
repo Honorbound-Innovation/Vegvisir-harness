@@ -386,7 +386,16 @@ impl TuiApplication {
             .rev()
             .find(|message| message.role == "assistant")
         {
-            completed_message.content = live_content;
+            // The streamed live buffer may lag behind the worker's completed
+            // response by a few final deltas when the provider thread finishes.
+            // Do not replace a complete final response with a shorter partial
+            // live buffer; that makes the TUI appear to cut off the end of the
+            // turn until another event forces state forward.
+            if completed_message.content.trim().is_empty()
+                || live_content.len() >= completed_message.content.len()
+            {
+                completed_message.content = live_content;
+            }
         }
     }
 

@@ -831,6 +831,46 @@ mod tests {
     }
 
     #[test]
+    fn completed_turn_does_not_replace_full_response_with_partial_live_trace() -> anyhow::Result<()>
+    {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "make a change".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        app.session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: "**Thinking trace**\n\nworking\n\n**Answer**\n\nDone.\n\nSummary:".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+
+        let mut completed = app.session.clone();
+        completed.messages.pop();
+        completed.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: "**Thinking trace**\n\nworking\n\n**Answer**\n\nDone.\n\nSummary:\n- final line visible".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+
+        app.merge_live_reasoning_trace(&mut completed);
+
+        assert!(
+            completed
+                .messages
+                .last()
+                .unwrap()
+                .content
+                .contains("final line visible")
+        );
+        Ok(())
+    }
+
+    #[test]
     fn activity_pulse_throttles_idle_streaming_redraws() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
