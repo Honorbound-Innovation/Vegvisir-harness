@@ -368,6 +368,7 @@ impl TuiApplication {
             search_query: String::new(),
             search_match_index: 0,
         };
+        app.autoload_workspace_session()?;
         app.rebuild_tooling_for_cms()?;
         let provider = app.session.current_provider.clone();
         let _ = app.refresh_provider_models(&provider);

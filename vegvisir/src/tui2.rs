@@ -416,7 +416,10 @@ fn message_lines(message: &ChatMessage, width: usize, search_query: &str) -> Vec
     let is_match = message_matches_search(message, search_query);
 
     if message.role == "system"
-        && matches!(system_kind, Some(SystemMessageKind::Tool | SystemMessageKind::Note))
+        && matches!(
+            system_kind,
+            Some(SystemMessageKind::Tool | SystemMessageKind::Note)
+        )
     {
         return vec![compact_system_message_line(
             marker,
@@ -925,7 +928,13 @@ fn highlight_code_piece(language: &str, piece: &str, fallback: Style) -> Vec<Spa
     }
     let trimmed = piece.trim_start();
     if trimmed.starts_with("//") || trimmed.starts_with('#') {
-        return vec![Span::styled(piece.to_string(), Style::default().fg(DIM).bg(PANEL).add_modifier(Modifier::ITALIC))];
+        return vec![Span::styled(
+            piece.to_string(),
+            Style::default()
+                .fg(DIM)
+                .bg(PANEL)
+                .add_modifier(Modifier::ITALIC),
+        )];
     }
     highlight_language_piece(piece, fallback)
 }
@@ -933,9 +942,31 @@ fn highlight_code_piece(language: &str, piece: &str, fallback: Style) -> Vec<Spa
 fn is_code_language(language: &str) -> bool {
     matches!(
         language,
-        "rust" | "rs" | "python" | "py" | "typescript" | "ts" | "tsx" | "javascript" | "js"
-            | "jsx" | "java" | "csharp" | "cs" | "cpp" | "c++" | "c" | "go" | "html" | "css"
-            | "toml" | "yaml" | "yml" | "bash" | "sh" | "shell"
+        "rust"
+            | "rs"
+            | "python"
+            | "py"
+            | "typescript"
+            | "ts"
+            | "tsx"
+            | "javascript"
+            | "js"
+            | "jsx"
+            | "java"
+            | "csharp"
+            | "cs"
+            | "cpp"
+            | "c++"
+            | "c"
+            | "go"
+            | "html"
+            | "css"
+            | "toml"
+            | "yaml"
+            | "yml"
+            | "bash"
+            | "sh"
+            | "shell"
     )
 }
 
@@ -957,7 +988,10 @@ fn highlight_language_piece(piece: &str, fallback: Style) -> Vec<Span<'static>> 
                     break;
                 }
             }
-            spans.push(Span::styled(piece[start..end].to_string(), Style::default().fg(GREEN).bg(PANEL)));
+            spans.push(Span::styled(
+                piece[start..end].to_string(),
+                Style::default().fg(GREEN).bg(PANEL),
+            ));
         } else if ch.is_ascii_digit() {
             let mut end = start + ch.len_utf8();
             while let Some((idx, next)) = chars.peek().copied() {
@@ -968,7 +1002,10 @@ fn highlight_language_piece(piece: &str, fallback: Style) -> Vec<Span<'static>> 
                     break;
                 }
             }
-            spans.push(Span::styled(piece[start..end].to_string(), Style::default().fg(AMBER).bg(PANEL)));
+            spans.push(Span::styled(
+                piece[start..end].to_string(),
+                Style::default().fg(AMBER).bg(PANEL),
+            ));
         } else if is_ident_start(ch) {
             let mut end = start + ch.len_utf8();
             while let Some((idx, next)) = chars.peek().copied() {
@@ -981,7 +1018,10 @@ fn highlight_language_piece(piece: &str, fallback: Style) -> Vec<Span<'static>> 
             }
             let token = &piece[start..end];
             let style = if is_keyword(token) {
-                Style::default().fg(CYAN).bg(PANEL).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(CYAN)
+                    .bg(PANEL)
+                    .add_modifier(Modifier::BOLD)
             } else if is_literal(token) {
                 Style::default().fg(AMBER).bg(PANEL)
             } else {
@@ -1029,7 +1069,10 @@ fn highlight_json_piece(piece: &str, fallback: Style) -> Vec<Span<'static>> {
                     break;
                 }
             }
-            spans.push(Span::styled(piece[start..end].to_string(), Style::default().fg(AMBER).bg(PANEL)));
+            spans.push(Span::styled(
+                piece[start..end].to_string(),
+                Style::default().fg(AMBER).bg(PANEL),
+            ));
         } else if is_ident_start(ch) {
             let mut end = start + ch.len_utf8();
             while let Some((idx, next)) = chars.peek().copied() {
@@ -1065,16 +1108,58 @@ fn is_ident_continue(ch: char) -> bool {
 fn is_keyword(token: &str) -> bool {
     matches!(
         token,
-        "as" | "async" | "await" | "break" | "case" | "class" | "const" | "continue" | "def"
-            | "else" | "enum" | "export" | "extends" | "false" | "fn" | "for" | "from" | "function"
-            | "if" | "impl" | "import" | "in" | "interface" | "let" | "loop" | "match" | "mod"
-            | "mut" | "new" | "private" | "pub" | "public" | "return" | "self" | "static" | "struct"
-            | "super" | "switch" | "this" | "trait" | "true" | "type" | "use" | "var" | "while"
+        "as" | "async"
+            | "await"
+            | "break"
+            | "case"
+            | "class"
+            | "const"
+            | "continue"
+            | "def"
+            | "else"
+            | "enum"
+            | "export"
+            | "extends"
+            | "false"
+            | "fn"
+            | "for"
+            | "from"
+            | "function"
+            | "if"
+            | "impl"
+            | "import"
+            | "in"
+            | "interface"
+            | "let"
+            | "loop"
+            | "match"
+            | "mod"
+            | "mut"
+            | "new"
+            | "private"
+            | "pub"
+            | "public"
+            | "return"
+            | "self"
+            | "static"
+            | "struct"
+            | "super"
+            | "switch"
+            | "this"
+            | "trait"
+            | "true"
+            | "type"
+            | "use"
+            | "var"
+            | "while"
     )
 }
 
 fn is_literal(token: &str) -> bool {
-    matches!(token, "true" | "false" | "null" | "None" | "Some" | "Ok" | "Err")
+    matches!(
+        token,
+        "true" | "false" | "null" | "None" | "Some" | "Ok" | "Err"
+    )
 }
 
 fn render_table(out: &mut Vec<Line<'static>>, table: &TableRenderState, width: usize) {

@@ -198,6 +198,25 @@ impl TuiApplication {
         self.switch_workspace(path)
     }
 
+    pub(crate) fn autoload_workspace_session(&mut self) -> anyhow::Result<bool> {
+        let Some(restored) = self.session_for_workspace(&self.cwd)? else {
+            return Ok(false);
+        };
+        if restored.session_id == self.session.session_id {
+            return Ok(false);
+        }
+        self.session = restored;
+        self.session.cwd = self.cwd.display().to_string();
+        self.session.status = "ready".to_string();
+        self.session.activity.clear();
+        self.session.activity_tick = 0;
+        self.apply_session_workspace_state()?;
+        self.input.history = self.session.input_history.clone();
+        self.chat_scroll_offset = 0;
+        self.redraw_requested = true;
+        Ok(true)
+    }
+
     fn switch_workspace_or_alias(&mut self, raw: &str) -> anyhow::Result<String> {
         let alias = crate::core::normalize_agent_id(raw);
         if let Some(path) = self.load_workspace_index().aliases.get(&alias) {

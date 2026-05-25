@@ -3118,6 +3118,79 @@ fn new_and_branch_preserve_model_and_system_prompt() -> anyhow::Result<()> {
 }
 
 #[test]
+fn startup_autoloads_latest_workspace_context() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let workspace = tmp.path().join("project");
+    let home = tmp.path().join("home");
+    fs::create_dir_all(&workspace)?;
+
+    let first_session_id = {
+        let mut app = TuiApplication::with_data_root(&workspace, &home)?;
+        app.execute_command("/title startup restored context")?
+            .unwrap();
+        app.session.messages.push(vegvisir_rust::core::ChatMessage {
+            role: "user".to_string(),
+            content: "remember this startup context".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        app.execute_command("/save")?.unwrap();
+        app.session.session_id.clone()
+    };
+
+    let app = TuiApplication::with_data_root(&workspace, &home)?;
+    assert_eq!(app.session.session_id, first_session_id);
+    assert_eq!(app.session.title, "startup restored context");
+    assert!(
+        app.session
+            .messages
+            .iter()
+            .any(|message| message.content == "remember this startup context")
+    );
+    Ok(())
+}
+
+#[test]
+fn cwd_alias_restores_previous_workspace_context() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let workspace_one = tmp.path().join("one");
+    let workspace_two = tmp.path().join("two");
+    let home = tmp.path().join("home");
+    fs::create_dir_all(&workspace_one)?;
+    fs::create_dir_all(&workspace_two)?;
+
+    let mut app = TuiApplication::with_data_root(&workspace_one, &home)?;
+    app.execute_command("/title workspace one previous context")?
+        .unwrap();
+    app.session.messages.push(vegvisir_rust::core::ChatMessage {
+        role: "user".to_string(),
+        content: "context from workspace one".to_string(),
+        attachments: Vec::new(),
+        created_at: chrono::Utc::now(),
+    });
+    let workspace_one_session = app.session.session_id.clone();
+
+    let changed = app
+        .execute_command(&format!("/cwd {}", workspace_two.display()))?
+        .unwrap();
+    assert!(changed.contains("Started new project session"));
+    assert_ne!(app.session.session_id, workspace_one_session);
+
+    let restored = app
+        .execute_command(&format!("/cwd {}", workspace_one.display()))?
+        .unwrap();
+    assert!(restored.contains(&format!("Restored session {workspace_one_session}")));
+    assert_eq!(app.session.session_id, workspace_one_session);
+    assert!(
+        app.session
+            .messages
+            .iter()
+            .any(|message| message.content == "context from workspace one")
+    );
+    Ok(())
+}
+
+#[test]
 fn workspace_command_retargets_filesystem_tools_and_sessions() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     unsafe {
