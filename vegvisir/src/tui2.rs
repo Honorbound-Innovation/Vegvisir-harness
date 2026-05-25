@@ -24,6 +24,7 @@ const AMBER: Color = Color::Rgb(220, 170, 65);
 const RED: Color = Color::Rgb(230, 86, 86);
 const BORDER: Color = Color::Rgb(62, 66, 76);
 const PANEL: Color = Color::Rgb(16, 17, 20);
+const CHAT_BOTTOM_GAP: u16 = 1;
 
 pub fn draw(f: &mut Frame<'_>, app: &mut TuiApplication) {
     let area = f.area();
@@ -37,6 +38,7 @@ pub fn draw(f: &mut Frame<'_>, app: &mut TuiApplication) {
         .constraints([
             Constraint::Length(2),
             Constraint::Min(6),
+            Constraint::Length(CHAT_BOTTOM_GAP),
             Constraint::Length(activity_height),
             Constraint::Length(input_height),
             Constraint::Length(1),
@@ -46,11 +48,11 @@ pub fn draw(f: &mut Frame<'_>, app: &mut TuiApplication) {
     draw_header(f, app, chunks[0]);
     draw_chat(f, app, chunks[1]);
     if activity_height > 0 {
-        draw_activity_strip(f, app, pending.as_ref(), chunks[2]);
+        draw_activity_strip(f, app, pending.as_ref(), chunks[3]);
     }
-    draw_input(f, app, chunks[3]);
-    draw_status(f, app, chunks[4]);
-    draw_suggestions(f, app, chunks[3], area);
+    draw_input(f, app, chunks[4]);
+    draw_status(f, app, chunks[5]);
+    draw_suggestions(f, app, chunks[4], area);
     if app.help_overlay_open {
         draw_help_overlay(f, app, centered_rect(92, 24, area));
     }
@@ -71,7 +73,7 @@ pub fn draw(f: &mut Frame<'_>, app: &mut TuiApplication) {
             centered_rect(88, 14, area),
         );
     }
-    set_input_cursor(f, app, chunks[3]);
+    set_input_cursor(f, app, chunks[4]);
 }
 
 fn activity_strip_height(app: &TuiApplication, pending: Option<&ApprovalRequest>) -> u16 {
@@ -112,7 +114,40 @@ fn draw_header(f: &mut Frame<'_>, app: &TuiApplication, area: Rect) {
 }
 
 fn draw_chat(f: &mut Frame<'_>, app: &TuiApplication, area: Rect) {
-    let width = area.width.saturating_sub(2) as usize;
+    let content_width = area.width.saturating_sub(2) as usize;
+    let lines = visual_chat_lines(app, content_width);
+
+    let visible_height = area.height.max(1) as usize;
+    let max_offset = lines.len().saturating_sub(visible_height);
+    let offset = app.chat_scroll_offset.min(max_offset);
+    let end = lines.len().saturating_sub(offset);
+    let start = end.saturating_sub(visible_height);
+    let mut visible = lines[start..end].to_vec();
+    apply_scroll_indicators(&mut visible, offset, max_offset, area.width as usize);
+    let paragraph = Paragraph::new(visible)
+        .style(Style::default().fg(FG).bg(BG))
+        // Lines are pre-wrapped before viewport slicing. Keeping Ratatui wrapping
+        // enabled is harmless as a terminal safety net, but the important part is
+        // that scroll math is based on visual rows, not raw markdown/logical rows.
+        .wrap(Wrap { trim: false });
+    f.render_widget(paragraph, area);
+}
+
+fn visual_chat_lines(app: &TuiApplication, width: usize) -> Vec<Line<'static>> {
+    chat_lines(app, width)
+        .into_iter()
+        .flat_map(|line| wrap_line_for_viewport(line, width))
+        .collect()
+}
+
+fn wrap_line_for_viewport(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
+    if line.spans.is_empty() {
+        return vec![line];
+    }
+    wrap_spans(line.spans, width.max(1), "")
+}
+
+fn chat_lines(app: &TuiApplication, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     if app.session.messages.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -132,6 +167,10 @@ fn draw_chat(f: &mut Frame<'_>, app: &TuiApplication, area: Rect) {
             .last()
             .is_some_and(|message| message.role == "assistant" && !message.content.is_empty())
         {
+            // Keep two rendered spacer rows after completed assistant output so the
+            // final line is not visually clipped by the lower TUI chrome/input area.
+            // This is a presentation-only pad; stored transcript content is unchanged.
+            lines.push(Line::from(""));
             lines.push(Line::from(""));
         }
     }
@@ -142,18 +181,7 @@ fn draw_chat(f: &mut Frame<'_>, app: &TuiApplication, area: Rect) {
             Span::styled(app.session.activity.clone(), Style::default().fg(DIM)),
         ]));
     }
-
-    let visible_height = area.height.max(1) as usize;
-    let max_offset = lines.len().saturating_sub(visible_height);
-    let offset = app.chat_scroll_offset.min(max_offset);
-    let end = lines.len().saturating_sub(offset);
-    let start = end.saturating_sub(visible_height);
-    let mut visible = lines[start..end].to_vec();
-    apply_scroll_indicators(&mut visible, offset, max_offset, area.width as usize);
-    let paragraph = Paragraph::new(visible)
-        .style(Style::default().fg(FG).bg(BG))
-        .wrap(Wrap { trim: false });
-    f.render_widget(paragraph, area);
+    lines
 }
 
 fn apply_scroll_indicators(
@@ -2241,6 +2269,98 @@ four",
                 assert!(span.content.width() <= width + 2, "{}", span.content);
             }
         }
+    }
+
+    #[test]
+    fn ratatui_completed_assistant_message_has_two_trailing_spacer_lines() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app =
+            crate::app::TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: "final visible line".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+
+        let lines = chat_lines(&app, 80);
+        assert!(lines.len() >= 3);
+        let last_two = &lines[lines.len() - 2..];
+        assert!(last_two.iter().all(|line| line.spans.is_empty()));
+        Ok(())
+    }
+
+    #[test]
+    fn ratatui_chat_area_ends_above_message_input_box() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app =
+            crate::app::TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))
+                .unwrap();
+        app.session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: "final visible line above input".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(90, 22)).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let mut final_line_y = None;
+        let mut input_top_y = None;
+        for y in 0..buffer.area.height {
+            let row = (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>();
+            if row.contains("final visible line above input") {
+                final_line_y = Some(y);
+            }
+            if row.contains(" message ") {
+                input_top_y = Some(y);
+            }
+        }
+
+        let final_line_y = final_line_y.expect("assistant content should render");
+        let input_top_y = input_top_y.expect("input box title should render");
+        assert!(
+            final_line_y + CHAT_BOTTOM_GAP < input_top_y,
+            "assistant line at y={final_line_y} should end above input top y={input_top_y}"
+        );
+    }
+
+    #[test]
+    fn ratatui_bottom_viewport_uses_visual_rows_so_summary_is_visible() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app =
+            crate::app::TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))
+                .unwrap();
+        let long_line = "x".repeat(420);
+        app.session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: format!("Here is a long line that wraps heavily:\n\n{long_line}\n\nSummary:\n- final summary visible"),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(72, 18)).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let rendered = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            rendered.contains("Summary:"),
+            "bottom-follow view should include the response summary, not stop mid wrapped content:\n{rendered}"
+        );
+        assert!(rendered.contains("final summary visible"));
     }
 
     #[test]
