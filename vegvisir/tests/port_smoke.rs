@@ -2599,6 +2599,39 @@ fn application_executes_core_commands_and_demo_runner() -> anyhow::Result<()> {
             .unwrap()
             .contains("No conversation history")
     );
+    app.session.messages.push(ChatMessage {
+        role: "user".to_string(),
+        content: "we need to patch /compress because it loses the useful current objective"
+            .to_string(),
+        attachments: Vec::new(),
+        created_at: Utc::now(),
+    });
+    app.session.messages.push(ChatMessage {
+        role: "assistant".to_string(),
+        content: "Implemented a structured context capsule and verified it with cargo test."
+            .to_string(),
+        attachments: Vec::new(),
+        created_at: Utc::now(),
+    });
+    let compressed = app
+        .execute_command("/compress context compression")?
+        .unwrap();
+    assert!(compressed.contains("Context Capsule: context compression"));
+    assert!(compressed.contains("Current Objective:"));
+    assert!(compressed.contains("Recent Actions / Evidence:"));
+    assert!(compressed.contains("Continuity Instructions:"));
+    assert!(
+        app.session
+            .messages
+            .first()
+            .is_some_and(|message| message.content.contains("Context Capsule"))
+    );
+    assert!(
+        app.session
+            .messages
+            .iter()
+            .any(|message| message.content.contains("we need to patch /compress"))
+    );
     assert!(
         app.execute_command("/tools allow-risky")?
             .unwrap()
