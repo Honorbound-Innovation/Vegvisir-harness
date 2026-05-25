@@ -1556,6 +1556,22 @@ impl TuiApplication {
             self.redraw_requested = true;
             return;
         }
+        if self.command_palette_open
+            && self.input.buffer.starts_with('/')
+            && self.input.buffer.chars().count() > 1
+        {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    self.input.move_selection(-1);
+                }
+                MouseEventKind::ScrollDown => {
+                    self.input.move_selection(1);
+                }
+                _ => return,
+            }
+            self.redraw_requested = true;
+            return;
+        }
         if self.diff_overlay.is_some() {
             self.diff_scroll_offset = apply_scroll_delta(self.diff_scroll_offset, delta);
             self.redraw_requested = true;

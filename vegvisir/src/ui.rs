@@ -605,9 +605,12 @@ pub mod layout {
             chat_scroll_offset: usize,
             pending_approvals: &[ApprovalRequest],
         ) -> String {
-            let (width, height) = self
+            let (mut width, height) = self
                 .viewport
                 .unwrap_or_else(|| (terminal_columns(), terminal_lines()));
+            if self.viewport.is_none() {
+                width = width.min(100);
+            }
             if width < 50 || height < 18 {
                 return self.too_small(width, height);
             }
@@ -648,7 +651,7 @@ pub mod layout {
             rows.push(self.key_hint_bar(width));
             for (index, line) in input_lines.into_iter().enumerate() {
                 let prompt = if index == 0 { "› " } else { "  " };
-                rows.push(format!("{}{}", self.theme.paint(prompt, "heading"), line));
+                rows.push(format!("{prompt}{line}"));
             }
             if input.buffer.starts_with('/') && !suggestions.is_empty() {
                 rows.extend(self.autocomplete(suggestions, commands, selected_suggestion, width));
@@ -713,15 +716,7 @@ pub mod layout {
         fn input_lines(&self, input: &InputState, width: usize) -> Vec<String> {
             if input.paste_char_count > width {
                 let marker = format!("[Pasted {} characters]", input.paste_char_count);
-                let prefix_width = width.saturating_sub(marker.chars().count() + 1);
-                return vec![truncate(
-                    &format!(
-                        "{} {}",
-                        truncate(&input.buffer, prefix_width).trim(),
-                        marker
-                    ),
-                    width,
-                )];
+                return vec![truncate(&marker, width)];
             }
             let max_lines = 6;
             let mut lines = wrap_input_text(&input.buffer, width);
@@ -1401,7 +1396,7 @@ pub mod layout {
         if matches!(language, "json" | "yaml" | "toml") {
             return highlight_json(line, theme);
         }
-        highlight_keywords_and_strings(line, keywords_for_language(language), theme)
+        theme.paint(line, "code")
     }
 
     fn normalize_language(language: &str) -> &str {
@@ -1457,6 +1452,7 @@ pub mod layout {
         theme.paint(line, "code")
     }
 
+    #[allow(dead_code)]
     fn highlight_keywords_and_strings(
         line: &str,
         keywords: &[&str],
@@ -1518,7 +1514,7 @@ pub mod layout {
         }
         out
     }
-
+    #[allow(dead_code)]
     fn keywords_for_language(language: &str) -> &'static [&'static str] {
         match language {
             "rust" => &[
@@ -1933,6 +1929,7 @@ pub mod layout {
         }
     }
 
+    #[allow(dead_code)]
     fn paint_token(token: &str, keywords: &[&str], theme: &ThemeRenderer) -> String {
         if keywords.contains(&token) {
             theme.paint(token, "code_keyword")
