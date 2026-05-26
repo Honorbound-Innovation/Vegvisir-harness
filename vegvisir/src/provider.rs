@@ -5,9 +5,11 @@ use std::{
     path::PathBuf,
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc::Receiver,
     },
-    time::Instant,
+    thread,
+    time::{Duration, Instant},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -17,6 +19,7 @@ use serde_json::{Map, Value, json};
 use crate::{
     core::{ChatMessage, ModelInfo, ProviderConfig, ProviderRegistry, SessionState},
     environment::get_env,
+    guardrails::ApprovalResolution,
     openai_sso::{codex_base_url, load_fresh_tokens_for_metadata},
     tools::{ToolExecutor, ToolRegistry},
     types::{Observation, ToolCall},
@@ -24,8 +27,6 @@ use crate::{
 
 const TOOL_OBSERVATION_MODEL_MAX_BYTES: usize = 24 * 1024;
 const OPENAI_TOOL_LOOP_MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
-const DEFAULT_MAX_TOOL_ROUNDS: usize = 32;
-const HARD_MAX_TOOL_ROUNDS: usize = 256;
 static RUNTIME_MAX_TOOL_ROUNDS: AtomicUsize = AtomicUsize::new(0);
 
 pub fn direct_provider_auth_allowed() -> bool {
@@ -69,33 +70,35 @@ fn env_truthy(name: &str) -> bool {
 fn max_tool_rounds() -> usize {
     let runtime_limit = RUNTIME_MAX_TOOL_ROUNDS.load(Ordering::Relaxed);
     if runtime_limit > 0 {
-        return runtime_limit.min(HARD_MAX_TOOL_ROUNDS);
+        return runtime_limit;
     }
     get_env("VEGVISIR_MAX_TOOL_ROUNDS")
         .and_then(|value| value.trim().parse::<usize>().ok())
         .filter(|value| *value > 0)
-        .map(|value| value.min(HARD_MAX_TOOL_ROUNDS))
-        .unwrap_or(DEFAULT_MAX_TOOL_ROUNDS)
+        .unwrap_or(usize::MAX)
 }
 
-pub fn configured_max_tool_rounds() -> usize {
-    max_tool_rounds()
+pub fn configured_max_tool_rounds() -> Option<usize> {
+    let rounds = max_tool_rounds();
+    if rounds == usize::MAX { None } else { Some(rounds) }
 }
 
-pub fn max_tool_rounds_hard_limit() -> usize {
-    HARD_MAX_TOOL_ROUNDS
+pub fn configured_max_tool_rounds_label() -> String {
+    configured_max_tool_rounds()
+        .map(|rounds| rounds.to_string())
+        .unwrap_or_else(|| "unlimited".to_string())
 }
 
-pub fn set_runtime_max_tool_rounds(limit: Option<usize>) -> usize {
+pub fn set_runtime_max_tool_rounds(limit: Option<usize>) -> Option<usize> {
     match limit {
         Some(limit) => {
-            let limit = limit.clamp(1, HARD_MAX_TOOL_ROUNDS);
+            let limit = limit.max(1);
             RUNTIME_MAX_TOOL_ROUNDS.store(limit, Ordering::Relaxed);
-            limit
+            Some(limit)
         }
         None => {
             RUNTIME_MAX_TOOL_ROUNDS.store(0, Ordering::Relaxed);
-            max_tool_rounds()
+            configured_max_tool_rounds()
         }
     }
 }
@@ -1193,7 +1196,7 @@ fn anthropic_messages_payload(messages: &[ChatMessage], model: &ModelInfo) -> Va
             .map(|message| {
                 json!({
                     "role": if message.role == "assistant" { "assistant" } else { "user" },
-                    "content": text_with_attachment_refs(message),
+                    "content": anthropic_message_content(message),
                 })
             })
             .collect::<Vec<_>>(),
@@ -1202,6 +1205,37 @@ fn anthropic_messages_payload(messages: &[ChatMessage], model: &ModelInfo) -> Va
         payload["system"] = Value::String(system_prompt);
     }
     payload
+}
+
+fn anthropic_message_content(message: &ChatMessage) -> Value {
+    let image_attachments = message
+        .attachments
+        .iter()
+        .filter(|attachment| attachment.kind == "image")
+        .collect::<Vec<_>>();
+    if image_attachments.is_empty() {
+        return Value::String(text_with_attachment_refs(message));
+    }
+    let mut blocks = vec![json!({
+        "type": "text",
+        "text": text_with_attachment_refs(message),
+    })];
+    for attachment in image_attachments {
+        if let Ok(data) = image_attachment_base64(&attachment.path) {
+            blocks.push(json!({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": attachment
+                        .mime_type
+                        .as_deref()
+                        .unwrap_or("application/octet-stream"),
+                    "data": data,
+                },
+            }));
+        }
+    }
+    Value::Array(blocks)
 }
 
 fn anthropic_tool_loop(
@@ -1233,6 +1267,7 @@ fn anthropic_tool_loop(
     if wire_messages.is_empty() {
         wire_messages.push(json!({"role": "user", "content": "Continue."}));
     }
+    let mut observations = Vec::<(String, String)>::new();
     for _ in 0..max_tool_rounds {
         let mut payload = json!({
             "model": model.name,
@@ -1271,12 +1306,9 @@ fn anthropic_tool_loop(
             .filter_map(|tool_use| {
                 let id = tool_use.get("id").and_then(Value::as_str)?.to_string();
                 let name = tool_use.get("name").and_then(Value::as_str)?.to_string();
-                let args = tool_use
-                    .get("input")
-                    .and_then(Value::as_object)
-                    .cloned()
-                    .unwrap_or_default();
+                let args = parse_tool_arguments(tool_use.get("input"));
                 let result = truncate_model_observation(&execute_tool(&name, args));
+                observations.push((name.clone(), result.clone()));
                 Some(json!({
                     "type": "tool_result",
                     "tool_use_id": id,
@@ -1286,7 +1318,7 @@ fn anthropic_tool_loop(
             .collect::<Vec<_>>();
         wire_messages.push(json!({"role": "user", "content": results}));
     }
-    anyhow::bail!("model exceeded Vegvisir tool-call round limit ({max_tool_rounds}).")
+    tool_round_limit_result(&observations, max_tool_rounds)
 }
 
 fn anthropic_tool_schema(tool: &Value) -> Value {
@@ -1615,7 +1647,7 @@ fn google_generate_content_payload(messages: &[ChatMessage]) -> Value {
         .map(|message| {
             json!({
                 "role": if message.role == "assistant" { "model" } else { "user" },
-                "parts": [{"text": text_with_attachment_refs(message)}],
+                "parts": google_message_parts(message),
             })
         })
         .collect::<Vec<_>>();
@@ -1627,6 +1659,27 @@ fn google_generate_content_payload(messages: &[ChatMessage]) -> Value {
         payload["systemInstruction"] = json!({"parts": [{"text": system_prompt}]});
     }
     payload
+}
+
+fn google_message_parts(message: &ChatMessage) -> Vec<Value> {
+    let mut parts = vec![json!({"text": text_with_attachment_refs(message)})];
+    for attachment in &message.attachments {
+        if attachment.kind != "image" {
+            continue;
+        }
+        if let Ok(data) = image_attachment_base64(&attachment.path) {
+            parts.push(json!({
+                "inlineData": {
+                    "mimeType": attachment
+                        .mime_type
+                        .as_deref()
+                        .unwrap_or("application/octet-stream"),
+                    "data": data,
+                },
+            }));
+        }
+    }
+    parts
 }
 
 fn google_tool_loop(
@@ -1643,6 +1696,7 @@ fn google_tool_loop(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_else(|| vec![json!({"role": "user", "parts": [{"text": ""}]})]);
+    let mut observations = Vec::<(String, String)>::new();
     for _ in 0..max_tool_rounds {
         let mut payload = json!({
             "contents": contents,
@@ -1676,12 +1730,9 @@ fn google_tool_loop(
             .into_iter()
             .filter_map(|call| {
                 let name = call.get("name").and_then(Value::as_str)?.to_string();
-                let args = call
-                    .get("args")
-                    .and_then(Value::as_object)
-                    .cloned()
-                    .unwrap_or_default();
+                let args = parse_tool_arguments(call.get("args"));
                 let result = truncate_model_observation(&execute_tool(&name, args));
+                observations.push((name.clone(), result.clone()));
                 Some(json!({
                     "functionResponse": {
                         "name": name,
@@ -1692,7 +1743,7 @@ fn google_tool_loop(
             .collect::<Vec<_>>();
         contents.push(json!({"role": "user", "parts": response_parts}));
     }
-    anyhow::bail!("model exceeded Vegvisir tool-call round limit ({max_tool_rounds}).")
+    tool_round_limit_result(&observations, max_tool_rounds)
 }
 
 fn google_tool_schema(tool: &Value) -> Value {
@@ -2076,12 +2127,16 @@ fn text_with_attachment_refs(message: &ChatMessage) -> String {
 }
 
 fn data_url(path: &str, mime_type: Option<&str>) -> anyhow::Result<String> {
-    let encoded = STANDARD.encode(fs::read(path)?);
+    let encoded = image_attachment_base64(path)?;
     Ok(format!(
         "data:{};base64,{}",
         mime_type.unwrap_or("application/octet-stream"),
         encoded
     ))
+}
+
+fn image_attachment_base64(path: &str) -> anyhow::Result<String> {
+    Ok(STANDARD.encode(fs::read(path)?))
 }
 
 fn hbse_provider_http(
@@ -2283,6 +2338,23 @@ fn extract_openai_compatible_text(response: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
+fn provider_error_message(value: &Value) -> Option<String> {
+    value
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            value
+                .pointer("/error/error/message")
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            value
+                .pointer("/response/error/message")
+                .and_then(Value::as_str)
+        })
+        .map(str::to_string)
+}
+
 fn parse_openai_sse(text: &str) -> anyhow::Result<String> {
     parse_openai_sse_with_callback(text, &mut |_| {})
 }
@@ -2310,6 +2382,9 @@ fn parse_openai_sse_reader<R: BufRead>(
             break;
         }
         let value: Value = serde_json::from_str(data)?;
+        if let Some(message) = provider_error_message(&value) {
+            anyhow::bail!(message);
+        }
         if let Some(delta) = value
             .pointer("/choices/0/delta/content")
             .and_then(Value::as_str)
@@ -2379,10 +2454,10 @@ fn parse_google_stream(text: &str) -> anyhow::Result<String> {
         let value: Value = serde_json::from_str(&body)?;
         if let Some(items) = value.as_array() {
             for item in items {
-                append_google_value(item, &mut output);
+                append_google_value(item, &mut output)?;
             }
         } else {
-            append_google_value(&value, &mut output);
+            append_google_value(&value, &mut output)?;
         }
     }
     Ok(output)
@@ -2794,13 +2869,15 @@ fn extract_response_text(value: &Value) -> Option<String> {
 
 fn append_google_json(data: &str, output: &mut String) -> anyhow::Result<()> {
     let value: Value = serde_json::from_str(data)?;
-    append_google_value(&value, output);
-    Ok(())
+    append_google_value(&value, output)
 }
 
-fn append_google_value(value: &Value, output: &mut String) {
+fn append_google_value(value: &Value, output: &mut String) -> anyhow::Result<()> {
+    if let Some(message) = google_error_message(value) {
+        anyhow::bail!(message);
+    }
     let Some(candidates) = value.get("candidates").and_then(Value::as_array) else {
-        return;
+        return Ok(());
     };
     for candidate in candidates {
         let Some(parts) = candidate
@@ -2815,6 +2892,24 @@ fn append_google_value(value: &Value, output: &mut String) {
             }
         }
     }
+    Ok(())
+}
+
+fn google_error_message(value: &Value) -> Option<String> {
+    value
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            value
+                .pointer("/promptFeedback/blockReasonMessage")
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            value
+                .pointer("/promptFeedback/blockReason")
+                .and_then(Value::as_str)
+        })
+        .map(str::to_string)
 }
 
 #[derive(Clone, Debug)]
@@ -3480,6 +3575,28 @@ fn compact_tool_observation(value: &str, max_bytes: usize) -> String {
     )
 }
 
+fn tool_round_limit_result(
+    observations: &[(String, String)],
+    max_tool_rounds: usize,
+) -> anyhow::Result<String> {
+    if !observations.is_empty() {
+        let summary = observations
+            .iter()
+            .rev()
+            .take(3)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .map(|(name, content)| format!("[{name}]\n{content}"))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        return Ok(format!(
+            "Tool-call round limit reached before the model produced a final answer. Latest tool observations:\n\n{summary}"
+        ));
+    }
+    anyhow::bail!("model exceeded Vegvisir tool-call round limit ({max_tool_rounds}).")
+}
+
 fn parse_tool_arguments(value: Option<&Value>) -> Map<String, Value> {
     match value {
         Some(Value::String(raw)) => parse_tool_arguments_str(raw),
@@ -3522,6 +3639,8 @@ pub struct ConversationRunner<P: ProviderAdapter> {
     pub tools: Option<ToolRegistry>,
     pub tool_executor: Option<ToolExecutor>,
     pub event_sink: Option<Arc<dyn Fn(ProviderRunEvent) + Send + Sync>>,
+    pub cancel_token: Option<Arc<AtomicBool>>,
+    pub steering_rx: Option<Receiver<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3554,6 +3673,97 @@ fn approval_required_observation(observation: &Observation) -> bool {
         || observation
             .content
             .contains("Risky tool requires permission:")
+}
+
+fn approval_id_from_observation(observation: &Observation) -> Option<String> {
+    let content = observation.content.split_once("approval_id=")?.1;
+    Some(
+        content
+            .split(|ch: char| ch.is_whitespace() || ch == ';' || ch == ',' || ch == ')')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+    )
+    .filter(|id| !id.is_empty())
+}
+
+fn wait_for_tool_approval(
+    executor: &mut ToolExecutor,
+    name: &str,
+    args: &Map<String, Value>,
+    approval_id: &str,
+    cancel_token: Option<&Arc<AtomicBool>>,
+) -> anyhow::Result<()> {
+    loop {
+        if cancel_token
+            .map(|token| token.load(Ordering::SeqCst))
+            .unwrap_or(false)
+        {
+            anyhow::bail!("Cancelled");
+        }
+        match executor
+            .guardrails
+            .approvals
+            .resolution(approval_id, name, args)
+        {
+            ApprovalResolution::Approved => return Ok(()),
+            ApprovalResolution::Denied => {
+                anyhow::bail!("Tool approval denied; approval_id={approval_id}")
+            }
+            ApprovalResolution::Missing => {
+                anyhow::bail!("Tool approval is no longer pending; approval_id={approval_id}")
+            }
+            ApprovalResolution::Pending => thread::sleep(Duration::from_millis(200)),
+        }
+    }
+}
+
+fn drain_steering_messages(
+    steering_rx: &Option<Receiver<String>>,
+    session: &mut SessionState,
+) -> Vec<String> {
+    let Some(receiver) = steering_rx else {
+        return Vec::new();
+    };
+    let mut messages = Vec::new();
+    while let Ok(message) = receiver.try_recv() {
+        let message = message.trim().to_string();
+        if message.is_empty() {
+            continue;
+        }
+        session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: format!("[mid-run steering] {message}"),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        messages.push(message);
+    }
+    messages
+}
+
+fn inject_steering_into_observation(
+    steering_rx: &Option<Receiver<String>>,
+    session: &mut SessionState,
+    observation: String,
+) -> String {
+    let steering = drain_steering_messages(steering_rx, session);
+    if steering.is_empty() {
+        return observation;
+    }
+    let steering = steering
+        .into_iter()
+        .map(|message| format!("- {message}"))
+        .collect::<Vec<_>>()
+        .join("
+");
+    format!(
+        "{observation}
+
+[User steering received while you were running; adjust your next step accordingly.]
+{steering}"
+    )
 }
 
 impl<P: ProviderAdapter> ConversationRunner<P> {
@@ -3631,18 +3841,45 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
                 .unwrap_or_default();
             let executor = self.tool_executor.as_mut().expect("checked above");
             let session_id = session.session_id.clone();
+            let current_provider = session.current_provider.clone();
+            let steering_rx = self.steering_rx.take();
             let mut approval_required = None::<String>;
             let mut execute_tool = |name: &str, args: Map<String, Value>| -> String {
                 session.activity = format!("using tool {name}");
-                let observation = executor.execute(ToolCall {
+                let mut observation = executor.execute(ToolCall {
                     name: name.to_string(),
-                    args,
+                    args: args.clone(),
                 });
-                session.activity = format!("finished tool {name}");
                 if approval_required_observation(&observation) {
                     approval_required = Some(observation.content.clone());
+                    if let Some(approval_id) = approval_id_from_observation(&observation)
+                        && self.cancel_token.is_some()
+                    {
+                        session.activity = format!("waiting for approval {approval_id}");
+                        match wait_for_tool_approval(
+                            executor,
+                            name,
+                            &args,
+                            &approval_id,
+                            self.cancel_token.as_ref(),
+                        ) {
+                            Ok(()) => {
+                                session.activity = format!("using approved tool {name}");
+                                observation = executor.execute(ToolCall {
+                                    name: name.to_string(),
+                                    args,
+                                });
+                                approval_required = None;
+                            }
+                            Err(error) => {
+                                approval_required = Some(error.to_string());
+                                return format!("ApprovalRequired: {error}");
+                            }
+                        }
+                    }
                 }
-                if observation.ok {
+                session.activity = format!("finished tool {name}");
+                let observation_text = if observation.ok {
                     observation.content
                 } else {
                     format!(
@@ -3650,7 +3887,8 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
                         observation.error.unwrap_or_else(|| "ToolError".to_string()),
                         observation.content
                     )
-                }
+                };
+                inject_steering_into_observation(&steering_rx, session, observation_text)
             };
             let _ = session_id;
             let response = self.provider.complete_with_tools(
@@ -3658,16 +3896,18 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
                 model,
                 &tools,
                 &mut execute_tool,
-                &session.current_provider,
+                &current_provider,
             )?;
             if let Some(message) = approval_required {
                 anyhow::bail!("{message}");
             }
+            let _ = drain_steering_messages(&steering_rx, session);
             response
         } else {
             self.provider
                 .complete(&provider_messages, model, &session.current_provider)?
         };
+        let _ = drain_steering_messages(&self.steering_rx, session);
         session.messages.push(ChatMessage {
             role: "assistant".to_string(),
             content: response.clone(),
@@ -3753,6 +3993,8 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
                 .unwrap_or_default();
             let executor = self.tool_executor.as_mut().expect("checked above");
             let event_sink = self.event_sink.clone();
+            let current_provider = session.current_provider.clone();
+            let steering_rx = self.steering_rx.take();
             let mut approval_required = None::<String>;
             let mut execute_tool = |name: &str, args: Map<String, Value>| -> String {
                 session.activity = format!("using tool {name}");
@@ -3763,10 +4005,50 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
                         args: summarize_tool_args(&args),
                     },
                 );
-                let observation = executor.execute(ToolCall {
+                let mut observation = executor.execute(ToolCall {
                     name: name.to_string(),
-                    args,
+                    args: args.clone(),
                 });
+                if approval_required_observation(&observation) {
+                    approval_required = Some(observation.content.clone());
+                    if let Some(approval_id) = approval_id_from_observation(&observation)
+                        && self.cancel_token.is_some()
+                    {
+                        session.activity = format!("waiting for approval {approval_id}");
+                        emit_provider_event(
+                            &event_sink,
+                            ProviderRunEvent::Activity(format!(
+                                "waiting for approval {approval_id}"
+                            )),
+                        );
+                        match wait_for_tool_approval(
+                            executor,
+                            name,
+                            &args,
+                            &approval_id,
+                            self.cancel_token.as_ref(),
+                        ) {
+                            Ok(()) => {
+                                session.activity = format!("using approved tool {name}");
+                                emit_provider_event(
+                                    &event_sink,
+                                    ProviderRunEvent::Activity(format!(
+                                        "using approved tool {name}"
+                                    )),
+                                );
+                                observation = executor.execute(ToolCall {
+                                    name: name.to_string(),
+                                    args,
+                                });
+                                approval_required = None;
+                            }
+                            Err(error) => {
+                                approval_required = Some(error.to_string());
+                                return format!("ApprovalRequired: {error}");
+                            }
+                        }
+                    }
+                }
                 session.activity = format!("finished tool {name}");
                 emit_provider_event(
                     &event_sink,
@@ -3777,10 +4059,7 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
                         detail: tool_display_detail(&name, &observation),
                     },
                 );
-                if approval_required_observation(&observation) {
-                    approval_required = Some(observation.content.clone());
-                }
-                if observation.ok {
+                let observation_text = if observation.ok {
                     observation.content
                 } else {
                     format!(
@@ -3788,19 +4067,21 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
                         observation.error.unwrap_or_else(|| "ToolError".to_string()),
                         observation.content
                     )
-                }
+                };
+                inject_steering_into_observation(&steering_rx, session, observation_text)
             };
             let response = self.provider.complete_with_tools_streaming(
                 &provider_messages,
                 model,
                 &tools,
                 &mut execute_tool,
-                &session.current_provider,
+                &current_provider,
                 on_delta,
             )?;
             if let Some(message) = approval_required {
                 anyhow::bail!("{message}");
             }
+            let _ = drain_steering_messages(&steering_rx, session);
             response
         } else {
             let response =
@@ -3809,6 +4090,7 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
             on_delta(&response);
             response
         };
+        let _ = drain_steering_messages(&self.steering_rx, session);
         session.last_prompt_cache_key = Some(envelope.manifest.prompt_cache_key.clone());
         session.last_prompt_manifest_id = Some(envelope.manifest.manifest_id.clone());
         session.messages.push(ChatMessage {
@@ -3933,6 +4215,69 @@ fn apply_system_prompt_to_envelope(envelope: &mut CachedPromptEnvelope, system_p
         .manifest
         .total_prompt_tokens
         .saturating_add(system_prompt.split_whitespace().count());
+}
+
+#[doc(hidden)]
+pub mod test_support {
+    use super::*;
+
+    pub fn openai_messages_for_test(messages: &[ChatMessage]) -> Vec<Value> {
+        openai_messages(messages)
+    }
+
+    pub fn responses_payload_for_test(messages: &[ChatMessage], model: &ModelInfo) -> Value {
+        responses_payload(messages, model)
+    }
+
+    pub fn anthropic_messages_payload_for_test(
+        messages: &[ChatMessage],
+        model: &ModelInfo,
+    ) -> Value {
+        anthropic_messages_payload(messages, model)
+    }
+
+    pub fn google_generate_content_payload_for_test(messages: &[ChatMessage]) -> Value {
+        google_generate_content_payload(messages)
+    }
+
+    pub fn parse_tool_arguments_for_test(value: Option<&Value>) -> Map<String, Value> {
+        parse_tool_arguments(value)
+    }
+
+    pub fn tool_round_limit_result_for_test(
+        observations: &[(String, String)],
+        max_tool_rounds: usize,
+    ) -> anyhow::Result<String> {
+        tool_round_limit_result(observations, max_tool_rounds)
+    }
+
+    pub fn parse_openai_sse_for_test(text: &str) -> anyhow::Result<String> {
+        parse_openai_sse(text)
+    }
+
+    pub fn parse_responses_sse_for_test(text: &str) -> anyhow::Result<String> {
+        parse_response_sse_text_reader(BufReader::new(text.as_bytes()), &mut |_| {})
+    }
+
+    pub fn parse_anthropic_sse_for_test(text: &str) -> anyhow::Result<String> {
+        parse_anthropic_sse(text)
+    }
+
+    pub fn parse_google_stream_for_test(text: &str) -> anyhow::Result<String> {
+        parse_google_stream(text)
+    }
+
+    pub fn anthropic_tool_schema_for_test(tool: &Value) -> Value {
+        anthropic_tool_schema(tool)
+    }
+
+    pub fn google_tool_schema_for_test(tool: &Value) -> Value {
+        google_tool_schema(tool)
+    }
+
+    pub fn responses_tool_schema_for_test(tool: &Value) -> Value {
+        responses_tool_schema(tool)
+    }
 }
 
 #[cfg(test)]

@@ -197,31 +197,30 @@ impl TuiApplication {
     pub(crate) fn tool_limit_command(&mut self, args: &[String]) -> String {
         match args.first().map(String::as_str) {
             None | Some("show") | Some("status") => format!(
-                "Max tool-call rounds per turn: {}\nHard limit: {}\nUsage: /tool-limit <rounds>|default",
-                configured_max_tool_rounds(),
-                max_tool_rounds_hard_limit()
+                "Max tool-call rounds per turn: {}
+Default: unlimited
+Usage: /tool-limit <rounds>|unlimited",
+                configured_max_tool_rounds_label(),
             ),
-            Some("default") | Some("reset") | Some("clear") => {
-                let effective = set_runtime_max_tool_rounds(None);
-                format!("Max tool-call rounds reset to default/environment value: {effective}.")
+            Some("default") | Some("reset") | Some("clear") | Some("unlimited") | Some("none") => {
+                let effective = set_runtime_max_tool_rounds(None)
+                    .map(|rounds| rounds.to_string())
+                    .unwrap_or_else(|| "unlimited".to_string());
+                format!("Max tool-call rounds reset to {effective}.")
             }
             Some(raw) => match raw.parse::<usize>() {
                 Ok(0) => "Tool-call round limit must be at least 1.".to_string(),
                 Ok(limit) => {
-                    let effective = set_runtime_max_tool_rounds(Some(limit));
-                    let clamped = if effective != limit {
-                        format!(" Requested value was clamped to the hard limit {effective}.")
-                    } else {
-                        String::new()
-                    };
+                    let effective = set_runtime_max_tool_rounds(Some(limit)).unwrap_or(limit);
                     format!(
-                        "Max tool-call rounds per turn set to {effective} for this running session.{clamped}"
+                        "Max tool-call rounds per turn set to {effective} for this running session."
                     )
                 }
-                Err(_) => "Usage: /tool-limit <rounds>|default".to_string(),
+                Err(_) => "Usage: /tool-limit <rounds>|unlimited".to_string(),
             },
         }
     }
+
 
     pub(crate) fn approvals_command(&mut self, args: &[String]) -> String {
         match args.first().map(String::as_str) {
@@ -278,6 +277,12 @@ impl TuiApplication {
                     .approvals
                     .approve_once_request(id)
                 {
+                    Some(request) if self.pending_send.is_some() => {
+                        format!(
+                            "Approved once: {}. In-flight model run will resume.",
+                            request.tool_name
+                        )
+                    }
                     Some(request) => self.execute_approved_request("Approved once", request),
                     None => format!("Unknown pending approval: {id}"),
                 }
@@ -311,7 +316,14 @@ impl TuiApplication {
                                 "Approved matching call and allowed shell command `{command}` for this running session"
                             );
                         }
-                        self.execute_approved_request(&prefix, request)
+                        if self.pending_send.is_some() {
+                            format!(
+                                "{prefix}: {}. In-flight model run will resume.",
+                                request.tool_name
+                            )
+                        } else {
+                            self.execute_approved_request(&prefix, request)
+                        }
                     }
                     None => format!("Unknown pending approval: {id}"),
                 }

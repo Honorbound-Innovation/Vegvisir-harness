@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
-    sync::{Arc, atomic::AtomicBool, mpsc::Receiver},
+    sync::{Arc, atomic::AtomicBool, mpsc::{Receiver, Sender}},
     thread::JoinHandle,
     time::Duration,
 };
@@ -30,8 +30,8 @@ use crate::{
     observability::EventLogger,
     policy::RuntimePolicy,
     provider::{
-        ConversationRunner, ProviderRouter, ProviderRunEvent, configured_max_tool_rounds,
-        direct_provider_auth_allowed, max_tool_rounds_hard_limit, set_runtime_max_tool_rounds,
+        ConversationRunner, ProviderRouter, ProviderRunEvent, configured_max_tool_rounds_label,
+        direct_provider_auth_allowed, set_runtime_max_tool_rounds,
     },
     subagents::{SubAgentStatus, SubAgentTaskRecord},
     tools::{ToolExecutor, ToolRegistry, build_builtin_registry_with_cms_and_mode},
@@ -84,6 +84,7 @@ pub struct TuiApplication {
     pending_background_jobs: Vec<JoinHandle<anyhow::Result<String>>>,
     pending_stream: Option<Receiver<StreamEvent>>,
     pending_cancel: Option<Arc<AtomicBool>>,
+    pending_steering: Option<Sender<String>>,
     pub command_palette_open: bool,
     pub help_overlay_open: bool,
     pub diff_overlay: Option<DiffOverlay>,
@@ -357,6 +358,7 @@ impl TuiApplication {
             pending_background_jobs: Vec::new(),
             pending_stream: None,
             pending_cancel: None,
+            pending_steering: None,
             command_palette_open: false,
             help_overlay_open: false,
             diff_overlay: None,
@@ -387,6 +389,8 @@ impl TuiApplication {
             tools: None,
             tool_executor: None,
             event_sink: None,
+            cancel_token: None,
+            steering_rx: None,
         };
         let (model_content, skill_trace) = self.prepare_lsl_for_content(content)?;
         let envelope = self.cms.prepare_cached_prompt(
@@ -423,6 +427,8 @@ impl TuiApplication {
             tools: Some(self.tool_registry.clone()),
             tool_executor: Some(self.tool_executor.clone()),
             event_sink: None,
+            cancel_token: None,
+            steering_rx: None,
         };
         let (model_content, skill_trace) = self.prepare_lsl_for_content(content)?;
         let envelope = self.cms.prepare_cached_prompt(

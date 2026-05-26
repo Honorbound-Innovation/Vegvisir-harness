@@ -1,8 +1,7 @@
 use std::{
     sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc,
+        mpsc, Arc,
     },
     thread,
 };
@@ -18,7 +17,7 @@ impl TuiApplication {
         attachments: Vec<crate::core::Attachment>,
     ) {
         if self.pending_send.is_some() {
-            self.push_system_message("A model response is already in progress.");
+            self.queue_steering_message(content, attachments);
             return;
         }
         let display_content = if content.trim().is_empty() && !attachments.is_empty() {
@@ -57,9 +56,11 @@ impl TuiApplication {
         let data_root = self.data_root.clone();
         let lsl_config = self.lsl_runtime_config();
         let (stream_tx, stream_rx) = mpsc::channel();
+        let (steering_tx, steering_rx) = mpsc::channel();
         let cancel_token = Arc::new(AtomicBool::new(false));
         let worker_cancel_token = Arc::clone(&cancel_token);
         self.pending_stream = Some(stream_rx);
+        self.pending_steering = Some(steering_tx);
         let handle = thread::spawn(move || -> anyhow::Result<SessionState> {
             let mut cms = VegvisirCms::open({
                 cms_config.commit_writebacks = true;
@@ -75,6 +76,8 @@ impl TuiApplication {
                 models,
                 tools: Some(tool_registry),
                 tool_executor: Some(tool_executor),
+                cancel_token: Some(Arc::clone(&worker_cancel_token)),
+                steering_rx: Some(steering_rx),
                 event_sink: Some(Arc::new({
                     let stream_tx = stream_tx.clone();
                     move |event| {
@@ -170,6 +173,7 @@ impl TuiApplication {
                 self.session = session;
                 self.pending_stream = None;
                 self.pending_cancel = None;
+                self.pending_steering = None;
                 self.autosave_session();
             }
             Ok(Err(error)) => {
@@ -177,6 +181,7 @@ impl TuiApplication {
                 self.session.activity.clear();
                 self.pending_stream = None;
                 self.pending_cancel = None;
+                self.pending_steering = None;
                 self.pop_empty_assistant_placeholder();
                 if error.to_string() == "Cancelled" {
                     self.pop_last_assistant_response();
@@ -191,6 +196,7 @@ impl TuiApplication {
                 self.session.activity.clear();
                 self.pending_stream = None;
                 self.pending_cancel = None;
+                self.pending_steering = None;
                 self.pop_empty_assistant_placeholder();
                 self.push_system_message("Error: provider worker panicked.");
                 self.autosave_session();
@@ -225,6 +231,51 @@ impl TuiApplication {
         changed
     }
 
+    pub(crate) fn queue_steering_message(
+        &mut self,
+        content: String,
+        attachments: Vec<crate::core::Attachment>,
+    ) {
+        let display_content = if content.trim().is_empty() && !attachments.is_empty() {
+            "Please review the attached file(s).".to_string()
+        } else {
+            content.trim().to_string()
+        };
+        if display_content.trim().is_empty() {
+            return;
+        }
+        if let Some(sender) = &self.pending_steering {
+            match sender.send(display_content.clone()) {
+                Ok(()) => {
+                    let attachment_note = if attachments.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            "
+
+Note: {} attachment(s) were not injected into the in-flight run; send them after the run or cancel/retry if the model needs the files.",
+                            attachments.len()
+                        )
+                    };
+                    self.push_system_message(format!(
+                        "Queued steering message for the in-flight model run. It will be injected after the next completed tool call, or before the final save if the run ends first.
+
+Steering: {display_content}{attachment_note}"
+                    ));
+                }
+                Err(_) => self.push_system_message(
+                    "Could not queue steering message because the in-flight run is closing."
+                        .to_string(),
+                ),
+            }
+        } else {
+            self.push_system_message("A model response is already in progress.".to_string());
+        }
+        self.autosave_session();
+        self.chat_scroll_offset = 0;
+        self.redraw_requested = true;
+    }
+
     pub(crate) fn cancel_pending_response(&mut self) -> String {
         let Some(handle) = self.pending_send.take() else {
             return "No in-flight model response to cancel.".to_string();
@@ -235,6 +286,7 @@ impl TuiApplication {
         drop(handle);
         self.pending_stream = None;
         self.pending_cancel = None;
+        self.pending_steering = None;
         self.session.status = "ready".to_string();
         self.session.activity.clear();
         self.pop_last_assistant_response();

@@ -20,6 +20,14 @@ pub struct ApprovalRequest {
     pub risk_label: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ApprovalResolution {
+    Pending,
+    Approved,
+    Denied,
+    Missing,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct ApprovalLedgerState {
     pub pending: BTreeMap<String, ApprovalRequest>,
@@ -77,6 +85,32 @@ impl ApprovalLedger {
             .lock()
             .map(|state| state.pending.keys().cloned().collect())
             .unwrap_or_default()
+    }
+
+    pub fn resolution(
+        &self,
+        id: &str,
+        tool_name: &str,
+        args: &Map<String, Value>,
+    ) -> ApprovalResolution {
+        self.state
+            .lock()
+            .map(|state| {
+                if state.approved_once.contains(id)
+                    || state
+                        .approved_for_session
+                        .contains(&approval_session_key(tool_name, args))
+                {
+                    ApprovalResolution::Approved
+                } else if state.rejected.iter().any(|request| request.id == id) {
+                    ApprovalResolution::Denied
+                } else if state.pending.contains_key(id) {
+                    ApprovalResolution::Pending
+                } else {
+                    ApprovalResolution::Missing
+                }
+            })
+            .unwrap_or(ApprovalResolution::Missing)
     }
 
     pub fn enqueue(&mut self, request: ApprovalRequest) {
@@ -343,5 +377,52 @@ fn risk_label(tool_name: &str) -> &'static str {
         "write_file" => "filesystem-write",
         name if name.starts_with("mcp::") => "external-tool",
         _ => "risky-tool",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn sample_request() -> ApprovalRequest {
+        let mut args = Map::new();
+        args.insert("path".to_string(), json!("example.txt"));
+        ApprovalRequest {
+            id: approval_request_id("write_file", &args),
+            reason: "Risky tool requires human approval: write_file".to_string(),
+            tool_name: "write_file".to_string(),
+            args,
+            risk_label: "filesystem-write".to_string(),
+        }
+    }
+
+    #[test]
+    fn approval_ledger_reports_pending_approved_and_denied_resolution() {
+        let mut ledger = ApprovalLedger::default();
+        let request = sample_request();
+        ledger.enqueue(request.clone());
+
+        assert_eq!(
+            ledger.resolution(&request.id, &request.tool_name, &request.args),
+            ApprovalResolution::Pending
+        );
+        assert!(ledger.approve_once(&request.id));
+        assert_eq!(
+            ledger.resolution(&request.id, &request.tool_name, &request.args),
+            ApprovalResolution::Approved
+        );
+        assert!(ledger.consume_approval(&request.id, &request.tool_name, &request.args));
+        assert_eq!(
+            ledger.resolution(&request.id, &request.tool_name, &request.args),
+            ApprovalResolution::Missing
+        );
+
+        ledger.enqueue(request.clone());
+        assert!(ledger.deny(&request.id));
+        assert_eq!(
+            ledger.resolution(&request.id, &request.tool_name, &request.args),
+            ApprovalResolution::Denied
+        );
     }
 }

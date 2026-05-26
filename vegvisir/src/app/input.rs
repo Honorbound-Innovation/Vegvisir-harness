@@ -419,6 +419,12 @@ impl TuiApplication {
                     .approvals
                     .approve_once_request(&id)
                 {
+                    Some(request) if self.pending_send.is_some() => {
+                        format!(
+                            "Approved once: {}. In-flight model run will resume.",
+                            request.tool_name
+                        )
+                    }
                     Some(request) => self.execute_approved_request("Approved once", request),
                     None => format!("Unknown pending approval: {id}"),
                 }
@@ -430,6 +436,10 @@ impl TuiApplication {
                     .approvals
                     .approve_for_session(&id)
                 {
+                    Some(request) if self.pending_send.is_some() => format!(
+                        "Approved matching call for this running session: {}. In-flight model run will resume.",
+                        request.tool_name
+                    ),
                     Some(request) => self.execute_approved_request(
                         "Approved matching call for this running session",
                         request,
