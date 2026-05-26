@@ -38,7 +38,7 @@ use vegvisir_rust::{
     },
     retrieval::{InMemoryRetriever, RetrievalDocument},
     sandbox::WorkspaceSandbox,
-    tools::{build_builtin_registry, Tool, ToolRegistry},
+    tools::{build_builtin_registry, build_builtin_registry_with_cms, Tool, ToolRegistry},
     types::{AgentDecision, Message, Observation, Role},
     ui::layout::visible_width,
 };
@@ -3911,7 +3911,7 @@ fn memory_import_chatgpt_uses_explicit_archive_database() -> anyhow::Result<()> 
                   "create_time": 1700000001.0,
                   "content": {
                     "content_type": "text",
-                    "parts": ["Use Vegvisir user_id and workspace project_id metadata."]
+                    "parts": ["Use a separate explicit-only ChatGPT archive database. Preserve useful answer material in the chunk body so agents can quote the imported conversation when asked about old project ideas."]
                   }
                 },
                 "parent": "m1",
@@ -3958,8 +3958,62 @@ fn memory_import_chatgpt_uses_explicit_archive_database() -> anyhow::Result<()> 
     let archive_search = app
         .execute_command("/memory search-chatgpt imported ChatGPT memories scoped")?
         .unwrap();
-    assert!(archive_search.contains("CMS Import Planning"));
-    assert!(archive_search.contains("chunk 1/1"));
+    assert!(archive_search.contains("CMS Import Planning"), "{archive_search}");
+    assert!(archive_search.contains("chunk 1/1"), "{archive_search}");
+
+    let tool_registry = build_builtin_registry_with_cms(&workspace, app.cms.config.clone())?;
+    assert!(tool_registry.get("cms_search_chatgpt_archive").is_ok());
+    let archive_tool = tool_registry.get("cms_search_chatgpt_archive")?;
+    let observation = (archive_tool.handler)(serde_json::Map::from_iter([
+        (
+            "query".to_string(),
+            serde_json::json!("imported ChatGPT memories scoped"),
+        ),
+        ("limit".to_string(), serde_json::json!(5)),
+    ]));
+    assert!(observation.ok, "{:?}", observation.error);
+    assert!(observation.content.contains("CMS Import Planning"), "{}", observation.content);
+    assert!(
+        observation.content.contains("excerpt:"),
+        "{}",
+        observation.content
+    );
+    assert!(
+        observation.content.contains("separate explicit-only ChatGPT archive database"),
+        "{}",
+        observation.content
+    );
+    let structured_results = observation
+        .data
+        .get("results")
+        .and_then(serde_json::Value::as_array)
+        .expect("structured archive results");
+    let first_result = structured_results.first().expect("first archive result");
+    assert!(
+        first_result
+            .get("excerpt")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .contains("separate explicit-only ChatGPT archive database"),
+        "{first_result:?}"
+    );
+    assert_eq!(
+        first_result
+            .get("conversation_title")
+            .and_then(serde_json::Value::as_str),
+        Some("CMS Import Planning")
+    );
+    assert_eq!(
+        observation.data.get("corpus").and_then(serde_json::Value::as_str),
+        Some("chatgpt_archive")
+    );
+    assert_eq!(
+        observation
+            .data
+            .get("retrieval_policy")
+            .and_then(serde_json::Value::as_str),
+        Some("explicit_only")
+    );
     Ok(())
 }
 
@@ -4230,6 +4284,7 @@ fn application_creates_specialized_agents_from_templates() -> anyhow::Result<()>
             "run_command",
             "run_tests",
             "cms_recall",
+            "cms_search_chatgpt_archive",
             "cms_remember",
             "cms_prepare_context",
             "audit_log"
@@ -5371,6 +5426,26 @@ fn builtin_registry_exposes_cms_tools() -> anyhow::Result<()> {
     });
     assert!(recent.ok, "{}", recent.content);
     assert!(recent.content.contains("CMS tool memory"));
+
+    let chatgpt_archive_search = executor.execute(vegvisir_rust::types::ToolCall {
+        name: "cms_search_chatgpt_archive".to_string(),
+        args: json!({"query": "tool execution CMS-v2", "limit": 5})
+            .as_object()
+            .unwrap()
+            .clone(),
+    });
+    assert!(
+        chatgpt_archive_search.ok,
+        "{}",
+        chatgpt_archive_search.content
+    );
+    assert_eq!(
+        chatgpt_archive_search
+            .data
+            .get("corpus")
+            .and_then(Value::as_str),
+        Some("chatgpt_archive")
+    );
 
     let prepared = executor.execute(vegvisir_rust::types::ToolCall {
         name: "cms_prepare_context".to_string(),

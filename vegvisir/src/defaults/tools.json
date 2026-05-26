@@ -9,6 +9,7 @@
     {"name": "save_session", "category": "storage", "description": "Persist active session state."},
     {"name": "cms_recall", "category": "memory", "description": "Search CMS memories for the local session user."},
     {"name": "cms_recent", "category": "memory", "description": "Return recent CMS memories for the local session user."},
+    {"name": "cms_search_chatgpt_archive", "category": "memory", "description": "Explicitly search the separate imported ChatGPT archive/reference corpus."},
     {"name": "cms_remember", "category": "memory", "description": "Store non-secret CMS memory for future recall."},
     {"name": "cms_prepare_context", "category": "context", "description": "Prepare CMS-v2 ECM context using recall and budgeting."},
     {"name": "cms_prepare_model_request", "category": "context", "description": "Prepare a provider-cacheable CMS-v2 model request envelope."},

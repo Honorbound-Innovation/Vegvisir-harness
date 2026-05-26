@@ -62,10 +62,14 @@ impl VegvisirCmsConfig {
 pub const CHATGPT_ARCHIVE_CORPUS: &str = "chatgpt_archive";
 
 pub fn default_chatgpt_archive_db_path() -> PathBuf {
+    chatgpt_archive_db_path_for_root(default_vegvisir_data_root())
+}
+
+pub fn chatgpt_archive_db_path_for_root(data_root: impl AsRef<Path>) -> PathBuf {
     std::env::var_os("VEGVISIR_CHATGPT_ARCHIVE_DB")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| default_vegvisir_data_root().join("cms-v2-chatgpt-archive.sqlite3"))
+        .unwrap_or_else(|| data_root.as_ref().join("cms-v2-chatgpt-archive.sqlite3"))
 }
 
 pub fn default_vegvisir_data_root() -> PathBuf {
@@ -432,7 +436,12 @@ impl VegvisirCms {
 
     pub fn chatgpt_archive_config(&self) -> VegvisirCmsConfig {
         let mut config = self.config.clone();
-        config.db_path = default_chatgpt_archive_db_path();
+        config.db_path = self
+            .config
+            .db_path
+            .parent()
+            .map(chatgpt_archive_db_path_for_root)
+            .unwrap_or_else(default_chatgpt_archive_db_path);
         config.project_id = None;
         config.context_mode = ContextMode::MemoryRecall;
         config.commit_writebacks = false;

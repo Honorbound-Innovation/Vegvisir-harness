@@ -21,6 +21,21 @@ use crate::{
 
 const LIST_FILES_DEFAULT_LIMIT: usize = 500;
 const LIST_FILES_MAX_LIMIT: usize = 2_000;
+const CHATGPT_ARCHIVE_EXCERPT_CHARS: usize = 1_800;
+
+fn compact_excerpt(text: &str, max_chars: usize) -> String {
+    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.chars().count() <= max_chars {
+        compact
+    } else {
+        let mut excerpt = compact
+            .chars()
+            .take(max_chars.saturating_sub(1))
+            .collect::<String>();
+        excerpt.push('…');
+        excerpt
+    }
+}
 
 pub type ToolHandler = Arc<dyn Fn(Map<String, Value>) -> Observation + Send + Sync>;
 
@@ -691,6 +706,131 @@ pub fn build_builtin_registry_with_cms_and_mode(
             }
         }),
         json!({"required": ["query"], "properties": {"query": "string", "limit": "integer"}}),
+        false,
+    ))?;
+
+    let chatgpt_archive_config = cms_config.clone();
+    registry.register(Tool::new(
+        "cms_search_chatgpt_archive",
+        "Search the explicit-only imported ChatGPT archive corpus through CMS-v2. Use only when the user specifically asks about prior ChatGPT history/ideas or when an explicit reference-archive search is warranted; this does not search active project/global memory. Returns answer-ready excerpts with conversation/chunk citations.",
+        Arc::new(move |args| {
+            let Some(query) = args.get("query").and_then(Value::as_str) else {
+                return Observation::err("Missing query", "ValueError");
+            };
+            let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(5) as usize;
+            let excerpt_chars = args
+                .get("excerpt_chars")
+                .and_then(Value::as_u64)
+                .map(|value| value as usize)
+                .unwrap_or(CHATGPT_ARCHIVE_EXCERPT_CHARS)
+                .clamp(200, 8_000);
+            match VegvisirCms::open(chatgpt_archive_config.clone())
+                .and_then(|cms| cms.retrieve_chatgpt_archive(query, limit))
+            {
+                Ok(bundle) => {
+                    let mut structured_results = Vec::new();
+                    let summaries = bundle
+                        .results
+                        .iter()
+                        .enumerate()
+                        .map(|(index, result)| {
+                            let conversation = result
+                                .memory
+                                .metadata
+                                .get("conversation_title")
+                                .and_then(Value::as_str)
+                                .unwrap_or(&result.memory.title);
+                            let conversation_id = result
+                                .memory
+                                .metadata
+                                .get("conversation_id")
+                                .and_then(Value::as_str)
+                                .unwrap_or("");
+                            let chunk = result
+                                .memory
+                                .metadata
+                                .get("chunk_index")
+                                .and_then(Value::as_str)
+                                .unwrap_or("?");
+                            let total = result
+                                .memory
+                                .metadata
+                                .get("chunk_total")
+                                .and_then(Value::as_str)
+                                .unwrap_or("?");
+                            let source_hash = result
+                                .memory
+                                .metadata
+                                .get("source_hash")
+                                .and_then(Value::as_str)
+                                .unwrap_or("");
+                            let excerpt = compact_excerpt(&result.memory.body, excerpt_chars);
+                            structured_results.push(json!({
+                                "rank": index + 1,
+                                "id": result.memory.id.0.clone(),
+                                "title": result.memory.title.clone(),
+                                "conversation_title": conversation,
+                                "conversation_id": conversation_id,
+                                "chunk_index": chunk,
+                                "chunk_total": total,
+                                "score": result.score,
+                                "source_mode": format!("{:?}", result.source_mode),
+                                "reason": result.reason.clone(),
+                                "summary": result.memory.summary.clone(),
+                                "excerpt": excerpt,
+                                "source_hash": source_hash,
+                                "metadata": result.memory.metadata.clone(),
+                                "tags": result.memory.tags.clone(),
+                                "claims": result.memory.claims.clone(),
+                                "links": result.memory.links.clone(),
+                            }));
+                            let citation = if conversation_id.is_empty() {
+                                format!("{} chunk {}/{}", conversation, chunk, total)
+                            } else {
+                                format!("{} ({}) chunk {}/{}", conversation, conversation_id, chunk, total)
+                            };
+                            format!(
+                                "{}. {} [{:?} score {:.3}]\n   id: {}{}\n   summary: {}\n   excerpt: {}",
+                                index + 1,
+                                citation,
+                                result.source_mode,
+                                result.score,
+                                result.memory.id.0,
+                                if source_hash.is_empty() { String::new() } else { format!("\n   source_hash: {source_hash}") },
+                                result.memory.summary,
+                                excerpt,
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    let mut data = Map::new();
+                    data.insert("results".to_string(), json!(structured_results));
+                    data.insert("raw_results".to_string(), json!(bundle.results));
+                    data.insert("trace".to_string(), json!(bundle.trace));
+                    data.insert("corpus".to_string(), json!("chatgpt_archive"));
+                    data.insert("retrieval_policy".to_string(), json!("explicit_only"));
+                    data.insert("excerpt_chars".to_string(), json!(excerpt_chars));
+                    Observation {
+                        ok: true,
+                        content: if summaries.is_empty() {
+                            "No ChatGPT archive memories matched.".to_string()
+                        } else {
+                            summaries.join("\n\n")
+                        },
+                        data,
+                        error: None,
+                    }
+                }
+                Err(error) => Observation::err(error.to_string(), "CmsError"),
+            }
+        }),
+        json!({
+            "required": ["query"],
+            "properties": {
+                "query": "string",
+                "limit": "integer",
+                "excerpt_chars": "integer"
+            }
+        }),
         false,
     ))?;
 

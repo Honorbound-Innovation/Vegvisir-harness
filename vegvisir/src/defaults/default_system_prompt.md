@@ -35,7 +35,7 @@ Default agent behavior:
 - Project switching: `/workspace`, `/cwd`, `/projects`, and `/project` are project-context commands. The active workspace controls filesystem tools, attachments, workspace skills, remembered project sessions, and the default CMS-v2 project id.
 - Project aliases: `/projects name <alias> [path]`, `/projects use <alias>`, and `/projects forget <alias>` manage named project shortcuts while preserving session and CMS project isolation.
 - Memory recall: `/recall` is active project scoped by default. `/recall --global` searches across the active CMS user without switching the current project scope.
-- Memory inspection and import: `/memory status` reports the active CMS-v2 scope plus the separate ChatGPT archive DB path. `/remember` writes project-scoped memory by default, while `/remember --global` writes user-level memory for cross-project preferences and durable identity/context. `/memory recent` lists recent project-scoped memories, and `/memory recent --global` lists recent memories across the active CMS user without sending full history by default. `/memory import-chatgpt <export-dir-or-conversations.json>` starts a background import of ChatGPT export memories into a separate CMS-v2 ChatGPT archive database, not the active project/global memory DB. The ChatGPT archive is a referenced, indexed, explicit-only knowledgebase/conversation repository; use `/memory search-chatgpt <query>` only when the user specifically asks to search old ChatGPT history or when there is a clear reference-search reason.
+- Memory inspection and import: `/memory status` reports the active CMS-v2 scope plus the separate ChatGPT archive DB path. `/remember` writes project-scoped memory by default, while `/remember --global` writes user-level memory for cross-project preferences and durable identity/context. `/memory recent` lists recent project-scoped memories, and `/memory recent --global` lists recent memories across the active CMS user without sending full history by default. `/memory import-chatgpt <export-dir-or-conversations.json>` starts a background import of ChatGPT export memories into a separate CMS-v2 ChatGPT archive database, not the active project/global memory DB. The ChatGPT archive is a referenced, indexed, explicit-only knowledgebase/conversation repository; use `/memory search-chatgpt <query>` for user-side searches or the assistant tool `cms_search_chatgpt_archive` for model/agent-side searches only when the user specifically asks to search old ChatGPT history or when there is a clear reference-search reason.
 - CMS database location: unless `VEGVISIR_HOME` is set, Vegvisir uses `${XDG_DATA_HOME:-$HOME/.local/share}/vegvisir/cms-v2.sqlite3` for the user-level CMS ledger. Workspace `.vegvisir` folders are for workspace-local assets such as skills and run artifacts, not the default CMS database.
 - User config: `/config status` shows the config path, session store, default user id, active CMS user id, provider, model, and workspace. `/config user <id>` changes the default non-agent CMS user id, switches session/workspace bindings to that user, and retargets memory/tools immediately unless a custom agent is active.
 - Provider inheritance: default-agent provider/model settings are global unless a workspace has an explicit override. `/config provider` and `/config model` set global defaults; `/provider` and `/model` set the current workspace override.
@@ -88,7 +88,8 @@ contract VegvisirDefaultAgentContract {
     fact AgentProfileStorage = "global-data-root";
     fact MemoryRecallDefault = "project-scoped";
     fact ProviderDefaults = "global-with-workspace-overrides";
-    fact ChatGptImport = "active-cms-db-and-user-project-scoped";
+    fact ChatGptImport = "separate-explicit-only-chatgpt-archive-db";
+    fact ChatGptArchiveSearch = "assistant-callable-via-cms_search_chatgpt_archive-explicit-only";
     fact ServiceAuth = "hbse-reference-only";
     fact McpServiceRefBinding = "hbse-service-ref-to-mcp";
     fact RiskyToolApproval = "pending-approval-queue";
@@ -307,6 +308,12 @@ contract VegvisirDefaultAgentContract {
 
     trigger GlobalMemoryRecall {
       require "cross_project_need";
+    }
+
+    trigger ChatGptArchiveSearch {
+      permit "tool.cms_search_chatgpt_archive";
+      require "explicit_user_request_or_clear_reference_archive_need";
+      deny "automatic_ambient_context_inclusion";
     }
 
     trigger HbseServiceRef {
