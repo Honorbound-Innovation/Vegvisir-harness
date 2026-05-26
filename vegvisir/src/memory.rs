@@ -59,6 +59,15 @@ impl VegvisirCmsConfig {
     }
 }
 
+pub const CHATGPT_ARCHIVE_CORPUS: &str = "chatgpt_archive";
+
+pub fn default_chatgpt_archive_db_path() -> PathBuf {
+    std::env::var_os("VEGVISIR_CHATGPT_ARCHIVE_DB")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| default_vegvisir_data_root().join("cms-v2-chatgpt-archive.sqlite3"))
+}
+
 pub fn default_vegvisir_data_root() -> PathBuf {
     if let Some(path) = std::env::var_os("VEGVISIR_HOME").filter(|value| !value.is_empty()) {
         return PathBuf::from(path);
@@ -118,7 +127,7 @@ pub struct ChatGptImportSummary {
     pub imported: usize,
     pub db_path: PathBuf,
     pub user_id: String,
-    pub project_id: Option<String>,
+    pub corpus: String,
 }
 
 impl VegvisirCms {
@@ -421,7 +430,79 @@ impl VegvisirCms {
         Ok(())
     }
 
+    pub fn chatgpt_archive_config(&self) -> VegvisirCmsConfig {
+        let mut config = self.config.clone();
+        config.db_path = default_chatgpt_archive_db_path();
+        config.project_id = None;
+        config.context_mode = ContextMode::MemoryRecall;
+        config.commit_writebacks = false;
+        config
+    }
+
+    pub fn open_chatgpt_archive(&self) -> anyhow::Result<Self> {
+        Self::open(self.chatgpt_archive_config())
+    }
+
+    pub fn retrieve_chatgpt_archive(
+        &self,
+        query: impl Into<String>,
+        limit: usize,
+    ) -> anyhow::Result<RetrievalBundle> {
+        let mut archive = self.open_chatgpt_archive()?;
+        let mut request = RetrievalRequest::new(query.into());
+        request.limit = limit.max(1);
+        request.modes = vec![
+            RetrievalMode::Hybrid,
+            RetrievalMode::Semantic,
+            RetrievalMode::Exact,
+            RetrievalMode::Recent,
+        ];
+        request.memory_types = vec!["chatgpt-conversation".to_string()];
+        request.filters.insert(
+            "user_id".to_string(),
+            Value::String(archive.config.user_id.clone()),
+        );
+        request.filters.insert(
+            "visibility".to_string(),
+            Value::String("private".to_string()),
+        );
+        request.filters.insert(
+            "corpus".to_string(),
+            Value::String(CHATGPT_ARCHIVE_CORPUS.to_string()),
+        );
+        let client = LocalCmsMemoryClient::new(&mut archive.ledger);
+        let mut bundle = client.retrieve(request)?;
+        bundle.results.retain(|result| {
+            result.memory.memory_type == "chatgpt-conversation"
+                && result
+                    .memory
+                    .metadata
+                    .get("user_id")
+                    .and_then(Value::as_str)
+                    .map(|user_id| user_id == self.config.user_id)
+                    .unwrap_or(false)
+                && result
+                    .memory
+                    .metadata
+                    .get("corpus")
+                    .and_then(Value::as_str)
+                    .map(|corpus| corpus == CHATGPT_ARCHIVE_CORPUS)
+                    .unwrap_or(false)
+        });
+        Ok(bundle)
+    }
+
     pub fn import_chatgpt(
+        &mut self,
+        path: impl AsRef<Path>,
+        messages_per_memory: usize,
+        max_chars_per_memory: usize,
+    ) -> anyhow::Result<ChatGptImportSummary> {
+        let mut archive = self.open_chatgpt_archive()?;
+        archive.import_chatgpt_archive(path, messages_per_memory, max_chars_per_memory)
+    }
+
+    fn import_chatgpt_archive(
         &mut self,
         path: impl AsRef<Path>,
         messages_per_memory: usize,
@@ -433,21 +514,9 @@ impl VegvisirCms {
         };
         let mut memories = import_chatgpt_export(path.as_ref(), &options)?;
         for memory in &mut memories {
-            memory
-                .metadata
-                .insert("user_id".to_string(), self.config.user_id.clone());
-            memory
-                .metadata
-                .insert("visibility".to_string(), "private".to_string());
-            if let Some(project_id) = &self.config.project_id {
-                memory
-                    .metadata
-                    .insert("project_id".to_string(), project_id.clone());
-            }
-            if !memory.tags.iter().any(|tag| tag == "vegvisir-import") {
-                memory.tags.push("vegvisir-import".to_string());
-            }
+            annotate_chatgpt_archive_memory(memory, &self.config.user_id);
         }
+        add_chatgpt_archive_cross_references(&mut memories);
         for memory in &memories {
             self.seed_memory_object(memory)?;
         }
@@ -455,8 +524,91 @@ impl VegvisirCms {
             imported: memories.len(),
             db_path: self.config.db_path.clone(),
             user_id: self.config.user_id.clone(),
-            project_id: self.config.project_id.clone(),
+            corpus: CHATGPT_ARCHIVE_CORPUS.to_string(),
         })
+    }
+}
+
+fn annotate_chatgpt_archive_memory(memory: &mut cms_v2::core::MemoryObject, user_id: &str) {
+    memory
+        .metadata
+        .insert("user_id".to_string(), user_id.to_string());
+    memory
+        .metadata
+        .insert("visibility".to_string(), "private".to_string());
+    memory.metadata.remove("project_id");
+    memory
+        .metadata
+        .insert("corpus".to_string(), CHATGPT_ARCHIVE_CORPUS.to_string());
+    memory
+        .metadata
+        .insert("corpus_role".to_string(), "reference_archive".to_string());
+    memory
+        .metadata
+        .insert("retrieval_policy".to_string(), "explicit_only".to_string());
+    memory.metadata.insert(
+        "archive_db".to_string(),
+        "cms-v2-chatgpt-archive".to_string(),
+    );
+    for tag in [
+        "vegvisir-import",
+        "reference-archive",
+        "explicit-recall-only",
+        "chatgpt-archive",
+    ] {
+        if !memory.tags.iter().any(|existing| existing == tag) {
+            memory.tags.push(tag.to_string());
+        }
+    }
+}
+
+fn add_chatgpt_archive_cross_references(memories: &mut [cms_v2::core::MemoryObject]) {
+    use std::collections::BTreeMap;
+
+    let mut by_conversation: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (index, memory) in memories.iter().enumerate() {
+        if let Some(conversation_id) = memory.metadata.get("conversation_id") {
+            by_conversation
+                .entry(conversation_id.clone())
+                .or_default()
+                .push(index);
+        }
+    }
+
+    for (_conversation_id, indexes) in by_conversation {
+        let mut ordered = indexes;
+        ordered.sort_by_key(|index| {
+            memories[*index]
+                .metadata
+                .get("chunk_index")
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(usize::MAX)
+        });
+        for (ordinal, index) in ordered.iter().copied().enumerate() {
+            memories[index]
+                .metadata
+                .insert("archive_sequence".to_string(), (ordinal + 1).to_string());
+            if let Some(previous_index) = ordinal.checked_sub(1).and_then(|i| ordered.get(i)) {
+                let target_id = memories[*previous_index].id.clone();
+                let source_id = memories[index].id.clone();
+                memories[index].links.push(cms_v2::core::MemoryLink {
+                    source_id,
+                    target_id,
+                    relation: "previous_chatgpt_archive_chunk".to_string(),
+                    confidence: 0.95,
+                });
+            }
+            if let Some(next_index) = ordered.get(ordinal + 1) {
+                let target_id = memories[*next_index].id.clone();
+                let source_id = memories[index].id.clone();
+                memories[index].links.push(cms_v2::core::MemoryLink {
+                    source_id,
+                    target_id,
+                    relation: "next_chatgpt_archive_chunk".to_string(),
+                    confidence: 0.95,
+                });
+            }
+        }
     }
 }
 

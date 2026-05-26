@@ -80,7 +80,11 @@ fn max_tool_rounds() -> usize {
 
 pub fn configured_max_tool_rounds() -> Option<usize> {
     let rounds = max_tool_rounds();
-    if rounds == usize::MAX { None } else { Some(rounds) }
+    if rounds == usize::MAX {
+        None
+    } else {
+        Some(rounds)
+    }
 }
 
 pub fn configured_max_tool_rounds_label() -> String {
@@ -3756,8 +3760,10 @@ fn inject_steering_into_observation(
         .into_iter()
         .map(|message| format!("- {message}"))
         .collect::<Vec<_>>()
-        .join("
-");
+        .join(
+            "
+",
+        );
     format!(
         "{observation}
 

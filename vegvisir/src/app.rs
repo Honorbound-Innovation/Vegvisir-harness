@@ -1,7 +1,11 @@
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
-    sync::{Arc, atomic::AtomicBool, mpsc::{Receiver, Sender}},
+    sync::{
+        Arc,
+        atomic::AtomicBool,
+        mpsc::{Receiver, Sender},
+    },
     thread::JoinHandle,
     time::Duration,
 };

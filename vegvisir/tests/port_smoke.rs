@@ -3875,7 +3875,7 @@ fn application_exposes_cms_commands() -> anyhow::Result<()> {
 }
 
 #[test]
-fn memory_import_chatgpt_scopes_imports_for_active_workspace() -> anyhow::Result<()> {
+fn memory_import_chatgpt_uses_explicit_archive_database() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let home = tmp.path().join("home");
     let workspace = tmp.path().join("workspace");
@@ -3929,9 +3929,11 @@ fn memory_import_chatgpt_scopes_imports_for_active_workspace() -> anyhow::Result
             export_dir.display()
         ))?
         .unwrap();
-    assert!(imported.contains("Started ChatGPT import in background"));
+    assert!(imported.contains("Started ChatGPT archive import in background"));
     assert!(imported.contains("user_id=local-user"));
-    assert!(imported.contains("project_id=workspace:"));
+    assert!(imported.contains("corpus=chatgpt_archive"));
+    assert!(imported.contains("retrieval_policy=explicit_only"));
+    assert!(imported.contains("cms-v2-chatgpt-archive.sqlite3"));
     for _ in 0..50 {
         if app.poll_background_jobs() {
             break;
@@ -3942,17 +3944,22 @@ fn memory_import_chatgpt_scopes_imports_for_active_workspace() -> anyhow::Result
         .session
         .messages
         .last()
-        .map(|message| message.content.contains("Imported 1 ChatGPT memory object"))
+        .map(|message| message.content.contains("Imported 1 ChatGPT archive memory object"))
         .unwrap_or(false));
 
     let recent = app.execute_command("/memory recent --limit 5")?.unwrap();
-    assert!(recent.contains("ChatGPT: CMS Import Planning"));
-    assert!(recent.contains("project=workspace:"));
+    assert!(!recent.contains("ChatGPT: CMS Import Planning"));
 
     let recalled = app
         .execute_command("/recall imported ChatGPT memories scoped")?
         .unwrap();
-    assert!(recalled.contains("ChatGPT: CMS Import Planning"));
+    assert!(!recalled.contains("ChatGPT: CMS Import Planning"));
+
+    let archive_search = app
+        .execute_command("/memory search-chatgpt imported ChatGPT memories scoped")?
+        .unwrap();
+    assert!(archive_search.contains("CMS Import Planning"));
+    assert!(archive_search.contains("chunk 1/1"));
     Ok(())
 }
 

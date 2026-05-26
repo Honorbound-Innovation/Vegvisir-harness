@@ -221,7 +221,6 @@ Usage: /tool-limit <rounds>|unlimited",
         }
     }
 
-
     pub(crate) fn approvals_command(&mut self, args: &[String]) -> String {
         match args.first().map(String::as_str) {
             None | Some("list") | Some("pending") => {

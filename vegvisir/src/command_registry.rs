@@ -177,7 +177,7 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
         cmd(
             "/memory",
             "inspect CMS-v2 memory scope, recent memories, or import ChatGPT exports",
-            "/memory [status|recent|import-chatgpt <path>] [--global] [--limit N]",
+            "/memory [status|recent|import-chatgpt <path>|search-chatgpt <query>] [--global] [--limit N]",
             &["/memories"],
         ),
         cmd(
