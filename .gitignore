@@ -14,5 +14,9 @@
 *.tmp
 *.bak
 components/t3code-overlay/apps/server/fibonacci_next.py
-implementation_plan.md
-skillssys.md
+
+# Ignore ad-hoc Markdown notes/idea files outside documentation.
+*.md
+!README.md
+!docs/*.md
+!docs/**/*.md

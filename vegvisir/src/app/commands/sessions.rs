@@ -210,6 +210,7 @@ impl TuiApplication {
         self.session.status = "ready".to_string();
         self.session.activity.clear();
         self.session.activity_tick = 0;
+        self.session.spinner_verb_seed = 0;
         self.apply_session_workspace_state()?;
         self.input.history = self.session.input_history.clone();
         self.chat_scroll_offset = 0;

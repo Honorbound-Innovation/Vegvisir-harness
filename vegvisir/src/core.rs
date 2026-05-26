@@ -448,6 +448,8 @@ pub struct SessionState {
     pub status: String,
     pub activity: String,
     pub activity_tick: u64,
+    #[serde(default)]
+    pub spinner_verb_seed: u64,
     pub debug: bool,
 }
 
@@ -480,6 +482,7 @@ impl SessionState {
             status: "ready".to_string(),
             activity: String::new(),
             activity_tick: 0,
+            spinner_verb_seed: 0,
             debug: false,
         }
     }
@@ -570,6 +573,7 @@ impl SessionManager {
         session.status = "ready".to_string();
         session.activity.clear();
         session.activity_tick = 0;
+        session.spinner_verb_seed = 0;
     }
 
     pub fn save(&self, session: &SessionState) -> anyhow::Result<PathBuf> {

@@ -7,6 +7,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
 };
 use unicode_width::UnicodeWidthStr;
+use std::sync::OnceLock;
 
 use crate::{
     app::{DiffOverlay, InfoOverlay, TuiApplication},
@@ -25,6 +26,34 @@ const RED: Color = Color::Rgb(230, 86, 86);
 const BORDER: Color = Color::Rgb(62, 66, 76);
 const PANEL: Color = Color::Rgb(16, 17, 20);
 const CHAT_BOTTOM_GAP: u16 = 1;
+const ACTIVITY_LABEL_WIDTH: usize = 18;
+
+const FALLBACK_SPINNER_VERBS: &[&str] = &[
+    "Architecting",
+    "Brewing",
+    "Calculating",
+    "Channeling",
+    "Cogitating",
+    "Computing",
+    "Conjuring",
+    "Crafting",
+    "Crunching",
+    "Deciphering",
+    "Forging",
+    "Hyperspacing",
+    "Ideating",
+    "Inferring",
+    "Noodling",
+    "Orchestrating",
+    "Percolating",
+    "Pondering",
+    "Processing",
+    "Reasoning",
+    "Synthesizing",
+    "Thinking",
+    "Tinkering",
+    "Wrangling",
+];
 
 pub fn draw(f: &mut Frame<'_>, app: &mut TuiApplication) {
     let area = f.area();
@@ -237,9 +266,10 @@ fn activity_line(
     pending: Option<&ApprovalRequest>,
     width: usize,
 ) -> Option<Line<'static>> {
-    let (label, detail, color) = if let Some(approval) = pending {
+    let (indicator, label, detail, color) = if let Some(approval) = pending {
         (
-            "waiting approval",
+            "● ".to_string(),
+            "waiting approval".to_string(),
             format!(
                 "{} wants {}. Press 1 approve once, 2 allow session, 3 deny.",
                 approval.risk_label, approval.tool_name
@@ -248,7 +278,8 @@ fn activity_line(
         )
     } else if app.session.status == "streaming" {
         (
-            "running",
+            streaming_spinner_dot(app.session.activity_tick),
+            animated_spinner_verb(app),
             if app.session.activity.trim().is_empty() {
                 "model response in progress".to_string()
             } else {
@@ -257,26 +288,102 @@ fn activity_line(
             CYAN,
         )
     } else if !app.session.activity.trim().is_empty() {
-        ("activity", app.session.activity.clone(), DIM)
+        ("● ".to_string(), "activity".to_string(), app.session.activity.clone(), DIM)
     } else {
         return None;
     };
 
+    let label = fixed_width(&label, ACTIVITY_LABEL_WIDTH);
+    let reserved_width = indicator.width() + ACTIVITY_LABEL_WIDTH + 1;
+    let detail_budget = width.saturating_sub(reserved_width);
     Some(Line::from(vec![
         Span::styled(
-            "● ",
+            indicator,
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             label,
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("  ", Style::default().fg(DIM)),
-        Span::styled(
-            truncate(&detail, width.saturating_sub(18)),
-            Style::default().fg(FG),
-        ),
+        Span::styled(" ", Style::default().fg(DIM)),
+        Span::styled(truncate(&detail, detail_budget), Style::default().fg(FG)),
     ]))
+}
+
+fn fixed_width(text: &str, width: usize) -> String {
+    let mut out = truncate(text, width);
+    let current = out.width();
+    if current < width {
+        out.push_str(&" ".repeat(width - current));
+    }
+    out
+}
+
+fn streaming_spinner_dot(tick: u64) -> String {
+    let frames = ["⠋ ", "⠙ ", "⠹ ", "⠸ ", "⠼ ", "⠴ ", "⠦ ", "⠧ ", "⠇ ", "⠏ "];
+    frames[(tick as usize / 2) % frames.len()].to_string()
+}
+
+fn animated_spinner_verb(app: &TuiApplication) -> String {
+    let verb = selected_spinner_verb(app);
+    let suffix_frames = ["", ".", "..", "...", "..", "."];
+    let suffix = suffix_frames[(app.session.activity_tick as usize / 6) % suffix_frames.len()];
+    let shimmer = match (app.session.activity_tick / 4) % 4 {
+        0 => "",
+        1 => " ✦",
+        2 => "",
+        _ => " ✧",
+    };
+    format!("{verb}{suffix}{shimmer}")
+}
+
+fn selected_spinner_verb(app: &TuiApplication) -> String {
+    let verbs = spinner_verbs();
+    if verbs.is_empty() {
+        return "Thinking".to_string();
+    }
+    let seed = if app.session.spinner_verb_seed == 0 {
+        stable_hash(&app.session.session_id)
+    } else {
+        app.session.spinner_verb_seed
+    };
+    verbs[(seed as usize) % verbs.len()].clone()
+}
+
+fn spinner_verbs() -> &'static Vec<String> {
+    static VERBS: OnceLock<Vec<String>> = OnceLock::new();
+    VERBS.get_or_init(|| {
+        let from_file = std::fs::read_to_string("spinner_verbs.md")
+            .ok()
+            .map(|content| parse_spinner_verbs(&content))
+            .unwrap_or_default();
+        if from_file.is_empty() {
+            FALLBACK_SPINNER_VERBS
+                .iter()
+                .map(|verb| (*verb).to_string())
+                .collect()
+        } else {
+            from_file
+        }
+    })
+}
+
+fn parse_spinner_verbs(content: &str) -> Vec<String> {
+    content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(str::to_string)
+        .collect()
+}
+
+fn stable_hash(value: &str) -> u64 {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 fn attachment_line(app: &TuiApplication, width: usize) -> Option<Line<'static>> {
@@ -290,7 +397,7 @@ fn attachment_line(app: &TuiApplication, width: usize) -> Option<Line<'static>> 
             "context",
             Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("  ", Style::default().fg(DIM)),
+        Span::styled(" ", Style::default().fg(DIM)),
         Span::styled(summary, Style::default().fg(FG)),
     ]))
 }
@@ -464,7 +571,7 @@ fn message_lines(message: &ChatMessage, width: usize, search_query: &str) -> Vec
     let mut header_spans = vec![
         Span::styled(format!("{marker} "), style),
         Span::styled(role_label.to_string(), style),
-        Span::styled("  ", Style::default().fg(DIM)),
+        Span::styled(" ", Style::default().fg(DIM)),
         Span::styled(timestamp, Style::default().fg(DIM)),
     ];
     if is_match {
@@ -502,9 +609,9 @@ fn compact_system_message_line(
     let mut spans = vec![
         Span::styled(format!("{marker} "), marker_style),
         Span::styled(role_label.to_string(), marker_style),
-        Span::styled("  ", Style::default().fg(DIM)),
+        Span::styled(" ", Style::default().fg(DIM)),
         Span::styled(timestamp.to_string(), Style::default().fg(DIM)),
-        Span::styled("  ", Style::default().fg(DIM)),
+        Span::styled(" ", Style::default().fg(DIM)),
         Span::styled(detail, content_style),
     ];
     if is_match {
@@ -1630,7 +1737,7 @@ fn draw_search_overlay(f: &mut Frame<'_>, app: &TuiApplication, area: Rect) {
             truncate(&query, area.width.saturating_sub(28) as usize),
             Style::default().fg(FG),
         ),
-        Span::styled("  ", Style::default().fg(DIM)),
+        Span::styled(" ", Style::default().fg(DIM)),
         Span::styled(current, Style::default().fg(AMBER)),
         Span::styled(
             "  Enter/↓ next  ↑ previous  Esc close",
@@ -1776,7 +1883,7 @@ fn input_lines(input: &InputState, width: usize, max_rows: usize) -> Vec<Line<'s
         let preview = paste_tail_preview(&input.buffer, preview_width, max_rows.saturating_sub(1));
         for line in preview {
             lines.push(Line::from(vec![
-                Span::styled("  ", Style::default().fg(DIM)),
+                Span::styled(" ", Style::default().fg(DIM)),
                 Span::styled(line, Style::default().fg(DIM)),
             ]));
         }
@@ -2401,7 +2508,22 @@ four",
         assert_eq!(activity_strip_height(&app, None), 0);
 
         app.session.status = "streaming".to_string();
+        app.session.spinner_verb_seed = 0;
+        app.session.session_id = "activity-strip-test".to_string();
         assert_eq!(activity_strip_height(&app, None), 3);
+        let running_line = activity_line(&app, None, 80).expect("streaming activity line");
+        let running_text = running_line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(!running_text.contains("running"));
+        assert!(running_text.contains("model response in progress"));
+        assert!(
+            spinner_verbs()
+                .iter()
+                .any(|verb| running_text.contains(verb.trim()))
+        );
 
         app.session.status = "ready".to_string();
         let approval = ApprovalRequest {
@@ -2412,6 +2534,76 @@ four",
             risk_label: "write".to_string(),
         };
         assert_eq!(activity_strip_height(&app, Some(&approval)), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn ratatui_spinner_dot_and_verb_animate() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app =
+            crate::app::TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.session.status = "streaming".to_string();
+        app.session.session_id = "spinner-animation-test".to_string();
+        app.session.spinner_verb_seed = 42;
+
+        app.session.activity_tick = 0;
+        let first = activity_line(&app, None, 100).expect("first line");
+        let first_text = first
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        app.session.activity_tick = 12;
+        let second = activity_line(&app, None, 100).expect("second line");
+        let second_text = second
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert_ne!(first_text, second_text);
+        assert!(first_text.starts_with('⠋'));
+        assert!(second_text.starts_with('⠦'));
+        Ok(())
+    }
+
+    #[test]
+    fn ratatui_streaming_activity_detail_stays_anchored_while_spinner_animates() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app =
+            crate::app::TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.session.status = "streaming".to_string();
+        app.session.activity = "finished tool run_command".to_string();
+        app.session.session_id = "spinner-anchor-test".to_string();
+        app.session.spinner_verb_seed = 42;
+
+        app.session.activity_tick = 0;
+        let first = activity_line(&app, None, 100).expect("first line");
+        let first_text = first
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        app.session.activity_tick = 12;
+        let second = activity_line(&app, None, 100).expect("second line");
+        let second_text = second
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert_ne!(first_text, second_text);
+        fn visual_column_of(haystack: &str, needle: &str) -> Option<usize> {
+            let idx = haystack.find(needle)?;
+            Some(haystack[..idx].width())
+        }
+
+        let first_detail_col = visual_column_of(&first_text, "finished tool run_command");
+        let second_detail_col = visual_column_of(&second_text, "finished tool run_command");
+        assert_eq!(first_detail_col, second_detail_col);
+        assert_eq!(first_detail_col, Some(21));
         Ok(())
     }
 

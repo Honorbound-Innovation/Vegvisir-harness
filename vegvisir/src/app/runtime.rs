@@ -41,6 +41,7 @@ impl TuiApplication {
         self.session.status = "streaming".to_string();
         self.session.activity = "using CMS-v2 prepared model request".to_string();
         self.session.activity_tick = 0;
+        self.session.spinner_verb_seed = new_spinner_verb_seed(&self.session.session_id);
         self.chat_scroll_offset = 0;
         self.redraw_requested = true;
 
@@ -507,8 +508,18 @@ Steering: {display_content}{attachment_note}"
             return;
         }
         self.session.activity_tick = self.session.activity_tick.saturating_add(1);
-        if self.session.activity_tick % 8 == 0 {
-            self.redraw_requested = true;
-        }
+        self.redraw_requested = true;
     }
+}
+
+fn new_spinner_verb_seed(session_id: &str) -> u64 {
+    let now = chrono::Utc::now()
+        .timestamp_nanos_opt()
+        .unwrap_or_default() as u64;
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in session_id.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash ^ now
 }

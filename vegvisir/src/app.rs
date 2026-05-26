@@ -881,17 +881,16 @@ mod tests {
     }
 
     #[test]
-    fn activity_pulse_throttles_idle_streaming_redraws() -> anyhow::Result<()> {
+    fn activity_pulse_animates_each_streaming_tick() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
         app.session.status = "streaming".to_string();
         app.redraw_requested = false;
 
         app.pulse_activity();
-        assert!(!app.redraw_requested);
-        for _ in 0..7 {
-            app.pulse_activity();
-        }
+        assert!(app.redraw_requested);
+        app.redraw_requested = false;
+        app.pulse_activity();
         assert!(app.redraw_requested);
         Ok(())
     }
