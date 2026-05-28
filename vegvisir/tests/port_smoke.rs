@@ -7480,6 +7480,97 @@ fn openai_tool_loop_returns_last_observations_on_round_limit() -> anyhow::Result
 }
 
 #[test]
+fn openai_tool_loop_defers_sibling_tool_calls_until_completion_is_observed() -> anyhow::Result<()> {
+    let payloads = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let payloads_for_post = Arc::clone(&payloads);
+    let mut posts = 0;
+    let mut post = move |payload: Value| -> anyhow::Result<Value> {
+        posts += 1;
+        payloads_for_post.lock().unwrap().push(payload);
+        if posts == 1 {
+            return Ok(json!({
+                "choices": [{
+                    "message": {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call-read",
+                                "type": "function",
+                                "function": {
+                                    "name": "read_file",
+                                    "arguments": "{\"path\":\"src/lib.rs\"}"
+                                }
+                            },
+                            {
+                                "id": "call-list",
+                                "type": "function",
+                                "function": {
+                                    "name": "list_files",
+                                    "arguments": "{\"path\":\"src\"}"
+                                }
+                            }
+                        ]
+                    }
+                }]
+            }));
+        }
+        Ok(json!({
+            "choices": [{
+                "message": {
+                    "content": "done"
+                }
+            }]
+        }))
+    };
+    let messages = vec![ChatMessage {
+        role: "user".to_string(),
+        content: "inspect files".to_string(),
+        attachments: Vec::new(),
+        created_at: Utc::now(),
+    }];
+    let tools = vec![
+        json!({"name": "read_file", "description": "Read file.", "parameters": {}}),
+        json!({"name": "list_files", "description": "List files.", "parameters": {}}),
+    ];
+    let mut executed = Vec::<String>::new();
+    let mut execute_tool = |name: &str, _: Map<String, Value>| {
+        executed.push(name.to_string());
+        "file contents".to_string()
+    };
+
+    let result = openai_tool_loop(
+        "gpt-test",
+        &messages,
+        &tools,
+        &mut execute_tool,
+        &mut post,
+        4,
+    )?;
+
+    assert_eq!(result, "done");
+    assert_eq!(executed, vec!["read_file".to_string()]);
+    let payloads = payloads.lock().unwrap();
+    let followup_messages = payloads[1]
+        .get("messages")
+        .and_then(Value::as_array)
+        .unwrap();
+    let read_result = followup_messages
+        .iter()
+        .find(|message| message["tool_call_id"] == "call-read")
+        .and_then(|message| message["content"].as_str())
+        .unwrap_or("");
+    let deferred_result = followup_messages
+        .iter()
+        .find(|message| message["tool_call_id"] == "call-list")
+        .and_then(|message| message["content"].as_str())
+        .unwrap_or("");
+    assert!(read_result.contains("[Vegvisir tool completed]"));
+    assert!(read_result.contains("file contents"));
+    assert!(deferred_result.contains("[Vegvisir tool deferred]"));
+    Ok(())
+}
+
+#[test]
 fn builtin_file_tools_bound_list_files_and_read_full_file_outputs() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     for index in 0..550 {
@@ -8296,6 +8387,24 @@ fn application_exposes_subagent_task_board_commands() -> anyhow::Result<()> {
     assert!(shown.contains("\"status\": \"cancelled\""));
     let second_cancel = app.execute_command("/subagents cancel task-1")?.unwrap();
     assert!(second_cancel.contains("already Cancelled"));
+    Ok(())
+}
+
+#[test]
+fn builtin_registry_exposes_spawn_subagent_tool() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let registry = build_builtin_registry(tmp.path())?;
+    let tool = registry.get("spawn_subagent")?;
+
+    assert!(tool.risky);
+    assert!(tool.description.contains("background Vegvisir child agent"));
+    assert!(
+        tool.schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "goal")
+    );
     Ok(())
 }
 

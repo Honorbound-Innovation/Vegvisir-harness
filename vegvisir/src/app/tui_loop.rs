@@ -1,6 +1,6 @@
 use std::{
     io::{self, IsTerminal, Write},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crossterm::{
@@ -21,6 +21,7 @@ impl TuiApplication {
         let mut terminal = ratatui::Terminal::new(backend)?;
         terminal.clear()?;
         terminal.draw(|frame| crate::tui2::draw(frame, self))?;
+        let mut last_activity_pulse = Instant::now();
         while self.running {
             if event::poll(Duration::from_millis(50))? {
                 match event::read()? {
@@ -39,17 +40,17 @@ impl TuiApplication {
             self.poll_stream_events();
             self.poll_pending_send();
             self.poll_background_jobs();
-            self.pulse_activity();
+            if last_activity_pulse.elapsed() >= Duration::from_millis(150) {
+                self.pulse_activity();
+                last_activity_pulse = Instant::now();
+            }
             if self.clear_requested {
                 terminal.clear()?;
                 self.chat_scroll_offset = 0;
                 self.clear_requested = false;
                 self.redraw_requested = true;
             }
-            if self.redraw_requested
-                || self.pending_send.is_some()
-                || !self.pending_background_jobs.is_empty()
-            {
+            if self.redraw_requested || !self.pending_background_jobs.is_empty() {
                 self.redraw_requested = false;
                 terminal.draw(|frame| crate::tui2::draw(frame, self))?;
             }

@@ -1,13 +1,15 @@
 use std::{
     collections::HashMap,
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::Arc,
     thread,
     time::{Duration, Instant},
 };
 
+use chrono::Utc;
 use serde_json::{Map, Value, json};
+use uuid::Uuid;
 use walkdir::WalkDir;
 
 use crate::{
@@ -16,6 +18,7 @@ use crate::{
     observability::EventLogger,
     policy::RuntimePolicy,
     sandbox::WorkspaceSandbox,
+    subagents::{SubAgentStatus, SubAgentTaskRecord},
     types::{Observation, ToolCall},
 };
 
@@ -306,6 +309,11 @@ pub fn build_builtin_registry_with_cms_and_mode(
     } else {
         WorkspaceSandbox::new(workspace)?
     };
+    let subagent_data_root = cms_config
+        .db_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| sandbox.root.join(".vegvisir"));
     let mut registry = ToolRegistry::default();
 
     let list_sandbox = sandbox.clone();
@@ -1000,7 +1008,194 @@ pub fn build_builtin_registry_with_cms_and_mode(
         false,
     ))?;
 
+    let subagent_root = sandbox.root.clone();
+    let subagent_sandbox = sandbox.clone();
+    registry.register(Tool::new(
+        "spawn_subagent",
+        "Delegate a bounded task to a background Vegvisir child agent and record it on the subagent board.",
+        Arc::new(move |args| {
+            let Some(goal) = args.get("goal").and_then(Value::as_str).map(str::trim) else {
+                return Observation::err("Missing goal", "ValueError");
+            };
+            if goal.is_empty() {
+                return Observation::err("Subagent goal must not be empty", "ValueError");
+            }
+            let name = args
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("subagent")
+                .to_string();
+            let workspace = match args.get("workspace").and_then(Value::as_str) {
+                Some(path) => match subagent_sandbox.resolve(path) {
+                    Ok(path) => path,
+                    Err(error) => return Observation::err(error.to_string(), "SandboxViolation"),
+                },
+                None => subagent_root.clone(),
+            };
+            let max_steps = args
+                .get("max_steps")
+                .and_then(Value::as_u64)
+                .unwrap_or(4)
+                .clamp(1, 32)
+                .to_string();
+            let provider = args
+                .get("provider")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let model = args
+                .get("model")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let agent = args
+                .get("agent")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+
+            let board_path = subagent_data_root.join("subagents.json");
+            let record = SubAgentTaskRecord {
+                id: Uuid::new_v4().to_string(),
+                name: name.clone(),
+                workspace: workspace.clone(),
+                goal: goal.to_string(),
+                status: SubAgentStatus::Queued,
+                created_at: Utc::now(),
+                started_at: None,
+                finished_at: None,
+                checkpoint: None,
+                final_answer: None,
+                error: None,
+            };
+            if let Err(error) = upsert_subagent_record(&board_path, record.clone()) {
+                return Observation::err(error.to_string(), "SubagentBoardError");
+            }
+
+            let child_record = record.clone();
+            let child_goal = goal.to_string();
+            thread::spawn(move || {
+                run_spawned_subagent(
+                    board_path,
+                    child_record,
+                    child_goal,
+                    workspace,
+                    max_steps,
+                    provider,
+                    model,
+                    agent,
+                );
+            });
+
+            let mut data = Map::new();
+            data.insert("id".to_string(), json!(record.id));
+            data.insert("name".to_string(), json!(record.name));
+            data.insert("workspace".to_string(), json!(record.workspace));
+            data.insert("board_path".to_string(), json!(subagent_data_root.join("subagents.json")));
+            Observation {
+                ok: true,
+                content: format!(
+                    "Spawned subagent {} ({name}). Use `/subagents show {}` to inspect status.",
+                    data["id"].as_str().unwrap_or(""),
+                    data["id"].as_str().unwrap_or("")
+                ),
+                data,
+                error: None,
+            }
+        }),
+        json!({
+            "required": ["goal"],
+            "properties": {
+                "goal": "string",
+                "name": "string",
+                "workspace": "string",
+                "max_steps": "integer",
+                "provider": "string",
+                "model": "string",
+                "agent": "string"
+            }
+        }),
+        true,
+    ))?;
+
     Ok(registry)
+}
+
+fn run_spawned_subagent(
+    board_path: PathBuf,
+    mut record: SubAgentTaskRecord,
+    goal: String,
+    workspace: PathBuf,
+    max_steps: String,
+    provider: Option<String>,
+    model: Option<String>,
+    agent: Option<String>,
+) {
+    record.status = SubAgentStatus::Running;
+    record.started_at = Some(Utc::now());
+    let _ = upsert_subagent_record(&board_path, record.clone());
+
+    let result = (|| -> anyhow::Result<String> {
+        let executable = std::env::current_exe()?;
+        let mut command = Command::new(executable);
+        command.arg("--json");
+        if let Some(provider) = provider {
+            command.arg("--provider").arg(provider);
+        }
+        if let Some(model) = model {
+            command.arg("--model").arg(model);
+        }
+        command
+            .arg("run")
+            .arg(goal)
+            .arg("--workspace")
+            .arg(workspace)
+            .arg("--max-steps")
+            .arg(max_steps);
+        if let Some(agent) = agent {
+            command.arg("--agent").arg(agent);
+        }
+        let output = command.output()?;
+        let mut text = String::new();
+        text.push_str(&String::from_utf8_lossy(&output.stdout));
+        text.push_str(&String::from_utf8_lossy(&output.stderr));
+        if !output.status.success() {
+            anyhow::bail!("{}", text.trim());
+        }
+        Ok(text)
+    })();
+
+    match result {
+        Ok(output) => {
+            record.status = SubAgentStatus::Completed;
+            record.finished_at = Some(Utc::now());
+            record.final_answer = Some(output);
+            record.error = None;
+        }
+        Err(error) => {
+            record.status = SubAgentStatus::Failed;
+            record.finished_at = Some(Utc::now());
+            record.error = Some(error.to_string());
+        }
+    }
+    let _ = upsert_subagent_record(&board_path, record);
+}
+
+fn upsert_subagent_record(path: &Path, record: SubAgentTaskRecord) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut records = if path.exists() {
+        serde_json::from_str::<Vec<SubAgentTaskRecord>>(&std::fs::read_to_string(path)?)?
+    } else {
+        Vec::new()
+    };
+    if let Some(existing) = records.iter_mut().find(|existing| existing.id == record.id) {
+        *existing = record;
+    } else {
+        records.push(record);
+    }
+    std::fs::write(path, serde_json::to_string_pretty(&records)?)?;
+    Ok(())
 }
 
 fn context_options_from_args(args: &Map<String, Value>) -> ContextPrepareOptions {
