@@ -1,8 +1,10 @@
-# Vegvisir Overlay Integration
+# Vegvisir Overlay / App Bridge Integration
 
-This branch is the development lane for adapting a richer terminal or desktop overlay to Vegvisir without moving Vegvisir's security, memory, provider, or tool runtime out of Rust.
+Vegvisir exposes a JSONL app-server bridge so future overlays, desktop shells, or external clients can drive Vegvisir headlessly without taking over its security, memory, provider, or tool runtime.
 
-The overlay should be treated as presentation and interaction. Vegvisir remains the authority for:
+The bridge is intentionally UI-agnostic. No overlay implementation is currently vendored in this repository.
+
+Vegvisir remains the authority for:
 
 - provider routing and model selection
 - CMS-v2 memory and project/user scope
@@ -12,33 +14,11 @@ The overlay should be treated as presentation and interaction. Vegvisir remains 
 - tool inventory, guardrails, approvals, checkpoints, and audit traces
 - workspace/session switching
 
-Do not embed the current Vegvisir TUI inside an overlay. The integration target is a process bridge that lets a better UI drive Vegvisir headlessly.
-
-## Development Branch
-
-Overlay work belongs on:
-
-```bash
-git switch vegvisir-overlay-integration
-```
-
-Keep `main` releasable while the overlay protocol and UI integration mature.
-
-## Vendored T3 Code Overlay
-
-The integration branch includes the T3 Code source tree under:
-
-```text
-components/t3code-overlay
-```
-
-That source tree now contains a `vegvisir` provider driver. The driver starts `vegvisir app-server`, sends user turns through the JSONL protocol, streams assistant deltas into the overlay runtime, and maps Vegvisir approval requests into overlay approval events.
-
-The overlay must stay a presentation and workflow layer. It must not call provider APIs, read HBSE secrets, execute tools, or mutate CMS-v2 state directly.
+External apps should treat the bridge as a control boundary. They may present state and collect user interaction, but they must not bypass Vegvisir by calling provider APIs, reading HBSE secrets, executing tools, or mutating CMS-v2 state directly.
 
 ## App Server Command
 
-Vegvisir now exposes a JSONL app-server bridge:
+Vegvisir exposes the JSONL app-server bridge with:
 
 ```bash
 vegvisir app-server --workspace /path/to/project
@@ -201,7 +181,7 @@ Events:
 
 Provider-native streaming is forwarded as one or more `content.delta` events. Non-streaming providers may still emit a single delta containing the full response.
 
-If a risky tool call needs approval, the bridge emits `approval.required` and then `turn.failed`. The overlay should show the approval request and let the user approve once, approve for session, edit, or deny.
+If a risky tool call needs approval, the bridge emits `approval.required` and then `turn.failed`. The client should show the approval request and let the user approve once, approve for session, edit, or deny.
 
 ### `command.run`
 
@@ -442,9 +422,9 @@ Cleanly terminates the app-server loop.
 {"id":"6","method":"shutdown","params":{}}
 ```
 
-## Overlay Responsibilities
+## Client Responsibilities
 
-An overlay should own:
+An external client or overlay may own:
 
 - pane layout
 - message rendering
@@ -457,7 +437,7 @@ An overlay should own:
 - task timeline and progress presentation
 - keyboard and mouse interaction
 
-It should not own:
+It must not own:
 
 - plaintext provider credentials
 - CMS database writes outside Vegvisir APIs
@@ -466,10 +446,9 @@ It should not own:
 - direct provider API calls that bypass Vegvisir's provider layer
 - direct tool execution that bypasses Vegvisir guardrails
 
-## Near-Term Integration Work
+## Near-Term Bridge Work
 
-1. Add structured events for tool calls, checkpoints, and task steps.
-2. Add transcript and diff export methods.
-3. Build or adapt an overlay frontend against this protocol on this branch.
-4. Add a T3 Code-compatible driver package once the frontend shell target is selected.
-5. Keep the current built-in TUI available as a fallback.
+1. Keep the app-server protocol stable and UI-agnostic.
+2. Add structured events for tool calls, checkpoints, and task steps.
+3. Add transcript and diff export methods.
+4. Keep the current built-in TUI available as the primary interface until a future overlay is mature enough to revisit.

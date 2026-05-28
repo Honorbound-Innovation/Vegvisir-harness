@@ -16,8 +16,7 @@ Vegvisir-harness/
 ├── components/
 │   ├── cms-v2/            # Continuum Memory System v2 runtime and CLI
 │   ├── HBSE/              # Rust Hardware Bound Secrets Enclave implementation
-│   ├── usrl/              # USRL parser and contract runtime
-│   └── t3code-overlay/    # T3 Code source vendored for the Vegvisir overlay integration branch
+│   └── usrl/              # USRL parser and contract runtime
 ├── docs/                  # Usage documentation for each included system
 ├── scripts/               # Helper scripts
 ├── install.sh             # Full-system installer
@@ -41,8 +40,7 @@ Vegvisir-harness/
 - Supports persistent custom agents with their own prompts, modes, memory scopes, tool permissions, skills, USRL bindings, MCP access, provider defaults, and model defaults.
 - Supports workspace/project switching with the right session and memory scope restored.
 - Renders Markdown in the TUI, including code fences and tables.
-- Exposes a JSONL app-server bridge for future overlay interfaces and desktop shells.
-- Includes a vendored T3 Code overlay source tree on the overlay integration branch.
+- Exposes a JSONL app-server bridge for future external interfaces and desktop shells.
 - Includes verification, eval, trace, and audit surfaces for production hardening.
 
 ## Terminal UI
@@ -157,7 +155,7 @@ Run headlessly:
 vegvisir --workspace /path/to/project --provider openai-hbse --model gpt-5.5 run "Summarize this repository"
 ```
 
-Run the app-server bridge for an external overlay:
+Run the app-server bridge for an external app or future overlay:
 
 ```bash
 vegvisir --provider openai-hbse --model gpt-5.5 app-server --workspace /path/to/project
@@ -198,7 +196,7 @@ The usage docs include command trees, explanations, and examples for the include
 - [HBSE usage](docs/hbse-usage.md)
 - [USRL usage](docs/usrl-usage.md)
 - [USRL language reference](docs/usrl-language-reference.md)
-- [Overlay integration](docs/overlay-integration.md)
+- [App bridge integration](docs/overlay-integration.md)
 - [MCP, tools, approvals, and security](docs/security-and-operations.md)
 - [Development and release workflow](docs/development.md)
 
