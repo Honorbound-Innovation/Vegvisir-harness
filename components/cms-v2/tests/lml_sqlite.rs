@@ -54,6 +54,7 @@ use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Output};
+use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 
 fn fake_openai_key() -> String {
@@ -2206,6 +2207,23 @@ fn ledger_lists_memories_by_status() {
     assert_eq!(all.len(), 2);
 }
 
+fn usrl_validator_root() -> PathBuf {
+    static ROOT: OnceLock<PathBuf> = OnceLock::new();
+    ROOT.get_or_init(|| {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let workspace_root = manifest_dir
+            .parent()
+            .and_then(Path::parent)
+            .expect("cms-v2 crate should be under components/cms-v2");
+        workspace_root.join("components/usrl")
+    })
+    .clone()
+}
+
+fn usrl_fixture_path() -> PathBuf {
+    usrl_validator_root().join("test-constitution.usrl")
+}
+
 #[test]
 fn usrl_summarizer_extracts_canonical_declarations() {
     let source = r#"
@@ -2233,7 +2251,7 @@ contract TestConstitution {
 
 #[test]
 fn usrl_importer_creates_structured_memory() {
-    let memory = import_usrl_file("/mnt/storage/Projects/USRL/test-constitution.usrl").unwrap();
+    let memory = import_usrl_file(usrl_fixture_path()).unwrap();
 
     assert_eq!(memory.memory_type, "usrl-source");
     assert!(memory.title.contains("TestConstitution"));
@@ -2254,9 +2272,9 @@ fn usrl_importer_creates_structured_memory() {
 
 #[test]
 fn usrl_authoritative_validation_bridge_marks_valid_fixture() {
-    let path = "/mnt/storage/Projects/USRL/test-constitution.usrl";
-    let validation =
-        validate_usrl_file_with_authoritative_cli(path, "/mnt/storage/Projects/USRL").unwrap();
+    let path = usrl_fixture_path();
+    let validator_root = usrl_validator_root();
+    let validation = validate_usrl_file_with_authoritative_cli(&path, &validator_root).unwrap();
 
     assert_eq!(validation.status, UsrlValidationStatus::Valid);
     assert_eq!(validation.module_count, Some(1));
@@ -2266,7 +2284,7 @@ fn usrl_authoritative_validation_bridge_marks_valid_fixture() {
     let memory = import_usrl_file_with_options(
         path,
         &UsrlImportOptions {
-            validator_root: Some(PathBuf::from("/mnt/storage/Projects/USRL")),
+            validator_root: Some(validator_root),
             require_authoritative_validation: true,
             ..Default::default()
         },
@@ -2283,16 +2301,16 @@ fn usrl_authoritative_validation_bridge_rejects_invalid_when_required() {
     let invalid_path = tempdir.path().join("invalid.usrl");
     fs::write(&invalid_path, "contract {").unwrap();
 
+    let validator_root = usrl_validator_root();
     let validation =
-        validate_usrl_file_with_authoritative_cli(&invalid_path, "/mnt/storage/Projects/USRL")
-            .unwrap();
+        validate_usrl_file_with_authoritative_cli(&invalid_path, &validator_root).unwrap();
     assert_eq!(validation.status, UsrlValidationStatus::Invalid);
     assert!(!validation.issues.is_empty());
 
     let error = import_usrl_file_with_options(
         &invalid_path,
         &UsrlImportOptions {
-            validator_root: Some(PathBuf::from("/mnt/storage/Projects/USRL")),
+            validator_root: Some(validator_root),
             require_authoritative_validation: true,
             ..Default::default()
         },
@@ -2484,7 +2502,7 @@ fn usrl_scope_policy_resolves_retrieval_and_writeback_decisions() {
 
 #[test]
 fn usrl_project_discovery_skips_generated_and_vendor_dirs() {
-    let paths = usrl_paths("/mnt/storage/Projects/USRL").unwrap();
+    let paths = usrl_paths(usrl_validator_root()).unwrap();
 
     assert!(
         paths
@@ -2501,7 +2519,7 @@ fn usrl_project_discovery_skips_generated_and_vendor_dirs() {
 fn usrl_project_imports_into_ledger() {
     let mut ledger = SqliteLedger::open_memory().unwrap();
     let mut count = 0usize;
-    for path in usrl_paths("/mnt/storage/Projects/USRL").unwrap() {
+    for path in usrl_paths(usrl_validator_root()).unwrap() {
         let memory = import_usrl_file(&path).unwrap();
         ledger.upsert_memory(&memory, Some(&path)).unwrap();
         SqliteGraphIndex::new(&ledger)
@@ -5948,7 +5966,7 @@ contract ValidatedPolicy {
                 "import-usrl",
                 "--ingest",
                 "--validator-root",
-                "/mnt/storage/Projects/USRL",
+                usrl_validator_root().to_str().unwrap(),
                 "--require-validation",
                 "--json",
             ])
