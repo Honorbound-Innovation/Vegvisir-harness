@@ -1,0 +1,76 @@
+openapi: 3.0.3
+info:
+  title: Example Payments API
+  version: 1.0.0
+paths:
+  /payments/{payment_id}:
+    get:
+      operationId: getPayment
+      summary: Retrieve a payment by identifier.
+      tags: [payments]
+      parameters:
+        - name: payment_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Payment found
+        '404':
+          description: Payment not found
+    patch:
+      operationId: updatePaymentMetadata
+      summary: Update non-financial payment metadata.
+      tags: [payments]
+      parameters:
+        - name: payment_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Updated
+        '409':
+          description: Conflict
+  /payments:
+    post:
+      operationId: createPayment
+      summary: Create a payment request using an idempotency key.
+      tags: [payments]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '201':
+          description: Created
+        '400':
+          description: Invalid request
+        '409':
+          description: Duplicate idempotency key
+components:
+  schemas:
+    Payment:
+      type: object
+      required: [id, status]
+      properties:
+        id:
+          type: string
+        status:
+          type: string

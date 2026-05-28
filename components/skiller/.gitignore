@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local/generated Skiller artifacts
+.skiller/
+*.log
+
+# Vegvisir local runtime artifacts
+.vegvisir/
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
+
+dist/
+target/

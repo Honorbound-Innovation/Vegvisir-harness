@@ -1,0 +1,20 @@
+Usage: cachectl [OPTIONS] COMMAND [ARGS]...
+
+Cache service administration CLI.
+
+Options:
+  --profile TEXT        Profile to use
+  --output [json|text]  Output format
+  --help                Show this message and exit.
+
+Commands:
+  status      Show cache cluster status.
+  inspect     Inspect a cache key without changing it.
+  warm        Warm a cache namespace from a manifest.
+  delete      Delete a specific cache key.
+  purge       Purge a namespace. Destructive.
+
+Examples:
+  cachectl status --profile prod --output json
+  cachectl inspect users:123 --profile prod
+  cachectl delete users:123 --profile staging

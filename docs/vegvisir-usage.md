@@ -24,11 +24,14 @@ Commands:
   model-request
   eval
   verify
-  help           Print this message or the help of the given subcommand(s)
+  app-server
+  open-ai-compat-server
+  skiller                Run the integrated Skiller component. Use `vegvisir skiller -- <args>`
+  help                   Print this message or the help of the given subcommand(s)
 
 Options:
   -p, --prompt <PROMPT>
-      --workspace <WORKSPACE>                     [default: /mnt/storage/Projects/Vegvisir-harness]
+      --workspace <WORKSPACE>
       --max-steps <MAX_STEPS>                     [default: 4]
       --provider <PROVIDER>
       --model <MODEL>
@@ -364,6 +367,35 @@ Notes:
 - `--workspace` controls project scope for tools and memory.
 - `--agent` applies a persistent custom agent profile.
 - `--dangerously-bypass-approvals-and-sandbox` is startup-only and should be used only for explicitly trusted sessions.
+
+
+
+#### skiller
+
+Purpose:
+
+Runs the integrated Skiller component through Vegvisir. Skiller compiles technical sources, repositories, API specs, CLI specs, captured CLI help, and documentation into governed, source-grounded skill bundles. The integrated command keeps Skiller available from the Vegvisir binary without replacing Vegvisir's existing LSL skill system.
+
+Usage pattern:
+
+```text
+vegvisir skiller -- <skiller-args>
+```
+
+Examples:
+
+```bash
+vegvisir skiller -- --help
+vegvisir skiller -- compile ./docs --out ./dist/docs-skills --name docs-skills
+vegvisir skiller -- validate ./dist/docs-skills
+vegvisir skiller -- forge-handoff ./dist/docs-skills --out ./dist/vegvisir-handoff --pass skill-expansion
+```
+
+Notes:
+
+- Use `--` after `skiller` so the remaining arguments are passed to Skiller.
+- Skiller's preserved upstream `legacy/` prototype is not part of the integrated Rust workspace component.
+- Skiller's Forge handoff path is designed for Vegvisir to provide the governed reasoning pass while retaining auditable request/response artifacts.
 
 ## TUI Slash Commands
 

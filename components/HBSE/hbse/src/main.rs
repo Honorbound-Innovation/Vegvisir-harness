@@ -825,7 +825,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     });
                     if mnemonic {
                         output["recovery_secret_display"] = serde_json::Value::String(
-                            if show_recovery_secret { "included" } else { "suppressed" }.to_string(),
+                            if show_recovery_secret {
+                                "included"
+                            } else {
+                                "suppressed"
+                            }
+                            .to_string(),
                         );
                         if show_recovery_secret {
                             output["recovery_mnemonic"] =

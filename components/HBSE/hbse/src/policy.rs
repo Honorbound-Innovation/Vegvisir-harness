@@ -243,7 +243,10 @@ impl PolicyEngine {
             deny!("raw export not allowed");
         }
         if request.raw_export_requested
-            && matches!(request.delivery_mode, DeliveryMode::Raw | DeliveryMode::TerminalPrint)
+            && matches!(
+                request.delivery_mode,
+                DeliveryMode::Raw | DeliveryMode::TerminalPrint
+            )
             && !policy.allow_unbound_plaintext_export
             && !policy_has_peer_binding(policy)
         {

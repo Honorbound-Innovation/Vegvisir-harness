@@ -1,0 +1,38 @@
+tool: deployctl
+summary: Example deployment CLI for service releases.
+auth: Uses the active profile configured outside Skiller. Do not place tokens in command arguments.
+commands:
+  - name: status
+    summary: Show deployment status for a service.
+    risk: low
+    read_only: true
+    required_inputs: [service, environment]
+    examples:
+      - deployctl status --service api --env prod
+  - name: plan
+    summary: Preview a deployment without applying changes.
+    risk: low
+    read_only: true
+    required_inputs: [service, environment, version]
+    examples:
+      - deployctl plan --service api --env prod --version 1.2.3
+  - name: deploy
+    summary: Deploy a version to an environment.
+    risk: high
+    read_only: false
+    required_inputs: [service, environment, version]
+    guardrails:
+      - Require an approved change or incident context before production deployment.
+      - Run plan first and capture rollback version.
+    examples:
+      - deployctl deploy --service api --env staging --version 1.2.3
+  - name: rollback
+    summary: Roll back a service to the previous version.
+    risk: high
+    read_only: false
+    required_inputs: [service, environment, target_version]
+    guardrails:
+      - Confirm blast radius and rollback target before execution.
+      - Prefer status and recent deployment evidence before rollback.
+    examples:
+      - deployctl rollback --service api --env prod --target-version 1.2.2

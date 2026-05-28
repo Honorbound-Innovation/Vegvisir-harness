@@ -212,9 +212,7 @@ fn handle_connection(
             state.unlocked = true;
             state.broker_session_id = Some(Uuid::new_v4().to_string());
             mark_activity(state);
-            Ok(
-                json!({"ok": true, "unlocked": true, "mfa_verified": state.mfa_verified}),
-            )
+            Ok(json!({"ok": true, "unlocked": true, "mfa_verified": state.mfa_verified}))
         }
         "mfa_verify" => {
             require_unlocked(state)?;

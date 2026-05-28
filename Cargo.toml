@@ -4,5 +4,5 @@ members = [
     "vegvisir",
     "components/cms-v2",
     "components/HBSE/hbse",
+    "components/skiller",
 ]
-

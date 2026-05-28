@@ -6,8 +6,8 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
 };
-use unicode_width::UnicodeWidthStr;
 use std::sync::OnceLock;
+use unicode_width::UnicodeWidthStr;
 
 use crate::{
     app::{DiffOverlay, InfoOverlay, TuiApplication},
@@ -288,7 +288,12 @@ fn activity_line(
             CYAN,
         )
     } else if !app.session.activity.trim().is_empty() {
-        ("● ".to_string(), "activity".to_string(), app.session.activity.clone(), DIM)
+        (
+            "● ".to_string(),
+            "activity".to_string(),
+            app.session.activity.clone(),
+            DIM,
+        )
     } else {
         return None;
     };
@@ -2569,7 +2574,8 @@ four",
     }
 
     #[test]
-    fn ratatui_streaming_activity_detail_stays_anchored_while_spinner_animates() -> anyhow::Result<()> {
+    fn ratatui_streaming_activity_detail_stays_anchored_while_spinner_animates()
+    -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let mut app =
             crate::app::TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;

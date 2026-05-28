@@ -513,9 +513,7 @@ Steering: {display_content}{attachment_note}"
 }
 
 fn new_spinner_verb_seed(session_id: &str) -> u64 {
-    let now = chrono::Utc::now()
-        .timestamp_nanos_opt()
-        .unwrap_or_default() as u64;
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default() as u64;
     let mut hash = 0xcbf29ce484222325_u64;
     for byte in session_id.as_bytes() {
         hash ^= u64::from(*byte);

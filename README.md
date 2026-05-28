@@ -16,6 +16,7 @@ Vegvisir-harness/
 ├── components/
 │   ├── cms-v2/            # Continuum Memory System v2 runtime and CLI
 │   ├── HBSE/              # Rust Hardware Bound Secrets Enclave implementation
+│   ├── skiller/           # Rust skill compiler and governed skill bundle tooling
 │   └── usrl/              # USRL parser and contract runtime
 ├── docs/                  # Usage documentation for each included system
 ├── scripts/               # Helper scripts
@@ -41,6 +42,7 @@ Vegvisir-harness/
 - Supports workspace/project switching with the right session and memory scope restored.
 - Renders Markdown in the TUI, including code fences and tables.
 - Exposes a JSONL app-server bridge for future external interfaces and desktop shells.
+- Integrates Skiller for compiling technical sources, repos, API specs, CLI specs, and docs into governed, source-grounded skill bundles.
 - Includes verification, eval, trace, and audit surfaces for production hardening.
 
 ## Terminal UI
@@ -159,6 +161,14 @@ Run the app-server bridge for an external app or future overlay:
 
 ```bash
 vegvisir --provider openai-hbse --model gpt-5.5 app-server --workspace /path/to/project
+```
+
+Use the integrated Skiller component:
+
+```bash
+vegvisir skiller -- compile ./docs --out ./dist/docs-skills --name docs-skills
+vegvisir skiller -- validate ./dist/docs-skills
+vegvisir skiller -- route ./dist/docs-skills "troubleshoot deployment"
 ```
 
 Check the installation:

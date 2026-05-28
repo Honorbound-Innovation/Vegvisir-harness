@@ -98,6 +98,11 @@ enum Command {
         #[arg(long, default_value_os_t = current_workspace())]
         workspace: PathBuf,
     },
+    /// Run the integrated Skiller component. Use `vegvisir skiller -- <args>`.
+    Skiller {
+        #[arg(last = true)]
+        args: Vec<std::ffi::OsString>,
+    },
 }
 
 fn current_workspace() -> PathBuf {
@@ -182,11 +187,17 @@ fn main() -> anyhow::Result<()> {
                 dangerously_bypass_approvals_and_sandbox: cli
                     .dangerously_bypass_approvals_and_sandbox,
             }),
+            Some(Command::Skiller { args }) => run_skiller(args),
             Some(Command::Tui) | None => {
                 run_tui_with_dangerous_bypass(cli.dangerously_bypass_approvals_and_sandbox)
             }
         }
     }
+}
+
+fn run_skiller(args: Vec<std::ffi::OsString>) -> anyhow::Result<()> {
+    let argv = std::iter::once(std::ffi::OsString::from("skiller")).chain(args);
+    skiller::run_cli_from(argv)
 }
 
 fn run_verify(

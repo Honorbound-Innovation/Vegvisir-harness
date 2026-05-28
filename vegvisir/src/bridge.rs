@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     io::{self, BufRead, Write},
     path::PathBuf,
 };
@@ -6,15 +7,40 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::app::TuiApplication;
-use crate::types::ToolCall;
+use chrono::Utc;
+
+use crate::{app::TuiApplication, types::ToolCall};
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+enum BridgeRequestId {
+    String(String),
+    Integer(i64),
+}
 
 #[derive(Debug, Deserialize)]
 struct BridgeRequest {
-    id: Option<String>,
+    id: Option<BridgeRequestId>,
     method: String,
     #[serde(default)]
     params: Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InitializeParams {
+    client_info: Option<Value>,
+    capabilities: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ThreadStartParams {
+    cwd: Option<PathBuf>,
+    model_provider: Option<String>,
+    model: Option<String>,
+    agent: Option<String>,
+    ephemeral: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -23,6 +49,15 @@ struct StartParams {
     provider: Option<String>,
     model: Option<String>,
     agent: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TurnStartParams {
+    thread_id: String,
+    input: Vec<Value>,
+    cwd: Option<PathBuf>,
+    model: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -68,8 +103,22 @@ struct BridgeEvent {
     #[serde(rename = "type")]
     kind: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<String>,
+    id: Option<BridgeRequestId>,
     payload: Value,
+}
+
+#[derive(Default)]
+struct BridgeState {
+    initialized: bool,
+    threads: HashMap<String, ThreadRuntime>,
+}
+
+#[derive(Clone, Debug)]
+struct ThreadRuntime {
+    created_at: i64,
+    updated_at: i64,
+    preview: String,
+    ephemeral: bool,
 }
 
 pub struct BridgeOptions {
@@ -100,8 +149,9 @@ pub fn run_app_server_with_io<R: BufRead, W: Write>(
         options.agent,
         options.dangerously_bypass_approvals_and_sandbox,
     )?;
+    let mut state = BridgeState::default();
 
-    emit(
+    emit_legacy(
         stdout,
         BridgeEvent {
             kind: "server.ready",
@@ -125,6 +175,7 @@ pub fn run_app_server_with_io<R: BufRead, W: Write>(
         let request_id = request.id.clone();
         match handle_request(
             &mut app,
+            &mut state,
             request,
             options.data_root.as_deref(),
             options.dangerously_bypass_approvals_and_sandbox,
@@ -145,14 +196,206 @@ enum BridgeControl {
 
 fn handle_request(
     app: &mut TuiApplication,
+    state: &mut BridgeState,
     request: BridgeRequest,
     data_root: Option<&std::path::Path>,
     dangerously_bypass_approvals_and_sandbox: bool,
     stdout: &mut dyn Write,
 ) -> anyhow::Result<BridgeControl> {
     match request.method.as_str() {
+        "initialize" if request.id.is_some() => {
+            let params: InitializeParams =
+                serde_json::from_value(request.params).unwrap_or(InitializeParams {
+                    client_info: None,
+                    capabilities: None,
+                });
+            let _client_info = params.client_info.as_ref();
+            let _capabilities = params.capabilities.as_ref();
+            state.initialized = true;
+            emit_response(
+                stdout,
+                request.id.expect("checked above"),
+                json!({
+                    "userAgent": format!("vegvisir/{}", env!("CARGO_PKG_VERSION")),
+                    "codexHome": default_data_root_path(),
+                    "platformFamily": std::env::consts::FAMILY,
+                    "platformOs": std::env::consts::OS,
+                }),
+            )?;
+        }
+        "initialized" => {
+            state.initialized = true;
+        }
+        "thread/start" => {
+            ensure_initialized(state)?;
+            let params: ThreadStartParams = serde_json::from_value(request.params)?;
+            let workspace = params.cwd.unwrap_or_else(|| app.cwd.clone());
+            *app = start_app(
+                workspace,
+                data_root.map(PathBuf::from),
+                params.model_provider,
+                params.model,
+                params.agent,
+                dangerously_bypass_approvals_and_sandbox,
+            )?;
+            let now = unix_now();
+            let runtime = ThreadRuntime {
+                created_at: now,
+                updated_at: now,
+                preview: String::new(),
+                ephemeral: params.ephemeral.unwrap_or(false),
+            };
+            state
+                .threads
+                .insert(app.session.session_id.clone(), runtime);
+            let thread = codex_thread(app, state);
+            if let Some(id) = request.id {
+                emit_response(stdout, id, json!({ "thread": thread.clone() }))?;
+            }
+            emit_notification(stdout, "thread/started", json!({ "thread": thread }))?;
+        }
+        "turn/start" => {
+            ensure_initialized(state)?;
+            let params: TurnStartParams = serde_json::from_value(request.params)?;
+            let requested_thread_id = params.thread_id.clone();
+            let resolved_thread_id =
+                if requested_thread_id.is_empty() || requested_thread_id == "current" {
+                    app.session.session_id.clone()
+                } else {
+                    requested_thread_id
+                };
+            if resolved_thread_id != app.session.session_id {
+                anyhow::bail!("unknown or unloaded thread: {}", params.thread_id);
+            }
+            if let Some(cwd) = params.cwd {
+                *app = start_app(
+                    cwd,
+                    data_root.map(PathBuf::from),
+                    None,
+                    params.model,
+                    None,
+                    dangerously_bypass_approvals_and_sandbox,
+                )?;
+            } else if let Some(model) = params.model {
+                apply_command(app, &format!("/model {model}"))?;
+            }
+            let content = codex_input_text(&params.input);
+            if let Some(thread) = state.threads.get_mut(&resolved_thread_id) {
+                if thread.preview.is_empty() {
+                    thread.preview = content.chars().take(160).collect();
+                }
+                thread.updated_at = unix_now();
+            }
+            let turn_id = new_id("turn");
+            let user_item_id = new_id("item");
+            let assistant_item_id = new_id("item");
+            let started_at = unix_now();
+            let started_turn = codex_turn(
+                &turn_id,
+                "inProgress",
+                started_at,
+                None,
+                None,
+                vec![codex_user_item(&user_item_id, &content)],
+            );
+            if let Some(id) = request.id {
+                emit_response(stdout, id, json!({ "turn": started_turn.clone() }))?;
+            }
+            emit_notification(
+                stdout,
+                "turn/started",
+                json!({ "threadId": resolved_thread_id, "turn": started_turn }),
+            )?;
+            let response_result = {
+                let mut delta_emit_error = None::<anyhow::Error>;
+                let thread_id = app.session.session_id.clone();
+                let turn_id_for_delta = turn_id.clone();
+                let assistant_item_id_for_delta = assistant_item_id.clone();
+                let mut on_delta = |delta: &str| {
+                    if delta.is_empty() || delta_emit_error.is_some() {
+                        return;
+                    }
+                    if let Err(error) = emit_notification(
+                        stdout,
+                        "item/agentMessage/delta",
+                        json!({
+                            "threadId": thread_id,
+                            "turnId": turn_id_for_delta,
+                            "itemId": assistant_item_id_for_delta,
+                            "delta": delta,
+                        }),
+                    ) {
+                        delta_emit_error = Some(error);
+                    }
+                };
+                let response = app.send_headless_streaming(&content, &mut on_delta);
+                match (response, delta_emit_error) {
+                    (Ok(response), None) => Ok(response),
+                    (Ok(_), Some(error)) => Err(error),
+                    (Err(error), _) => Err(error),
+                }
+            };
+            let completed_at = unix_now();
+            let duration_ms = (completed_at - started_at).max(0) * 1000;
+            match response_result {
+                Ok(response) => {
+                    let turn = codex_turn(
+                        &turn_id,
+                        "completed",
+                        started_at,
+                        Some(completed_at),
+                        Some(duration_ms),
+                        vec![
+                            codex_user_item(&user_item_id, &content),
+                            codex_agent_item(&assistant_item_id, &response),
+                        ],
+                    );
+                    emit_notification(
+                        stdout,
+                        "turn/completed",
+                        json!({ "threadId": app.session.session_id, "turn": turn }),
+                    )?;
+                }
+                Err(error) => {
+                    let turn = codex_turn(
+                        &turn_id,
+                        "failed",
+                        started_at,
+                        Some(completed_at),
+                        Some(duration_ms),
+                        vec![codex_user_item(&user_item_id, &content)],
+                    );
+                    emit_notification(
+                        stdout,
+                        "turn/completed",
+                        json!({ "threadId": app.session.session_id, "turn": turn }),
+                    )?;
+                    return Err(error);
+                }
+            }
+        }
+        "model/list" => {
+            ensure_initialized(state)?;
+            let data: Vec<Value> = app
+                .models
+                .list()
+                .into_iter()
+                .map(|model| {
+                    json!({
+                        "id": model.name,
+                        "name": model.display_name.as_deref().unwrap_or(&model.name),
+                        "provider": model.provider,
+                        "contextWindow": model.context_window,
+                        "supported": model.enabled,
+                    })
+                })
+                .collect();
+            if let Some(id) = request.id {
+                emit_response(stdout, id, json!({ "data": data, "nextCursor": null }))?;
+            }
+        }
         "initialize" | "session.status" => {
-            emit(
+            emit_legacy(
                 stdout,
                 BridgeEvent {
                     kind: "session.status",
@@ -172,7 +415,7 @@ fn handle_request(
                 params.agent,
                 dangerously_bypass_approvals_and_sandbox,
             )?;
-            emit(
+            emit_legacy(
                 stdout,
                 BridgeEvent {
                     kind: "session.started",
@@ -182,7 +425,7 @@ fn handle_request(
             )?;
         }
         "session.messages" => {
-            emit(
+            emit_legacy(
                 stdout,
                 BridgeEvent {
                     kind: "session.messages",
@@ -195,7 +438,7 @@ fn handle_request(
             )?;
         }
         "session.exportMarkdown" => {
-            emit(
+            emit_legacy(
                 stdout,
                 BridgeEvent {
                     kind: "session.exportMarkdown",
@@ -209,7 +452,7 @@ fn handle_request(
         }
         "turn.send" => {
             let params: TurnParams = serde_json::from_value(request.params)?;
-            emit(
+            emit_legacy(
                 stdout,
                 BridgeEvent {
                     kind: "turn.started",
@@ -226,7 +469,7 @@ fn handle_request(
                     if delta.is_empty() || delta_emit_error.is_some() {
                         return;
                     }
-                    if let Err(error) = emit(
+                    if let Err(error) = emit_legacy(
                         stdout,
                         BridgeEvent {
                             kind: "content.delta",
@@ -248,7 +491,7 @@ fn handle_request(
                 }
             };
             match response_result {
-                Ok(response) => emit(
+                Ok(response) => emit_legacy(
                     stdout,
                     BridgeEvent {
                         kind: "turn.completed",
@@ -273,7 +516,7 @@ fn handle_request(
                         {
                             app.session.messages.pop();
                         }
-                        emit(
+                        emit_legacy(
                             stdout,
                             BridgeEvent {
                                 kind: "approval.required",
@@ -285,7 +528,7 @@ fn handle_request(
                             },
                         )?;
                     }
-                    emit(
+                    emit_legacy(
                         stdout,
                         BridgeEvent {
                             kind: "turn.failed",
@@ -302,7 +545,7 @@ fn handle_request(
         "command.run" => {
             let params: CommandParams = serde_json::from_value(request.params)?;
             let output = app.execute_command(&params.command)?.unwrap_or_default();
-            emit(
+            emit_legacy(
                 stdout,
                 BridgeEvent {
                     kind: "command.completed",
@@ -316,7 +559,7 @@ fn handle_request(
             )?;
         }
         "tools.list" => {
-            emit(
+            emit_legacy(
                 stdout,
                 BridgeEvent {
                     kind: "tools.list",
@@ -331,7 +574,7 @@ fn handle_request(
             )?;
         }
         "providers.list" => {
-            emit(
+            emit_legacy(
                 stdout,
                 BridgeEvent {
                     kind: "providers.list",
@@ -352,7 +595,7 @@ fn handle_request(
             } else {
                 Vec::new()
             };
-            emit(
+            emit_legacy(
                 stdout,
                 BridgeEvent {
                     kind: "models.list",
@@ -367,7 +610,7 @@ fn handle_request(
             )?;
         }
         "hbse.onboarding.providers" => {
-            emit(
+            emit_legacy(
                 stdout,
                 BridgeEvent {
                     kind: "hbse.onboarding.providers",
@@ -381,7 +624,7 @@ fn handle_request(
             )?;
         }
         "agents.list" => {
-            emit(
+            emit_legacy(
                 stdout,
                 BridgeEvent {
                     kind: "agents.list",
@@ -394,7 +637,7 @@ fn handle_request(
             )?;
         }
         "approvals.list" => {
-            emit(
+            emit_legacy(
                 stdout,
                 BridgeEvent {
                     kind: "approvals.list",
@@ -427,7 +670,7 @@ fn handle_request(
                     args: approval.args.clone(),
                 })
             });
-            emit(
+            emit_legacy(
                 stdout,
                 BridgeEvent {
                     kind: "approval.executed",
@@ -465,7 +708,7 @@ fn handle_request(
                     args: approval.args.clone(),
                 })
             });
-            emit(
+            emit_legacy(
                 stdout,
                 BridgeEvent {
                     kind: "approval.executed",
@@ -492,7 +735,7 @@ fn handle_request(
                 .guardrails
                 .approvals
                 .edit(&params.id, params.args);
-            emit(
+            emit_legacy(
                 stdout,
                 BridgeEvent {
                     kind: "approvals.updated",
@@ -519,7 +762,7 @@ fn handle_request(
                 command.push_str(&path);
             }
             let output = app.execute_command(&command)?.unwrap_or_default();
-            emit(
+            emit_legacy(
                 stdout,
                 BridgeEvent {
                     kind: "diff.current",
@@ -533,7 +776,7 @@ fn handle_request(
         }
         "memory.status" => {
             let output = app.execute_command("/memory status")?.unwrap_or_default();
-            emit(
+            emit_legacy(
                 stdout,
                 BridgeEvent {
                     kind: "memory.status",
@@ -550,7 +793,7 @@ fn handle_request(
             )?;
         }
         "system.prompt" => {
-            emit(
+            emit_legacy(
                 stdout,
                 BridgeEvent {
                     kind: "system.prompt",
@@ -565,7 +808,7 @@ fn handle_request(
             let params: SystemPromptSetParams = serde_json::from_value(request.params)?;
             app.session.system_prompt = params.prompt;
             app.autosave_session();
-            emit(
+            emit_legacy(
                 stdout,
                 BridgeEvent {
                     kind: "system.prompt",
@@ -577,7 +820,7 @@ fn handle_request(
             )?;
         }
         "shutdown" => {
-            emit(
+            emit_legacy(
                 stdout,
                 BridgeEvent {
                     kind: "server.shutdown",
@@ -601,11 +844,11 @@ fn handle_request(
 
 fn emit_approval_mutation(
     stdout: &mut dyn Write,
-    id: Option<String>,
+    id: Option<BridgeRequestId>,
     ok: bool,
     app: &TuiApplication,
 ) -> anyhow::Result<()> {
-    emit(
+    emit_legacy(
         stdout,
         BridgeEvent {
             kind: "approvals.updated",
@@ -616,6 +859,120 @@ fn emit_approval_mutation(
             }),
         },
     )
+}
+
+fn ensure_initialized(state: &BridgeState) -> anyhow::Result<()> {
+    if state.initialized {
+        Ok(())
+    } else {
+        anyhow::bail!("Not initialized")
+    }
+}
+
+fn default_data_root_path() -> String {
+    crate::memory::default_vegvisir_data_root()
+        .display()
+        .to_string()
+}
+
+fn unix_now() -> i64 {
+    Utc::now().timestamp()
+}
+
+fn new_id(prefix: &str) -> String {
+    format!("{prefix}-{}", uuid::Uuid::new_v4().simple())
+}
+
+fn codex_input_text(input: &[Value]) -> String {
+    input
+        .iter()
+        .filter_map(|item| match item.get("type").and_then(Value::as_str) {
+            Some("text") => item.get("text").and_then(Value::as_str).map(str::to_string),
+            Some("mention") | Some("skill") => item
+                .get("path")
+                .and_then(Value::as_str)
+                .map(|path| format!("@{path}")),
+            Some("image") => item
+                .get("url")
+                .and_then(Value::as_str)
+                .map(|url| format!("[image: {url}]")),
+            Some("localImage") => item
+                .get("path")
+                .and_then(Value::as_str)
+                .map(|path| format!("[image: {path}]")),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn codex_thread(app: &TuiApplication, state: &BridgeState) -> Value {
+    let thread_id = &app.session.session_id;
+    let runtime = state.threads.get(thread_id);
+    let now = unix_now();
+    json!({
+        "id": thread_id,
+        "sessionId": thread_id,
+        "forkedFromId": null,
+        "preview": runtime.map(|thread| thread.preview.as_str()).unwrap_or(""),
+        "ephemeral": runtime.map(|thread| thread.ephemeral).unwrap_or(true),
+        "modelProvider": app.session.current_provider,
+        "createdAt": runtime.map(|thread| thread.created_at).unwrap_or(now),
+        "updatedAt": runtime.map(|thread| thread.updated_at).unwrap_or(now),
+        "status": { "type": "idle" },
+        "path": null,
+        "cwd": app.cwd.display().to_string(),
+        "cliVersion": env!("CARGO_PKG_VERSION"),
+        "source": "appServer",
+        "threadSource": null,
+        "agentNickname": null,
+        "agentRole": app.session.active_agent_name,
+        "gitInfo": null,
+        "name": app.session.title,
+        "turns": [],
+    })
+}
+
+fn codex_turn(
+    id: &str,
+    status: &'static str,
+    started_at: i64,
+    completed_at: Option<i64>,
+    duration_ms: Option<i64>,
+    items: Vec<Value>,
+) -> Value {
+    json!({
+        "id": id,
+        "items": items,
+        "itemsView": "full",
+        "status": status,
+        "error": null,
+        "startedAt": started_at,
+        "completedAt": completed_at,
+        "durationMs": duration_ms,
+    })
+}
+
+fn codex_user_item(id: &str, text: &str) -> Value {
+    json!({
+        "type": "userMessage",
+        "id": id,
+        "content": [{
+            "type": "text",
+            "text": text,
+            "text_elements": [],
+        }],
+    })
+}
+
+fn codex_agent_item(id: &str, text: &str) -> Value {
+    json!({
+        "type": "agentMessage",
+        "id": id,
+        "text": text,
+        "phase": null,
+        "memoryCitation": null,
+    })
 }
 
 fn start_app(
@@ -769,27 +1126,68 @@ fn transcript_markdown(app: &TuiApplication) -> String {
     out
 }
 
-fn emit(stdout: &mut dyn Write, event: BridgeEvent) -> anyhow::Result<()> {
+fn emit_legacy(stdout: &mut dyn Write, event: BridgeEvent) -> anyhow::Result<()> {
     writeln!(stdout, "{}", serde_json::to_string(&event)?)?;
+    stdout.flush()?;
+    Ok(())
+}
+
+fn emit_response(stdout: &mut dyn Write, id: BridgeRequestId, result: Value) -> anyhow::Result<()> {
+    writeln!(
+        stdout,
+        "{}",
+        serde_json::to_string(&json!({ "id": id, "result": result }))?
+    )?;
+    stdout.flush()?;
+    Ok(())
+}
+
+fn emit_notification(
+    stdout: &mut dyn Write,
+    method: &'static str,
+    params: Value,
+) -> anyhow::Result<()> {
+    writeln!(
+        stdout,
+        "{}",
+        serde_json::to_string(&json!({ "method": method, "params": params }))?
+    )?;
     stdout.flush()?;
     Ok(())
 }
 
 fn emit_error(
     stdout: &mut dyn Write,
-    id: Option<String>,
+    id: Option<BridgeRequestId>,
     code: &'static str,
     message: String,
 ) -> anyhow::Result<()> {
-    emit(
-        stdout,
-        BridgeEvent {
-            kind: "error",
-            id,
-            payload: json!({
-                "code": code,
-                "message": message,
-            }),
-        },
-    )
+    if let Some(id) = id {
+        writeln!(
+            stdout,
+            "{}",
+            serde_json::to_string(&json!({
+                "id": id,
+                "error": {
+                    "code": -32000,
+                    "message": message,
+                    "data": { "code": code },
+                }
+            }))?
+        )?;
+        stdout.flush()?;
+        Ok(())
+    } else {
+        emit_legacy(
+            stdout,
+            BridgeEvent {
+                kind: "error",
+                id: None,
+                payload: json!({
+                    "code": code,
+                    "message": message,
+                }),
+            },
+        )
+    }
 }
