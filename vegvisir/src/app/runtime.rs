@@ -153,7 +153,17 @@ impl TuiApplication {
                     trace,
                 );
             }
-            let _ = cms.complete_turn(&display_content, &response);
+            // Do not run CMS writeback on the foreground TUI worker. Completion
+            // writeback can involve SQLite/vectors/graph work and has previously
+            // made the live UI look stalled after the provider finished: status
+            // stayed "streaming" and the context counter did not advance because
+            // the JoinHandle could not complete. Snapshot the answer and persist
+            // memory asynchronously instead.
+            spawn_cms_complete_turn_writeback(
+                cms.config.clone(),
+                display_content.clone(),
+                response.clone(),
+            );
             Ok(worker_session)
         });
         self.pending_send = Some(handle);
@@ -315,11 +325,18 @@ Steering: {display_content}{attachment_note}"
     }
 
     pub(crate) fn poll_stream_events(&mut self) {
+        const MAX_STREAM_EVENTS_PER_POLL: usize = 256;
+
         let mut events = Vec::new();
+        let mut reached_frame_budget = false;
         if let Some(receiver) = &self.pending_stream {
-            while let Ok(event) = receiver.try_recv() {
-                events.push(event);
+            for _ in 0..MAX_STREAM_EVENTS_PER_POLL {
+                match receiver.try_recv() {
+                    Ok(event) => events.push(event),
+                    Err(_) => break,
+                }
             }
+            reached_frame_budget = events.len() == MAX_STREAM_EVENTS_PER_POLL;
         }
         if events.is_empty() {
             return;
@@ -370,6 +387,12 @@ Steering: {display_content}{attachment_note}"
             }
         }
         self.redraw_requested = true;
+        if reached_frame_budget {
+            // Leave remaining deltas for the next UI tick. This prevents a hot
+            // streaming provider from monopolizing the TUI thread and starving
+            // redraw/input/finalization work.
+            self.session.activity_tick = self.session.activity_tick.saturating_add(1);
+        }
     }
 
     pub(crate) fn push_live_tool_message(&mut self, content: String) {
@@ -512,10 +535,25 @@ Steering: {display_content}{attachment_note}"
     }
 }
 
+fn spawn_cms_complete_turn_writeback(
+    config: crate::memory::VegvisirCmsConfig,
+    user_content: String,
+    assistant_response: String,
+) {
+    thread::spawn(move || {
+        let mut config = config;
+        config.commit_writebacks = true;
+        match VegvisirCms::open(config) {
+            Ok(mut cms) => {
+                let _ = cms.complete_turn(&user_content, &assistant_response);
+            }
+            Err(_) => {}
+        }
+    });
+}
+
 fn new_spinner_verb_seed(session_id: &str) -> u64 {
-    let now = chrono::Utc::now()
-        .timestamp_nanos_opt()
-        .unwrap_or_default() as u64;
+    let now = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default() as u64;
     let mut hash = 0xcbf29ce484222325_u64;
     for byte in session_id.as_bytes() {
         hash ^= u64::from(*byte);

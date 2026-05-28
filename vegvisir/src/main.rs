@@ -8,6 +8,7 @@ use vegvisir_rust::{
     compat_server::{CompatServerOptions, run_openai_compat_server},
     evals::{format_eval_results, run_builtin_evals, run_eval_file},
     memory::{VegvisirCms, VegvisirCmsConfig, default_vegvisir_data_root},
+    setup::{SetupOptions, run_setup, setup_status},
 };
 
 #[derive(Parser)]
@@ -98,6 +99,27 @@ enum Command {
         #[arg(long, default_value_os_t = current_workspace())]
         workspace: PathBuf,
     },
+    /// Run first-time setup or inspect setup status.
+    Setup {
+        /// Print current setup status instead of writing setup config.
+        #[arg(long)]
+        status: bool,
+        /// Vegvisir data root. Defaults to the platform Vegvisir data directory.
+        #[arg(long)]
+        data_root: Option<PathBuf>,
+        /// Workspace to record as the initial/default workspace.
+        #[arg(long, default_value_os_t = current_workspace())]
+        workspace: PathBuf,
+        /// Use defaults and avoid prompts.
+        #[arg(long)]
+        non_interactive: bool,
+        /// Overwrite current_provider/current_model even if already configured.
+        #[arg(long)]
+        force: bool,
+        /// Do not include HBSE onboarding instructions in next steps.
+        #[arg(long)]
+        skip_hbse: bool,
+    },
 }
 
 fn current_workspace() -> PathBuf {
@@ -182,11 +204,75 @@ fn main() -> anyhow::Result<()> {
                 dangerously_bypass_approvals_and_sandbox: cli
                     .dangerously_bypass_approvals_and_sandbox,
             }),
+            Some(Command::Setup {
+                status,
+                data_root,
+                workspace,
+                non_interactive,
+                force,
+                skip_hbse,
+            }) => run_setup_command(
+                status,
+                data_root,
+                workspace,
+                non_interactive,
+                force,
+                skip_hbse,
+                cli.provider,
+                cli.json,
+            ),
             Some(Command::Tui) | None => {
                 run_tui_with_dangerous_bypass(cli.dangerously_bypass_approvals_and_sandbox)
             }
         }
     }
+}
+
+fn run_setup_command(
+    status: bool,
+    data_root: Option<PathBuf>,
+    workspace: PathBuf,
+    non_interactive: bool,
+    force: bool,
+    skip_hbse: bool,
+    provider: Option<String>,
+    json_output: bool,
+) -> anyhow::Result<()> {
+    let data_root = data_root.unwrap_or_else(default_vegvisir_data_root);
+    let summary = if status {
+        setup_status(&data_root)?
+    } else {
+        run_setup(SetupOptions {
+            data_root,
+            workspace,
+            non_interactive: non_interactive || json_output,
+            force,
+            provider,
+            skip_hbse,
+        })?
+    };
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+        return Ok(());
+    }
+    if status {
+        println!("Vegvisir setup status");
+        println!("────────────────────");
+        println!("data root: {}", summary.data_root.display());
+        println!("config:    {}", summary.config_path.display());
+        println!("provider:  {}", summary.current_provider);
+        println!("model:     {}", summary.current_model);
+        println!(
+            "HBSE:      {} (exists={})",
+            summary.hbse_socket.display(),
+            summary.hbse_socket_exists
+        );
+        if !summary.hbse_socket_exists {
+            println!();
+            println!("Next: start/configure HBSE, or set HBSE_BROKER_SOCKET.");
+        }
+    }
+    Ok(())
 }
 
 fn run_verify(

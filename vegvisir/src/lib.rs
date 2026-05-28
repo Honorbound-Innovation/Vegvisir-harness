@@ -25,6 +25,7 @@ pub mod provider;
 pub mod retrieval;
 pub mod runtime;
 pub mod sandbox;
+pub mod setup;
 pub mod state;
 pub mod subagents;
 pub mod tools;

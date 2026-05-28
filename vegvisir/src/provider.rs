@@ -1307,12 +1307,19 @@ fn anthropic_tool_loop(
         wire_messages.push(json!({"role": "assistant", "content": content}));
         let results = tool_uses
             .into_iter()
-            .filter_map(|tool_use| {
+            .enumerate()
+            .filter_map(|(index, tool_use)| {
                 let id = tool_use.get("id").and_then(Value::as_str)?.to_string();
                 let name = tool_use.get("name").and_then(Value::as_str)?.to_string();
-                let args = parse_tool_arguments(tool_use.get("input"));
-                let result = truncate_model_observation(&execute_tool(&name, args));
-                observations.push((name.clone(), result.clone()));
+                let result = if index == 0 {
+                    let args = parse_tool_arguments(tool_use.get("input"));
+                    let result = completed_tool_observation(&name, &execute_tool(&name, args));
+                    let result = truncate_model_observation(&result);
+                    observations.push((name.clone(), result.clone()));
+                    result
+                } else {
+                    deferred_tool_observation(&name)
+                };
                 Some(json!({
                     "type": "tool_result",
                     "tool_use_id": id,
@@ -1732,11 +1739,18 @@ fn google_tool_loop(
         contents.push(json!({"role": "model", "parts": parts}));
         let response_parts = calls
             .into_iter()
-            .filter_map(|call| {
+            .enumerate()
+            .filter_map(|(index, call)| {
                 let name = call.get("name").and_then(Value::as_str)?.to_string();
-                let args = parse_tool_arguments(call.get("args"));
-                let result = truncate_model_observation(&execute_tool(&name, args));
-                observations.push((name.clone(), result.clone()));
+                let result = if index == 0 {
+                    let args = parse_tool_arguments(call.get("args"));
+                    let result = completed_tool_observation(&name, &execute_tool(&name, args));
+                    let result = truncate_model_observation(&result);
+                    observations.push((name.clone(), result.clone()));
+                    result
+                } else {
+                    deferred_tool_observation(&name)
+                };
                 Some(json!({
                     "functionResponse": {
                         "name": name,
@@ -1848,8 +1862,16 @@ impl ProviderAdapter for OpenAISsoProfileAdapter {
             if let Some(output) = response.get("output").and_then(Value::as_array) {
                 input.extend(output.iter().map(response_output_item_for_followup));
             }
-            for call in tool_calls {
-                let result = truncate_model_observation(&execute_tool(&call.name, call.args));
+            for (index, call) in tool_calls.into_iter().enumerate() {
+                let result = if index == 0 {
+                    let result = completed_tool_observation(
+                        &call.name,
+                        &execute_tool(&call.name, call.args),
+                    );
+                    truncate_model_observation(&result)
+                } else {
+                    deferred_tool_observation(&call.name)
+                };
                 input.push(json!({
                     "type": "function_call_output",
                     "call_id": call.call_id,
@@ -1973,8 +1995,14 @@ fn responses_tool_loop_streaming(
         if let Some(output) = response.get("output").and_then(Value::as_array) {
             input.extend(output.iter().map(response_output_item_for_followup));
         }
-        for call in tool_calls {
-            let result = truncate_model_observation(&execute_tool(&call.name, call.args));
+        for (index, call) in tool_calls.into_iter().enumerate() {
+            let result = if index == 0 {
+                let result =
+                    completed_tool_observation(&call.name, &execute_tool(&call.name, call.args));
+                truncate_model_observation(&result)
+            } else {
+                deferred_tool_observation(&call.name)
+            };
             input.push(json!({
                 "type": "function_call_output",
                 "call_id": call.call_id,
@@ -3361,15 +3389,21 @@ pub fn openai_tool_loop(
             "content": content,
             "tool_calls": tool_calls,
         }));
-        for tool_call in tool_calls {
+        for (index, tool_call) in tool_calls.into_iter().enumerate() {
             let name = tool_call
                 .pointer("/function/name")
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
-            let args = parse_tool_arguments(tool_call.pointer("/function/arguments"));
-            let result = truncate_model_observation(&execute_tool(&name, args));
-            observations.push((name.clone(), result.clone()));
+            let result = if index == 0 {
+                let args = parse_tool_arguments(tool_call.pointer("/function/arguments"));
+                let result = completed_tool_observation(&name, &execute_tool(&name, args));
+                let result = truncate_model_observation(&result);
+                observations.push((name.clone(), result.clone()));
+                result
+            } else {
+                deferred_tool_observation(&name)
+            };
             wire_messages.push(json!({
                 "role": "tool",
                 "tool_call_id": tool_call.get("id").cloned().unwrap_or(Value::Null),
@@ -3428,15 +3462,21 @@ pub fn openai_tool_loop_streaming(
             "content": content,
             "tool_calls": tool_calls,
         }));
-        for tool_call in tool_calls {
+        for (index, tool_call) in tool_calls.into_iter().enumerate() {
             let name = tool_call
                 .pointer("/function/name")
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
-            let args = parse_tool_arguments(tool_call.pointer("/function/arguments"));
-            let result = truncate_model_observation(&execute_tool(&name, args));
-            observations.push((name.clone(), result.clone()));
+            let result = if index == 0 {
+                let args = parse_tool_arguments(tool_call.pointer("/function/arguments"));
+                let result = completed_tool_observation(&name, &execute_tool(&name, args));
+                let result = truncate_model_observation(&result);
+                observations.push((name.clone(), result.clone()));
+                result
+            } else {
+                deferred_tool_observation(&name)
+            };
             wire_messages.push(json!({
                 "role": "tool",
                 "tool_call_id": tool_call.get("id").cloned().unwrap_or(Value::Null),
@@ -3556,6 +3596,19 @@ fn truncate_utf8(value: &str, max_bytes: usize) -> &str {
 
 fn truncate_model_observation(value: &str) -> String {
     compact_tool_observation(value, TOOL_OBSERVATION_MODEL_MAX_BYTES)
+}
+
+fn completed_tool_observation(name: &str, content: &str) -> String {
+    format!(
+        "[Vegvisir tool completed]\nname: {name}\nstatus: completed\n\n{}",
+        content.trim_end()
+    )
+}
+
+fn deferred_tool_observation(name: &str) -> String {
+    format!(
+        "[Vegvisir tool deferred]\nname: {name}\nstatus: deferred\nreason: Vegvisir executes one native tool call at a time. Wait for the preceding [Vegvisir tool completed] observation before requesting another tool."
+    )
 }
 
 fn compact_tool_observation(value: &str, max_bytes: usize) -> String {

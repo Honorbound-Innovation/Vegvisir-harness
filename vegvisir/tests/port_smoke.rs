@@ -9,36 +9,37 @@ use std::{
     time::Duration,
 };
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::Utc;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use tempfile::tempdir;
 use vegvisir_rust::{
     app::TuiApplication,
     attachments::extract_attachments,
-    bridge::{run_app_server_with_io, BridgeOptions},
+    bridge::{BridgeOptions, run_app_server_with_io},
     checkpoints::CheckpointStore,
     command_registry::CommandRegistry,
     context::ContextManager,
     core::{
-        default_system_prompt, Attachment, AuditEvent, AuditLog, ChatMessage, ConfigStore,
-        ModelInfo, ModelRegistry, ProviderConfig, ProviderRegistry,
+        Attachment, AuditEvent, AuditLog, ChatMessage, ConfigStore, ModelInfo, ModelRegistry,
+        ProviderConfig, ProviderRegistry, default_system_prompt,
     },
     environment::{load_environment_d, parse_environment_line},
     guardrails::{ApprovalRequest, GuardrailEngine, PermissionPolicy},
-    memory::{default_vegvisir_data_root, ContextPrepareOptions, VegvisirCms, VegvisirCmsConfig},
+    memory::{ContextPrepareOptions, VegvisirCms, VegvisirCmsConfig, default_vegvisir_data_root},
     model::ScriptedModel,
     model_discovery::discover_provider_models,
     orchestrator::{AgentHarness, AgentTask},
     provider::{
-        openai_tool_loop, openai_tool_schema, AnthropicProviderAdapter, ConversationRunner,
-        GoogleProviderAdapter, HBSEAnthropicProviderAdapter, HBSEAzureOpenAIProviderAdapter,
-        HBSEGoogleProviderAdapter, HBSEOpenAICompatibleProviderAdapter,
-        OpenAICompatibleProviderAdapter, OpenAISsoProfileAdapter, ProviderAdapter, ProviderRouter,
+        AnthropicProviderAdapter, ConversationRunner, GoogleProviderAdapter,
+        HBSEAnthropicProviderAdapter, HBSEAzureOpenAIProviderAdapter, HBSEGoogleProviderAdapter,
+        HBSEOpenAICompatibleProviderAdapter, OpenAICompatibleProviderAdapter,
+        OpenAISsoProfileAdapter, ProviderAdapter, ProviderRouter, openai_tool_loop,
+        openai_tool_schema,
     },
     retrieval::{InMemoryRetriever, RetrievalDocument},
     sandbox::WorkspaceSandbox,
-    tools::{build_builtin_registry, build_builtin_registry_with_cms, Tool, ToolRegistry},
+    tools::{Tool, ToolRegistry, build_builtin_registry, build_builtin_registry_with_cms},
     types::{AgentDecision, Message, Observation, Role},
     ui::layout::visible_width,
 };
@@ -128,7 +129,6 @@ impl ProviderAdapter for MessageRecordingProvider {
         Ok("ok".to_string())
     }
 }
-
 
 #[derive(Clone, Debug)]
 struct SteeringToolProvider {
@@ -438,10 +438,12 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
     assert_eq!(provider_json["provider"], "demo");
     assert_eq!(provider_json["model"], "demo-local");
     assert_eq!(provider_json["mode"], "provider_runtime");
-    assert!(provider_json["answer"]
-        .as_str()
-        .unwrap()
-        .contains("Demo response"));
+    assert!(
+        provider_json["answer"]
+            .as_str()
+            .unwrap()
+            .contains("Demo response")
+    );
 
     let agent_home = tmp.path().join("home-agent-cli");
     let mut agent_app = TuiApplication::with_data_root(tmp.path(), &agent_home)?;
@@ -627,9 +629,11 @@ fn command_allow_list_can_be_managed_and_approved_from_tui() -> anyhow::Result<(
             .clone(),
     });
     assert!(!blocked.ok);
-    assert!(blocked
-        .content
-        .contains("Shell command is not allow-listed"));
+    assert!(
+        blocked
+            .content
+            .contains("Shell command is not allow-listed")
+    );
     let approval_id = app
         .tool_executor
         .guardrails
@@ -646,12 +650,13 @@ fn command_allow_list_can_be_managed_and_approved_from_tui() -> anyhow::Result<(
         "{approved}"
     );
     assert!(approved.contains("approved-command"), "{approved}");
-    assert!(app
-        .tool_executor
-        .guardrails
-        .policy
-        .allowed_commands
-        .contains("sh"));
+    assert!(
+        app.tool_executor
+            .guardrails
+            .policy
+            .allowed_commands
+            .contains("sh")
+    );
     Ok(())
 }
 
@@ -838,11 +843,13 @@ fn session_approvals_are_not_persisted_across_restarts() -> anyhow::Result<()> {
         .first()
         .cloned()
         .expect("pending approval");
-    assert!(executor
-        .guardrails
-        .approvals
-        .approve_for_session(&approval_id)
-        .is_some());
+    assert!(
+        executor
+            .guardrails
+            .approvals
+            .approve_for_session(&approval_id)
+            .is_some()
+    );
     assert!(executor.execute(call.clone()).ok);
 
     let reloaded_approvals =
@@ -909,10 +916,12 @@ fn approval_queue_can_edit_arguments_before_approval() -> anyhow::Result<()> {
         .expect("edited approval");
     assert_ne!(edited_request.id, original_id);
     assert!(!executor.guardrails.approvals.approve_once(&original_id));
-    assert!(executor
-        .guardrails
-        .approvals
-        .approve_once(&edited_request.id));
+    assert!(
+        executor
+            .guardrails
+            .approvals
+            .approve_once(&edited_request.id)
+    );
     let allowed = executor.execute(edited);
     assert!(allowed.ok, "{}", allowed.content);
     assert_eq!(executor.guardrails.approvals.pending_len(), 0);
@@ -1136,19 +1145,33 @@ fn provider_and_model_catalogs_load() -> anyhow::Result<()> {
     );
     assert!(models.is_model_allowed_for_provider(models.get("gpt-5.5").unwrap(), "openai-sso"));
     assert!(models.is_model_allowed_for_provider(models.get("gpt-5.5").unwrap(), "openai-hbse"));
-    assert!(models
-        .is_model_allowed_for_provider(models.get("claude-sonnet-4-5").unwrap(), "anthropic-hbse"));
-    assert!(models
-        .is_model_allowed_for_provider(models.get("gemini-2.5-flash").unwrap(), "google-hbse"));
+    assert!(
+        models.is_model_allowed_for_provider(
+            models.get("claude-sonnet-4-5").unwrap(),
+            "anthropic-hbse"
+        )
+    );
+    assert!(
+        models
+            .is_model_allowed_for_provider(models.get("gemini-2.5-flash").unwrap(), "google-hbse")
+    );
     assert!(models.is_model_allowed_for_provider(models.get("grok-4").unwrap(), "xai-hbse"));
     assert!(models.is_model_allowed_for_provider(
         models.get("mistral-large-latest").unwrap(),
         "mistral-hbse"
     ));
-    assert!(models
-        .is_model_allowed_for_provider(models.get("openai/gpt-5.4").unwrap(), "openrouter-hbse"));
-    assert!(models
-        .is_model_allowed_for_provider(models.get("azure:gpt-5.4").unwrap(), "azure-openai-hbse"));
+    assert!(
+        models.is_model_allowed_for_provider(
+            models.get("openai/gpt-5.4").unwrap(),
+            "openrouter-hbse"
+        )
+    );
+    assert!(
+        models.is_model_allowed_for_provider(
+            models.get("azure:gpt-5.4").unwrap(),
+            "azure-openai-hbse"
+        )
+    );
     let router = ProviderRouter::from_registry(&providers);
     assert_eq!(router.get("demo").unwrap().config().name, "demo");
     assert_eq!(
@@ -1310,9 +1333,11 @@ fn conversation_runner_does_not_send_saved_ui_notes_as_system_prompt() -> anyhow
     let messages = recorded_messages.lock().unwrap();
     assert_eq!(messages[0].role, "system");
     assert_eq!(messages[0].content, "real harness prompt");
-    assert!(!messages
-        .iter()
-        .any(|message| message.content.contains("note from /system show")));
+    assert!(
+        !messages
+            .iter()
+            .any(|message| message.content.contains("note from /system show"))
+    );
     Ok(())
 }
 
@@ -2464,11 +2489,12 @@ fn tui_approval_queue_selects_and_resolves_chosen_request() -> anyhow::Result<()
     let pending = app.tool_executor.guardrails.approvals.pending_ids();
     assert_eq!(pending, vec!["apr_a".to_string()]);
     assert_eq!(app.approval_selected_index, 0);
-    assert!(app
-        .session
-        .messages
-        .last()
-        .is_some_and(|message| message.content.contains("Denied approval apr_b")));
+    assert!(
+        app.session
+            .messages
+            .last()
+            .is_some_and(|message| message.content.contains("Denied approval apr_b"))
+    );
     Ok(())
 }
 
@@ -2477,9 +2503,11 @@ fn command_registry_suggests_and_preserves_system_text() {
     let registry = CommandRegistry::with_defaults();
 
     assert!(registry.suggest("/mo").contains(&"/model".to_string()));
-    assert!(registry
-        .suggest("/system-p")
-        .contains(&"/system-prompt".to_string()));
+    assert!(
+        registry
+            .suggest("/system-p")
+            .contains(&"/system-prompt".to_string())
+    );
     assert_eq!(registry.canonical("/quit"), "/exit");
     let parsed = CommandRegistry::parse("/system set keep this prompt intact").unwrap();
     assert_eq!(parsed.0, "/system");
@@ -2507,14 +2535,16 @@ fn application_executes_core_commands_and_demo_runner() -> anyhow::Result<()> {
 
     assert!(app.execute_command("/help")?.unwrap().contains("/models"));
     assert!(app.session.system_prompt.contains("You are Vegvisir"));
-    assert!(app
-        .session
-        .system_prompt
-        .contains("contract VegvisirDefaultAgentContract"));
-    assert!(app
-        .execute_command("/system-prompt")?
-        .unwrap()
-        .contains("You are Vegvisir"));
+    assert!(
+        app.session
+            .system_prompt
+            .contains("contract VegvisirDefaultAgentContract")
+    );
+    assert!(
+        app.execute_command("/system-prompt")?
+            .unwrap()
+            .contains("You are Vegvisir")
+    );
     assert_eq!(
         app.execute_command("/system set answer tersely")?.unwrap(),
         "Harness system prompt updated."
@@ -2550,14 +2580,16 @@ fn application_executes_core_commands_and_demo_runner() -> anyhow::Result<()> {
     );
     assert_eq!(app.session.system_prompt, default_system_prompt());
     assert!(app.session.system_prompt.contains("trigger ProviderCall"));
-    assert!(app
-        .execute_command("/system show")?
-        .unwrap()
-        .contains("You are Vegvisir"));
-    assert!(app
-        .execute_command("/system print")?
-        .unwrap()
-        .contains("contract VegvisirDefaultAgentContract"));
+    assert!(
+        app.execute_command("/system show")?
+            .unwrap()
+            .contains("You are Vegvisir")
+    );
+    assert!(
+        app.execute_command("/system print")?
+            .unwrap()
+            .contains("contract VegvisirDefaultAgentContract")
+    );
 
     let response = app.send_demo("hello")?;
     assert!(response.contains("Demo response from demo-local"));
@@ -2571,14 +2603,16 @@ fn application_executes_core_commands_and_demo_runner() -> anyhow::Result<()> {
     )?;
     assert!(saved_session.contains("\"content\": \"hello\""));
     assert!(saved_session.contains("Demo response from demo-local"));
-    assert!(app
-        .execute_command("/sessions")?
-        .unwrap()
-        .contains(&saved_session_id));
-    assert!(app
-        .execute_command("/history")?
-        .unwrap()
-        .contains("user: hello"));
+    assert!(
+        app.execute_command("/sessions")?
+            .unwrap()
+            .contains(&saved_session_id)
+    );
+    assert!(
+        app.execute_command("/history")?
+            .unwrap()
+            .contains("user: hello")
+    );
     assert!(!app.execute_command("/help")?.unwrap().contains("/select"));
     assert!(app.execute_command("/help")?.unwrap().contains("/cancel"));
     assert_eq!(
@@ -2598,10 +2632,11 @@ fn application_executes_core_commands_and_demo_runner() -> anyhow::Result<()> {
         app.execute_command("/undo")?.unwrap(),
         "Removed last exchange."
     );
-    assert!(app
-        .execute_command("/history")?
-        .unwrap()
-        .contains("No conversation history"));
+    assert!(
+        app.execute_command("/history")?
+            .unwrap()
+            .contains("No conversation history")
+    );
     app.session.messages.push(ChatMessage {
         role: "user".to_string(),
         content: "we need to patch /compress because it loses the useful current objective"
@@ -2623,44 +2658,53 @@ fn application_executes_core_commands_and_demo_runner() -> anyhow::Result<()> {
     assert!(compressed.contains("Current Objective:"));
     assert!(compressed.contains("Recent Actions / Evidence:"));
     assert!(compressed.contains("Continuity Instructions:"));
-    assert!(app
-        .session
-        .messages
-        .first()
-        .is_some_and(|message| message.content.contains("Context Capsule")));
-    assert!(app
-        .session
-        .messages
-        .iter()
-        .any(|message| message.content.contains("we need to patch /compress")));
-    assert!(app
-        .execute_command("/tools allow-risky")?
-        .unwrap()
-        .contains("enabled"));
-    assert!(app
-        .execute_command("/tools require-approval")?
-        .unwrap()
-        .contains("Human approval required"));
-    assert!(app
-        .execute_command("/tools status")?
-        .unwrap()
-        .contains("Human approval: required"));
-    assert!(app
-        .execute_command("/tool-limit")?
-        .unwrap()
-        .contains("Max tool-call rounds per turn"));
-    assert!(app
-        .execute_command("/tool-limit 64")?
-        .unwrap()
-        .contains("set to 64"));
-    assert!(app
-        .execute_command("/tools max-rounds 65")?
-        .unwrap()
-        .contains("set to 65"));
-    assert!(app
-        .execute_command("/tool-limit default")?
-        .unwrap()
-        .contains("reset to"));
+    assert!(
+        app.session
+            .messages
+            .first()
+            .is_some_and(|message| message.content.contains("Context Capsule"))
+    );
+    assert!(
+        app.session
+            .messages
+            .iter()
+            .any(|message| message.content.contains("we need to patch /compress"))
+    );
+    assert!(
+        app.execute_command("/tools allow-risky")?
+            .unwrap()
+            .contains("enabled")
+    );
+    assert!(
+        app.execute_command("/tools require-approval")?
+            .unwrap()
+            .contains("Human approval required")
+    );
+    assert!(
+        app.execute_command("/tools status")?
+            .unwrap()
+            .contains("Human approval: required")
+    );
+    assert!(
+        app.execute_command("/tool-limit")?
+            .unwrap()
+            .contains("Max tool-call rounds per turn")
+    );
+    assert!(
+        app.execute_command("/tool-limit 64")?
+            .unwrap()
+            .contains("set to 64")
+    );
+    assert!(
+        app.execute_command("/tools max-rounds 65")?
+            .unwrap()
+            .contains("set to 65")
+    );
+    assert!(
+        app.execute_command("/tool-limit default")?
+            .unwrap()
+            .contains("reset to")
+    );
     assert_eq!(
         app.execute_command("/approvals")?.unwrap(),
         "No pending approvals."
@@ -2691,38 +2735,45 @@ fn application_executes_core_commands_and_demo_runner() -> anyhow::Result<()> {
     assert!(approval_detail.contains("\"approve_for_session\""));
     app.execute_command(&format!("/approvals deny {approval_id}"))?
         .unwrap();
-    assert!(app
-        .execute_command("/help")?
-        .unwrap()
-        .contains("/approvals"));
+    assert!(
+        app.execute_command("/help")?
+            .unwrap()
+            .contains("/approvals")
+    );
     assert!(app.execute_command("/help")?.unwrap().contains("/eval"));
-    assert!(app
-        .execute_command("/tools no-approval")?
-        .unwrap()
-        .contains("no longer required"));
-    assert!(app
-        .execute_command("/providers")?
-        .unwrap()
-        .contains("openai"));
+    assert!(
+        app.execute_command("/tools no-approval")?
+            .unwrap()
+            .contains("no longer required")
+    );
+    assert!(
+        app.execute_command("/providers")?
+            .unwrap()
+            .contains("openai")
+    );
     let models = app.execute_command("/models")?.unwrap();
     assert!(models.contains("Available models for demo"));
     assert_eq!(app.input.buffer, "/model ");
-    assert!(app
-        .execute_command("/provider open")?
-        .unwrap()
-        .contains("Close matches"));
-    assert!(app
-        .execute_command("/model demo")?
-        .unwrap()
-        .contains("Close matches"));
-    assert!(app
-        .execute_command("/auth")?
-        .unwrap()
-        .contains("openai-sso-status"));
-    assert!(app
-        .execute_command("/auth openai-sso-status")?
-        .unwrap()
-        .contains("not logged in"));
+    assert!(
+        app.execute_command("/provider open")?
+            .unwrap()
+            .contains("Close matches")
+    );
+    assert!(
+        app.execute_command("/model demo")?
+            .unwrap()
+            .contains("Close matches")
+    );
+    assert!(
+        app.execute_command("/auth")?
+            .unwrap()
+            .contains("openai-sso-status")
+    );
+    assert!(
+        app.execute_command("/auth openai-sso-status")?
+            .unwrap()
+            .contains("not logged in")
+    );
     let auth = app.execute_command("/auth openai")?.unwrap();
     assert!(auth.contains("Production auth"));
     assert!(auth.contains("/hbse provider openai"));
@@ -2767,7 +2818,9 @@ fn hbse_command_generates_reference_only_secret_setup() -> anyhow::Result<()> {
     let service = app
         .execute_command("/hbse service postgres vegvisir.tool.db-query database.query")?
         .unwrap();
-    assert!(service.contains("hbse secret put secret://vegvisir/services/postgres/default --stdin"));
+    assert!(
+        service.contains("hbse secret put secret://vegvisir/services/postgres/default --stdin")
+    );
     assert!(service.contains("\"allowed_consumers\": [\n    \"vegvisir.tool.db-query\""));
     assert!(service.contains("\"allowed_purposes\": [\n    \"database.query\""));
     assert!(!service.contains("password"));
@@ -2803,10 +2856,11 @@ fn hbse_command_generates_reference_only_secret_setup() -> anyhow::Result<()> {
     assert!(shown.contains("consumer=vegvisir.tool.db"));
     let disabled = app.execute_command("/hbse service disable db")?.unwrap();
     assert!(disabled.contains("Disabled HBSE service ref db"));
-    assert!(app
-        .execute_command("/hbse services")?
-        .unwrap()
-        .contains("enabled=false"));
+    assert!(
+        app.execute_command("/hbse services")?
+            .unwrap()
+            .contains("enabled=false")
+    );
     let enabled = app.execute_command("/hbse service enable db")?.unwrap();
     assert!(enabled.contains("Enabled HBSE service ref db"));
     let stored = std::fs::read_to_string(home.join("hbse-services.json"))?;
@@ -3077,10 +3131,11 @@ fn new_and_branch_preserve_model_and_system_prompt() -> anyhow::Result<()> {
     let home = tmp.path().join("home");
     let mut app = TuiApplication::with_data_root(tmp.path(), &home)?;
 
-    assert!(app
-        .execute_command("/model demo-long-context")?
-        .unwrap()
-        .contains("Selected model demo-long-context"));
+    assert!(
+        app.execute_command("/model demo-long-context")?
+            .unwrap()
+            .contains("Selected model demo-long-context")
+    );
     assert_eq!(
         app.execute_command("/system set Persistent prompt")?,
         Some("Harness system prompt updated.".to_string())
@@ -3128,11 +3183,12 @@ fn startup_autoloads_latest_workspace_context() -> anyhow::Result<()> {
     let app = TuiApplication::with_data_root(&workspace, &home)?;
     assert_eq!(app.session.session_id, first_session_id);
     assert_eq!(app.session.title, "startup restored context");
-    assert!(app
-        .session
-        .messages
-        .iter()
-        .any(|message| message.content == "remember this startup context"));
+    assert!(
+        app.session
+            .messages
+            .iter()
+            .any(|message| message.content == "remember this startup context")
+    );
     Ok(())
 }
 
@@ -3167,11 +3223,12 @@ fn cwd_alias_restores_previous_workspace_context() -> anyhow::Result<()> {
         .unwrap();
     assert!(restored.contains(&format!("Restored session {workspace_one_session}")));
     assert_eq!(app.session.session_id, workspace_one_session);
-    assert!(app
-        .session
-        .messages
-        .iter()
-        .any(|message| message.content == "context from workspace one"));
+    assert!(
+        app.session
+            .messages
+            .iter()
+            .any(|message| message.content == "context from workspace one")
+    );
     Ok(())
 }
 
@@ -3203,10 +3260,11 @@ fn workspace_command_retargets_filesystem_tools_and_sessions() -> anyhow::Result
     )?
     .unwrap();
     let workspace_one_session = app.session.session_id.clone();
-    assert!(app
-        .execute_command("/workspace")?
-        .unwrap()
-        .contains(&workspace_one.canonicalize()?.display().to_string()));
+    assert!(
+        app.execute_command("/workspace")?
+            .unwrap()
+            .contains(&workspace_one.canonicalize()?.display().to_string())
+    );
     let before = app.tool_executor.execute(vegvisir_rust::types::ToolCall {
         name: "list_files".to_string(),
         args: json!({"path": "."}).as_object().unwrap().clone(),
@@ -3232,10 +3290,11 @@ fn workspace_command_retargets_filesystem_tools_and_sessions() -> anyhow::Result
             .unwrap(),
         "No CMS memories matched."
     );
-    assert!(app
-        .execute_command("/recall threat models mitigations")?
-        .unwrap()
-        .contains("User security preference"));
+    assert!(
+        app.execute_command("/recall threat models mitigations")?
+            .unwrap()
+            .contains("User security preference")
+    );
     app.execute_command("/title workspace two session")?
         .unwrap();
     app.execute_command("/remember Two project note | only visible in workspace two")?
@@ -3262,42 +3321,48 @@ fn workspace_command_retargets_filesystem_tools_and_sessions() -> anyhow::Result
         .execute_command(&format!("/projects name main {}", workspace_one.display()))?
         .unwrap();
     assert!(named.contains("Project alias main"));
-    assert!(app
-        .execute_command("/projects")?
-        .unwrap()
-        .contains("alias=main"));
+    assert!(
+        app.execute_command("/projects")?
+            .unwrap()
+            .contains("alias=main")
+    );
     let restored_one = app.execute_command("/projects use main")?.unwrap();
     assert!(restored_one.contains(&format!("Restored session {workspace_one_session}")));
     assert_eq!(app.session.session_id, workspace_one_session);
-    assert!(app
-        .execute_command("/recall only visible in workspace one")?
-        .unwrap()
-        .contains("One project note"));
-    assert!(app
-        .execute_command("/memory recent --global --limit 10")?
-        .unwrap()
-        .contains("User security preference"));
+    assert!(
+        app.execute_command("/recall only visible in workspace one")?
+            .unwrap()
+            .contains("One project note")
+    );
+    assert!(
+        app.execute_command("/memory recent --global --limit 10")?
+            .unwrap()
+            .contains("User security preference")
+    );
     assert_eq!(
         app.execute_command("/recall Two project note")?.unwrap(),
         "No CMS memories matched."
     );
-    assert!(app
-        .execute_command("/recall --global --limit 10 Two project note")?
-        .unwrap()
-        .contains("Two project note"));
-    assert!(app
-        .execute_command("/memory recent --global --limit 10")?
-        .unwrap()
-        .contains("Two project note"));
+    assert!(
+        app.execute_command("/recall --global --limit 10 Two project note")?
+            .unwrap()
+            .contains("Two project note")
+    );
+    assert!(
+        app.execute_command("/memory recent --global --limit 10")?
+            .unwrap()
+            .contains("Two project note")
+    );
     let restored_two = app
         .execute_command(&format!("/workspace {}", workspace_two.display()))?
         .unwrap();
     assert!(restored_two.contains(&format!("Restored session {workspace_two_session}")));
     assert_eq!(app.session.session_id, workspace_two_session);
-    assert!(app
-        .execute_command("/recall only visible in workspace two")?
-        .unwrap()
-        .contains("Two project note"));
+    assert!(
+        app.execute_command("/recall only visible in workspace two")?
+            .unwrap()
+            .contains("Two project note")
+    );
     let restored_one_again = app
         .execute_command(&format!("/project {}", workspace_one.display()))?
         .unwrap();
@@ -3325,20 +3390,22 @@ fn provider_defaults_are_global_with_workspace_overrides() -> anyhow::Result<()>
     fs::create_dir_all(&workspace_two)?;
 
     let mut app = TuiApplication::with_data_root(&workspace_one, &home)?;
-    assert!(app
-        .execute_command("/config provider openai-hbse")?
-        .unwrap()
-        .contains("global default"));
+    assert!(
+        app.execute_command("/config provider openai-hbse")?
+            .unwrap()
+            .contains("global default")
+    );
     assert_eq!(app.session.current_provider, "openai-hbse");
 
     app.execute_command(&format!("/workspace {}", workspace_two.display()))?
         .unwrap();
     assert_eq!(app.session.current_provider, "openai-hbse");
 
-    assert!(app
-        .execute_command("/provider demo")?
-        .unwrap()
-        .contains("project override"));
+    assert!(
+        app.execute_command("/provider demo")?
+            .unwrap()
+            .contains("project override")
+    );
     assert_eq!(app.session.current_provider, "demo");
 
     app.execute_command(&format!("/workspace {}", workspace_one.display()))?
@@ -3541,11 +3608,12 @@ fn tui_command_palette_and_help_shortcuts_work() -> anyhow::Result<()> {
     ));
     assert_eq!(app.input.buffer, "/m");
     assert!(app.command_palette_open);
-    assert!(app
-        .input
-        .suggestions
-        .iter()
-        .any(|suggestion| suggestion.value == "/models"));
+    assert!(
+        app.input
+            .suggestions
+            .iter()
+            .any(|suggestion| suggestion.value == "/models")
+    );
     app.handle_key_event(crossterm::event::KeyEvent::new(
         crossterm::event::KeyCode::PageDown,
         crossterm::event::KeyModifiers::NONE,
@@ -3584,11 +3652,12 @@ fn tui_command_palette_and_help_shortcuts_work() -> anyhow::Result<()> {
         crossterm::event::KeyModifiers::NONE,
     ));
     assert!(!app.command_palette_open);
-    assert!(app
-        .session
-        .messages
-        .last()
-        .is_some_and(|message| message.content.contains("Available models for")));
+    assert!(
+        app.session
+            .messages
+            .last()
+            .is_some_and(|message| message.content.contains("Available models for"))
+    );
 
     app.handle_key_event(crossterm::event::KeyEvent::new(
         crossterm::event::KeyCode::Esc,
@@ -3601,11 +3670,12 @@ fn tui_command_palette_and_help_shortcuts_work() -> anyhow::Result<()> {
         crossterm::event::KeyCode::Enter,
         crossterm::event::KeyModifiers::NONE,
     ));
-    assert!(app
-        .session
-        .messages
-        .last()
-        .is_some_and(|message| message.content.contains("Available models for")));
+    assert!(
+        app.session
+            .messages
+            .last()
+            .is_some_and(|message| message.content.contains("Available models for"))
+    );
     app.handle_key_event(crossterm::event::KeyEvent::new(
         crossterm::event::KeyCode::Esc,
         crossterm::event::KeyModifiers::NONE,
@@ -3757,9 +3827,11 @@ fn tui_submit_message_uses_cms_memory_and_demo_provider() -> anyhow::Result<()> 
     assert_eq!(app.session.messages[0].role, "user");
     assert_eq!(app.session.messages[0].content, "hello from tui");
     assert_eq!(app.session.messages[1].role, "assistant");
-    assert!(app.session.messages[1]
-        .content
-        .contains("CMS-v2 model request"));
+    assert!(
+        app.session.messages[1]
+            .content
+            .contains("CMS-v2 model request")
+    );
     assert!(app.session.last_prompt_cache_key.is_some());
     assert!(home.join("cms-v2.sqlite3").exists());
     Ok(())
@@ -3785,13 +3857,14 @@ fn tui_failed_provider_send_keeps_user_message_and_shows_error() -> anyhow::Resu
     assert_eq!(app.session.messages[0].role, "user");
     assert_eq!(app.session.messages[0].content, "hello failing provider");
     assert_eq!(app.session.messages.last().unwrap().role, "system");
-    assert!(app
-        .session
-        .messages
-        .last()
-        .unwrap()
-        .content
-        .contains("Unknown model: missing-model"));
+    assert!(
+        app.session
+            .messages
+            .last()
+            .unwrap()
+            .content
+            .contains("Unknown model: missing-model")
+    );
     Ok(())
 }
 
@@ -3814,27 +3887,30 @@ fn application_exposes_cms_commands() -> anyhow::Result<()> {
     assert!(memory_status.contains("CMS-v2 memory scope"));
     assert!(memory_status.contains("user_id=local-user"));
     assert!(memory_status.contains("project_id=workspace:"));
-    assert!(app
-        .execute_command("/config status")?
-        .unwrap()
-        .contains("default_user_id=local-user"));
+    assert!(
+        app.execute_command("/config status")?
+            .unwrap()
+            .contains("default_user_id=local-user")
+    );
     assert_eq!(
         app.execute_command("/config user user:alice")?.unwrap(),
         "Default user id set to user:alice."
     );
     assert_eq!(app.cms.config.user_id, "user:alice");
-    assert!(app
-        .sessions
-        .store
-        .root
-        .ends_with("users/user-alice/sessions"));
+    assert!(
+        app.sessions
+            .store
+            .root
+            .ends_with("users/user-alice/sessions")
+    );
     assert!(home.join("users/user-alice/sessions").exists());
     let user_status = app.execute_command("/memory status")?.unwrap();
     assert!(user_status.contains("user_id=user:alice"));
-    assert!(app
-        .execute_command("/recall command surface CMS-v2")?
-        .unwrap()
-        .contains("No CMS memories matched"));
+    assert!(
+        app.execute_command("/recall command surface CMS-v2")?
+            .unwrap()
+            .contains("No CMS memories matched")
+    );
     assert_eq!(
         app.execute_command("/config user bad/user")
             .unwrap_err()
@@ -3866,11 +3942,13 @@ fn application_exposes_cms_commands() -> anyhow::Result<()> {
 
     let reopened = TuiApplication::with_data_root(tmp.path(), &home)?;
     assert_eq!(reopened.cms.config.user_id, "user:alice");
-    assert!(reopened
-        .sessions
-        .store
-        .root
-        .ends_with("users/user-alice/sessions"));
+    assert!(
+        reopened
+            .sessions
+            .store
+            .root
+            .ends_with("users/user-alice/sessions")
+    );
     Ok(())
 }
 
@@ -3940,12 +4018,15 @@ fn memory_import_chatgpt_uses_explicit_archive_database() -> anyhow::Result<()> 
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    assert!(app
-        .session
-        .messages
-        .last()
-        .map(|message| message.content.contains("Imported 1 ChatGPT archive memory object"))
-        .unwrap_or(false));
+    assert!(
+        app.session
+            .messages
+            .last()
+            .map(|message| message
+                .content
+                .contains("Imported 1 ChatGPT archive memory object"))
+            .unwrap_or(false)
+    );
 
     let recent = app.execute_command("/memory recent --limit 5")?.unwrap();
     assert!(!recent.contains("ChatGPT: CMS Import Planning"));
@@ -3958,7 +4039,10 @@ fn memory_import_chatgpt_uses_explicit_archive_database() -> anyhow::Result<()> 
     let archive_search = app
         .execute_command("/memory search-chatgpt imported ChatGPT memories scoped")?
         .unwrap();
-    assert!(archive_search.contains("CMS Import Planning"), "{archive_search}");
+    assert!(
+        archive_search.contains("CMS Import Planning"),
+        "{archive_search}"
+    );
     assert!(archive_search.contains("chunk 1/1"), "{archive_search}");
 
     let tool_registry = build_builtin_registry_with_cms(&workspace, app.cms.config.clone())?;
@@ -3972,14 +4056,20 @@ fn memory_import_chatgpt_uses_explicit_archive_database() -> anyhow::Result<()> 
         ("limit".to_string(), serde_json::json!(5)),
     ]));
     assert!(observation.ok, "{:?}", observation.error);
-    assert!(observation.content.contains("CMS Import Planning"), "{}", observation.content);
+    assert!(
+        observation.content.contains("CMS Import Planning"),
+        "{}",
+        observation.content
+    );
     assert!(
         observation.content.contains("excerpt:"),
         "{}",
         observation.content
     );
     assert!(
-        observation.content.contains("separate explicit-only ChatGPT archive database"),
+        observation
+            .content
+            .contains("separate explicit-only ChatGPT archive database"),
         "{}",
         observation.content
     );
@@ -4004,7 +4094,10 @@ fn memory_import_chatgpt_uses_explicit_archive_database() -> anyhow::Result<()> 
         Some("CMS Import Planning")
     );
     assert_eq!(
-        observation.data.get("corpus").and_then(serde_json::Value::as_str),
+        observation
+            .data
+            .get("corpus")
+            .and_then(serde_json::Value::as_str),
         Some("chatgpt_archive")
     );
     assert_eq!(
@@ -4098,22 +4191,30 @@ fn application_persists_custom_agents_with_dedicated_memory_scope() -> anyhow::R
     assert!(listed.contains("mode=tester"));
     assert!(listed.contains("Code Reviewer"));
 
-    assert!(reopened
-        .execute_command("/agent enable-skill reviewer review-style")?
-        .unwrap()
-        .contains("Enabled skill review-style"));
-    assert!(reopened
-        .execute_command("/agent allow-tool reviewer read_file")?
-        .unwrap()
-        .contains("Allowed tool read_file"));
-    assert!(reopened
-        .execute_command("/agent bind-usrl reviewer review-contract")?
-        .unwrap()
-        .contains("Bound USRL contract(s) review-contract"));
-    assert!(reopened
-        .execute_command("/agent allow-mcp reviewer github")?
-        .unwrap()
-        .contains("Allowed MCP server github"));
+    assert!(
+        reopened
+            .execute_command("/agent enable-skill reviewer review-style")?
+            .unwrap()
+            .contains("Enabled skill review-style")
+    );
+    assert!(
+        reopened
+            .execute_command("/agent allow-tool reviewer read_file")?
+            .unwrap()
+            .contains("Allowed tool read_file")
+    );
+    assert!(
+        reopened
+            .execute_command("/agent bind-usrl reviewer review-contract")?
+            .unwrap()
+            .contains("Bound USRL contract(s) review-contract")
+    );
+    assert!(
+        reopened
+            .execute_command("/agent allow-mcp reviewer github")?
+            .unwrap()
+            .contains("Allowed MCP server github")
+    );
     let shown = reopened.execute_command("/agent show reviewer")?.unwrap();
     assert!(shown.contains("tools: read_file"));
     assert!(shown.contains("skills: review-style"));
@@ -4138,37 +4239,49 @@ fn application_persists_custom_agents_with_dedicated_memory_scope() -> anyhow::R
         reopened.session.system_prompt,
         "You are a dedicated code-review agent.\n\nEnabled agent skills:\nSkill: review-style\n# Review Style\nFlag correctness risks before style notes."
     );
-    assert!(reopened
-        .execute_command("/agent revoke-tool reviewer read_file")?
-        .unwrap()
-        .contains("Revoked tool read_file"));
-    assert!(reopened
-        .tool_executor
-        .runtime_policy
-        .allowed_tools
-        .is_empty());
-    assert!(reopened
-        .execute_command("/agent disable-skill reviewer review-style")?
-        .unwrap()
-        .contains("Disabled skill review-style"));
+    assert!(
+        reopened
+            .execute_command("/agent revoke-tool reviewer read_file")?
+            .unwrap()
+            .contains("Revoked tool read_file")
+    );
+    assert!(
+        reopened
+            .tool_executor
+            .runtime_policy
+            .allowed_tools
+            .is_empty()
+    );
+    assert!(
+        reopened
+            .execute_command("/agent disable-skill reviewer review-style")?
+            .unwrap()
+            .contains("Disabled skill review-style")
+    );
     assert_eq!(
         reopened.session.system_prompt,
         "You are a dedicated code-review agent."
     );
-    assert!(reopened
-        .execute_command("/agent unbind-usrl reviewer review-contract")?
-        .unwrap()
-        .contains("Unbound USRL contract(s) review-contract"));
-    assert!(reopened
-        .tool_executor
-        .runtime_policy
-        .usrl_contracts
-        .is_empty());
+    assert!(
+        reopened
+            .execute_command("/agent unbind-usrl reviewer review-contract")?
+            .unwrap()
+            .contains("Unbound USRL contract(s) review-contract")
+    );
+    assert!(
+        reopened
+            .tool_executor
+            .runtime_policy
+            .usrl_contracts
+            .is_empty()
+    );
     assert!(!reopened.tool_executor.runtime_policy.strict_usrl);
-    assert!(reopened
-        .execute_command("/agent revoke-mcp reviewer github")?
-        .unwrap()
-        .contains("Revoked MCP server github"));
+    assert!(
+        reopened
+            .execute_command("/agent revoke-mcp reviewer github")?
+            .unwrap()
+            .contains("Revoked MCP server github")
+    );
     assert_eq!(reopened.cms.config.user_id, "agent:reviewer");
     assert_eq!(
         reopened.cms.config.project_id.as_deref(),
@@ -4178,22 +4291,26 @@ fn application_persists_custom_agents_with_dedicated_memory_scope() -> anyhow::R
     reopened
         .execute_command("/remember Reviewer private note | Agent-only memory marker")?
         .unwrap();
-    assert!(reopened
-        .execute_command("/recall Agent-only memory marker")?
-        .unwrap()
-        .contains("Reviewer private note"));
+    assert!(
+        reopened
+            .execute_command("/recall Agent-only memory marker")?
+            .unwrap()
+            .contains("Reviewer private note")
+    );
 
     let cleared = reopened.execute_command("/agent clear")?.unwrap();
     assert!(cleared.contains("default Vegvisir memory scope"));
     assert_eq!(reopened.session.active_agent_id, None);
     assert_eq!(reopened.cms.config.user_id, "local-user");
-    assert!(reopened
-        .cms
-        .config
-        .project_id
-        .as_deref()
-        .unwrap_or("")
-        .starts_with("workspace:"));
+    assert!(
+        reopened
+            .cms
+            .config
+            .project_id
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("workspace:")
+    );
     assert_eq!(
         reopened
             .execute_command("/recall Agent-only memory marker")?
@@ -4241,13 +4358,14 @@ fn application_clones_exports_imports_and_deletes_agents() -> anyhow::Result<()>
     assert!(deleted.contains("Deleted agent planner"));
     assert_eq!(app.session.active_agent_id, None);
     assert_eq!(app.cms.config.user_id, "local-user");
-    assert!(app
-        .cms
-        .config
-        .project_id
-        .as_deref()
-        .unwrap_or("")
-        .starts_with("workspace:"));
+    assert!(
+        app.cms
+            .config
+            .project_id
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("workspace:")
+    );
     Ok(())
 }
 
@@ -4306,15 +4424,18 @@ fn natural_agent_template_request_creates_agent_without_provider_roundtrip() -> 
     app.handle_submit();
 
     assert!(app.pending_send.is_none());
-    assert!(home
-        .join("agents")
-        .join("agent-red-security-auditor.json")
-        .exists());
+    assert!(
+        home.join("agents")
+            .join("agent-red-security-auditor.json")
+            .exists()
+    );
     assert_eq!(app.session.messages[0].role, "user");
     assert_eq!(app.session.messages[1].role, "system");
-    assert!(app.session.messages[1]
-        .content
-        .contains("Created agent agent-red-security-auditor"));
+    assert!(
+        app.session.messages[1]
+            .content
+            .contains("Created agent agent-red-security-auditor")
+    );
     let shown = app
         .execute_command("/agent show agent-red-security-auditor")?
         .unwrap();
@@ -4410,22 +4531,28 @@ fn application_edits_agent_prompt_description_and_model_defaults() -> anyhow::Re
 
     app.execute_command("/agent create coder | coder | Coder | Initial prompt.")?
         .unwrap();
-    assert!(app
-        .execute_command("/agent describe coder Writes focused patches.")?
+    assert!(
+        app.execute_command("/agent describe coder Writes focused patches.")?
+            .unwrap()
+            .contains("Updated agent coder description")
+    );
+    assert!(
+        app.execute_command(
+            "/agent prompt coder You write Rust changes only after reading context."
+        )?
         .unwrap()
-        .contains("Updated agent coder description"));
-    assert!(app
-        .execute_command("/agent prompt coder You write Rust changes only after reading context.")?
-        .unwrap()
-        .contains("Updated agent coder system prompt"));
-    assert!(app
-        .execute_command("/agent provider coder openai-hbse")?
-        .unwrap()
-        .contains("Set agent coder provider to openai-hbse"));
-    assert!(app
-        .execute_command("/agent model coder gpt-5.4-mini")?
-        .unwrap()
-        .contains("Set agent coder model to gpt-5.4-mini"));
+        .contains("Updated agent coder system prompt")
+    );
+    assert!(
+        app.execute_command("/agent provider coder openai-hbse")?
+            .unwrap()
+            .contains("Set agent coder provider to openai-hbse")
+    );
+    assert!(
+        app.execute_command("/agent model coder gpt-5.4-mini")?
+            .unwrap()
+            .contains("Set agent coder model to gpt-5.4-mini")
+    );
 
     let shown = app.execute_command("/agent show coder")?.unwrap();
     assert!(shown.contains("description: Writes focused patches."));
@@ -4441,14 +4568,16 @@ fn application_edits_agent_prompt_description_and_model_defaults() -> anyhow::Re
         "You write Rust changes only after reading context."
     );
 
-    assert!(app
-        .execute_command("/agent model coder claude-sonnet-4-5")?
-        .unwrap()
-        .contains("not available for agent provider openai-hbse"));
-    assert!(app
-        .execute_command("/agent provider coder -")?
-        .unwrap()
-        .contains("Set agent coder provider to -"));
+    assert!(
+        app.execute_command("/agent model coder claude-sonnet-4-5")?
+            .unwrap()
+            .contains("not available for agent provider openai-hbse")
+    );
+    assert!(
+        app.execute_command("/agent provider coder -")?
+            .unwrap()
+            .contains("Set agent coder provider to -")
+    );
     let cleared = app.execute_command("/agent show coder")?.unwrap();
     assert!(cleared.contains("provider: -"));
     assert!(cleared.contains("model: -"));
@@ -4506,10 +4635,11 @@ fn application_loads_markdown_and_usrl_skills_from_filesystem() -> anyhow::Resul
 
     let compiled = app.execute_command("/skills compile")?.unwrap();
     assert!(compiled.contains("Compiled 1 LSL libraries, 1 sub-skills"));
-    assert!(tmp
-        .path()
-        .join(".vegvisir/compiled/index/subskills.json")
-        .exists());
+    assert!(
+        tmp.path()
+            .join(".vegvisir/compiled/index/subskills.json")
+            .exists()
+    );
     let status = app.execute_command("/skills status")?.unwrap();
     assert!(status.contains("compiled_exists: true"));
     assert!(status.contains("fresh: true"));
@@ -4568,12 +4698,14 @@ fn application_loads_markdown_and_usrl_skills_from_filesystem() -> anyhow::Resul
         planner.metadata.get("format").and_then(Value::as_str),
         Some("markdown")
     );
-    assert!(planner
-        .metadata
-        .get("body")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .contains("Break work into verifiable phases"));
+    assert!(
+        planner
+            .metadata
+            .get("body")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .contains("Break work into verifiable phases")
+    );
 
     let usrl = app
         .session
@@ -4585,12 +4717,13 @@ fn application_loads_markdown_and_usrl_skills_from_filesystem() -> anyhow::Resul
         usrl.metadata.get("format").and_then(Value::as_str),
         Some("usrl")
     );
-    assert!(usrl
-        .metadata
-        .get("body")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .contains("contract regulated_release"));
+    assert!(
+        usrl.metadata
+            .get("body")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .contains("contract regulated_release")
+    );
     assert_eq!(
         usrl.metadata
             .get("usrl_contracts")
@@ -4649,9 +4782,11 @@ fn runtime_usrl_gate_blocks_risky_tools_without_contract() -> anyhow::Result<()>
         args: json!({"command": ["pwd"]}).as_object().unwrap().clone(),
     });
     assert!(!blocked.ok);
-    assert!(blocked
-        .content
-        .contains("risky operation requires an active USRL contract"));
+    assert!(
+        blocked
+            .content
+            .contains("risky operation requires an active USRL contract")
+    );
 
     executor.runtime_policy.usrl_contracts = vec!["agent-red-baseline".to_string()];
     let allowed = executor.execute(vegvisir_rust::types::ToolCall {
@@ -4669,9 +4804,11 @@ fn runtime_usrl_gate_blocks_risky_tools_without_contract() -> anyhow::Result<()>
             .clone(),
     });
     assert!(!denied_secret.ok);
-    assert!(denied_secret
-        .content
-        .contains("violates no-secret constraint"));
+    assert!(
+        denied_secret
+            .content
+            .contains("violates no-secret constraint")
+    );
     Ok(())
 }
 
@@ -4709,9 +4846,11 @@ fn runtime_usrl_gate_enforces_stage_and_evidence_requirements() -> anyhow::Resul
         args_summary: json!({"command": ["pwd"], "usrl_stage": "verify"}),
     });
     assert!(!missing_evidence.allowed);
-    assert!(missing_evidence
-        .reason
-        .contains("evidence or justification is required"));
+    assert!(
+        missing_evidence
+            .reason
+            .contains("evidence or justification is required")
+    );
 
     let allowed = policy.gate(vegvisir_rust::policy::RuntimeGateRequest {
         operation: "run_command".to_string(),
@@ -4758,9 +4897,11 @@ fn active_agent_tool_allow_list_blocks_unlisted_tools() -> anyhow::Result<()> {
         args: json!({"command": ["pwd"]}).as_object().unwrap().clone(),
     });
     assert!(!blocked.ok);
-    assert!(blocked
-        .content
-        .contains("tool is not enabled for active agent: run_command"));
+    assert!(
+        blocked
+            .content
+            .contains("tool is not enabled for active agent: run_command")
+    );
     Ok(())
 }
 
@@ -4874,10 +5015,11 @@ fn mcp_commands_manage_config_without_plaintext_secrets() -> anyhow::Result<()> 
     );
     let enabled = app.execute_command("/mcp enable github")?.unwrap();
     assert!(enabled.contains("Enabled MCP server github"));
-    assert!(app
-        .execute_command("/mcp tools")?
-        .unwrap()
-        .contains("mcp::github::search_issues"));
+    assert!(
+        app.execute_command("/mcp tools")?
+            .unwrap()
+            .contains("mcp::github::search_issues")
+    );
 
     let stdio = app
         .execute_command("/mcp add-stdio local python3 /tmp/mock_mcp.py")?
@@ -5466,12 +5608,14 @@ fn builtin_registry_exposes_cms_tools() -> anyhow::Result<()> {
     });
     assert!(legacy_context.ok, "{}", legacy_context.content);
     assert!(legacy_context.content.contains("context_prompt"));
-    assert!(legacy_context
-        .data
-        .get("context_prompt")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .contains("CMS tool memory"));
+    assert!(
+        legacy_context
+            .data
+            .get("context_prompt")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .contains("CMS tool memory")
+    );
 
     let private_context = executor.execute(vegvisir_rust::types::ToolCall {
         name: "eternium_prepare_context".to_string(),
@@ -5534,10 +5678,12 @@ fn cms_v2_is_the_runtime_memory_system() -> anyhow::Result<()> {
     assert!(committed.created_new || committed.updated_existing);
 
     let bundle = cms.retrieve("runtime memory system", 5)?;
-    assert!(bundle
-        .results
-        .iter()
-        .any(|result| result.memory.title == "CMS v2 integration"));
+    assert!(
+        bundle
+            .results
+            .iter()
+            .any(|result| result.memory.title == "CMS v2 integration")
+    );
 
     let prepared = cms.prepare_context("Continue the Vegvisir runtime memory integration")?;
     assert!(prepared.packed_text.contains("CMS v2 integration"));
@@ -5605,20 +5751,24 @@ fn cms_model_request_skips_ambient_memory_for_trivial_short_messages() -> anyhow
 
     let trivial = cms.prepare_cached_prompt("this is a test message", "openai", "gpt-test")?;
     assert!(!trivial.model_request.prompt.contains("Large imported note"));
-    assert!(trivial
-        .model_request
-        .prompt
-        .contains("this is a test message"));
+    assert!(
+        trivial
+            .model_request
+            .prompt
+            .contains("this is a test message")
+    );
 
     let relevant = cms.prepare_cached_prompt(
         "Continue with the memory work from this project",
         "openai",
         "gpt-test",
     )?;
-    assert!(relevant
-        .model_request
-        .prompt
-        .contains("Large imported note"));
+    assert!(
+        relevant
+            .model_request
+            .prompt
+            .contains("Large imported note")
+    );
     Ok(())
 }
 
@@ -5663,11 +5813,13 @@ fn cms_v2_retrieval_isolates_configured_users() -> anyhow::Result<()> {
 
     alpha.remember("note", "Alpha memory", "Alpha only memory content.")?;
 
-    assert!(alpha
-        .retrieve("Alpha only", 5)?
-        .results
-        .iter()
-        .any(|result| result.memory.title == "Alpha memory"));
+    assert!(
+        alpha
+            .retrieve("Alpha only", 5)?
+            .results
+            .iter()
+            .any(|result| result.memory.title == "Alpha memory")
+    );
     assert!(beta.retrieve("Alpha only", 5)?.results.is_empty());
     Ok(())
 }
@@ -6044,17 +6196,21 @@ ECM memory: blue lantern"
 
     let openai = vegvisir_rust::provider::test_support::openai_messages_for_test(&messages);
     assert_eq!(openai[0]["role"], "system");
-    assert!(openai[0]["content"]
-        .as_str()
-        .unwrap()
-        .contains("ECM memory: blue lantern"));
+    assert!(
+        openai[0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("ECM memory: blue lantern")
+    );
 
     let responses =
         vegvisir_rust::provider::test_support::responses_payload_for_test(&messages, &model);
-    assert!(responses["instructions"]
-        .as_str()
-        .unwrap()
-        .contains("ECM memory: blue lantern"));
+    assert!(
+        responses["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("ECM memory: blue lantern")
+    );
     assert!(responses["input"].as_array().unwrap().iter().any(|item| {
         item["role"] == "user" && item["content"][0]["text"] == "What is the codename?"
     }));
@@ -6062,18 +6218,22 @@ ECM memory: blue lantern"
     let anthropic = vegvisir_rust::provider::test_support::anthropic_messages_payload_for_test(
         &messages, &model,
     );
-    assert!(anthropic["system"]
-        .as_str()
-        .unwrap()
-        .contains("ECM memory: blue lantern"));
+    assert!(
+        anthropic["system"]
+            .as_str()
+            .unwrap()
+            .contains("ECM memory: blue lantern")
+    );
     assert_eq!(anthropic["messages"][0]["role"], "user");
 
     let google =
         vegvisir_rust::provider::test_support::google_generate_content_payload_for_test(&messages);
-    assert!(google["systemInstruction"]["parts"][0]["text"]
-        .as_str()
-        .unwrap()
-        .contains("ECM memory: blue lantern"));
+    assert!(
+        google["systemInstruction"]["parts"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("ECM memory: blue lantern")
+    );
     assert_eq!(google["contents"][0]["role"], "user");
 }
 
@@ -6115,44 +6275,50 @@ fn provider_payloads_preserve_image_attachments_across_wire_formats() -> anyhow:
 
     let responses =
         vegvisir_rust::provider::test_support::responses_payload_for_test(&messages, &model);
-    assert!(responses["input"][0]["content"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|part| {
-            part["type"] == "input_image"
-                && part["image_url"]
-                    .as_str()
-                    .is_some_and(|url| url.starts_with("data:image/png;base64,"))
-        }));
+    assert!(
+        responses["input"][0]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|part| {
+                part["type"] == "input_image"
+                    && part["image_url"]
+                        .as_str()
+                        .is_some_and(|url| url.starts_with("data:image/png;base64,"))
+            })
+    );
 
     let anthropic = vegvisir_rust::provider::test_support::anthropic_messages_payload_for_test(
         &messages, &model,
     );
-    assert!(anthropic["messages"][0]["content"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|part| {
-            part["type"] == "image"
-                && part["source"]["media_type"] == "image/png"
-                && part["source"]["data"]
-                    .as_str()
-                    .is_some_and(|data| !data.is_empty())
-        }));
+    assert!(
+        anthropic["messages"][0]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|part| {
+                part["type"] == "image"
+                    && part["source"]["media_type"] == "image/png"
+                    && part["source"]["data"]
+                        .as_str()
+                        .is_some_and(|data| !data.is_empty())
+            })
+    );
 
     let google =
         vegvisir_rust::provider::test_support::google_generate_content_payload_for_test(&messages);
-    assert!(google["contents"][0]["parts"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|part| {
-            part["inlineData"]["mimeType"] == "image/png"
-                && part["inlineData"]["data"]
-                    .as_str()
-                    .is_some_and(|data| !data.is_empty())
-        }));
+    assert!(
+        google["contents"][0]["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|part| {
+                part["inlineData"]["mimeType"] == "image/png"
+                    && part["inlineData"]["data"]
+                        .as_str()
+                        .is_some_and(|data| !data.is_empty())
+            })
+    );
 
     Ok(())
 }
@@ -6835,8 +7001,10 @@ fn google_provider_streams_generate_content() -> anyhow::Result<()> {
 
     assert_eq!(response, "gemini stream");
     let request = server.join().expect("server thread completed")?;
-    assert!(request
-        .contains("POST /models/gemini-test:streamGenerateContent?alt=sse&key=google-test-key"));
+    assert!(
+        request
+            .contains("POST /models/gemini-test:streamGenerateContent?alt=sse&key=google-test-key")
+    );
     assert!(request.contains("\"role\":\"user\""));
     assert!(request.contains("\"parts\":[{\"text\":\"hello\"}]"));
     Ok(())
@@ -6940,10 +7108,12 @@ fn hbse_google_provider_routes_generate_content_through_broker_socket() -> anyho
         request["url"],
         "https://gemini.example/v1beta/models/gemini-test:streamGenerateContent?alt=sse"
     );
-    assert!(request["body"]
-        .as_str()
-        .unwrap()
-        .contains("\"role\":\"user\""));
+    assert!(
+        request["body"]
+            .as_str()
+            .unwrap()
+            .contains("\"role\":\"user\"")
+    );
     Ok(())
 }
 
@@ -7158,10 +7328,12 @@ fn hbse_provider_routes_chat_completion_through_broker_socket() -> anyhow::Resul
         "https://api.example.test/v1/chat/completions"
     );
     assert_eq!(request["headers"]["Accept"], "text/event-stream");
-    assert!(request["body"]
-        .as_str()
-        .unwrap()
-        .contains("\"stream\":true"));
+    assert!(
+        request["body"]
+            .as_str()
+            .unwrap()
+            .contains("\"stream\":true")
+    );
     Ok(())
 }
 
@@ -7296,6 +7468,97 @@ fn openai_tool_loop_returns_last_observations_on_round_limit() -> anyhow::Result
 
     assert!(result.contains("Tool-call round limit reached"));
     assert!(result.contains("alpha.txt"));
+    Ok(())
+}
+
+#[test]
+fn openai_tool_loop_defers_sibling_tool_calls_until_completion_is_observed() -> anyhow::Result<()> {
+    let payloads = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let payloads_for_post = Arc::clone(&payloads);
+    let mut posts = 0;
+    let mut post = move |payload: Value| -> anyhow::Result<Value> {
+        posts += 1;
+        payloads_for_post.lock().unwrap().push(payload);
+        if posts == 1 {
+            return Ok(json!({
+                "choices": [{
+                    "message": {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call-read",
+                                "type": "function",
+                                "function": {
+                                    "name": "read_file",
+                                    "arguments": "{\"path\":\"src/lib.rs\"}"
+                                }
+                            },
+                            {
+                                "id": "call-list",
+                                "type": "function",
+                                "function": {
+                                    "name": "list_files",
+                                    "arguments": "{\"path\":\"src\"}"
+                                }
+                            }
+                        ]
+                    }
+                }]
+            }));
+        }
+        Ok(json!({
+            "choices": [{
+                "message": {
+                    "content": "done"
+                }
+            }]
+        }))
+    };
+    let messages = vec![ChatMessage {
+        role: "user".to_string(),
+        content: "inspect files".to_string(),
+        attachments: Vec::new(),
+        created_at: Utc::now(),
+    }];
+    let tools = vec![
+        json!({"name": "read_file", "description": "Read file.", "parameters": {}}),
+        json!({"name": "list_files", "description": "List files.", "parameters": {}}),
+    ];
+    let mut executed = Vec::<String>::new();
+    let mut execute_tool = |name: &str, _: Map<String, Value>| {
+        executed.push(name.to_string());
+        "file contents".to_string()
+    };
+
+    let result = openai_tool_loop(
+        "gpt-test",
+        &messages,
+        &tools,
+        &mut execute_tool,
+        &mut post,
+        4,
+    )?;
+
+    assert_eq!(result, "done");
+    assert_eq!(executed, vec!["read_file".to_string()]);
+    let payloads = payloads.lock().unwrap();
+    let followup_messages = payloads[1]
+        .get("messages")
+        .and_then(Value::as_array)
+        .unwrap();
+    let read_result = followup_messages
+        .iter()
+        .find(|message| message["tool_call_id"] == "call-read")
+        .and_then(|message| message["content"].as_str())
+        .unwrap_or("");
+    let deferred_result = followup_messages
+        .iter()
+        .find(|message| message["tool_call_id"] == "call-list")
+        .and_then(|message| message["content"].as_str())
+        .unwrap_or("");
+    assert!(read_result.contains("[Vegvisir tool completed]"));
+    assert!(read_result.contains("file contents"));
+    assert!(deferred_result.contains("[Vegvisir tool deferred]"));
     Ok(())
 }
 
@@ -7437,8 +7700,8 @@ fn tool_executor_normalizes_safe_argument_shapes_and_classifies_errors() -> anyh
 }
 
 #[test]
-fn openai_tool_loop_repairs_markdown_wrapped_tool_arguments_and_compacts_observation(
-) -> anyhow::Result<()> {
+fn openai_tool_loop_repairs_markdown_wrapped_tool_arguments_and_compacts_observation()
+-> anyhow::Result<()> {
     let payloads = Arc::new(Mutex::new(Vec::<Value>::new()));
     let payloads_for_post = Arc::clone(&payloads);
     let mut calls = 0;
@@ -7504,7 +7767,6 @@ fn openai_tool_loop_repairs_markdown_wrapped_tool_arguments_and_compacts_observa
     Ok(())
 }
 
-
 #[test]
 fn conversation_runner_injects_mid_run_steering_after_tool_call() -> anyhow::Result<()> {
     let workspace = tempdir()?;
@@ -7539,7 +7801,8 @@ fn conversation_runner_injects_mid_run_steering_after_tool_call() -> anyhow::Res
         cancel_token: None,
         steering_rx: Some(steering_rx),
     };
-    let mut session = vegvisir_rust::core::SessionState::new(workspace.path(), Vec::new(), Vec::new());
+    let mut session =
+        vegvisir_rust::core::SessionState::new(workspace.path(), Vec::new(), Vec::new());
     session.current_provider = "demo".to_string();
     session.current_model = "demo-local".to_string();
 
@@ -7547,7 +7810,10 @@ fn conversation_runner_injects_mid_run_steering_after_tool_call() -> anyhow::Res
 
     let observed = observation.lock().unwrap().clone().unwrap_or_default();
     assert!(observed.contains("User steering received"), "{observed}");
-    assert!(observed.contains("stop exploring and summarize now"), "{observed}");
+    assert!(
+        observed.contains("stop exploring and summarize now"),
+        "{observed}"
+    );
     assert!(session.messages.iter().any(|message| {
         message.role == "user" && message.content.contains("[mid-run steering]")
     }));
@@ -7720,12 +7986,16 @@ fn cms_envelope_path_preserves_recent_chat_history() -> anyhow::Result<()> {
 
     let messages = recorded_messages.lock().unwrap();
     assert_eq!(messages[0].role, "system");
-    assert!(messages
-        .iter()
-        .any(|message| message.content.contains("blue lantern")));
-    assert!(messages
-        .iter()
-        .any(|message| message.content == "what did I ask you to remember?"));
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.content.contains("blue lantern"))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.content == "what did I ask you to remember?")
+    );
     Ok(())
 }
 
@@ -8050,10 +8320,12 @@ fn parallel_subagents_can_run_concurrently_with_durable_board() -> anyhow::Resul
     assert_eq!(results["one"].final_answer.as_deref(), Some("one"));
     assert_eq!(results["two"].final_answer.as_deref(), Some("two"));
     assert_eq!(supervisor.task_records().len(), 2);
-    assert!(supervisor
-        .task_records()
-        .iter()
-        .all(|record| record.status == vegvisir_rust::subagents::SubAgentStatus::Completed));
+    assert!(
+        supervisor
+            .task_records()
+            .iter()
+            .all(|record| record.status == vegvisir_rust::subagents::SubAgentStatus::Completed)
+    );
     let persisted = fs::read_to_string(board_path)?;
     assert!(persisted.contains("\"name\": \"one\""));
     assert!(persisted.contains("\"name\": \"two\""));
@@ -8111,6 +8383,24 @@ fn application_exposes_subagent_task_board_commands() -> anyhow::Result<()> {
 }
 
 #[test]
+fn builtin_registry_exposes_spawn_subagent_tool() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let registry = build_builtin_registry(tmp.path())?;
+    let tool = registry.get("spawn_subagent")?;
+
+    assert!(tool.risky);
+    assert!(tool.description.contains("background Vegvisir child agent"));
+    assert!(
+        tool.schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "goal")
+    );
+    Ok(())
+}
+
+#[test]
 fn subagent_supervisor_persists_task_board_and_events() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let board_path = tmp.path().join("subagents.json");
@@ -8139,9 +8429,11 @@ fn subagent_supervisor_persists_task_board_and_events() -> anyhow::Result<()> {
     let events = supervisor.logger.events();
     assert!(events.iter().any(|event| event.name == "subagent.queued"));
     assert!(events.iter().any(|event| event.name == "subagent.started"));
-    assert!(events
-        .iter()
-        .any(|event| event.name == "subagent.completed"));
+    assert!(
+        events
+            .iter()
+            .any(|event| event.name == "subagent.completed")
+    );
 
     let reopened = vegvisir_rust::subagents::SubAgentSupervisor::with_board_path(
         ScriptedModel::default(),
@@ -8259,9 +8551,11 @@ fn app_server_bridge_streams_demo_turn_and_reports_status() -> anyhow::Result<()
         .map(serde_json::from_str::<Value>)
         .collect::<Result<Vec<_>, _>>()?;
     assert!(events.iter().any(|event| event["type"] == "server.ready"));
-    assert!(events
-        .iter()
-        .any(|event| event["type"] == "session.started"));
+    assert!(
+        events
+            .iter()
+            .any(|event| event["type"] == "session.started")
+    );
     assert!(events.iter().any(|event| {
         event["type"] == "content.delta"
             && event["payload"]["text"]
@@ -8284,29 +8578,35 @@ fn app_server_bridge_streams_demo_turn_and_reports_status() -> anyhow::Result<()
         .iter()
         .find(|event| event["type"] == "tools.list")
         .expect("tools list event");
-    assert!(tools["payload"]["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|tool| tool["name"] == "read_file"));
+    assert!(
+        tools["payload"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == "read_file")
+    );
     let providers = events
         .iter()
         .find(|event| event["type"] == "providers.list")
         .expect("providers list event");
-    assert!(providers["payload"]["providers"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|provider| provider["name"] == "demo"));
+    assert!(
+        providers["payload"]["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|provider| provider["name"] == "demo")
+    );
     let models = events
         .iter()
         .find(|event| event["type"] == "models.list")
         .expect("models list event");
-    assert!(models["payload"]["models"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|model| model["name"] == "demo-local"));
+    assert!(
+        models["payload"]["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|model| model["name"] == "demo-local")
+    );
     let messages = events
         .iter()
         .find(|event| event["type"] == "session.messages")
@@ -8316,10 +8616,12 @@ fn app_server_bridge_streams_demo_turn_and_reports_status() -> anyhow::Result<()
         .iter()
         .find(|event| event["type"] == "session.exportMarkdown")
         .expect("session export event");
-    assert!(exported["payload"]["markdown"]
-        .as_str()
-        .unwrap()
-        .contains("hello bridge"));
+    assert!(
+        exported["payload"]["markdown"]
+            .as_str()
+            .unwrap()
+            .contains("hello bridge")
+    );
     let memory = events
         .iter()
         .find(|event| event["type"] == "memory.status")
@@ -8329,9 +8631,11 @@ fn app_server_bridge_streams_demo_turn_and_reports_status() -> anyhow::Result<()
         .iter()
         .find(|event| event["type"] == "system.prompt")
         .expect("system prompt event");
-    assert!(prompt["payload"]["prompt"]
-        .as_str()
-        .unwrap()
-        .contains("Vegvisir"));
+    assert!(
+        prompt["payload"]["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("Vegvisir")
+    );
     Ok(())
 }
