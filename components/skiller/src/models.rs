@@ -359,12 +359,55 @@ pub struct ForgeRequestEnvelope {
     pub candidate_skills: Vec<Skill>,
     pub capability_candidates: Vec<CapabilityCandidate>,
     pub citation_ids: Vec<String>,
+    #[serde(default)]
+    pub source_context: Vec<ForgeSourceContext>,
+    #[serde(default)]
+    pub bundle_context: ForgeBundleContext,
+    #[serde(default)]
+    pub validation_constraints: Vec<String>,
+    #[serde(default)]
+    pub response_schema_guide: ForgeResponseSchemaGuide,
+    #[serde(default)]
+    pub prior_forge_summary: Vec<String>,
     pub graph_concepts: Vec<ConceptNode>,
     pub task_instruction: String,
     pub output_schema: String,
     pub token_budget: usize,
     pub risk_policy: String,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ForgeSourceContext {
+    pub source_id: String,
+    pub title: String,
+    pub source_type: SourceType,
+    pub origin: String,
+    pub version: Option<String>,
+    pub source_trust: String,
+    pub export_policy: ExportPolicy,
+    pub permission_status: PermissionStatus,
+    pub secret_scan_status: ScanStatus,
+    pub section_count: usize,
+    pub selected_section_count: usize,
+    pub skill_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ForgeBundleContext {
+    pub bundle_name: String,
+    pub domain: Option<String>,
+    pub review_status: SkillStatus,
+    pub publish_status: PublishStatus,
+    pub compatibility: BTreeMap<String, String>,
+    pub total_source_count: usize,
+    pub total_section_count: usize,
+    pub total_skill_count: usize,
+    pub selected_skill_count: usize,
+    pub high_risk_skill_count: usize,
+    pub inference_record_count: usize,
+    pub existing_forge_request_count: usize,
+    pub existing_forge_response_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -376,6 +419,26 @@ pub struct ForgeSectionPacket {
     pub detected_commands: Vec<String>,
     pub detected_api_operations: Vec<String>,
     pub detected_warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ForgeResponseSchemaGuide {
+    pub envelope_type: String,
+    pub required_fields: Vec<String>,
+    pub field_guidance: Vec<ForgeResponseFieldGuide>,
+    pub skill_output_rules: Vec<String>,
+    pub evidence_record_rules: Vec<String>,
+    pub confidence_update_rules: Vec<String>,
+    pub forbidden_outputs: Vec<String>,
+    pub minimal_valid_response: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ForgeResponseFieldGuide {
+    pub field: String,
+    pub required: bool,
+    pub expected_type: String,
+    pub guidance: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -527,6 +590,43 @@ pub enum PublishStatus {
     Published,
     Rejected,
 }
+
+impl Default for SourceType {
+    fn default() -> Self {
+        Self::Unknown
+    }
+}
+
+impl Default for ExportPolicy {
+    fn default() -> Self {
+        Self::PrivateOnly
+    }
+}
+
+impl Default for ScanStatus {
+    fn default() -> Self {
+        Self::Clean
+    }
+}
+
+impl Default for PermissionStatus {
+    fn default() -> Self {
+        Self::Allowed
+    }
+}
+
+impl Default for SkillStatus {
+    fn default() -> Self {
+        Self::Candidate
+    }
+}
+
+impl Default for PublishStatus {
+    fn default() -> Self {
+        Self::Unpublished
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum EvalType {
     Positive,

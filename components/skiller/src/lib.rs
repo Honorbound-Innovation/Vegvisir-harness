@@ -162,6 +162,9 @@ enum Commands {
         request: PathBuf,
         #[arg(long)]
         response: PathBuf,
+        /// Write a machine-readable validation report YAML before returning.
+        #[arg(long)]
+        report: Option<PathBuf>,
     },
     /// Validate and apply a Vegvisir Forge response envelope.
     ForgeApply {
@@ -172,6 +175,9 @@ enum Commands {
         response: PathBuf,
         #[arg(long)]
         out: PathBuf,
+        /// Write a machine-readable apply report YAML after successful application.
+        #[arg(long)]
+        report: Option<PathBuf>,
     },
     /// Generate inferred skills from a bundle.
     Infer {
@@ -446,8 +452,7 @@ where
             "CLI help",
         )?,
         Commands::Validate { bundle } => {
-            let bundle = registry::read_bundle(&bundle)?;
-            let report = registry::validate_bundle(&bundle);
+            let report = registry::validate_bundle_path(&bundle)?;
             println!("{}", serde_yaml::to_string(&report)?);
             if !report.valid {
                 std::process::exit(1);
@@ -552,28 +557,51 @@ where
             bundle,
             request,
             response,
+            report,
         } => {
             let bundle = registry::read_bundle(&bundle)?;
             let request: models::ForgeRequestEnvelope =
                 serde_yaml::from_str(&std::fs::read_to_string(&request)?)?;
             let response: models::ForgeResponseEnvelope =
                 serde_yaml::from_str(&std::fs::read_to_string(&response)?)?;
-            forge::validate_response(&bundle, &request, &response)?;
-            println!("Forge response is valid for request {}", request.request_id);
+            let validation_report = forge::validate_response_report(&bundle, &request, &response);
+            if let Some(report_path) = report {
+                if let Some(parent) = report_path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(&report_path, serde_yaml::to_string(&validation_report)?)?;
+            }
+            if validation_report.valid {
+                println!("Forge response is valid for request {}", request.request_id);
+            } else {
+                anyhow::bail!(
+                    "Forge response is invalid for request {}: {}",
+                    request.request_id,
+                    validation_report.errors.join("; ")
+                );
+            }
         }
         Commands::ForgeApply {
             bundle,
             request,
             response,
             out,
+            report,
         } => {
             let bundle = registry::read_bundle(&bundle)?;
             let request: models::ForgeRequestEnvelope =
                 serde_yaml::from_str(&std::fs::read_to_string(&request)?)?;
             let response: models::ForgeResponseEnvelope =
                 serde_yaml::from_str(&std::fs::read_to_string(&response)?)?;
-            let forged = forge::apply_external_response(bundle, request, response)?;
+            let (forged, apply_report) =
+                forge::apply_external_response_with_report(bundle, request, response)?;
             registry::write_bundle(&forged, &out)?;
+            if let Some(report_path) = report {
+                if let Some(parent) = report_path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(&report_path, serde_yaml::to_string(&apply_report)?)?;
+            }
             println!("validated and applied Forge response to {}", out.display());
         }
         Commands::Infer { bundle, out } => {

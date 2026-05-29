@@ -68,6 +68,73 @@ fn compile_forge_review_and_agent_pack_workflow() {
     assert!(review.join("verifier-review.yaml").exists());
     assert!(review.join("verifier-review.md").exists());
 
+    let forge_requests_text = std::fs::read_to_string(forged.join("forge_requests.yaml")).unwrap();
+    let forge_responses_text =
+        std::fs::read_to_string(forged.join("forge_responses.yaml")).unwrap();
+    for pass in [
+        "Interpretation",
+        "SkillExpansion",
+        "SkillInference",
+        "SafetyAndGovernance",
+        "EvalGeneration",
+        "Critique",
+        "VerifierReview",
+        "AgentRoleMapping",
+        "RegistryReadiness",
+    ] {
+        assert!(
+            forge_requests_text.contains(&format!("pass_type: {pass}")),
+            "missing request pass {pass}: {forge_requests_text}"
+        );
+        assert!(
+            forge_responses_text.contains(&format!("pass_type: {pass}")),
+            "missing response pass {pass}: {forge_responses_text}"
+        );
+    }
+    assert!(
+        forge_responses_text.contains("READY-CANDIDATE")
+            || forge_responses_text.contains("requires review before publication")
+    );
+    assert!(forge_responses_text.contains("VERIFY:"));
+    assert!(forge_responses_text.contains("WARNING:") || forge_responses_text.contains("OK:"));
+
+    let forge_summary_text = std::fs::read_to_string(forged.join("forge_summary.yaml")).unwrap();
+    let forge_summary_md = std::fs::read_to_string(forged.join("forge_summary.md")).unwrap();
+    assert!(forge_summary_text.contains("summary_id: forge-summary-"));
+    assert!(forge_summary_text.contains("pass_count: 9"));
+    assert!(forge_summary_text.contains("pass_type: RegistryReadiness"));
+    assert!(forge_summary_text.contains("required_human_review: true"));
+    assert!(forge_summary_text.contains("review_finding_count:"));
+    assert!(forge_summary_md.contains("# Forge Summary"));
+    assert!(forge_summary_md.contains("## Registry Readiness Notes"));
+    assert!(forge_summary_md.contains("Human review required: true"));
+
+    let mut inferred_count = 0;
+    for entry in std::fs::read_dir(forged.join("skills")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|s| s.to_str()) == Some("yaml") {
+            let skill_text = std::fs::read_to_string(path).unwrap();
+            if skill_text.contains("inferred-workflow") || skill_text.contains("inference_records:")
+            {
+                inferred_count += 1;
+            }
+        }
+    }
+    assert!(
+        inferred_count > 0,
+        "Forge did not store inferred/review records"
+    );
+
+    let eval_output = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["eval", forged.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let eval_stdout = String::from_utf8_lossy(&eval_output.stdout);
+    assert!(
+        eval_stdout.contains("total_eval_cases:"),
+        "eval stdout was: {eval_stdout}"
+    );
+
     let reviewed = temp.path().join("reviewed");
     assert!(
         Command::new(env!("CARGO_BIN_EXE_skiller"))
@@ -103,6 +170,8 @@ fn compile_forge_review_and_agent_pack_workflow() {
     assert!(pack.contains("required_skills"));
     assert!(pack.contains("optional_skills"));
     assert!(pack.contains("approval_policy"));
+    assert!(pack.contains("eval_status:"));
+    assert!(pack.contains("selected_skill_count:"));
 }
 
 #[test]
@@ -155,8 +224,35 @@ fn forge_handoff_and_validate_template_workflow() {
 
     assert!(handoff.join("forge-request.yaml").exists());
     assert!(handoff.join("forge-response-template.yaml").exists());
+    let request_text = std::fs::read_to_string(handoff.join("forge-request.yaml")).unwrap();
+    assert!(request_text.contains("source_context:"));
+    assert!(request_text.contains("bundle_context:"));
+    assert!(request_text.contains("validation_constraints:"));
+    assert!(request_text.contains("response_schema_guide:"));
+    assert!(request_text.contains("envelope_type: ForgeResponseEnvelope"));
+    assert!(request_text.contains("required_fields:"));
+    assert!(request_text.contains("field: generated_items"));
+    assert!(request_text.contains("skill_output_rules:"));
+    assert!(request_text.contains("evidence_record_rules:"));
+    assert!(request_text.contains("confidence_update_rules:"));
+    assert!(request_text.contains("forbidden_outputs:"));
+    assert!(request_text.contains("minimal_valid_response:"));
+    assert!(request_text.contains("selected_skill_count: 1"));
+    assert!(request_text.contains("existing_forge_request_count: 0"));
+    assert!(
+        request_text
+            .contains("Return a ForgeResponseEnvelope with matching request_id and pass_type.")
+    );
+    assert!(request_text.contains("source_trust:"));
     let prompt = std::fs::read_to_string(handoff.join("vegvisir-prompt.md")).unwrap();
     assert!(prompt.contains("Return ONLY a valid `ForgeResponseEnvelope`"));
+    assert!(prompt.contains("`bundle_context` summarizes"));
+    assert!(prompt.contains("`validation_constraints` are hard requirements"));
+    assert!(
+        prompt.contains(
+            "Use `response_schema_guide` from the request as the authoritative field guide"
+        )
+    );
 
     assert!(
         Command::new(env!("CARGO_BIN_EXE_skiller"))
@@ -174,6 +270,131 @@ fn forge_handoff_and_validate_template_workflow() {
             .status()
             .unwrap()
             .success()
+    );
+}
+
+#[test]
+fn forge_apply_writes_summary_and_manifest_for_external_responses() {
+    let temp = tempdir().unwrap();
+    let docs = temp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(
+        docs.join("cli.md"),
+        "# Inspect Cache\n\nUse status commands before mutations.\n\n```\ncachectl status\n```\n\nWarning: require approval before flushing caches.\n",
+    )
+    .unwrap();
+
+    let bundle = temp.path().join("bundle");
+    let handoff = temp.path().join("handoff");
+    let applied = temp.path().join("applied");
+    let apply_report_path = temp.path().join("forge-apply-report.yaml");
+
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "compile",
+                docs.to_str().unwrap(),
+                "--out",
+                bundle.to_str().unwrap(),
+                "--name",
+                "external-forge-apply",
+                "--domain",
+                "cli",
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "forge-handoff",
+                bundle.to_str().unwrap(),
+                "--out",
+                handoff.to_str().unwrap(),
+                "--pass",
+                "skill-expansion",
+                "--max-skills",
+                "1",
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "forge-apply",
+                bundle.to_str().unwrap(),
+                "--request",
+                handoff.join("forge-request.yaml").to_str().unwrap(),
+                "--response",
+                handoff
+                    .join("forge-response-template.yaml")
+                    .to_str()
+                    .unwrap(),
+                "--out",
+                applied.to_str().unwrap(),
+                "--report",
+                apply_report_path.to_str().unwrap(),
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    assert!(apply_report_path.exists());
+    let apply_report = std::fs::read_to_string(&apply_report_path).unwrap();
+    assert!(apply_report.contains("apply_id: forge-apply-"));
+    assert!(apply_report.contains("pass_type: SkillExpansion"));
+    assert!(apply_report.contains("valid: true"));
+    assert!(apply_report.contains("before_skill_count: 1"));
+    assert!(apply_report.contains("after_skill_count: 1"));
+    assert!(apply_report.contains("review_finding_count: 1"));
+    assert!(apply_report.contains("required_human_review: true"));
+    assert!(apply_report.contains("validation_errors: []"));
+
+    assert!(applied.join("forge_requests.yaml").exists());
+    assert!(applied.join("forge_responses.yaml").exists());
+    assert!(applied.join("forge_summary.yaml").exists());
+    assert!(applied.join("forge_summary.md").exists());
+
+    let summary = std::fs::read_to_string(applied.join("forge_summary.yaml")).unwrap();
+    assert!(summary.contains("summary_id: forge-summary-"));
+    assert!(summary.contains("pass_count: 1"));
+    assert!(summary.contains("pass_type: SkillExpansion"));
+
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args(["validate", applied.to_str().unwrap()])
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args(["verify-manifest", applied.to_str().unwrap()])
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    std::fs::write(applied.join("forge_summary.md"), "# stale\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["validate", applied.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("forge_summary.md is stale"),
+        "output was: {combined}"
     );
 }
 
@@ -393,6 +614,7 @@ fn forge_validate_rejects_unsupported_source_and_out_of_range_scores() {
     let response_path = temp.path().join("bad-response.yaml");
     std::fs::write(&response_path, response).unwrap();
 
+    let report_path = temp.path().join("forge-validation-report.yaml");
     let output = Command::new(env!("CARGO_BIN_EXE_skiller"))
         .args([
             "forge-validate",
@@ -401,6 +623,8 @@ fn forge_validate_rejects_unsupported_source_and_out_of_range_scores() {
             handoff.join("forge-request.yaml").to_str().unwrap(),
             "--response",
             response_path.to_str().unwrap(),
+            "--report",
+            report_path.to_str().unwrap(),
         ])
         .output()
         .unwrap();
@@ -412,6 +636,27 @@ fn forge_validate_rejects_unsupported_source_and_out_of_range_scores() {
             || stderr.contains("total exceeds 1.0"),
         "stderr was: {stderr}"
     );
+
+    let report_text = std::fs::read_to_string(report_path).unwrap();
+    let report: serde_yaml::Value = serde_yaml::from_str(&report_text).unwrap();
+    assert_eq!(report["request_id"].as_str().unwrap(), request_id);
+    assert_eq!(report["pass_type"].as_str().unwrap(), "SkillExpansion");
+    assert_eq!(report["valid"].as_bool().unwrap(), false);
+    assert!(report["error_count"].as_u64().unwrap() >= 4);
+    let errors = report["errors"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap())
+        .collect::<Vec<_>>()
+        .join(
+            "
+",
+        );
+    assert!(errors.contains("references missing source invented-source"));
+    assert!(errors.contains("confidence.raw must be between 0.0 and 1.0"));
+    assert!(errors.contains("evidence_breakdown total exceeds"));
+    assert!(errors.contains("confidence update"));
 }
 
 #[test]
@@ -477,6 +722,72 @@ fn validation_rejects_invalid_stored_forge_history() {
     assert!(
         combined.contains("stored Forge response")
             && combined.contains("must be between 0.0 and 1.0"),
+        "output was: {combined}"
+    );
+}
+
+#[test]
+fn validation_rejects_stale_forge_summary_artifacts() {
+    let temp = tempdir().unwrap();
+    let docs = temp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(
+        docs.join("ops.md"),
+        "# Inspect Service\n\nUse service status before changes.\n\n```\nsvc status\n```\n\nWarning: require approval before restart.\n",
+    )
+    .unwrap();
+
+    let bundle = temp.path().join("bundle");
+    let forged = temp.path().join("forged");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "compile",
+                docs.to_str().unwrap(),
+                "--out",
+                bundle.to_str().unwrap(),
+                "--name",
+                "stale-forge-summary",
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "forge",
+                bundle.to_str().unwrap(),
+                "--out",
+                forged.to_str().unwrap(),
+                "--provider",
+                "mock",
+                "--max-skills",
+                "1",
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let summary_path = forged.join("forge_summary.yaml");
+    let mut summary: serde_yaml::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&summary_path).unwrap()).unwrap();
+    summary["pass_count"] = serde_yaml::Value::from(999);
+    std::fs::write(&summary_path, serde_yaml::to_string(&summary).unwrap()).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["validate", forged.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("forge_summary.yaml is stale"),
         "output was: {combined}"
     );
 }

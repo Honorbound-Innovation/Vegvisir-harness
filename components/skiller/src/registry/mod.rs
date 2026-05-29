@@ -24,6 +24,14 @@ pub fn write_bundle(bundle: &SkillBundle, out: &Path) -> Result<()> {
     write_yaml(&out.join("audit/events.yaml"), &bundle.audit_events)?;
     write_yaml(&out.join("forge_requests.yaml"), &bundle.forge_requests)?;
     write_yaml(&out.join("forge_responses.yaml"), &bundle.forge_responses)?;
+    if !bundle.forge_requests.is_empty() || !bundle.forge_responses.is_empty() {
+        let summary = crate::forge::summarize_forge_history(bundle);
+        write_yaml(&out.join("forge_summary.yaml"), &summary)?;
+        fs::write(
+            out.join("forge_summary.md"),
+            crate::forge::forge_summary_markdown(&summary),
+        )?;
+    }
     for skill in &bundle.skills {
         write_yaml(
             &out.join("skills").join(format!("{}.yaml", skill.id)),
@@ -267,6 +275,16 @@ pub fn validate_bundle(bundle: &SkillBundle) -> ValidationReport {
         errors,
         warnings,
     }
+}
+
+pub fn validate_bundle_path(path: &Path) -> Result<ValidationReport> {
+    let bundle = read_bundle(path)?;
+    let mut report = validate_bundle(&bundle);
+    if let Err(err) = crate::forge::validate_forge_summary_artifacts(path, &bundle) {
+        report.errors.push(err.to_string());
+        report.valid = false;
+    }
+    Ok(report)
 }
 
 #[derive(Debug, Serialize)]
