@@ -1,5 +1,359 @@
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 use tempfile::tempdir;
+
+#[test]
+fn forge_provider_status_reports_current_provider_capabilities() {
+    let catalog = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["forge-provider-status"])
+        .output()
+        .unwrap();
+    assert!(catalog.status.success());
+    let catalog_text = String::from_utf8_lossy(&catalog.stdout);
+    assert!(catalog_text.contains("default_provider: mock"));
+    assert!(catalog_text.contains("name: mock"));
+    assert!(catalog_text.contains("name: vegvisir"));
+    assert!(catalog_text.contains("structured_envelope: true"));
+    assert!(catalog_text.contains("live_reasoning: false"));
+    assert!(catalog_text.contains("SkillInference"));
+    assert!(catalog_text.contains("RegistryReadiness"));
+    assert!(catalog_text.contains("adapter_command_configured: false"));
+    assert!(catalog_text.contains("SKILLER_VEGVISIR_FORGE_ADAPTER"));
+
+    let vegvisir = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["forge-provider-status", "--provider", "vegvisir"])
+        .output()
+        .unwrap();
+    assert!(vegvisir.status.success());
+    let vegvisir_text = String::from_utf8_lossy(&vegvisir.stdout);
+    assert!(vegvisir_text.contains("name: vegvisir"));
+    assert!(vegvisir_text.contains("display_name: Vegvisir structured-envelope Forge adapter"));
+    assert!(vegvisir_text.contains("deterministic: true"));
+    assert!(vegvisir_text.contains("live_reasoning: false"));
+    assert!(vegvisir_text.contains("adapter_command_configured: false"));
+    assert!(vegvisir_text.contains("adapter_mode: deterministic fallback"));
+    assert!(vegvisir_text.contains("SKILLER_VEGVISIR_FORGE_ADAPTER"));
+    assert!(vegvisir_text.contains("adapter_timeout_secs: 120"));
+    assert!(vegvisir_text.contains("SKILLER_VEGVISIR_FORGE_ADAPTER_TIMEOUT_SECS"));
+
+    let configured = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["forge-provider-status", "--provider", "vegvisir"])
+        .env(
+            "SKILLER_VEGVISIR_FORGE_ADAPTER",
+            env!("CARGO_BIN_EXE_skiller"),
+        )
+        .env("SKILLER_VEGVISIR_FORGE_ADAPTER_TIMEOUT_SECS", "3")
+        .output()
+        .unwrap();
+    assert!(configured.status.success());
+    let configured_text = String::from_utf8_lossy(&configured.stdout);
+    assert!(configured_text.contains("adapter_command_configured: true"));
+    assert!(configured_text.contains("deterministic: false"));
+    assert!(configured_text.contains("live_reasoning: true"));
+    assert!(configured_text.contains("adapter_mode: external strict-envelope command"));
+    assert!(configured_text.contains("adapter_preflight_ok: true"));
+    assert!(configured_text.contains("adapter_timeout_secs: 3"));
+}
+
+#[test]
+fn forge_adapter_preflight_reports_missing_adapter_before_execution() {
+    let missing = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["forge-adapter-preflight"])
+        .env(
+            "SKILLER_VEGVISIR_FORGE_ADAPTER",
+            "/tmp/skiller-definitely-missing-adapter",
+        )
+        .output()
+        .unwrap();
+    assert!(!missing.status.success());
+    let text = String::from_utf8_lossy(&missing.stdout);
+    assert!(text.contains("valid: false"));
+    assert!(text.contains("adapter_command_configured: true"));
+    assert!(text.contains("adapter command does not exist"));
+
+    let fallback = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["forge-adapter-preflight"])
+        .output()
+        .unwrap();
+    assert!(fallback.status.success());
+    let fallback_text = String::from_utf8_lossy(&fallback.stdout);
+    assert!(fallback_text.contains("valid: true"));
+    assert!(fallback_text.contains("adapter_command_configured: false"));
+    assert!(fallback_text.contains("deterministic fallback"));
+}
+
+#[test]
+#[cfg(unix)]
+fn forge_adapter_self_test_exercises_strict_envelope_contract() {
+    let temp = tempdir().unwrap();
+
+    let missing = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["forge-adapter-self-test"])
+        .output()
+        .unwrap();
+    assert!(!missing.status.success());
+    let missing_text = String::from_utf8_lossy(&missing.stdout);
+    assert!(missing_text.contains("valid: false"));
+    assert!(missing_text.contains("must be configured for adapter self-test"));
+
+    let adapter = temp.path().join("self-test-adapter.py");
+    std::fs::write(
+        &adapter,
+        r#"#!/usr/bin/env python3
+import sys
+request_id = ""
+pass_type = ""
+for line in sys.stdin.read().splitlines():
+    if line.startswith("request_id:"):
+        request_id = line.split(":", 1)[1].strip().strip("'\"")
+    if line.startswith("pass_type:"):
+        pass_type = line.split(":", 1)[1].strip().strip("'\"")
+print(f"request_id: {request_id}")
+print(f"pass_type: {pass_type}")
+print("generated_items: []")
+print("modified_items: []")
+print("review_findings:")
+print("- self-test adapter valid strict envelope")
+print("confidence_updates: {}")
+print("evidence_records: []")
+print("required_human_review: false")
+print("audit_notes:")
+print("- self-test adapter completed")
+"#,
+    )
+    .unwrap();
+    let mut perms = std::fs::metadata(&adapter).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&adapter, perms).unwrap();
+
+    let ok = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["forge-adapter-self-test"])
+        .env("SKILLER_VEGVISIR_FORGE_ADAPTER", adapter.to_str().unwrap())
+        .env("SKILLER_VEGVISIR_FORGE_ADAPTER_TIMEOUT_SECS", "3")
+        .output()
+        .unwrap();
+    assert!(
+        ok.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&ok.stdout),
+        String::from_utf8_lossy(&ok.stderr)
+    );
+    let ok_text = String::from_utf8_lossy(&ok.stdout);
+    assert!(ok_text.contains("valid: true"));
+    assert!(ok_text.contains("preflight_valid: true"));
+    assert!(ok_text.contains("response_parsed: true"));
+    assert!(ok_text.contains("response_valid: true"));
+    assert!(ok_text.contains("pass_type: Interpretation"));
+    assert!(ok_text.contains("self-test adapter completed"));
+
+    let bad_adapter = temp.path().join("bad-self-test-adapter.py");
+    std::fs::write(
+        &bad_adapter,
+        r#"#!/usr/bin/env python3
+import sys
+_ = sys.stdin.read()
+print("request_id: wrong")
+print("pass_type: Interpretation")
+print("generated_items: []")
+print("modified_items: []")
+print("review_findings: []")
+print("confidence_updates: {}")
+print("evidence_records: []")
+print("required_human_review: false")
+print("audit_notes: []")
+"#,
+    )
+    .unwrap();
+    let mut perms = std::fs::metadata(&bad_adapter).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&bad_adapter, perms).unwrap();
+
+    let bad = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["forge-adapter-self-test"])
+        .env(
+            "SKILLER_VEGVISIR_FORGE_ADAPTER",
+            bad_adapter.to_str().unwrap(),
+        )
+        .env("SKILLER_VEGVISIR_FORGE_ADAPTER_TIMEOUT_SECS", "3")
+        .output()
+        .unwrap();
+    assert!(!bad.status.success());
+    let bad_text = String::from_utf8_lossy(&bad.stdout);
+    assert!(bad_text.contains("valid: false"));
+    assert!(bad_text.contains("response_parsed: true"));
+    assert!(bad_text.contains("response_valid: false"));
+    assert!(bad_text.contains("forge response request_id mismatch"));
+}
+
+#[test]
+#[cfg(unix)]
+fn vegvisir_forge_provider_uses_configured_strict_envelope_adapter() {
+    let temp = tempdir().unwrap();
+    let docs = temp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(
+        docs.join("ops.md"),
+        "# Diagnose Pods\n\nUse `kubectl get pods` before changing anything. Warning: ask approval before mutation.\n",
+    )
+    .unwrap();
+    let bundle = temp.path().join("bundle");
+    let forged = temp.path().join("forged");
+
+    let compile = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "compile",
+            docs.to_str().unwrap(),
+            "--out",
+            bundle.to_str().unwrap(),
+            "--name",
+            "adapter-smoke",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        compile.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let adapter = temp.path().join("adapter.py");
+    std::fs::write(
+        &adapter,
+        r#"#!/usr/bin/env python3
+import sys
+request_id = ""
+pass_type = ""
+for line in sys.stdin.read().splitlines():
+    if line.startswith("request_id:"):
+        request_id = line.split(":", 1)[1].strip().strip("'\"")
+    if line.startswith("pass_type:"):
+        pass_type = line.split(":", 1)[1].strip().strip("'\"")
+print(f"request_id: {request_id}")
+print(f"pass_type: {pass_type}")
+print("generated_items: []")
+print("modified_items: []")
+print("review_findings:")
+print("- external adapter smoke finding")
+print("confidence_updates: {}")
+print("evidence_records: []")
+print("required_human_review: true")
+print("audit_notes:")
+print("- external adapter smoke response")
+"#,
+    )
+    .unwrap();
+    let mut perms = std::fs::metadata(&adapter).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&adapter, perms).unwrap();
+
+    let forge = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "forge",
+            bundle.to_str().unwrap(),
+            "--out",
+            forged.to_str().unwrap(),
+            "--provider",
+            "vegvisir",
+            "--max-skills",
+            "1",
+        ])
+        .env("SKILLER_VEGVISIR_FORGE_ADAPTER", adapter.to_str().unwrap())
+        .output()
+        .unwrap();
+    assert!(
+        forge.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&forge.stdout),
+        String::from_utf8_lossy(&forge.stderr)
+    );
+
+    let responses = std::fs::read_to_string(forged.join("forge_responses.yaml")).unwrap();
+    assert!(
+        responses.contains("external adapter smoke response"),
+        "{responses}"
+    );
+    assert!(
+        responses.contains("external adapter smoke finding"),
+        "{responses}"
+    );
+
+    let validate = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["validate", forged.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        validate.status.success(),
+        "{}",
+        String::from_utf8_lossy(&validate.stdout)
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn vegvisir_forge_adapter_timeout_is_bounded_and_diagnostic() {
+    let temp = tempdir().unwrap();
+    let docs = temp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(
+        docs.join("ops.md"),
+        "# Diagnose Pods\n\nUse `kubectl get pods` before changing anything.\n",
+    )
+    .unwrap();
+    let bundle = temp.path().join("bundle");
+    let forged = temp.path().join("forged");
+
+    let compile = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "compile",
+            docs.to_str().unwrap(),
+            "--out",
+            bundle.to_str().unwrap(),
+            "--name",
+            "adapter-timeout-smoke",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        compile.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let adapter = temp.path().join("sleepy-adapter.py");
+    std::fs::write(
+        &adapter,
+        r#"#!/usr/bin/env python3
+import sys, time
+_ = sys.stdin.read()
+print("adapter started", file=sys.stderr, flush=True)
+time.sleep(5)
+"#,
+    )
+    .unwrap();
+    let mut perms = std::fs::metadata(&adapter).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&adapter, perms).unwrap();
+
+    let forge = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "forge",
+            bundle.to_str().unwrap(),
+            "--out",
+            forged.to_str().unwrap(),
+            "--provider",
+            "vegvisir",
+            "--max-skills",
+            "1",
+        ])
+        .env("SKILLER_VEGVISIR_FORGE_ADAPTER", adapter.to_str().unwrap())
+        .env("SKILLER_VEGVISIR_FORGE_ADAPTER_TIMEOUT_SECS", "1")
+        .output()
+        .unwrap();
+    assert!(!forge.status.success());
+    let stderr = String::from_utf8_lossy(&forge.stderr);
+    assert!(stderr.contains("timed out after 1 seconds"), "{stderr}");
+}
 
 #[test]
 fn compile_forge_review_and_agent_pack_workflow() {

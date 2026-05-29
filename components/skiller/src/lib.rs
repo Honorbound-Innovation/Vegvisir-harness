@@ -119,6 +119,15 @@ enum Commands {
     },
     /// Run deterministic structural evals for a bundle.
     Eval { bundle: PathBuf },
+    /// Show available Forge providers and current integration status.
+    ForgeProviderStatus {
+        #[arg(long)]
+        provider: Option<String>,
+    },
+    /// Preflight-check the configured Vegvisir Forge adapter command.
+    ForgeAdapterPreflight,
+    /// Send a synthetic strict-envelope request to the configured Vegvisir Forge adapter.
+    ForgeAdapterSelfTest,
     /// Run a local Forge pass over a deterministic bundle.
     Forge {
         bundle: PathBuf,
@@ -508,6 +517,29 @@ where
             let report = registry::eval_bundle(&bundle);
             println!("{}", serde_yaml::to_string(&report)?);
             if !report.passed {
+                std::process::exit(1);
+            }
+        }
+        Commands::ForgeProviderStatus { provider } => {
+            if let Some(provider) = provider {
+                let status = forge::provider_status(&provider)?;
+                println!("{}", serde_yaml::to_string(&status)?);
+            } else {
+                let catalog = forge::provider_catalog();
+                println!("{}", serde_yaml::to_string(&catalog)?);
+            }
+        }
+        Commands::ForgeAdapterPreflight => {
+            let report = forge::vegvisir_adapter_preflight_report();
+            println!("{}", serde_yaml::to_string(&report)?);
+            if !report.valid {
+                std::process::exit(1);
+            }
+        }
+        Commands::ForgeAdapterSelfTest => {
+            let report = forge::vegvisir_adapter_self_test_report();
+            println!("{}", serde_yaml::to_string(&report)?);
+            if !report.valid {
                 std::process::exit(1);
             }
         }

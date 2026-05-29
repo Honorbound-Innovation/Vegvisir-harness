@@ -325,3 +325,33 @@ These commands emit YAML and Markdown summaries that expose selection rationale,
 ## Language pivot note
 
 The Python implementation was an initial prototype and is intentionally preserved in `legacy/python/`. New development should target the Rust implementation at the repository root.
+
+
+## Forge provider status and live adapter hook
+
+Provider status can be inspected explicitly:
+
+```bash
+skiller forge-provider-status
+skiller forge-provider-status --provider vegvisir
+```
+
+The current `vegvisir` Forge provider is a structured-envelope adapter. When no live adapter is configured, it uses deterministic strict-envelope fallback behavior.
+
+To configure a Vegvisir-managed live adapter:
+
+```bash
+export SKILLER_VEGVISIR_FORGE_ADAPTER=/path/to/vegvisir-forge-adapter
+skiller forge-adapter-preflight
+skiller forge-adapter-self-test
+skiller forge <bundle> --out <forged> --provider vegvisir
+```
+
+`forge-adapter-preflight` checks that the configured adapter path exists and is executable. `forge-adapter-self-test` sends a tiny synthetic `ForgeRequestEnvelope` to the adapter and validates that the returned `ForgeResponseEnvelope` obeys the strict schema before any real corpus is forged.
+
+Use `forge-handoff`, `forge-validate --report`, and `forge-apply --report` for external or GUI-mediated reasoning workflows.
+
+
+### Vegvisir Forge adapter bounds
+
+When using the live adapter hook, set `SKILLER_VEGVISIR_FORGE_ADAPTER` to a Vegvisir-managed executable that reads a `ForgeRequestEnvelope` YAML from stdin and writes a `ForgeResponseEnvelope` YAML to stdout. Adapter execution is bounded by `SKILLER_VEGVISIR_FORGE_ADAPTER_TIMEOUT_SECS` (default `120`, maximum `900`). Keep provider credentials behind Vegvisir/HBSE; do not place secrets in adapter arguments, Forge requests, or logs.

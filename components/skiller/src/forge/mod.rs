@@ -7,6 +7,9 @@ use anyhow::{Result, anyhow, bail};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write;
+use std::path::Path;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ForgeBundleSummary {
@@ -238,6 +241,275 @@ fn push_unique_string(values: &mut Vec<String>, value: String) {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ForgeProviderCatalog {
+    pub default_provider: String,
+    pub providers: Vec<ForgeProviderStatus>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ForgeProviderStatus {
+    pub name: String,
+    pub display_name: String,
+    pub available: bool,
+    pub deterministic: bool,
+    pub live_reasoning: bool,
+    pub structured_envelope: bool,
+    pub secret_safe: bool,
+    pub supported_passes: Vec<ForgePassType>,
+    pub adapter_command_configured: bool,
+    pub adapter_command_env: Option<String>,
+    pub adapter_command: Option<String>,
+    pub adapter_mode: String,
+    pub adapter_timeout_secs: Option<u64>,
+    pub adapter_timeout_env: Option<String>,
+    pub adapter_preflight_ok: Option<bool>,
+    pub adapter_preflight_errors: Vec<String>,
+    pub required_setup: Vec<String>,
+    pub caveats: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ForgeAdapterPreflightReport {
+    pub provider: String,
+    pub valid: bool,
+    pub adapter_command_env: String,
+    pub adapter_command_configured: bool,
+    pub adapter_command: Option<String>,
+    pub adapter_timeout_env: String,
+    pub adapter_timeout_secs: u64,
+    pub checks: Vec<String>,
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ForgeAdapterSelfTestReport {
+    pub provider: String,
+    pub valid: bool,
+    pub request_id: String,
+    pub pass_type: ForgePassType,
+    pub adapter_command_env: String,
+    pub adapter_command_configured: bool,
+    pub adapter_command: Option<String>,
+    pub adapter_timeout_env: String,
+    pub adapter_timeout_secs: u64,
+    pub preflight_valid: bool,
+    pub response_parsed: bool,
+    pub response_valid: bool,
+    pub validation_report: Option<ForgeValidationReport>,
+    pub audit_notes: Vec<String>,
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+pub fn provider_catalog() -> ForgeProviderCatalog {
+    ForgeProviderCatalog {
+        default_provider: "mock".into(),
+        providers: vec![mock_provider_status(), vegvisir_provider_status()],
+    }
+}
+
+pub fn provider_status(name: &str) -> Result<ForgeProviderStatus> {
+    provider_catalog()
+        .providers
+        .into_iter()
+        .find(|provider| provider.name == name)
+        .ok_or_else(|| anyhow!("unsupported forge provider '{name}'"))
+}
+
+fn all_forge_passes() -> Vec<ForgePassType> {
+    vec![
+        ForgePassType::Interpretation,
+        ForgePassType::SkillExpansion,
+        ForgePassType::SkillInference,
+        ForgePassType::DeduplicationAndScope,
+        ForgePassType::SafetyAndGovernance,
+        ForgePassType::EvalGeneration,
+        ForgePassType::Critique,
+        ForgePassType::VerifierReview,
+        ForgePassType::AgentRoleMapping,
+        ForgePassType::RegistryReadiness,
+    ]
+}
+
+fn mock_provider_status() -> ForgeProviderStatus {
+    ForgeProviderStatus {
+        name: "mock".into(),
+        display_name: "Deterministic local Forge provider".into(),
+        available: true,
+        deterministic: true,
+        live_reasoning: false,
+        structured_envelope: true,
+        secret_safe: true,
+        supported_passes: all_forge_passes(),
+        adapter_command_configured: false,
+        adapter_command_env: None,
+        adapter_command: None,
+        adapter_mode: "in-process deterministic".into(),
+        adapter_timeout_secs: None,
+        adapter_timeout_env: None,
+        adapter_preflight_ok: None,
+        adapter_preflight_errors: vec![],
+        required_setup: vec![],
+        caveats: vec![
+            "Uses deterministic rule-based refinement; does not call an AI model.".into(),
+            "Useful for tests, dry runs, GUI integration, and local governance validation.".into(),
+        ],
+    }
+}
+
+pub const VEGVISIR_FORGE_ADAPTER_COMMAND_ENV: &str = "SKILLER_VEGVISIR_FORGE_ADAPTER";
+pub const VEGVISIR_FORGE_ADAPTER_TIMEOUT_ENV: &str = "SKILLER_VEGVISIR_FORGE_ADAPTER_TIMEOUT_SECS";
+const DEFAULT_VEGVISIR_FORGE_ADAPTER_TIMEOUT_SECS: u64 = 120;
+const MAX_VEGVISIR_FORGE_ADAPTER_TIMEOUT_SECS: u64 = 900;
+
+fn vegvisir_adapter_command_configured() -> bool {
+    std::env::var_os(VEGVISIR_FORGE_ADAPTER_COMMAND_ENV).is_some()
+}
+
+fn vegvisir_adapter_command() -> Option<String> {
+    std::env::var(VEGVISIR_FORGE_ADAPTER_COMMAND_ENV)
+        .ok()
+        .map(|raw| raw.trim().to_string())
+        .filter(|raw| !raw.is_empty())
+}
+
+pub fn vegvisir_adapter_preflight_report() -> ForgeAdapterPreflightReport {
+    let configured = vegvisir_adapter_command_configured();
+    let command = vegvisir_adapter_command();
+    let timeout_secs = vegvisir_adapter_timeout_secs();
+    let mut checks = vec![
+        "adapter command environment inspected".to_string(),
+        "adapter timeout parsed and bounded".to_string(),
+    ];
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+
+    match (&configured, &command) {
+        (false, _) => {
+            warnings.push(format!(
+                "{VEGVISIR_FORGE_ADAPTER_COMMAND_ENV} is not set; vegvisir provider will use deterministic fallback"
+            ));
+        }
+        (true, None) => {
+            errors.push(format!(
+                "{VEGVISIR_FORGE_ADAPTER_COMMAND_ENV} is set but empty"
+            ));
+        }
+        (true, Some(command)) => {
+            let path = Path::new(command);
+            if !path.exists() {
+                errors.push(format!("adapter command does not exist: {command}"));
+            } else {
+                checks.push("adapter command exists".to_string());
+                match std::fs::metadata(path) {
+                    Ok(metadata) => {
+                        if !metadata.is_file() {
+                            errors.push(format!("adapter command is not a file: {command}"));
+                        } else {
+                            checks.push("adapter command is a file".to_string());
+                        }
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::PermissionsExt;
+                            if metadata.permissions().mode() & 0o111 == 0 {
+                                errors
+                                    .push(format!("adapter command is not executable: {command}"));
+                            } else {
+                                checks.push("adapter command is executable".to_string());
+                            }
+                        }
+                    }
+                    Err(err) => errors.push(format!(
+                        "failed to inspect adapter command metadata for {command}: {err}"
+                    )),
+                }
+            }
+        }
+    }
+
+    ForgeAdapterPreflightReport {
+        provider: "vegvisir".to_string(),
+        valid: errors.is_empty(),
+        adapter_command_env: VEGVISIR_FORGE_ADAPTER_COMMAND_ENV.to_string(),
+        adapter_command_configured: configured,
+        adapter_command: command,
+        adapter_timeout_env: VEGVISIR_FORGE_ADAPTER_TIMEOUT_ENV.to_string(),
+        adapter_timeout_secs: timeout_secs,
+        checks,
+        errors,
+        warnings,
+    }
+}
+
+fn vegvisir_provider_status() -> ForgeProviderStatus {
+    let preflight = vegvisir_adapter_preflight_report();
+    let adapter_command_configured = preflight.adapter_command_configured;
+    let adapter_preflight_ok = preflight.valid;
+    let mut required_setup = vec![
+        "Keep provider credentials behind Vegvisir/HBSE; do not place secrets in Forge requests."
+            .into(),
+    ];
+    let mut caveats = vec![
+        "Skiller sends and accepts strict ForgeRequestEnvelope/ForgeResponseEnvelope YAML; malformed output is rejected.".into(),
+    ];
+
+    if adapter_command_configured {
+        if adapter_preflight_ok {
+            caveats.push(
+                "External Vegvisir Forge adapter command is configured and passed preflight; Skiller will treat provider output as live external reasoning and validate it strictly.".into(),
+            );
+        } else {
+            required_setup.push(
+                "Fix the configured Vegvisir Forge adapter command; preflight currently fails."
+                    .into(),
+            );
+            caveats.push(
+                "External Vegvisir Forge adapter command is configured but failed preflight; Forge execution will fail until fixed.".into(),
+            );
+        }
+    } else {
+        required_setup.push(
+            format!(
+                "Set {VEGVISIR_FORGE_ADAPTER_COMMAND_ENV} to a Vegvisir-managed adapter command for live reasoning."
+            ),
+        );
+        caveats.push(
+            "No external adapter command is configured; provider uses deterministic local refinement while preserving Vegvisir-generated-agent metadata.".into(),
+        );
+    }
+
+    ForgeProviderStatus {
+        name: "vegvisir".into(),
+        display_name: "Vegvisir structured-envelope Forge adapter".into(),
+        available: !adapter_command_configured || adapter_preflight_ok,
+        deterministic: !adapter_command_configured,
+        live_reasoning: adapter_command_configured && adapter_preflight_ok,
+        structured_envelope: true,
+        secret_safe: true,
+        supported_passes: all_forge_passes(),
+        adapter_command_configured,
+        adapter_command_env: Some(VEGVISIR_FORGE_ADAPTER_COMMAND_ENV.into()),
+        adapter_command: preflight.adapter_command.clone(),
+        adapter_mode: if adapter_command_configured {
+            if adapter_preflight_ok {
+                "external strict-envelope command".into()
+            } else {
+                "external strict-envelope command (preflight failed)".into()
+            }
+        } else {
+            "deterministic fallback".into()
+        },
+        adapter_timeout_secs: Some(preflight.adapter_timeout_secs),
+        adapter_timeout_env: Some(VEGVISIR_FORGE_ADAPTER_TIMEOUT_ENV.into()),
+        adapter_preflight_ok: Some(adapter_preflight_ok),
+        adapter_preflight_errors: preflight.errors.clone(),
+        required_setup,
+        caveats,
+    }
+}
+
 pub trait ForgeProvider {
     fn name(&self) -> &'static str;
     fn run_pass(&self, request: &ForgeRequestEnvelope) -> Result<ForgeResponseEnvelope>;
@@ -334,10 +606,14 @@ impl ForgeProvider for VegvisirForgeProvider {
     }
 
     fn run_pass(&self, request: &ForgeRequestEnvelope) -> Result<ForgeResponseEnvelope> {
-        // This is the stable in-process adapter boundary for the future Vegvisir runtime call.
+        if vegvisir_adapter_command_configured() {
+            return run_vegvisir_adapter_command(request);
+        }
+
+        // This is the stable in-process adapter boundary for Vegvisir runtime integration.
         // It intentionally accepts and returns strict envelopes, avoids plaintext credentials,
-        // and currently falls back to deterministic behavior until Skiller is linked as a
-        // first-class Vegvisir tool/agent provider.
+        // and falls back to deterministic behavior unless an explicit Vegvisir-managed adapter
+        // command is configured through SKILLER_VEGVISIR_FORGE_ADAPTER.
         let mock = MockForgeProvider;
         let mut response = mock.run_pass(request)?;
         for record in &mut response.evidence_records {
@@ -357,10 +633,310 @@ impl ForgeProvider for VegvisirForgeProvider {
             );
         }
         response.audit_notes.push(
-            "Vegvisir adapter used structured request/response envelope; remote reasoning integration pending harness binding.".into(),
+            "Vegvisir adapter used structured request/response envelope with deterministic fallback; configure SKILLER_VEGVISIR_FORGE_ADAPTER for live external reasoning.".into(),
         );
         Ok(response)
     }
+}
+
+fn vegvisir_adapter_timeout_secs() -> u64 {
+    std::env::var(VEGVISIR_FORGE_ADAPTER_TIMEOUT_ENV)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .map(|value| value.min(MAX_VEGVISIR_FORGE_ADAPTER_TIMEOUT_SECS))
+        .unwrap_or(DEFAULT_VEGVISIR_FORGE_ADAPTER_TIMEOUT_SECS)
+}
+
+fn truncate_diagnostic(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .chars()
+        .take(2000)
+        .collect::<String>()
+}
+
+fn wait_for_adapter_output(
+    mut child: std::process::Child,
+    command: &str,
+    timeout: Duration,
+) -> Result<std::process::Output> {
+    let started = Instant::now();
+    loop {
+        if child
+            .try_wait()
+            .map_err(|err| anyhow!("failed waiting for Vegvisir Forge adapter '{command}': {err}"))?
+            .is_some()
+        {
+            return child.wait_with_output().map_err(|err| {
+                anyhow!("failed collecting Vegvisir Forge adapter '{command}' output: {err}")
+            });
+        }
+
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let output = child.wait_with_output().ok();
+            let stderr = output
+                .as_ref()
+                .map(|output| truncate_diagnostic(&output.stderr))
+                .unwrap_or_default();
+            bail!(
+                "Vegvisir Forge adapter '{command}' timed out after {} seconds{}",
+                timeout.as_secs(),
+                if stderr.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(": {stderr}")
+                }
+            );
+        }
+
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn minimal_adapter_self_test_bundle_and_request() -> (SkillBundle, ForgeRequestEnvelope) {
+    let now = Utc::now();
+    let source = SourceDocument {
+        source_id: "self-test-source".into(),
+        title: "Vegvisir Forge Adapter Self-Test Source".into(),
+        source_type: SourceType::Markdown,
+        origin: "skiller://forge-adapter-self-test".into(),
+        version: Some("self-test".into()),
+        license: None,
+        owner: Some("skiller".into()),
+        visibility: Visibility::Private,
+        ingested_at: now,
+        hash: "self-test-source-hash".into(),
+        retention_policy: RetentionPolicy::ExcerptsOnly,
+        export_policy: ExportPolicy::PrivateOnly,
+        secret_scan_status: ScanStatus::Clean,
+        permission_status: PermissionStatus::Allowed,
+        citation_policy: CitationPolicy::ShortExcerpts,
+    };
+    let section = DocumentSection {
+        section_id: "self-test-section".into(),
+        source_id: source.source_id.clone(),
+        heading: "Adapter self-test".into(),
+        breadcrumbs: vec!["Adapter self-test".into()],
+        line_start: 1,
+        line_end: 1,
+        text_excerpt:
+            "Use this synthetic section only to prove strict Forge envelope compatibility.".into(),
+        code_blocks: vec![],
+        links: vec![],
+        detected_commands: vec![],
+        detected_api_operations: vec![],
+        detected_warnings: vec![],
+        detected_examples: vec!["Return an empty but valid ForgeResponseEnvelope.".into()],
+        detected_normative_language: vec!["must return matching request_id and pass_type".into()],
+    };
+    let candidate = CapabilityCandidate {
+        candidate_id: "self-test-candidate".into(),
+        source_section_ids: vec![section.section_id.clone()],
+        candidate_title: "Validate strict Forge adapter envelope".into(),
+        candidate_type: SkillType::Review,
+        detected_task:
+            "Return a syntactically valid ForgeResponseEnvelope without mutating skills.".into(),
+        detected_inputs: vec!["ForgeRequestEnvelope".into()],
+        detected_outputs: vec!["ForgeResponseEnvelope".into()],
+        detected_procedures: vec![
+            "Read request_id and pass_type from the request and echo them in the response.".into(),
+        ],
+        detected_warnings: vec!["Do not include secrets or raw external content.".into()],
+        candidate_confidence: 1.0,
+        evidence_strength: 1.0,
+        extraction_type: EvidenceClass::DirectExtraction,
+        related_candidates: vec![],
+    };
+    let bundle = SkillBundle {
+        package: SkillPackage {
+            bundle_id: "self-test-bundle".into(),
+            name: "forge-adapter-self-test".into(),
+            version: "0.0.0-self-test".into(),
+            domain: Some("skiller-forge-adapter".into()),
+            source_corpus: vec![source.origin.clone()],
+            review_status: SkillStatus::Draft,
+            publish_status: PublishStatus::Unpublished,
+            compatibility: BTreeMap::new(),
+            created_at: now,
+        },
+        sources: vec![source],
+        sections: vec![section],
+        capability_candidates: vec![candidate],
+        skills: vec![],
+        graph: SkillGraph::default(),
+        audit_events: vec![],
+        forge_requests: vec![],
+        forge_responses: vec![],
+    };
+    let request = ForgeRequestEnvelope {
+        request_id: stable_id("forge-adapter-self-test", "vegvisir:strict-envelope"),
+        provider: "vegvisir".into(),
+        pass_type: ForgePassType::Interpretation,
+        bundle_id: bundle.package.bundle_id.clone(),
+        bundle_version: bundle.package.version.clone(),
+        domain_profile: None,
+        source_sections: bundle.sections.iter().map(|section| ForgeSectionPacket {
+            section_id: section.section_id.clone(),
+            source_id: section.source_id.clone(),
+            heading: section.heading.clone(),
+            excerpt: section.text_excerpt.clone(),
+            detected_commands: section.detected_commands.clone(),
+            detected_api_operations: section.detected_api_operations.clone(),
+            detected_warnings: section.detected_warnings.clone(),
+        }).collect(),
+        candidate_skills: vec![],
+        capability_candidates: bundle.capability_candidates.clone(),
+        citation_ids: vec![],
+        source_context: vec![ForgeSourceContext {
+            source_id: "self-test-source".into(),
+            title: "Vegvisir Forge Adapter Self-Test Source".into(),
+            source_type: SourceType::Markdown,
+            origin: "skiller://forge-adapter-self-test".into(),
+            version: Some("self-test".into()),
+            source_trust: "InternalCompanyDocumentation".into(),
+            export_policy: ExportPolicy::PrivateOnly,
+            permission_status: PermissionStatus::Allowed,
+            secret_scan_status: ScanStatus::Clean,
+            section_count: 1,
+            selected_section_count: 1,
+            skill_count: 0,
+        }],
+        bundle_context: ForgeBundleContext {
+            bundle_name: bundle.package.name.clone(),
+            domain: bundle.package.domain.clone(),
+            review_status: bundle.package.review_status.clone(),
+            publish_status: bundle.package.publish_status.clone(),
+            compatibility: BTreeMap::new(),
+            total_source_count: 1,
+            total_section_count: 1,
+            total_skill_count: 0,
+            selected_skill_count: 0,
+            high_risk_skill_count: 0,
+            inference_record_count: 0,
+            existing_forge_request_count: 0,
+            existing_forge_response_count: 0,
+        },
+        validation_constraints: validation_constraints_for(&ForgePassType::Interpretation),
+        response_schema_guide: response_schema_guide_for(&ForgePassType::Interpretation),
+        prior_forge_summary: vec![],
+        graph_concepts: vec![],
+        task_instruction: "Self-test the configured Vegvisir Forge adapter by returning a valid empty ForgeResponseEnvelope with matching request_id and pass_type. Do not generate or modify skills.".into(),
+        output_schema: "ForgeResponseEnvelope YAML".into(),
+        token_budget: 1024,
+        risk_policy: "Self-test only: no secrets, no tool execution, no skill mutation, no registry publication.".into(),
+        created_at: now,
+    };
+    (bundle, request)
+}
+
+pub fn vegvisir_adapter_self_test_report() -> ForgeAdapterSelfTestReport {
+    let preflight = vegvisir_adapter_preflight_report();
+    let (bundle, request) = minimal_adapter_self_test_bundle_and_request();
+    let mut report = ForgeAdapterSelfTestReport {
+        provider: "vegvisir".into(),
+        valid: false,
+        request_id: request.request_id.clone(),
+        pass_type: request.pass_type.clone(),
+        adapter_command_env: VEGVISIR_FORGE_ADAPTER_COMMAND_ENV.into(),
+        adapter_command_configured: preflight.adapter_command_configured,
+        adapter_command: preflight.adapter_command.clone(),
+        adapter_timeout_env: VEGVISIR_FORGE_ADAPTER_TIMEOUT_ENV.into(),
+        adapter_timeout_secs: preflight.adapter_timeout_secs,
+        preflight_valid: preflight.valid,
+        response_parsed: false,
+        response_valid: false,
+        validation_report: None,
+        audit_notes: vec![],
+        errors: vec![],
+        warnings: preflight.warnings.clone(),
+    };
+
+    if !preflight.valid {
+        report.errors.extend(preflight.errors.clone());
+        if !preflight.adapter_command_configured {
+            report.errors.push(format!(
+                "{VEGVISIR_FORGE_ADAPTER_COMMAND_ENV} must be configured for adapter self-test"
+            ));
+        }
+        return report;
+    }
+    if !preflight.adapter_command_configured {
+        report.errors.push(format!(
+            "{VEGVISIR_FORGE_ADAPTER_COMMAND_ENV} must be configured for adapter self-test"
+        ));
+        return report;
+    }
+
+    match run_vegvisir_adapter_command(&request) {
+        Ok(response) => {
+            report.response_parsed = true;
+            report.audit_notes = response.audit_notes.clone();
+            let validation = validate_response_report(&bundle, &request, &response);
+            report.response_valid = validation.valid;
+            if validation.valid {
+                report.valid = true;
+            } else {
+                report.errors.extend(validation.errors.clone());
+            }
+            report.validation_report = Some(validation);
+        }
+        Err(err) => {
+            report.errors.push(err.to_string());
+        }
+    }
+
+    report
+}
+
+fn run_vegvisir_adapter_command(request: &ForgeRequestEnvelope) -> Result<ForgeResponseEnvelope> {
+    let command = std::env::var(VEGVISIR_FORGE_ADAPTER_COMMAND_ENV)
+        .map_err(|err| anyhow!("{VEGVISIR_FORGE_ADAPTER_COMMAND_ENV} is not configured: {err}"))?;
+    if command.trim().is_empty() {
+        bail!("{VEGVISIR_FORGE_ADAPTER_COMMAND_ENV} is empty");
+    }
+    let preflight = vegvisir_adapter_preflight_report();
+    if !preflight.valid {
+        bail!(
+            "Vegvisir Forge adapter preflight failed: {}",
+            preflight.errors.join("; ")
+        );
+    }
+
+    let timeout_secs = vegvisir_adapter_timeout_secs();
+    let request_yaml = serde_yaml::to_string(request)?;
+    let mut child = std::process::Command::new(&command)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|err| anyhow!("failed to start Vegvisir Forge adapter '{command}': {err}"))?;
+
+    {
+        let mut stdin = child.stdin.take().ok_or_else(|| {
+            anyhow!("failed to open stdin for Vegvisir Forge adapter '{command}'")
+        })?;
+        stdin.write_all(request_yaml.as_bytes()).map_err(|err| {
+            anyhow!("failed to write Forge request to Vegvisir Forge adapter '{command}': {err}")
+        })?;
+    }
+
+    let output = wait_for_adapter_output(child, &command, Duration::from_secs(timeout_secs))?;
+    if !output.status.success() {
+        let stderr = truncate_diagnostic(&output.stderr);
+        let stdout = truncate_diagnostic(&output.stdout);
+        bail!(
+            "Vegvisir Forge adapter '{command}' failed with status {}: stderr={stderr}; stdout={stdout}",
+            output.status
+        );
+    }
+
+    let response: ForgeResponseEnvelope = serde_yaml::from_slice(&output.stdout).map_err(|err| {
+        let stdout = truncate_diagnostic(&output.stdout);
+        let stderr = truncate_diagnostic(&output.stderr);
+        anyhow!("Vegvisir Forge adapter '{command}' returned invalid ForgeResponseEnvelope YAML: {err}; stdout={stdout}; stderr={stderr}")
+    })?;
+    Ok(response)
 }
 
 pub fn forge_bundle(

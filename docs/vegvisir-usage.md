@@ -730,3 +730,29 @@ Use these after changing providers, tools, memory, approval behavior, USRL contr
 ## Input And Scrolling
 
 The input editor supports multi-line expansion, left/right navigation, up/down navigation across input lines, and history recall from the start position. Mouse wheel scrolling controls the chat viewport.
+
+
+## Skiller Forge Provider Status And Adapter Checks
+
+Forge provider status is machine-readable:
+
+```bash
+vegvisir skiller -- forge-provider-status
+vegvisir skiller -- forge-provider-status --provider vegvisir
+```
+
+The current `vegvisir` Forge provider is a structured-envelope adapter. When no live adapter is configured, it uses deterministic strict-envelope fallback behavior.
+
+To configure a Vegvisir-managed live adapter:
+
+```bash
+export SKILLER_VEGVISIR_FORGE_ADAPTER=/path/to/vegvisir-forge-adapter
+vegvisir skiller -- forge-adapter-preflight
+vegvisir skiller -- forge-adapter-self-test
+vegvisir skiller -- forge <bundle> --out <forged> --provider vegvisir
+```
+
+`forge-adapter-preflight` checks that the configured adapter path exists and is executable. `forge-adapter-self-test` sends a tiny synthetic `ForgeRequestEnvelope` to the adapter and validates that the returned `ForgeResponseEnvelope` obeys the strict schema before any real corpus is forged.
+
+
+Skiller Forge live adapter hook: `SKILLER_VEGVISIR_FORGE_ADAPTER` may point to a Vegvisir-managed strict-envelope adapter. Adapter execution is bounded by `SKILLER_VEGVISIR_FORGE_ADAPTER_TIMEOUT_SECS` (default `120`, maximum `900`). Credentials must remain behind Vegvisir/HBSE and must not be passed in command arguments or request payloads.
