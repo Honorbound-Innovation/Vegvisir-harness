@@ -9,6 +9,11 @@ use std::{
 
 use chrono::Utc;
 use serde_json::{Map, Value, json};
+use skiller::{
+    compiler, forge as skiller_forge,
+    models::{ForgePassType, ForgeRequestEnvelope, ForgeResponseEnvelope},
+    registry as skiller_registry, runtime as skiller_runtime,
+};
 use uuid::Uuid;
 use walkdir::WalkDir;
 
@@ -25,6 +30,79 @@ use crate::{
 const LIST_FILES_DEFAULT_LIMIT: usize = 500;
 const LIST_FILES_MAX_LIMIT: usize = 2_000;
 const CHATGPT_ARCHIVE_EXCERPT_CHARS: usize = 1_800;
+
+fn parse_skiller_forge_pass(value: Option<&str>) -> anyhow::Result<ForgePassType> {
+    let raw = value.unwrap_or("skill_expansion").trim();
+    match raw {
+        "interpretation" | "Interpretation" => Ok(ForgePassType::Interpretation),
+        "skill_expansion" | "skill-expansion" | "SkillExpansion" => {
+            Ok(ForgePassType::SkillExpansion)
+        }
+        "safety_and_governance" | "safety-and-governance" | "SafetyAndGovernance" => {
+            Ok(ForgePassType::SafetyAndGovernance)
+        }
+        "eval_generation" | "eval-generation" | "EvalGeneration" => {
+            Ok(ForgePassType::EvalGeneration)
+        }
+        "agent_role_mapping" | "agent-role-mapping" | "AgentRoleMapping" => {
+            Ok(ForgePassType::AgentRoleMapping)
+        }
+        "critique" | "Critique" => Ok(ForgePassType::Critique),
+        "verifier_review" | "verifier-review" | "VerifierReview" => {
+            Ok(ForgePassType::VerifierReview)
+        }
+        "registry_readiness" | "registry-readiness" | "RegistryReadiness" => {
+            Ok(ForgePassType::RegistryReadiness)
+        }
+        "skill_inference" | "skill-inference" | "SkillInference" => {
+            Ok(ForgePassType::SkillInference)
+        }
+        "deduplication_and_scope" | "deduplication-and-scope" | "DeduplicationAndScope" => {
+            Ok(ForgePassType::DeduplicationAndScope)
+        }
+        other => anyhow::bail!("Unsupported Skiller Forge pass: {other}"),
+    }
+}
+
+fn parse_skiller_forge_response(raw: &str) -> anyhow::Result<ForgeResponseEnvelope> {
+    let trimmed = raw.trim();
+    if let Ok(response) = serde_yaml::from_str::<ForgeResponseEnvelope>(trimmed) {
+        return Ok(response);
+    }
+    if let Some(fenced) = extract_fenced_yaml(trimmed)
+        && let Ok(response) = serde_yaml::from_str::<ForgeResponseEnvelope>(&fenced)
+    {
+        return Ok(response);
+    }
+    if let Some(start) = trimmed.find("request_id:") {
+        return serde_yaml::from_str::<ForgeResponseEnvelope>(&trimmed[start..])
+            .map_err(|err| anyhow::anyhow!("failed to parse ForgeResponseEnvelope YAML: {err}"));
+    }
+    anyhow::bail!("model response did not contain a ForgeResponseEnvelope YAML document")
+}
+
+fn extract_fenced_yaml(text: &str) -> Option<String> {
+    let mut lines = text.lines();
+    while let Some(line) = lines.next() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```")
+            && (trimmed == "```"
+                || trimmed.eq_ignore_ascii_case("```yaml")
+                || trimmed.eq_ignore_ascii_case("```yml"))
+        {
+            let mut block = String::new();
+            for inner in lines.by_ref() {
+                if inner.trim() == "```" {
+                    return Some(block);
+                }
+                block.push_str(inner);
+                block.push('\n');
+            }
+            return Some(block);
+        }
+    }
+    None
+}
 
 fn compact_excerpt(text: &str, max_chars: usize) -> String {
     let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -632,6 +710,232 @@ pub fn build_builtin_registry_with_cms_and_mode(
         true,
     ))?;
 
+    let skiller_compile_sandbox = sandbox.clone();
+    registry.register(Tool::new(
+        "skiller_compile",
+        "Compile local source files/directories into a Skiller skill bundle using the integrated Skiller component.",
+        Arc::new(move |args| {
+            let Some(input) = args.get("input").and_then(Value::as_str) else { return Observation::err("Missing input", "ValueError"); };
+            let Some(out) = args.get("out").and_then(Value::as_str) else { return Observation::err("Missing out", "ValueError"); };
+            let name = args.get("name").and_then(Value::as_str).unwrap_or("skiller-bundle");
+            let domain = args.get("domain").and_then(Value::as_str);
+            let input_path = match skiller_compile_sandbox.resolve(input) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
+            let out_path = match skiller_compile_sandbox.resolve(out) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
+            match compiler::compile_path(&input_path, name, domain).and_then(|bundle| {
+                let bundle_id = bundle.package.bundle_id.clone();
+                let skill_count = bundle.skills.len();
+                let source_count = bundle.sources.len();
+                skiller_registry::write_bundle(&bundle, &out_path)?;
+                Ok((bundle_id, skill_count, source_count))
+            }) {
+                Ok((bundle_id, skill_count, source_count)) => {
+                    let mut data = Map::new();
+                    data.insert("bundle_id".to_string(), json!(bundle_id));
+                    data.insert("skill_count".to_string(), json!(skill_count));
+                    data.insert("source_count".to_string(), json!(source_count));
+                    data.insert("out".to_string(), json!(out));
+                    Observation { ok: true, content: format!("Compiled Skiller bundle {bundle_id} to {out} ({skill_count} skills, {source_count} sources)."), data, error: None }
+                }
+                Err(error) => Observation::err(error.to_string(), "SkillerCompileError"),
+            }
+        }),
+        json!({"required": ["input", "out"], "properties": {"input": "string", "out": "string", "name": "string", "domain": "string"}}),
+        true,
+    ))?;
+
+    let skiller_compile_cli_help_sandbox = sandbox.clone();
+    registry.register(Tool::new(
+        "skiller_compile_cli_help",
+        "Compile captured CLI help/manpage text into a Skiller CLI operation skill bundle.",
+        Arc::new(move |args| {
+            let Some(input) = args.get("input").and_then(Value::as_str) else { return Observation::err("Missing input", "ValueError"); };
+            let Some(out) = args.get("out").and_then(Value::as_str) else { return Observation::err("Missing out", "ValueError"); };
+            let name = args.get("name").and_then(Value::as_str).unwrap_or("skiller-cli-help-bundle");
+            let domain = args.get("domain").and_then(Value::as_str);
+            let input_path = match skiller_compile_cli_help_sandbox.resolve(input) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
+            let out_path = match skiller_compile_cli_help_sandbox.resolve(out) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
+            match compiler::compile_cli_help(&input_path, name, domain).and_then(|bundle| {
+                let bundle_id = bundle.package.bundle_id.clone();
+                let skill_count = bundle.skills.len();
+                let source_count = bundle.sources.len();
+                skiller_registry::write_bundle(&bundle, &out_path)?;
+                Ok((bundle_id, skill_count, source_count))
+            }) {
+                Ok((bundle_id, skill_count, source_count)) => {
+                    let mut data = Map::new();
+                    data.insert("bundle_id".to_string(), json!(bundle_id));
+                    data.insert("skill_count".to_string(), json!(skill_count));
+                    data.insert("source_count".to_string(), json!(source_count));
+                    data.insert("out".to_string(), json!(out));
+                    Observation { ok: true, content: format!("Compiled Skiller CLI help bundle {bundle_id} to {out} ({skill_count} skills, {source_count} sources)."), data, error: None }
+                }
+                Err(error) => Observation::err(error.to_string(), "SkillerCompileError"),
+            }
+        }),
+        json!({"required": ["input", "out"], "properties": {"input": "string", "out": "string", "name": "string", "domain": "string"}}),
+        true,
+    ))?;
+
+    let skiller_validate_sandbox = sandbox.clone();
+    registry.register(Tool::new(
+        "skiller_validate",
+        "Validate a Skiller skill bundle from inside Vegvisir.",
+        Arc::new(move |args| {
+            let Some(bundle) = args.get("bundle").and_then(Value::as_str) else {
+                return Observation::err("Missing bundle", "ValueError");
+            };
+            let bundle_path = match skiller_validate_sandbox.resolve(bundle) {
+                Ok(path) => path,
+                Err(error) => return Observation::err(error.to_string(), "SandboxViolation"),
+            };
+            match skiller_registry::validate_bundle_path(&bundle_path) {
+                Ok(report) => {
+                    let valid = report.valid;
+                    let content = serde_json::to_string_pretty(&report)
+                        .unwrap_or_else(|_| format!("valid: {valid}"));
+                    let mut data = Map::new();
+                    data.insert("valid".to_string(), json!(valid));
+                    data.insert(
+                        "report".to_string(),
+                        serde_json::to_value(&report).unwrap_or(Value::Null),
+                    );
+                    Observation {
+                        ok: valid,
+                        content,
+                        data,
+                        error: (!valid).then(|| "SkillerValidationFailed".to_string()),
+                    }
+                }
+                Err(error) => Observation::err(error.to_string(), "SkillerValidateError"),
+            }
+        }),
+        json!({"required": ["bundle"], "properties": {"bundle": "string"}}),
+        false,
+    ))?;
+
+    let skiller_route_sandbox = sandbox.clone();
+    registry.register(Tool::new(
+        "skiller_route",
+        "Route a user task/query to matching skills in a Skiller bundle.",
+        Arc::new(move |args| {
+            let Some(bundle) = args.get("bundle").and_then(Value::as_str) else { return Observation::err("Missing bundle", "ValueError"); };
+            let Some(query) = args.get("query").and_then(Value::as_str) else { return Observation::err("Missing query", "ValueError"); };
+            let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(5).clamp(1, 50) as usize;
+            let bundle_path = match skiller_route_sandbox.resolve(bundle) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
+            match skiller_registry::read_bundle(&bundle_path) {
+                Ok(bundle_data) => {
+                    let hits = skiller_runtime::route(&bundle_data, query, limit);
+                    let content = if hits.is_empty() { "No matching skills.".to_string() } else { hits.iter().map(|hit| format!("{:.3}\t{}\t{}", hit.score, hit.skill_id, hit.title)).collect::<Vec<_>>().join("\n") };
+                    let mut data = Map::new();
+                    data.insert("hits".to_string(), json!(hits.iter().map(|hit| json!({"score": hit.score, "skill_id": hit.skill_id, "title": hit.title})).collect::<Vec<_>>()));
+                    Observation { ok: true, content, data, error: None }
+                }
+                Err(error) => Observation::err(error.to_string(), "SkillerRouteError"),
+            }
+        }),
+        json!({"required": ["bundle", "query"], "properties": {"bundle": "string", "query": "string", "limit": "integer"}}),
+        false,
+    ))?;
+
+    let skiller_load_sandbox = sandbox.clone();
+    registry.register(Tool::new(
+        "skiller_load",
+        "Materialize a Skiller skill card/body/extended context from inside Vegvisir.",
+        Arc::new(move |args| {
+            let Some(bundle) = args.get("bundle").and_then(Value::as_str) else { return Observation::err("Missing bundle", "ValueError"); };
+            let Some(skill_id) = args.get("skill_id").and_then(Value::as_str) else { return Observation::err("Missing skill_id", "ValueError"); };
+            let mode = match args.get("mode").and_then(Value::as_str).unwrap_or("body").trim().to_ascii_lowercase().as_str() {
+                "card" => skiller_runtime::LoadMode::Card,
+                "body" => skiller_runtime::LoadMode::Body,
+                "extended" => skiller_runtime::LoadMode::Extended,
+                other => return Observation::err(format!("Unknown mode: {other}"), "ValueError"),
+            };
+            let bundle_path = match skiller_load_sandbox.resolve(bundle) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
+            match skiller_registry::read_bundle(&bundle_path).and_then(|bundle_data| skiller_runtime::load_skill(&bundle_data, skill_id, mode)) {
+                Ok(content) => Observation::ok(content),
+                Err(error) => Observation::err(error.to_string(), "SkillerLoadError"),
+            }
+        }),
+        json!({"required": ["bundle", "skill_id"], "properties": {"bundle": "string", "skill_id": "string", "mode": "string"}}),
+        false,
+    ))?;
+
+    let skiller_eval_sandbox = sandbox.clone();
+    registry.register(Tool::new(
+        "skiller_eval",
+        "Run deterministic structural evals for a Skiller bundle from inside Vegvisir.",
+        Arc::new(move |args| {
+            let Some(bundle) = args.get("bundle").and_then(Value::as_str) else {
+                return Observation::err("Missing bundle", "ValueError");
+            };
+            let bundle_path = match skiller_eval_sandbox.resolve(bundle) {
+                Ok(path) => path,
+                Err(error) => return Observation::err(error.to_string(), "SandboxViolation"),
+            };
+            match skiller_registry::read_bundle(&bundle_path) {
+                Ok(bundle_data) => {
+                    let report = skiller_registry::eval_bundle(&bundle_data);
+                    let passed = report.passed;
+                    let content = serde_json::to_string_pretty(&report)
+                        .unwrap_or_else(|_| format!("passed: {passed}"));
+                    let mut data = Map::new();
+                    data.insert("passed".to_string(), json!(passed));
+                    data.insert(
+                        "report".to_string(),
+                        serde_json::to_value(&report).unwrap_or(Value::Null),
+                    );
+                    Observation {
+                        ok: passed,
+                        content,
+                        data,
+                        error: (!passed).then(|| "SkillerEvalFailed".to_string()),
+                    }
+                }
+                Err(error) => Observation::err(error.to_string(), "SkillerEvalError"),
+            }
+        }),
+        json!({"required": ["bundle"], "properties": {"bundle": "string"}}),
+        false,
+    ))?;
+
+    let skiller_readiness_sandbox = sandbox.clone();
+    registry.register(Tool::new(
+        "skiller_readiness",
+        "Assess Skiller bundle registry publication readiness from inside Vegvisir.",
+        Arc::new(move |args| {
+            let Some(bundle) = args.get("bundle").and_then(Value::as_str) else {
+                return Observation::err("Missing bundle", "ValueError");
+            };
+            let bundle_path = match skiller_readiness_sandbox.resolve(bundle) {
+                Ok(path) => path,
+                Err(error) => return Observation::err(error.to_string(), "SandboxViolation"),
+            };
+            match skiller_registry::read_bundle(&bundle_path) {
+                Ok(bundle_data) => {
+                    let report = skiller_registry::readiness_report(&bundle_data);
+                    let ready = report.ready;
+                    let content = serde_json::to_string_pretty(&report)
+                        .unwrap_or_else(|_| format!("ready: {ready}"));
+                    let mut data = Map::new();
+                    data.insert("ready".to_string(), json!(ready));
+                    data.insert(
+                        "report".to_string(),
+                        serde_json::to_value(&report).unwrap_or(Value::Null),
+                    );
+                    Observation {
+                        ok: true,
+                        content,
+                        data,
+                        error: None,
+                    }
+                }
+                Err(error) => Observation::err(error.to_string(), "SkillerReadinessError"),
+            }
+        }),
+        json!({"required": ["bundle"], "properties": {"bundle": "string"}}),
+        false,
+    ))?;
+
     let remember_config = cms_config.clone();
     registry.register(Tool::new(
         "cms_remember",
@@ -715,6 +1019,87 @@ pub fn build_builtin_registry_with_cms_and_mode(
         }),
         json!({"required": ["query"], "properties": {"query": "string", "limit": "integer"}}),
         false,
+    ))?;
+
+    let skiller_forge_request_sandbox = sandbox.clone();
+    registry.register(Tool::new(
+        "skiller_forge_request",
+        "Build a strict Vegvisir-provider Skiller Forge request envelope and model prompt for native agent/provider execution.",
+        Arc::new(move |args| {
+            let Some(bundle) = args.get("bundle").and_then(Value::as_str) else { return Observation::err("Missing bundle", "ValueError"); };
+            let pass = match parse_skiller_forge_pass(args.get("pass").and_then(Value::as_str)) { Ok(pass) => pass, Err(error) => return Observation::err(error.to_string(), "ValueError") };
+            let domain_profile = args.get("domain_profile").and_then(Value::as_str);
+            let max_skills = args.get("max_skills").and_then(Value::as_u64).unwrap_or(8).clamp(1, 100) as usize;
+            let bundle_path = match skiller_forge_request_sandbox.resolve(bundle) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
+            match skiller_registry::read_bundle(&bundle_path).map(|bundle_data| skiller_forge::build_vegvisir_handoff(&bundle_data, pass, domain_profile, max_skills)) {
+                Ok(request) => {
+                    let prompt = skiller_forge::vegvisir_prompt_markdown(&request);
+                    let template = skiller_forge::response_template_for(&request);
+                    let mut data = Map::new();
+                    data.insert("request_id".to_string(), json!(request.request_id));
+                    data.insert("provider".to_string(), json!(request.provider));
+                    data.insert("pass_type".to_string(), json!(format!("{:?}", request.pass_type)));
+                    data.insert("selected_skill_count".to_string(), json!(request.candidate_skills.len()));
+                    data.insert("request".to_string(), serde_json::to_value(&request).unwrap_or(Value::Null));
+                    data.insert("response_template".to_string(), serde_json::to_value(&template).unwrap_or(Value::Null));
+                    data.insert("prompt".to_string(), json!(prompt));
+                    Observation { ok: true, content: prompt, data, error: None }
+                }
+                Err(error) => Observation::err(error.to_string(), "SkillerForgeRequestError"),
+            }
+        }),
+        json!({"required": ["bundle"], "properties": {"bundle": "string", "pass": "string", "domain_profile": "string", "max_skills": "integer"}}),
+        false,
+    ))?;
+
+    let skiller_forge_apply_sandbox = sandbox.clone();
+    registry.register(Tool::new(
+        "skiller_forge_apply",
+        "Validate and apply a Vegvisir-generated Skiller Forge response envelope to a bundle, writing the reviewed output bundle inside the workspace.",
+        Arc::new(move |args| {
+            let Some(bundle) = args.get("bundle").and_then(Value::as_str) else { return Observation::err("Missing bundle", "ValueError"); };
+            let Some(out) = args.get("out").and_then(Value::as_str) else { return Observation::err("Missing out", "ValueError"); };
+            let request_value = match args.get("request") { Some(value) => value.clone(), None => return Observation::err("Missing request", "ValueError") };
+            let response_text = args.get("response").and_then(Value::as_str);
+            let response_value = args.get("response_envelope").cloned();
+            let bundle_path = match skiller_forge_apply_sandbox.resolve(bundle) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
+            let out_path = match skiller_forge_apply_sandbox.resolve(out) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
+            let request = match serde_json::from_value(request_value).or_else(|json_err| serde_yaml::from_str::<ForgeRequestEnvelope>(args.get("request").and_then(Value::as_str).unwrap_or("")) .map_err(|yaml_err| anyhow::anyhow!("failed to parse Forge request as JSON ({json_err}) or YAML ({yaml_err})"))) {
+                Ok(request) => request,
+                Err(error) => return Observation::err(error.to_string(), "ValueError"),
+            };
+            let response = match response_value {
+                Some(value) => match serde_json::from_value::<ForgeResponseEnvelope>(value) {
+                    Ok(response) => response,
+                    Err(error) => return Observation::err(format!("failed to parse response_envelope: {error}"), "ValueError"),
+                },
+                None => match response_text {
+                    Some(text) => match parse_skiller_forge_response(text) {
+                        Ok(response) => response,
+                        Err(error) => return Observation::err(error.to_string(), "ValueError"),
+                    },
+                    None => return Observation::err("Missing response or response_envelope", "ValueError"),
+                }
+            };
+            match skiller_registry::read_bundle(&bundle_path)
+                .and_then(|bundle_data| skiller_forge::apply_external_response_with_report(bundle_data, request, response))
+                .and_then(|(bundle_data, report)| {
+                    skiller_registry::write_bundle(&bundle_data, &out_path)?;
+                    Ok((bundle_data, report))
+                })
+            {
+                Ok((bundle_data, report)) => {
+                    let mut data = Map::new();
+                    data.insert("bundle_id".to_string(), json!(bundle_data.package.bundle_id));
+                    data.insert("out".to_string(), json!(out));
+                    data.insert("apply_report".to_string(), serde_json::to_value(&report).unwrap_or(Value::Null));
+                    Observation { ok: true, content: format!("Applied Vegvisir Skiller Forge response {} to {out} (skills: {} -> {}, human_review_required={}).", report.request_id, report.before_skill_count, report.after_skill_count, report.required_human_review), data, error: None }
+                }
+                Err(error) => Observation::err(error.to_string(), "SkillerForgeApplyError"),
+            }
+        }),
+        json!({"required": ["bundle", "out", "request"], "properties": {"bundle": "string", "out": "string", "request": "object", "response": "string", "response_envelope": "object"}}),
+        true,
     ))?;
 
     let chatgpt_archive_config = cms_config.clone();
@@ -1260,4 +1645,167 @@ fn simple_unified_diff(path: &str, old: &str, new: &str) -> String {
         diff.push('\n');
     }
     diff
+}
+
+#[cfg(test)]
+mod skiller_tool_tests {
+    use super::*;
+    use crate::memory::VegvisirCmsConfig;
+    use serde_json::json;
+    use tempfile::TempDir;
+
+    #[test]
+    fn skiller_tools_compile_validate_route_and_load_cli_help() -> anyhow::Result<()> {
+        let workspace = TempDir::new()?;
+        std::fs::write(
+            workspace.path().join("safebackup-help.txt"),
+            "safebackup - safe local backup utility\n\nUsage:\n  safebackup scan <path>\n  safebackup delete <backup-id> --yes\n\nCommands:\n  scan       Inspect a directory. Read-only.\n  delete     Delete a backup permanently. Destructive operation. Requires --yes.\n",
+        )?;
+        let cms_config = VegvisirCmsConfig {
+            db_path: workspace.path().join("cms-v2.sqlite3"),
+            user_id: "test-user".to_string(),
+            project_id: Some("test-project".to_string()),
+            context_mode: cms_v2::ecm::ContextMode::Project,
+            commit_writebacks: true,
+        };
+        let mut executor = ToolExecutor {
+            registry: build_builtin_registry_with_cms_and_mode(
+                workspace.path(),
+                cms_config,
+                false,
+            )?,
+            guardrails: GuardrailEngine {
+                policy: crate::guardrails::PermissionPolicy {
+                    allow_risky_tools: true,
+                    require_human_approval: false,
+                    ..crate::guardrails::PermissionPolicy::default()
+                },
+                approvals: crate::guardrails::ApprovalLedger::default(),
+            },
+            runtime_policy: RuntimePolicy::default(),
+            logger: EventLogger::new(None),
+        };
+
+        let compile = executor.execute(ToolCall {
+            name: "skiller_compile_cli_help".to_string(),
+            args: serde_json::from_value(json!({
+                "input": "safebackup-help.txt",
+                "out": "bundle",
+                "name": "safebackup",
+                "domain": "cli-safety"
+            }))?,
+        });
+        assert!(compile.ok, "{}", compile.content);
+        assert!(workspace.path().join("bundle/package.yaml").exists());
+
+        let validate = executor.execute(ToolCall {
+            name: "skiller_validate".to_string(),
+            args: serde_json::from_value(json!({"bundle": "bundle"}))?,
+        });
+        assert!(validate.ok, "{}", validate.content);
+
+        let route = executor.execute(ToolCall {
+            name: "skiller_route".to_string(),
+            args: serde_json::from_value(
+                json!({"bundle": "bundle", "query": "cli workflow overview", "limit": 3}),
+            )?,
+        });
+        assert!(route.ok, "{}", route.content);
+        let hits = route
+            .data
+            .get("hits")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(!hits.is_empty(), "expected route hits: {}", route.content);
+        let skill_id = hits[0]
+            .get("skill_id")
+            .and_then(Value::as_str)
+            .expect("route hit skill_id")
+            .to_string();
+
+        let load = executor.execute(ToolCall {
+            name: "skiller_load".to_string(),
+            args: serde_json::from_value(
+                json!({"bundle": "bundle", "skill_id": skill_id, "mode": "extended"}),
+            )?,
+        });
+        assert!(load.ok, "{}", load.content);
+        assert!(load.content.contains("safebackup") || load.content.contains("delete"));
+
+        Ok(())
+    }
+    #[test]
+    fn skiller_tools_build_and_apply_vegvisir_forge_envelope() -> anyhow::Result<()> {
+        let workspace = TempDir::new()?;
+        std::fs::write(
+            workspace.path().join("release.md"),
+            "# Release workflow\n\nRun tests before release. Do not claim verification passed without evidence. Publishing requires explicit approval.\n",
+        )?;
+        let registry = build_builtin_registry_with_cms_and_mode(
+            workspace.path(),
+            VegvisirCmsConfig::for_workspace(workspace.path()),
+            true,
+        )?;
+        let mut executor = ToolExecutor {
+            registry,
+            guardrails: GuardrailEngine {
+                policy: crate::guardrails::PermissionPolicy {
+                    allow_risky_tools: true,
+                    require_human_approval: false,
+                    ..crate::guardrails::PermissionPolicy::default()
+                },
+                approvals: crate::guardrails::ApprovalLedger::default(),
+            },
+            runtime_policy: RuntimePolicy::default(),
+            logger: EventLogger::new(None),
+        };
+
+        let compile = executor.execute(ToolCall {
+            name: "skiller_compile".to_string(),
+            args: serde_json::from_value(json!({
+                "input": "release.md",
+                "out": "bundle",
+                "name": "release",
+                "domain": "release-management"
+            }))?,
+        });
+        assert!(compile.ok, "{}", compile.content);
+
+        let request_obs = executor.execute(ToolCall {
+            name: "skiller_forge_request".to_string(),
+            args: serde_json::from_value(json!({
+                "bundle": "bundle",
+                "pass": "skill_expansion",
+                "max_skills": 2
+            }))?,
+        });
+        assert!(request_obs.ok, "{}", request_obs.content);
+        assert!(request_obs.content.contains("ForgeResponseEnvelope"));
+        assert_eq!(request_obs.data.get("provider"), Some(&json!("vegvisir")));
+        let request = request_obs
+            .data
+            .get("request")
+            .cloned()
+            .expect("request data");
+        let response_template = request_obs
+            .data
+            .get("response_template")
+            .cloned()
+            .expect("response template data");
+
+        let apply = executor.execute(ToolCall {
+            name: "skiller_forge_apply".to_string(),
+            args: serde_json::from_value(json!({
+                "bundle": "bundle",
+                "out": "forged-bundle",
+                "request": request,
+                "response_envelope": response_template
+            }))?,
+        });
+        assert!(apply.ok, "{}", apply.content);
+        assert!(workspace.path().join("forged-bundle/package.yaml").exists());
+        assert!(apply.data.get("apply_report").is_some());
+        Ok(())
+    }
 }
