@@ -1,14 +1,14 @@
+use crate::ingest::stable_id;
 use crate::models::*;
 use anyhow::Result;
 use serde::Serialize;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
-use uuid::Uuid;
 
 pub fn proposals(bundle: &SkillBundle) -> Vec<AgentProfileProposal> {
     let mut roles = BTreeSet::new();
-    for s in &bundle.skills {
+    for s in proposal_eligible_skills(bundle) {
         for r in &s.role_suitability {
             roles.insert(r.role.clone());
         }
@@ -18,41 +18,45 @@ pub fn proposals(bundle: &SkillBundle) -> Vec<AgentProfileProposal> {
     }
     roles
         .into_iter()
-        .map(|role| AgentProfileProposal {
-            agent_id: format!("agent-{}", Uuid::new_v4()),
-            agent_name: role.clone(),
-            agent_purpose: format!(
-                "Use reviewed skills from {} for role-specific assistance.",
-                bundle.package.name
-            ),
-            recommended_skills: bundle
-                .skills
-                .iter()
+        .map(|role| {
+            let recommended_skills: Vec<String> = proposal_eligible_skills(bundle)
+                .into_iter()
                 .filter(|s| {
                     s.role_suitability.iter().any(|r| r.role == role) || bundle.skills.len() <= 10
                 })
                 .map(|s| s.id.clone())
-                .collect(),
-            required_tools: bundle
-                .skills
-                .iter()
+                .collect();
+            let required_tools = proposal_eligible_skills(bundle)
+                .into_iter()
+                .filter(|s| recommended_skills.contains(&s.id))
                 .flat_map(|s| s.tool_requirements.iter().map(|t| t.name.clone()))
                 .collect::<BTreeSet<_>>()
                 .into_iter()
-                .collect(),
-            allowed_actions: vec![
-                "answer with citations".into(),
-                "plan read-only checks".into(),
-            ],
-            disallowed_actions: vec![
-                "mutate external systems without approval".into(),
-                "use undocumented commands".into(),
-            ],
-            runtime_context_policy: "Load smallest sufficient skills and citations.".into(),
-            review_policy: "High-risk skills require human approval.".into(),
-            escalation_policy: "Escalate missing evidence, secrets, or destructive actions.".into(),
-            example_tasks: vec!["Diagnose a source-grounded technical issue.".into()],
-            evaluation_suite: vec![],
+                .collect();
+            AgentProfileProposal {
+                agent_id: stable_agent_id(&bundle.package.bundle_id, &role),
+                agent_name: role.clone(),
+                agent_purpose: format!(
+                    "Use reviewed skills from {} for role-specific assistance.",
+                    bundle.package.name
+                ),
+                recommended_skills,
+                required_tools,
+                allowed_actions: vec![
+                    "answer with citations".into(),
+                    "plan read-only checks".into(),
+                ],
+                disallowed_actions: vec![
+                    "mutate external systems without approval".into(),
+                    "use undocumented commands".into(),
+                ],
+                runtime_context_policy: "Load smallest sufficient skills and citations.".into(),
+                review_policy: "High-risk skills require human approval.".into(),
+                escalation_policy: "Escalate missing evidence, secrets, or destructive actions."
+                    .into(),
+                example_tasks: vec!["Diagnose a source-grounded technical issue.".into()],
+                evaluation_suite: vec![],
+            }
         })
         .collect()
 }
@@ -93,14 +97,20 @@ struct AgentPack<'a> {
 }
 pub fn write_agent_pack(bundle: &SkillBundle, agent: &str, out: &Path) -> Result<()> {
     fs::create_dir_all(out)?;
+    let selected_skill_ids = selected_skill_ids(bundle, agent);
+    let selected_skill_id_set: BTreeSet<String> = selected_skill_ids.iter().cloned().collect();
+    let selected_skills: Vec<&Skill> = bundle
+        .skills
+        .iter()
+        .filter(|s| selected_skill_id_set.contains(&s.id) && !is_forbidden_skill(s))
+        .collect();
     let pack = AgentPack {
         agent_name: agent,
         agent_version: "0.1.0",
         description: format!("Agent pack generated from {}", bundle.package.name),
         source_bundle_ids: vec![bundle.package.bundle_id.clone()],
-        skill_ids: selected_skill_ids(bundle, agent),
-        required_skills: bundle
-            .skills
+        skill_ids: selected_skill_ids,
+        required_skills: selected_skills
             .iter()
             .filter(|s| {
                 matches!(
@@ -110,8 +120,7 @@ pub fn write_agent_pack(bundle: &SkillBundle, agent: &str, out: &Path) -> Result
             })
             .map(|s| s.id.clone())
             .collect(),
-        optional_skills: bundle
-            .skills
+        optional_skills: selected_skills
             .iter()
             .filter(|s| matches!(s.status, SkillStatus::Candidate | SkillStatus::NeedsReview))
             .map(|s| s.id.clone())
@@ -119,16 +128,10 @@ pub fn write_agent_pack(bundle: &SkillBundle, agent: &str, out: &Path) -> Result
         forbidden_skills: bundle
             .skills
             .iter()
-            .filter(|s| {
-                matches!(
-                    s.status,
-                    SkillStatus::Unsafe | SkillStatus::Archived | SkillStatus::Deprecated
-                ) || s.maturity < SkillMaturity::Level1StructuredCandidate
-            })
+            .filter(|s| is_forbidden_skill(s))
             .map(|s| s.id.clone())
             .collect(),
-        tool_permissions: bundle
-            .skills
+        tool_permissions: selected_skills
             .iter()
             .flat_map(|s| {
                 s.tool_requirements
@@ -141,8 +144,7 @@ pub fn write_agent_pack(bundle: &SkillBundle, agent: &str, out: &Path) -> Result
         memory_policy: "Store non-secret durable improvements only after review.".into(),
         approval_policy: "Require user approval for file or external mutation.".into(),
         review_status: bundle.package.review_status.clone(),
-        evals: bundle
-            .skills
+        evals: selected_skills
             .iter()
             .flat_map(|s| s.evals.iter().cloned())
             .take(25)
@@ -157,24 +159,38 @@ pub fn write_agent_pack(bundle: &SkillBundle, agent: &str, out: &Path) -> Result
 
 fn selected_skill_ids(bundle: &SkillBundle, agent: &str) -> Vec<String> {
     let agent_l = agent.to_lowercase();
-    let selected: Vec<String> = bundle
-        .skills
+    let eligible = proposal_eligible_skills(bundle);
+    let selected: Vec<String> = eligible
         .iter()
         .filter(|s| {
             s.role_suitability.iter().any(|r| {
                 r.role.to_lowercase().contains(&agent_l) || agent_l.contains(&r.role.to_lowercase())
-            }) || bundle.skills.len() <= 10
+            }) || eligible.len() <= 10
         })
         .map(|s| s.id.clone())
         .collect();
     if selected.is_empty() {
-        bundle
-            .skills
-            .iter()
-            .take(10)
-            .map(|s| s.id.clone())
-            .collect()
+        eligible.iter().take(10).map(|s| s.id.clone()).collect()
     } else {
         selected
     }
+}
+
+fn proposal_eligible_skills(bundle: &SkillBundle) -> Vec<&Skill> {
+    bundle
+        .skills
+        .iter()
+        .filter(|s| !is_forbidden_skill(s))
+        .collect()
+}
+
+fn is_forbidden_skill(skill: &Skill) -> bool {
+    matches!(
+        skill.status,
+        SkillStatus::Unsafe | SkillStatus::Archived | SkillStatus::Deprecated
+    ) || skill.maturity < SkillMaturity::Level1StructuredCandidate
+}
+
+fn stable_agent_id(bundle_id: &str, role: &str) -> String {
+    stable_id("agent", &format!("{bundle_id}:{role}"))
 }

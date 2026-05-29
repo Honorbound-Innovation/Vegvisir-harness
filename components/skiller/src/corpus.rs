@@ -1,3 +1,4 @@
+use crate::domain;
 use crate::ingest;
 use crate::models::*;
 use anyhow::Result;
@@ -17,7 +18,17 @@ pub struct CorpusMap {
     pub concepts: Vec<CorpusConcept>,
     pub source_clusters: BTreeMap<String, Vec<String>>,
     pub skill_clusters: BTreeMap<String, Vec<String>>,
+    pub source_trust_summary: BTreeMap<String, usize>,
+    pub domain_profile: Option<DomainProfileSummary>,
     pub missing_area_hints: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DomainProfileSummary {
+    pub name: String,
+    pub preferred_agent_roles: Vec<String>,
+    pub known_tools: Vec<String>,
+    pub required_review_policy: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -43,6 +54,19 @@ pub fn build_corpus_map(bundle: &SkillBundle) -> CorpusMap {
             .or_default()
             .push(skill.id.clone());
     }
+
+    let source_trust_summary = source_trust_summary(bundle);
+    let domain_profile = bundle
+        .package
+        .compatibility
+        .get("domain_profile")
+        .and_then(|name| domain::get_profile(name))
+        .map(|profile| DomainProfileSummary {
+            name: profile.name,
+            preferred_agent_roles: profile.preferred_agent_roles,
+            known_tools: profile.known_tools,
+            required_review_policy: profile.required_review_policy,
+        });
 
     let mut missing_area_hints = Vec::new();
     if bundle.skills.iter().all(|s| s.tool_requirements.is_empty()) {
@@ -82,7 +106,32 @@ pub fn build_corpus_map(bundle: &SkillBundle) -> CorpusMap {
             .collect(),
         source_clusters,
         skill_clusters,
+        source_trust_summary,
+        domain_profile,
         missing_area_hints,
+    }
+}
+
+fn source_trust_summary(bundle: &SkillBundle) -> BTreeMap<String, usize> {
+    let mut summary = BTreeMap::new();
+    for source in &bundle.sources {
+        *summary
+            .entry(format!("{:?}", inferred_source_trust(source)))
+            .or_insert(0) += 1;
+    }
+    summary
+}
+
+fn inferred_source_trust(source: &SourceDocument) -> SourceTrust {
+    match source.source_type {
+        SourceType::OpenApi => SourceTrust::OfficialApiSpecification,
+        SourceType::ApiSpec => SourceTrust::OfficialApiSpecification,
+        SourceType::CliSpec | SourceType::CliHelp => SourceTrust::OfficialCliReference,
+        SourceType::Repository => SourceTrust::ProjectMaintainerDocumentation,
+        SourceType::Markdown | SourceType::Text => SourceTrust::ProjectMaintainerDocumentation,
+        SourceType::Url | SourceType::Html => SourceTrust::UnknownSource,
+        SourceType::Pdf | SourceType::Epub => SourceTrust::UnknownSource,
+        SourceType::Unknown => SourceTrust::UnknownSource,
     }
 }
 
@@ -100,7 +149,27 @@ fn corpus_map_markdown(map: &CorpusMap) -> String {
         "Sources: {}  Sections: {}  Candidates: {}  Skills: {}\n\n",
         map.source_count, map.section_count, map.candidate_count, map.skill_count
     ));
-    out.push_str("## Skill Clusters\n\n");
+    if let Some(profile) = &map.domain_profile {
+        out.push_str("## Domain Profile\n\n");
+        out.push_str(&format!("- Name: {}\n", profile.name));
+        out.push_str(&format!(
+            "- Preferred roles: {}\n",
+            profile.preferred_agent_roles.join(", ")
+        ));
+        out.push_str(&format!(
+            "- Known tools: {}\n",
+            profile.known_tools.join(", ")
+        ));
+        out.push_str(&format!(
+            "- Review policy: {}\n\n",
+            profile.required_review_policy
+        ));
+    }
+    out.push_str("## Source Trust Summary\n\n");
+    for (trust, count) in &map.source_trust_summary {
+        out.push_str(&format!("- {}: {} sources\n", trust, count));
+    }
+    out.push_str("\n## Skill Clusters\n\n");
     for (kind, ids) in &map.skill_clusters {
         out.push_str(&format!("- {}: {} skills\n", kind, ids.len()));
     }

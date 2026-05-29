@@ -1,4 +1,5 @@
 use crate::corpus;
+use crate::domain;
 use crate::ingest;
 use crate::models::*;
 use anyhow::Result;
@@ -74,12 +75,13 @@ fn compile_from_parts(
     domain: Option<&str>,
     audit_message: &str,
 ) -> SkillBundle {
+    let profile = domain.and_then(domain::get_profile);
     let capability_candidates = sections
         .iter()
         .filter(|section| is_capability_bearing(section))
         .map(corpus::candidate_from_section)
         .collect();
-    let skills = generate_skills(&sources, &sections, domain);
+    let skills = generate_skills_with_profile(&sources, &sections, domain, profile.as_ref());
     let graph = build_graph(&skills, &sections);
     let package = SkillPackage {
         bundle_id: ingest::stable_id("bundle", name),
@@ -89,7 +91,7 @@ fn compile_from_parts(
         source_corpus: sources.iter().map(|s| s.source_id.clone()).collect(),
         review_status: SkillStatus::Candidate,
         publish_status: PublishStatus::Unpublished,
-        compatibility: BTreeMap::new(),
+        compatibility: package_compatibility(domain, profile.as_ref()),
         created_at: Utc::now(),
     };
     SkillBundle {
@@ -132,6 +134,16 @@ pub fn generate_skills(
     sections: &[DocumentSection],
     domain: Option<&str>,
 ) -> Vec<Skill> {
+    let profile = domain.and_then(domain::get_profile);
+    generate_skills_with_profile(sources, sections, domain, profile.as_ref())
+}
+
+fn generate_skills_with_profile(
+    sources: &[SourceDocument],
+    sections: &[DocumentSection],
+    domain: Option<&str>,
+    profile: Option<&DomainProfile>,
+) -> Vec<Skill> {
     let mut skills = Vec::new();
     for section in sections {
         let source = sources.iter().find(|s| s.source_id == section.source_id);
@@ -150,6 +162,15 @@ pub fn generate_skills(
         let mut metadata = BTreeMap::new();
         if let Some(kind) = interface_kind {
             metadata.insert("interface_kind".into(), kind.into());
+        }
+        if let Some(profile) = profile {
+            metadata.insert("domain_profile".into(), profile.name.clone());
+            if !profile.risk_categories.is_empty() {
+                metadata.insert(
+                    "domain_risk_categories".into(),
+                    profile.risk_categories.join(","),
+                );
+            }
         }
         let mut runtime_policy = RuntimePolicy::default();
         let mut skill_type = SkillType::Procedure;
@@ -173,6 +194,10 @@ pub fn generate_skills(
                     rollback_required: mutating(section),
                 });
             }
+        }
+        add_profile_tools(section, profile, &mut tool_requirements);
+        if profile.is_some() && !tool_requirements.is_empty() {
+            runtime_policy.requires_user_approval = true;
         }
         let citation = Citation {
             citation_id: ingest::stable_id("cite", &section.section_id),
@@ -203,6 +228,18 @@ pub fn generate_skills(
             "Do not expose or request plaintext secrets.".into(),
         ];
         guardrails.extend(section.detected_warnings.clone());
+        if let Some(profile) = profile {
+            guardrails.push(format!(
+                "Apply domain profile '{}' review policy: {}",
+                profile.name, profile.required_review_policy
+            ));
+            guardrails.extend(
+                profile
+                    .common_anti_patterns
+                    .iter()
+                    .map(|a| format!("Avoid domain anti-pattern: {a}")),
+            );
+        }
         if mutating(section) {
             guardrails.push("Require explicit user approval, backup/rollback plan, and idempotency check before mutation.".into());
             runtime_policy.requires_backup_or_rollback = true;
@@ -230,7 +267,7 @@ pub fn generate_skills(
             confidence,
             evidence_breakdown: EvidenceBreakdown::default(),
             inference_records: vec![],
-            role_suitability: role_suitability(domain, interface_kind),
+            role_suitability: role_suitability(domain, interface_kind, profile),
             tool_requirements,
             runtime_policy,
             version_applicability: VersionApplicability::default(),
@@ -325,7 +362,29 @@ fn source_quality(source: Option<&SourceDocument>) -> f32 {
         _ => 0.5,
     }
 }
-fn role_suitability(domain: Option<&str>, kind: Option<&str>) -> Vec<AgentRoleSuitability> {
+fn role_suitability(
+    domain: Option<&str>,
+    kind: Option<&str>,
+    profile: Option<&DomainProfile>,
+) -> Vec<AgentRoleSuitability> {
+    if let Some(profile) = profile {
+        return profile
+            .preferred_agent_roles
+            .iter()
+            .map(|role| AgentRoleSuitability {
+                role: role.clone(),
+                suitability: if matches!(kind, Some("api") | Some("cli")) {
+                    0.78
+                } else {
+                    0.7
+                },
+                rationale: format!(
+                    "Derived from '{}' domain profile, source type, and detected capability.",
+                    profile.name
+                ),
+            })
+            .collect();
+    }
     let role = match (domain, kind) {
         (_, Some("api")) => "API Operations Agent",
         (_, Some("cli")) => "CLI Operations Agent",
@@ -337,6 +396,67 @@ fn role_suitability(domain: Option<&str>, kind: Option<&str>) -> Vec<AgentRoleSu
         suitability: 0.65,
         rationale: "Derived from source type and detected capability.".into(),
     }]
+}
+
+fn package_compatibility(
+    domain: Option<&str>,
+    profile: Option<&DomainProfile>,
+) -> BTreeMap<String, String> {
+    let mut compatibility = BTreeMap::new();
+    if let Some(domain) = domain {
+        compatibility.insert("domain".into(), domain.into());
+    }
+    if let Some(profile) = profile {
+        compatibility.insert("domain_profile".into(), profile.name.clone());
+        compatibility.insert(
+            "preferred_agent_roles".into(),
+            profile.preferred_agent_roles.join(","),
+        );
+        compatibility.insert("known_tools".into(), profile.known_tools.join(","));
+        compatibility.insert(
+            "required_review_policy".into(),
+            profile.required_review_policy.clone(),
+        );
+    }
+    compatibility
+}
+
+fn add_profile_tools(
+    section: &DocumentSection,
+    profile: Option<&DomainProfile>,
+    tool_requirements: &mut Vec<ToolRequirement>,
+) {
+    let Some(profile) = profile else {
+        return;
+    };
+    let haystack = format!(
+        "{}
+{}
+{}",
+        section.heading,
+        section.text_excerpt,
+        section.detected_commands.join(
+            "
+"
+        )
+    )
+    .to_lowercase();
+    let existing: BTreeSet<String> = tool_requirements
+        .iter()
+        .map(|t| t.name.to_lowercase())
+        .collect();
+    for tool in &profile.known_tools {
+        if existing.contains(&tool.to_lowercase()) || !haystack.contains(&tool.to_lowercase()) {
+            continue;
+        }
+        tool_requirements.push(ToolRequirement {
+            name: tool.clone(),
+            requirement_type: ToolRequirementType::Optional,
+            permission_level: permission_for(section),
+            dry_run_available: Some(haystack.contains("dry-run")),
+            rollback_required: mutating(section),
+        });
+    }
 }
 fn dedup(skills: Vec<Skill>) -> Vec<Skill> {
     let mut seen = BTreeSet::new();

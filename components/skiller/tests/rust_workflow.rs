@@ -415,6 +415,73 @@ fn forge_validate_rejects_unsupported_source_and_out_of_range_scores() {
 }
 
 #[test]
+fn validation_rejects_invalid_stored_forge_history() {
+    let temp = tempdir().unwrap();
+    let docs = temp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(
+        docs.join("ops.md"),
+        "# Inspect Service\n\nYou should inspect service status before making changes.\n\n```\nsvc status\n```\n\nWarning: never restart production services without approval.\n",
+    )
+    .unwrap();
+
+    let bundle = temp.path().join("bundle");
+    let forged = temp.path().join("forged");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "compile",
+                docs.to_str().unwrap(),
+                "--out",
+                bundle.to_str().unwrap(),
+                "--name",
+                "stored-forge-validation",
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "forge",
+                bundle.to_str().unwrap(),
+                "--out",
+                forged.to_str().unwrap(),
+                "--provider",
+                "mock",
+                "--max-skills",
+                "1",
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let responses_path = forged.join("forge_responses.yaml");
+    let responses_text = std::fs::read_to_string(&responses_path).unwrap();
+    let mut responses: serde_yaml::Value = serde_yaml::from_str(&responses_text).unwrap();
+    responses[0]["modified_items"][0]["confidence"]["raw"] = serde_yaml::Value::from(42.0);
+    std::fs::write(&responses_path, serde_yaml::to_string(&responses).unwrap()).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["validate", forged.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("stored Forge response")
+            && combined.contains("must be between 0.0 and 1.0"),
+        "output was: {combined}"
+    );
+}
+
+#[test]
 fn validation_rejects_mismatched_citation_source_and_duplicate_skill_ids() {
     let temp = tempdir().unwrap();
     let docs = temp.path().join("docs");
@@ -703,6 +770,27 @@ fn agent_pack_does_not_promote_unsafe_archived_or_deprecated_skills() {
     let unsafe_id = unsafe_skill["id"].as_str().unwrap().to_string();
     unsafe_skill["status"] = serde_yaml::Value::from("Unsafe");
     unsafe_skill["maturity"] = serde_yaml::Value::from("Level6Certified");
+    unsafe_skill["tool_requirements"] = serde_yaml::from_str(
+        r#"- name: dangerous-tool
+  requirement_type: Required
+  permission_level: ExternalMutation
+  dry_run_available: false
+  rollback_required: true
+  notes: dangerous tool from unsafe skill
+"#,
+    )
+    .unwrap();
+    unsafe_skill["evals"] = serde_yaml::from_str(
+        r#"- id: unsafe-eval
+  eval_type: Safety
+  prompt: Do an unsafe thing.
+  expected_behavior: Refuse or escalate.
+  negative_cases: []
+  safety_cases: []
+  safety_notes: []
+"#,
+    )
+    .unwrap();
     std::fs::write(&skill_path, serde_yaml::to_string(&unsafe_skill).unwrap()).unwrap();
 
     let mut deprecated_skill = unsafe_skill.clone();
@@ -720,6 +808,27 @@ fn agent_pack_does_not_promote_unsafe_archived_or_deprecated_skills() {
     reviewed_skill["id"] = serde_yaml::Value::from(reviewed_id.clone());
     reviewed_skill["status"] = serde_yaml::Value::from("Reviewed");
     reviewed_skill["maturity"] = serde_yaml::Value::from("Level3Verified");
+    reviewed_skill["tool_requirements"] = serde_yaml::from_str(
+        r#"- name: safe-tool
+  requirement_type: Optional
+  permission_level: ReadOnly
+  dry_run_available: true
+  rollback_required: false
+  notes: safe tool from reviewed skill
+"#,
+    )
+    .unwrap();
+    reviewed_skill["evals"] = serde_yaml::from_str(
+        r#"- id: reviewed-eval
+  eval_type: Positive
+  prompt: Do a safe reviewed thing.
+  expected_behavior: Answer with citations.
+  negative_cases: []
+  safety_cases: []
+  safety_notes: []
+"#,
+    )
+    .unwrap();
     std::fs::write(
         bundle.join("skills").join(format!("{reviewed_id}.yaml")),
         serde_yaml::to_string(&reviewed_skill).unwrap(),
@@ -750,6 +859,28 @@ fn agent_pack_does_not_promote_unsafe_archived_or_deprecated_skills() {
     assert!(!required.iter().any(|v| v.as_str() == Some(&deprecated_id)));
     assert!(forbidden.iter().any(|v| v.as_str() == Some(&unsafe_id)));
     assert!(forbidden.iter().any(|v| v.as_str() == Some(&deprecated_id)));
+    let tool_permissions = pack_yaml["tool_permissions"].as_sequence().unwrap();
+    assert!(
+        tool_permissions
+            .iter()
+            .any(|v| v.as_str().is_some_and(|s| s.contains("safe-tool")))
+    );
+    assert!(
+        !tool_permissions
+            .iter()
+            .any(|v| v.as_str().is_some_and(|s| s.contains("dangerous-tool")))
+    );
+    let evals = pack_yaml["evals"].as_sequence().unwrap();
+    assert!(
+        evals
+            .iter()
+            .any(|v| v["id"].as_str() == Some("reviewed-eval"))
+    );
+    assert!(
+        !evals
+            .iter()
+            .any(|v| v["id"].as_str() == Some("unsafe-eval"))
+    );
 }
 
 #[test]
@@ -950,4 +1081,787 @@ fn telemetry_improvement_proposals_are_deterministic_risk_specific_and_indexed()
             .all(|name| !name.contains("proposal-") || !name.contains("00000000"))
     );
     assert_eq!(proposal_files.len(), 4);
+}
+
+#[test]
+fn agent_proposals_are_deterministic_and_exclude_forbidden_skills() {
+    let temp = tempdir().unwrap();
+    let docs = temp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(
+        docs.join("ops.md"),
+        "# Inspect Service\n\nUse status before mutation.\n\n```\nsvcctl status demo\n```\n",
+    )
+    .unwrap();
+
+    let bundle = temp.path().join("bundle");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "compile",
+                docs.to_str().unwrap(),
+                "--out",
+                bundle.to_str().unwrap(),
+                "--name",
+                "agent-proposal-gates",
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let skill_path = std::fs::read_dir(bundle.join("skills"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.extension().and_then(|s| s.to_str()) == Some("yaml"))
+        .unwrap();
+    let skill_text = std::fs::read_to_string(&skill_path).unwrap();
+    let mut base_skill: serde_yaml::Value = serde_yaml::from_str(&skill_text).unwrap();
+    let base_id = base_skill["id"].as_str().unwrap().to_string();
+    base_skill["status"] = serde_yaml::Value::from("Reviewed");
+    base_skill["maturity"] = serde_yaml::Value::from("Level3Verified");
+    base_skill["role_suitability"] = serde_yaml::from_str(
+        r#"
+- role: Technical Documentation Agent
+  suitability: 0.9
+  rationale: Source-grounded operational support.
+"#,
+    )
+    .unwrap();
+    base_skill["tool_requirements"] = serde_yaml::from_str(
+        r#"
+- name: safe-tool
+  requirement_type: Required
+  permission_level: ReadOnly
+  dry_run_available: true
+  rollback_required: false
+"#,
+    )
+    .unwrap();
+    std::fs::write(&skill_path, serde_yaml::to_string(&base_skill).unwrap()).unwrap();
+
+    let mut unsafe_skill = base_skill.clone();
+    let unsafe_id = format!("{base_id}-unsafe");
+    unsafe_skill["id"] = serde_yaml::Value::from(unsafe_id.clone());
+    unsafe_skill["status"] = serde_yaml::Value::from("Unsafe");
+    unsafe_skill["tool_requirements"] = serde_yaml::from_str(
+        r#"
+- name: dangerous-tool
+  requirement_type: Dangerous
+  permission_level: Dangerous
+  dry_run_available: false
+  rollback_required: true
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        bundle.join("skills").join(format!("{unsafe_id}.yaml")),
+        serde_yaml::to_string(&unsafe_skill).unwrap(),
+    )
+    .unwrap();
+
+    let out_a = temp.path().join("agents-a");
+    let out_b = temp.path().join("agents-b");
+    for out in [&out_a, &out_b] {
+        assert!(
+            Command::new(env!("CARGO_BIN_EXE_skiller"))
+                .args([
+                    "propose-agents",
+                    bundle.to_str().unwrap(),
+                    "--out",
+                    out.to_str().unwrap(),
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+
+    let proposal_a =
+        std::fs::read_to_string(out_a.join("technical-documentation-agent.yaml")).unwrap();
+    let proposal_b =
+        std::fs::read_to_string(out_b.join("technical-documentation-agent.yaml")).unwrap();
+    assert_eq!(proposal_a, proposal_b);
+    let proposal: serde_yaml::Value = serde_yaml::from_str(&proposal_a).unwrap();
+    let recommended = proposal["recommended_skills"].as_sequence().unwrap();
+    let required_tools = proposal["required_tools"].as_sequence().unwrap();
+    assert!(recommended.iter().any(|v| v.as_str() == Some(&base_id)));
+    assert!(!recommended.iter().any(|v| v.as_str() == Some(&unsafe_id)));
+    assert!(
+        required_tools
+            .iter()
+            .any(|v| v.as_str() == Some("safe-tool"))
+    );
+    assert!(
+        !required_tools
+            .iter()
+            .any(|v| v.as_str() == Some("dangerous-tool"))
+    );
+}
+
+#[test]
+fn manifest_verification_rejects_path_traversal_entries() {
+    let temp = tempdir().unwrap();
+    let docs = temp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(
+        docs.join("ops.md"),
+        "# Inspect Service\n\nUse the status command before changes.\n\n```\nsvc status demo\n```\n",
+    )
+    .unwrap();
+
+    let bundle = temp.path().join("bundle");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "compile",
+                docs.to_str().unwrap(),
+                "--out",
+                bundle.to_str().unwrap(),
+                "--name",
+                "manifest-path-safety",
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    std::fs::write(
+        bundle.join("MANIFEST.sha256"),
+        "0000000000000000000000000000000000000000000000000000000000000000  ../outside.yaml\n1111111111111111111111111111111111111111111111111111111111111111  /absolute.yaml\n",
+    )
+    .unwrap();
+
+    let verify = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["verify-manifest", bundle.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!verify.status.success());
+    let stdout = String::from_utf8_lossy(&verify.stdout);
+    assert!(stdout.contains("valid: false"), "stdout was: {stdout}");
+    assert!(
+        stdout.contains("../outside.yaml") && stdout.contains("/absolute.yaml"),
+        "stdout was: {stdout}"
+    );
+}
+
+#[test]
+fn forge_artifact_ids_are_deterministic_for_same_input() {
+    let temp = tempdir().unwrap();
+    let docs = temp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(
+        docs.join("ops.md"),
+        "# Inspect Service\n\nUse the status command before changes.\n\n```\nsvc status demo\n```\n\n# Restart Service\n\nRestart only after inspection and approval.\n\n```\nsvc restart demo\n```\n",
+    )
+    .unwrap();
+
+    let bundle = temp.path().join("bundle");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "compile",
+                docs.to_str().unwrap(),
+                "--out",
+                bundle.to_str().unwrap(),
+                "--name",
+                "forge-determinism",
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let forged_a = temp.path().join("forged-a");
+    let forged_b = temp.path().join("forged-b");
+    for out in [&forged_a, &forged_b] {
+        assert!(
+            Command::new(env!("CARGO_BIN_EXE_skiller"))
+                .args([
+                    "forge",
+                    bundle.to_str().unwrap(),
+                    "--out",
+                    out.to_str().unwrap(),
+                    "--provider",
+                    "mock",
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+
+    let requests_a: serde_yaml::Value = serde_yaml::from_str(
+        &std::fs::read_to_string(forged_a.join("forge_requests.yaml")).unwrap(),
+    )
+    .unwrap();
+    let requests_b: serde_yaml::Value = serde_yaml::from_str(
+        &std::fs::read_to_string(forged_b.join("forge_requests.yaml")).unwrap(),
+    )
+    .unwrap();
+    let request_ids_a: Vec<_> = requests_a
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .map(|request| request["request_id"].as_str().unwrap().to_string())
+        .collect();
+    let request_ids_b: Vec<_> = requests_b
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .map(|request| request["request_id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(request_ids_a, request_ids_b);
+    assert!(request_ids_a.iter().all(|id| id.starts_with("forge-req-")));
+
+    let responses_a: serde_yaml::Value = serde_yaml::from_str(
+        &std::fs::read_to_string(forged_a.join("forge_responses.yaml")).unwrap(),
+    )
+    .unwrap();
+    let responses_b: serde_yaml::Value = serde_yaml::from_str(
+        &std::fs::read_to_string(forged_b.join("forge_responses.yaml")).unwrap(),
+    )
+    .unwrap();
+    let response_ids_a: Vec<_> = responses_a
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .map(|response| response["request_id"].as_str().unwrap().to_string())
+        .collect();
+    let response_ids_b: Vec<_> = responses_b
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .map(|response| response["request_id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(response_ids_a, response_ids_b);
+    assert_eq!(response_ids_a, request_ids_a);
+
+    let mut inference_ids = Vec::new();
+    for entry in std::fs::read_dir(forged_a.join("skills")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|s| s.to_str()) != Some("yaml") {
+            continue;
+        }
+        let skill: serde_yaml::Value =
+            serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        if let Some(records) = skill["inference_records"].as_sequence() {
+            inference_ids.extend(
+                records
+                    .iter()
+                    .filter_map(|record| record["inference_id"].as_str().map(|id| id.to_string())),
+            );
+        }
+    }
+    assert!(!inference_ids.is_empty());
+    assert!(inference_ids.iter().all(|id| id.starts_with("inf-")));
+}
+
+#[test]
+fn validation_rejects_duplicate_stored_forge_request_ids() {
+    let temp = tempdir().unwrap();
+    let docs = temp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(
+        docs.join("ops.md"),
+        "# Inspect Service\n\nUse the status command before changes.\n\n```\nsvc status demo\n```\n",
+    )
+    .unwrap();
+
+    let bundle = temp.path().join("bundle");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "compile",
+                docs.to_str().unwrap(),
+                "--out",
+                bundle.to_str().unwrap(),
+                "--name",
+                "forge-duplicate-history",
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let forged = temp.path().join("forged");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "forge",
+                bundle.to_str().unwrap(),
+                "--out",
+                forged.to_str().unwrap(),
+                "--provider",
+                "mock",
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let requests_path = forged.join("forge_requests.yaml");
+    let mut requests: serde_yaml::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&requests_path).unwrap()).unwrap();
+    let seq = requests.as_sequence_mut().unwrap();
+    assert!(seq.len() > 1);
+    let duplicate_id = seq[0]["request_id"].clone();
+    seq[1]["request_id"] = duplicate_id;
+    std::fs::write(&requests_path, serde_yaml::to_string(&requests).unwrap()).unwrap();
+
+    let validate = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["validate", forged.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!validate.status.success());
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&validate.stdout),
+        String::from_utf8_lossy(&validate.stderr)
+    );
+    assert!(
+        combined.contains("duplicate stored Forge request_id"),
+        "combined output was: {combined}"
+    );
+}
+
+#[test]
+fn deterministic_compile_applies_domain_profile_metadata_roles_and_tools() {
+    let temp = tempdir().unwrap();
+    let docs = temp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(
+        docs.join("kube.md"),
+        "# Diagnose Kubernetes Rollouts\n\nYou should inspect rollout state with kubectl before changing manifests.\n\n```\nkubectl rollout status deployment/demo\nkubectl get pods\n```\n\nWarning: never mutate production resources without approval and rollback context.\n",
+    )
+    .unwrap();
+    let bundle = temp.path().join("bundle");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "compile",
+                docs.to_str().unwrap(),
+                "--out",
+                bundle.to_str().unwrap(),
+                "--name",
+                "kube-profiled",
+                "--domain",
+                "kubernetes-operations",
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let package = std::fs::read_to_string(bundle.join("package.yaml")).unwrap();
+    assert!(package.contains("domain_profile: kubernetes-operations"));
+    assert!(package.contains("Cluster Diagnostic Agent"));
+    assert!(package.contains("kubectl"));
+
+    let skill_path = std::fs::read_dir(bundle.join("skills"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| p.extension().and_then(|s| s.to_str()) == Some("yaml"))
+        .expect("compiled skill exists");
+    let skill = std::fs::read_to_string(skill_path).unwrap();
+    assert!(skill.contains("domain_profile: kubernetes-operations"));
+    assert!(skill.contains("Cluster Diagnostic Agent"));
+    assert!(skill.contains("Manifest Review Agent"));
+    assert!(
+        skill.contains("Apply domain profile")
+            && skill.contains("kubernetes-operations")
+            && skill.contains("review policy")
+    );
+    assert!(skill.contains("Avoid domain anti-pattern"));
+    assert!(skill.contains("name: kubectl"));
+}
+
+#[test]
+fn corpus_map_includes_domain_profile_and_source_trust_summary() {
+    let temp = tempdir().unwrap();
+    let docs = temp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(
+        docs.join("kube.md"),
+        "# Diagnose Pods\n\nYou should inspect pod state with kubectl.\n\n```\nkubectl get pods\n```\n",
+    )
+    .unwrap();
+    let bundle = temp.path().join("bundle");
+    let map = temp.path().join("map");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "compile",
+                docs.to_str().unwrap(),
+                "--out",
+                bundle.to_str().unwrap(),
+                "--name",
+                "kube-map",
+                "--domain",
+                "kubernetes-operations",
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "corpus-map",
+                bundle.to_str().unwrap(),
+                "--out",
+                map.to_str().unwrap()
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let yaml = std::fs::read_to_string(map.join("corpus-map.yaml")).unwrap();
+    assert!(yaml.contains("domain_profile:"));
+    assert!(yaml.contains("name: kubernetes-operations"));
+    assert!(yaml.contains("Cluster Diagnostic Agent"));
+    assert!(yaml.contains("source_trust_summary:"));
+    assert!(yaml.contains("ProjectMaintainerDocumentation"));
+    let md = std::fs::read_to_string(map.join("corpus-map.md")).unwrap();
+    assert!(md.contains("## Domain Profile"));
+    assert!(md.contains("## Source Trust Summary"));
+}
+
+#[test]
+fn verifier_review_ids_are_stable_and_reject_invalid_risky_skills() {
+    let temp = tempdir().unwrap();
+    let docs = temp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(
+        docs.join("ops.md"),
+        "# Operate Service\n\nUse dangerousctl apply to mutate an external service.\n\n```\ndangerousctl apply\n```\n",
+    )
+    .unwrap();
+    let bundle = temp.path().join("bundle");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "compile",
+                docs.to_str().unwrap(),
+                "--out",
+                bundle.to_str().unwrap(),
+                "--name",
+                "review-stability",
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let skill_path = std::fs::read_dir(bundle.join("skills"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| p.extension().and_then(|s| s.to_str()) == Some("yaml"))
+        .unwrap();
+    let mut skill_yaml: serde_yaml::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&skill_path).unwrap()).unwrap();
+    skill_yaml["confidence"]["raw"] = serde_yaml::Value::from(1.7);
+    skill_yaml["runtime_policy"]["modify_external_systems"] = serde_yaml::Value::from(true);
+    skill_yaml["runtime_policy"]["requires_user_approval"] = serde_yaml::Value::from(false);
+    skill_yaml["tool_requirements"] = serde_yaml::from_str(
+        r#"- name: dangerousctl
+  requirement_type: Dangerous
+  permission_level: Dangerous
+  dry_run_available: false
+  rollback_required: true
+"#,
+    )
+    .unwrap();
+    std::fs::write(&skill_path, serde_yaml::to_string(&skill_yaml).unwrap()).unwrap();
+
+    let review_a = temp.path().join("review-a");
+    let review_b = temp.path().join("review-b");
+    for out in [&review_a, &review_b] {
+        assert!(
+            Command::new(env!("CARGO_BIN_EXE_skiller"))
+                .args([
+                    "review-agent",
+                    bundle.to_str().unwrap(),
+                    "--out",
+                    out.to_str().unwrap(),
+                    "--agent",
+                    "verifier",
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+
+    let report_a: serde_yaml::Value = serde_yaml::from_str(
+        &std::fs::read_to_string(review_a.join("verifier-review.yaml")).unwrap(),
+    )
+    .unwrap();
+    let report_b: serde_yaml::Value = serde_yaml::from_str(
+        &std::fs::read_to_string(review_b.join("verifier-review.yaml")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(report_a["report_id"], report_b["report_id"]);
+    assert!(
+        report_a["report_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("review-")
+    );
+    let finding = &report_a["findings"][0];
+    assert_eq!(finding["decision"].as_str(), Some("Unsafe"));
+    let finding_text = serde_yaml::to_string(finding).unwrap();
+    assert!(finding_text.contains("confidence score outside 0.0..=1.0"));
+    assert!(finding_text.contains("without user approval"));
+}
+
+#[test]
+fn evidence_report_includes_trust_inference_tools_and_publication_warnings() {
+    let temp = tempdir().unwrap();
+    let docs = temp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(
+        docs.join("kube.md"),
+        "# Diagnose Pods\n\nUse kubectl to inspect pod state before changing manifests.\n\n```\nkubectl get pods\n```\n",
+    )
+    .unwrap();
+    let bundle = temp.path().join("bundle");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "compile",
+                docs.to_str().unwrap(),
+                "--out",
+                bundle.to_str().unwrap(),
+                "--name",
+                "evidence-rich",
+                "--domain",
+                "kubernetes-operations",
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let forged = temp.path().join("forged");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "infer",
+                bundle.to_str().unwrap(),
+                "--out",
+                forged.to_str().unwrap(),
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let skill_path = std::fs::read_dir(forged.join("skills"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| p.extension().and_then(|s| s.to_str()) == Some("yaml"))
+        .unwrap();
+    let mut skill_yaml: serde_yaml::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&skill_path).unwrap()).unwrap();
+    let section_id = skill_yaml["source_section_ids"][0]
+        .as_str()
+        .unwrap()
+        .to_string();
+    skill_yaml["evidence_breakdown"]["speculative_candidate"] = serde_yaml::Value::from(0.30);
+    skill_yaml["inference_records"] = serde_yaml::from_str(&format!(
+        r#"- inference_id: inf-test-evidence
+  candidate_ids_used: []
+  source_refs_used:
+    - {section_id}
+  reasoning_summary: Test inference record for evidence report coverage.
+  inference_type: Expansion
+  evidence_type: SupportingInference
+  confidence: 0.6
+  unsupported_assumptions:
+    - Reviewer must confirm operational ordering.
+  required_review: true
+  risk_flags:
+    - review-required
+  generated_by_agent: test
+  created_at: 2024-01-01T00:00:00Z
+"#
+    ))
+    .unwrap();
+    std::fs::write(&skill_path, serde_yaml::to_string(&skill_yaml).unwrap()).unwrap();
+
+    let evidence = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["evidence-report", forged.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(evidence.status.success());
+    let stdout = String::from_utf8_lossy(&evidence.stdout);
+    assert!(stdout.contains("## Source Trust and Rights"));
+    assert!(stdout.contains("ProjectMaintainerDocumentation"));
+    assert!(stdout.contains("PrivateOnly"));
+    assert!(stdout.contains("## Evidence Summary by Skill"));
+    assert!(stdout.contains("### Citations"));
+    assert!(stdout.contains("ownership=ok"));
+    assert!(stdout.contains("### Inference Records"));
+    assert!(stdout.contains("required_review=true"));
+    assert!(stdout.contains("### Tool Requirements"));
+    assert!(stdout.contains("kubectl"));
+    assert!(stdout.contains("Evidence / Publication Warnings"));
+}
+
+#[test]
+fn registry_publish_writes_rich_provenance_and_index_lifecycle_metadata() {
+    let temp = tempdir().unwrap();
+    let docs = temp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(
+        docs.join("ops.md"),
+        "# Inspect Service\n\nUse the status command before changes.\n\n```\nsvc status demo\n```\n",
+    )
+    .unwrap();
+
+    let bundle = temp.path().join("bundle");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "compile",
+                docs.to_str().unwrap(),
+                "--out",
+                bundle.to_str().unwrap(),
+                "--name",
+                "provenance-registry",
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let registry = temp.path().join("registry");
+    let publish = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "publish",
+            bundle.to_str().unwrap(),
+            "--registry",
+            registry.to_str().unwrap(),
+            "--force",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        publish.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&publish.stdout),
+        String::from_utf8_lossy(&publish.stderr)
+    );
+
+    let package: serde_yaml::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(bundle.join("package.yaml")).unwrap())
+            .unwrap();
+    let bundle_id = package["bundle_id"].as_str().unwrap().to_string();
+    let version = package["version"].as_str().unwrap().to_string();
+    let entry = registry.join(&bundle_id).join(&version);
+
+    let provenance_text = std::fs::read_to_string(entry.join("PROVENANCE.json")).unwrap();
+    let provenance: serde_json::Value = serde_json::from_str(&provenance_text).unwrap();
+    assert_eq!(provenance["bundle_id"].as_str(), Some(bundle_id.as_str()));
+    assert_eq!(provenance["version"].as_str(), Some(version.as_str()));
+    assert_eq!(provenance["force"].as_bool(), Some(true));
+    assert_eq!(provenance["readiness_ready"].as_bool(), Some(false));
+    assert!(provenance["readiness_blockers"].as_array().unwrap().len() > 0);
+    assert!(provenance["content_manifest_hash"].as_str().unwrap().len() == 64);
+    assert!(provenance["source_count"].as_u64().unwrap() > 0);
+    assert!(provenance["skill_count"].as_u64().unwrap() > 0);
+    assert!(
+        provenance["source_rights_summary"]
+            .as_object()
+            .unwrap()
+            .contains_key("PrivateOnly")
+    );
+
+    let verify = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["verify-manifest", entry.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(verify.status.success());
+    let verify_stdout = String::from_utf8_lossy(&verify.stdout);
+    assert!(
+        verify_stdout.contains("valid: true"),
+        "stdout was: {verify_stdout}"
+    );
+
+    let list = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["registry-list", registry.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        list.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&list.stdout),
+        String::from_utf8_lossy(&list.stderr)
+    );
+    let list_stdout = String::from_utf8_lossy(&list.stdout);
+    assert!(
+        list_stdout.contains("force_published: true"),
+        "stdout was: {list_stdout}"
+    );
+    assert!(
+        list_stdout.contains("readiness_ready: false"),
+        "stdout was: {list_stdout}"
+    );
+    assert!(
+        list_stdout.contains("content_manifest_hash:"),
+        "stdout was: {list_stdout}"
+    );
+    assert!(
+        list_stdout.contains("manifest_valid: true"),
+        "stdout was: {list_stdout}"
+    );
+
+    let deprecate = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "registry-deprecate",
+            registry.to_str().unwrap(),
+            &bundle_id,
+            &version,
+            "--reason",
+            "superseded by test fixture",
+        ])
+        .output()
+        .unwrap();
+    assert!(deprecate.status.success());
+
+    let rollback = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "registry-rollback",
+            registry.to_str().unwrap(),
+            &bundle_id,
+            &version,
+            "--reason",
+            "test rollback target",
+        ])
+        .output()
+        .unwrap();
+    assert!(rollback.status.success());
+
+    let list = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["registry-list", registry.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(list.status.success());
+    let list_stdout = String::from_utf8_lossy(&list.stdout);
+    assert!(
+        list_stdout.contains("deprecated: true"),
+        "stdout was: {list_stdout}"
+    );
+    assert!(
+        list_stdout.contains("superseded by test fixture"),
+        "stdout was: {list_stdout}"
+    );
+    assert!(
+        list_stdout.contains("active_version:"),
+        "stdout was: {list_stdout}"
+    );
+    assert!(list_stdout.contains(&version), "stdout was: {list_stdout}");
 }

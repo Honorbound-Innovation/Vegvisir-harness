@@ -1,6 +1,5 @@
 use crate::models::*;
 use chrono::Utc;
-use uuid::Uuid;
 
 pub fn verifier_review(bundle: &SkillBundle, reviewer: &str) -> VerifierReviewReport {
     let findings = bundle
@@ -21,7 +20,7 @@ pub fn verifier_review(bundle: &SkillBundle, reviewer: &str) -> VerifierReviewRe
         .filter(|f| f.decision == ReviewDecision::Unsafe)
         .count();
     VerifierReviewReport {
-        report_id: format!("review-{}", Uuid::new_v4()),
+        report_id: stable_review_id(bundle, reviewer),
         bundle_id: bundle.package.bundle_id.clone(),
         reviewer: reviewer.into(),
         created_at: Utc::now(),
@@ -74,6 +73,37 @@ fn review_skill(skill: &Skill, reviewer: &str) -> SkillReviewFinding {
         blockers.push("missing citations".into());
         required_changes.push("add at least one source citation".into());
     }
+    if !probability_ok(skill.confidence.raw)
+        || !probability_ok(skill.confidence.extraction)
+        || !probability_ok(skill.confidence.inference)
+        || !probability_ok(skill.confidence.procedure)
+        || !probability_ok(skill.confidence.guardrail)
+        || !probability_ok(skill.confidence.eval)
+        || !probability_ok(skill.confidence.routing)
+        || !probability_ok(skill.confidence.source_quality)
+        || !probability_ok(skill.confidence.human_review)
+        || !probability_ok(skill.confidence.runtime)
+    {
+        blockers.push("confidence score outside 0.0..=1.0".into());
+        required_changes.push("normalize confidence breakdown before review".into());
+    }
+    let evidence_total = skill.evidence_breakdown.direct_extraction
+        + skill.evidence_breakdown.supporting_inference
+        + skill.evidence_breakdown.operational_synthesis
+        + skill.evidence_breakdown.speculative_candidate
+        + skill.evidence_breakdown.community_derived
+        + skill.evidence_breakdown.internal_policy_derived;
+    if !probability_ok(skill.evidence_breakdown.direct_extraction)
+        || !probability_ok(skill.evidence_breakdown.supporting_inference)
+        || !probability_ok(skill.evidence_breakdown.operational_synthesis)
+        || !probability_ok(skill.evidence_breakdown.speculative_candidate)
+        || !probability_ok(skill.evidence_breakdown.community_derived)
+        || !probability_ok(skill.evidence_breakdown.internal_policy_derived)
+        || evidence_total > 1.05
+    {
+        blockers.push("invalid evidence breakdown".into());
+        required_changes.push("normalize evidence classes and keep total within 100%".into());
+    }
     if skill.source_section_ids.is_empty() {
         blockers.push("missing source section references".into());
     }
@@ -90,6 +120,25 @@ fn review_skill(skill: &Skill, reviewer: &str) -> SkillReviewFinding {
     }
     if skill.runtime_policy.modify_files && !skill.runtime_policy.requires_backup_or_rollback {
         warnings.push("file mutation should require backup or rollback context".into());
+    }
+    for tool in &skill.tool_requirements {
+        if matches!(
+            tool.permission_level,
+            PermissionLevel::Dangerous | PermissionLevel::ExternalMutation
+        ) && !skill.runtime_policy.requires_user_approval
+        {
+            blockers.push(format!(
+                "tool '{}' requires {:?} without user approval",
+                tool.name, tool.permission_level
+            ));
+            required_changes.push("require user approval for dangerous/external tools".into());
+        }
+        if tool.rollback_required && !skill.runtime_policy.requires_backup_or_rollback {
+            warnings.push(format!(
+                "tool '{}' requires rollback but skill policy does not require backup/rollback",
+                tool.name
+            ));
+        }
     }
     if skill
         .inference_records
@@ -221,7 +270,7 @@ pub fn apply_verifier_review(
     metadata.insert("unsafe".into(), unsafe_count.to_string());
     metadata.insert("archived".into(), archived.to_string());
     bundle.audit_events.push(AuditEvent {
-        event_id: format!("audit-{}", Uuid::new_v4()),
+        event_id: stable_review_audit_id(&bundle.package.bundle_id, &report.report_id),
         event_type: "apply-verifier-review".into(),
         message: "applied verifier review decisions to staged bundle".into(),
         created_at: Utc::now(),
@@ -235,4 +284,40 @@ fn push_unique(items: &mut Vec<String>, value: &str) {
     if items.iter().all(|item| item != value) {
         items.push(value.into());
     }
+}
+
+fn stable_review_id(bundle: &SkillBundle, reviewer: &str) -> String {
+    let mut parts = vec![
+        bundle.package.bundle_id.as_str(),
+        bundle.package.version.as_str(),
+        reviewer,
+    ];
+    let mut skill_ids = bundle
+        .skills
+        .iter()
+        .map(|s| s.id.as_str())
+        .collect::<Vec<_>>();
+    skill_ids.sort_unstable();
+    parts.extend(skill_ids);
+    format!("review-{}", stable_hash(&parts.join("|")))
+}
+
+fn stable_review_audit_id(bundle_id: &str, report_id: &str) -> String {
+    format!(
+        "audit-{}",
+        stable_hash(&format!("apply-review|{bundle_id}|{report_id}"))
+    )
+}
+
+fn stable_hash(input: &str) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in input.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
+}
+
+fn probability_ok(value: f32) -> bool {
+    value.is_finite() && (0.0..=1.0).contains(&value)
 }

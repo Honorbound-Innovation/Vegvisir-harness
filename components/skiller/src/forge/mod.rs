@@ -1,10 +1,10 @@
 use crate::compiler;
 use crate::domain;
+use crate::ingest::stable_id;
 use crate::models::*;
 use anyhow::{Result, anyhow, bail};
 use chrono::Utc;
 use std::collections::{BTreeMap, BTreeSet};
-use uuid::Uuid;
 
 pub trait ForgeProvider {
     fn name(&self) -> &'static str;
@@ -231,7 +231,7 @@ pub fn build_request(
         .flat_map(|s| s.citations.iter().map(|c| c.citation_id.clone()))
         .collect();
     ForgeRequestEnvelope {
-        request_id: Uuid::new_v4().to_string(),
+        request_id: stable_forge_request_id(bundle, provider, &pass_type, max_skills),
         provider: provider.into(),
         pass_type: pass_type.clone(),
         bundle_id: bundle.package.bundle_id.clone(),
@@ -279,6 +279,32 @@ pub fn apply_external_response(
         "applied externally generated Forge response after validation",
     ));
     Ok(bundle)
+}
+
+fn stable_forge_request_id(
+    bundle: &SkillBundle,
+    provider: &str,
+    pass_type: &ForgePassType,
+    max_skills: usize,
+) -> String {
+    let selected = bundle
+        .skills
+        .iter()
+        .take(max_skills)
+        .map(|skill| skill.id.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    stable_id(
+        "forge-req",
+        &format!(
+            "{}:{}:{}:{provider}:{pass_type:?}:{selected}",
+            bundle.package.bundle_id, bundle.package.version, bundle.package.name
+        ),
+    )
+}
+
+fn stable_inference_id(skill_id: &str, pass: &str, refs: &[String]) -> String {
+    stable_id("inf", &format!("{skill_id}:{pass}:{}", refs.join(",")))
 }
 
 fn instruction_for(pass_type: &ForgePassType) -> String {
@@ -541,7 +567,7 @@ fn apply_expansion(skill: &mut Skill, provider: &str, profile: Option<&DomainPro
         apply_role_mapping(skill, Some(p));
     }
     skill.inference_records.push(InferenceRecord {
-        inference_id: Uuid::new_v4().to_string(),
+        inference_id: stable_inference_id(&skill.id, "expansion", &skill.source_section_ids),
         candidate_ids_used: vec![skill.id.clone()],
         source_refs_used: skill.source_section_ids.clone(),
         reasoning_summary: "Forge provider expanded metadata, guardrails, and role suitability using structured citations and candidate packets.".into(),
@@ -578,7 +604,7 @@ fn apply_safety(skill: &mut Skill, provider: &str) {
         );
     }
     skill.inference_records.push(InferenceRecord {
-        inference_id: Uuid::new_v4().to_string(),
+        inference_id: stable_inference_id(&skill.id, "safety", &skill.source_section_ids),
         candidate_ids_used: vec![skill.id.clone()],
         source_refs_used: skill.source_section_ids.clone(),
         reasoning_summary: "Safety/governance pass added runtime approval and rollback boundaries for operational use.".into(),
@@ -688,7 +714,7 @@ fn inferred_skill_from_request(request: &ForgeRequestEnvelope, provider: &str) -
         internal_policy_derived: 0.0,
     };
     inferred.inference_records = vec![InferenceRecord {
-        inference_id: Uuid::new_v4().to_string(),
+        inference_id: stable_inference_id(&inferred.id, "new-skill", &section_refs),
         candidate_ids_used: request
             .candidate_skills
             .iter()
@@ -737,17 +763,43 @@ pub fn critique_markdown(bundle: &SkillBundle) -> String {
 }
 
 pub fn validate_stored_forge(bundle: &SkillBundle) -> Result<()> {
+    let mut request_ids = BTreeSet::new();
+    for request in &bundle.forge_requests {
+        if request.request_id.trim().is_empty() {
+            bail!("stored Forge request has empty request_id");
+        }
+        if !request_ids.insert(request.request_id.as_str()) {
+            bail!("duplicate stored Forge request_id {}", request.request_id);
+        }
+    }
+
+    let mut response_ids = BTreeSet::new();
     for response in &bundle.forge_responses {
-        if bundle
+        if response.request_id.trim().is_empty() {
+            bail!("stored Forge response has empty request_id");
+        }
+        if !response_ids.insert(response.request_id.as_str()) {
+            bail!(
+                "duplicate stored Forge response request_id {}",
+                response.request_id
+            );
+        }
+        let request = bundle
             .forge_requests
             .iter()
-            .all(|request| request.request_id != response.request_id)
-        {
-            return Err(anyhow!(
-                "stored Forge response {} has no matching request",
+            .find(|request| request.request_id == response.request_id)
+            .ok_or_else(|| {
+                anyhow!(
+                    "stored Forge response {} has no matching request",
+                    response.request_id
+                )
+            })?;
+        validate_response(bundle, request, response).map_err(|err| {
+            anyhow!(
+                "stored Forge response {} failed validation: {err}",
                 response.request_id
-            ));
-        }
+            )
+        })?;
     }
     Ok(())
 }
@@ -759,7 +811,7 @@ pub fn response_template_for(request: &ForgeRequestEnvelope) -> ForgeResponseEnv
         generated_items: vec![],
         modified_items: vec![],
         review_findings: vec![
-            "TODO: Vegvisir should replace this template with review findings or remove this note."
+            "Template note: replace with concrete review findings, or leave empty when there are no findings."
                 .into(),
         ],
         confidence_updates: BTreeMap::new(),

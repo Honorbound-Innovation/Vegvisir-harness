@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 pub fn write_bundle(bundle: &SkillBundle, out: &Path) -> Result<()> {
     fs::create_dir_all(out.join("skills"))?;
@@ -423,15 +423,113 @@ pub fn publish_bundle(bundle: &SkillBundle, registry: &Path, force: bool) -> Res
         .join(&bundle.package.bundle_id)
         .join(&bundle.package.version);
     write_bundle(bundle, &dest)?;
+    let content_manifest_hash = manifest_file_hash(&dest)?;
+    let provenance =
+        ProvenanceRecord::from_bundle(bundle, &readiness, force, content_manifest_hash);
     fs::write(
         dest.join("PROVENANCE.json"),
-        serde_json::to_string_pretty(
-            &serde_json::json!({"published_at": Utc::now(), "force": force, "warnings": readiness.warnings, "blockers": readiness.blockers}),
-        )?,
+        serde_json::to_string_pretty(&provenance)?,
     )?;
     write_manifest(&dest)?;
     write_registry_index(registry)?;
     Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ProvenanceRecord {
+    pub bundle_id: String,
+    pub bundle_name: String,
+    pub version: String,
+    pub domain: Option<String>,
+    pub published_at: chrono::DateTime<Utc>,
+    pub force: bool,
+    pub readiness_ready: bool,
+    pub readiness_blockers: Vec<String>,
+    pub readiness_warnings: Vec<String>,
+    pub content_manifest_hash: String,
+    pub skill_count: usize,
+    pub source_count: usize,
+    pub reviewed_skill_count: usize,
+    pub approved_skill_count: usize,
+    pub published_skill_count: usize,
+    pub high_risk_skill_count: usize,
+    pub inference_record_count: usize,
+    pub source_trust_summary: std::collections::BTreeMap<String, usize>,
+    pub source_rights_summary: std::collections::BTreeMap<String, usize>,
+}
+
+impl ProvenanceRecord {
+    fn from_bundle(
+        bundle: &SkillBundle,
+        readiness: &ReadinessReport,
+        force: bool,
+        content_manifest_hash: String,
+    ) -> Self {
+        let reviewed_skill_count = bundle
+            .skills
+            .iter()
+            .filter(|skill| matches!(skill.status, SkillStatus::Reviewed))
+            .count();
+        let approved_skill_count = bundle
+            .skills
+            .iter()
+            .filter(|skill| matches!(skill.status, SkillStatus::Approved))
+            .count();
+        let published_skill_count = bundle
+            .skills
+            .iter()
+            .filter(|skill| matches!(skill.status, SkillStatus::Published))
+            .count();
+        let high_risk_skill_count = bundle
+            .skills
+            .iter()
+            .filter(|skill| {
+                skill.runtime_policy.modify_external_systems
+                    || skill.tool_requirements.iter().any(|tool| {
+                        matches!(
+                            tool.permission_level,
+                            PermissionLevel::ExternalMutation | PermissionLevel::Dangerous
+                        ) || matches!(tool.requirement_type, ToolRequirementType::Dangerous)
+                    })
+            })
+            .count();
+        let inference_record_count = bundle
+            .skills
+            .iter()
+            .map(|skill| skill.inference_records.len())
+            .sum();
+        let mut source_trust_summary = std::collections::BTreeMap::new();
+        let mut source_rights_summary = std::collections::BTreeMap::new();
+        for source in &bundle.sources {
+            *source_trust_summary
+                .entry(format!("{:?}", infer_source_trust(source)))
+                .or_insert(0) += 1;
+            *source_rights_summary
+                .entry(format!("{:?}", source.export_policy))
+                .or_insert(0) += 1;
+        }
+        Self {
+            bundle_id: bundle.package.bundle_id.clone(),
+            bundle_name: bundle.package.name.clone(),
+            version: bundle.package.version.clone(),
+            domain: bundle.package.domain.clone(),
+            published_at: Utc::now(),
+            force,
+            readiness_ready: readiness.ready,
+            readiness_blockers: readiness.blockers.clone(),
+            readiness_warnings: readiness.warnings.clone(),
+            content_manifest_hash,
+            skill_count: bundle.skills.len(),
+            source_count: bundle.sources.len(),
+            reviewed_skill_count,
+            approved_skill_count,
+            published_skill_count,
+            high_risk_skill_count,
+            inference_record_count,
+            source_trust_summary,
+            source_rights_summary,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -442,6 +540,12 @@ pub struct RegistryEntry {
     pub domain: Option<String>,
     pub path: PathBuf,
     pub skill_count: usize,
+    pub source_count: Option<usize>,
+    pub high_risk_skill_count: Option<usize>,
+    pub inference_record_count: Option<usize>,
+    pub readiness_ready: Option<bool>,
+    pub force_published: Option<bool>,
+    pub content_manifest_hash: Option<String>,
     pub published_at: Option<String>,
     pub manifest_valid: bool,
     pub deprecated: bool,
@@ -522,10 +626,12 @@ pub fn list_registry(registry: &Path) -> Result<RegistryIndex> {
                 })
                 .unwrap_or(0);
             let provenance_path = path.join("PROVENANCE.json");
-            let published_at = fs::read_to_string(&provenance_path)
+            let provenance: Option<ProvenanceRecord> = fs::read_to_string(&provenance_path)
                 .ok()
-                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-                .and_then(|value| value.get("published_at").map(|v| v.to_string()));
+                .and_then(|text| serde_json::from_str::<ProvenanceRecord>(&text).ok());
+            let published_at = provenance.as_ref().map(|record| {
+                serde_json::Value::String(record.published_at.to_rfc3339()).to_string()
+            });
             let manifest_valid = verify_manifest(&path)
                 .map(|report| report.valid)
                 .unwrap_or(false);
@@ -540,6 +646,18 @@ pub fn list_registry(registry: &Path) -> Result<RegistryIndex> {
                 domain: package.domain,
                 path,
                 skill_count,
+                source_count: provenance.as_ref().map(|record| record.source_count),
+                high_risk_skill_count: provenance
+                    .as_ref()
+                    .map(|record| record.high_risk_skill_count),
+                inference_record_count: provenance
+                    .as_ref()
+                    .map(|record| record.inference_record_count),
+                readiness_ready: provenance.as_ref().map(|record| record.readiness_ready),
+                force_published: provenance.as_ref().map(|record| record.force),
+                content_manifest_hash: provenance
+                    .as_ref()
+                    .map(|record| record.content_manifest_hash.clone()),
                 published_at,
                 manifest_valid,
                 deprecated: deprecation.is_some(),
@@ -637,6 +755,10 @@ pub fn verify_manifest(root: &Path) -> Result<ManifestVerificationReport> {
             continue;
         }
         let rel_path = PathBuf::from(rel);
+        if !is_safe_manifest_relative_path(&rel_path) {
+            malformed_lines.push(line.to_string());
+            continue;
+        }
         expected_paths.insert(rel_path.clone());
         let file_path = root.join(&rel_path);
         if !file_path.exists() {
@@ -678,6 +800,42 @@ pub fn verify_manifest(root: &Path) -> Result<ManifestVerificationReport> {
         extra_files,
         malformed_lines,
     })
+}
+
+fn is_safe_manifest_relative_path(path: &Path) -> bool {
+    !path.as_os_str().is_empty()
+        && !path.is_absolute()
+        && path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+}
+
+fn infer_source_trust(source: &SourceDocument) -> SourceTrust {
+    match source.source_type {
+        SourceType::OpenApi | SourceType::ApiSpec => SourceTrust::OfficialApiSpecification,
+        SourceType::CliHelp | SourceType::CliSpec => SourceTrust::OfficialCliReference,
+        SourceType::Repository => SourceTrust::ProjectMaintainerDocumentation,
+        SourceType::Unknown => SourceTrust::UnknownSource,
+        _ => {
+            let origin = source.origin.to_lowercase();
+            if origin.contains("official") || origin.contains("docs.") {
+                SourceTrust::OfficialVendorDocumentation
+            } else if matches!(
+                source.visibility,
+                Visibility::Internal | Visibility::Restricted
+            ) {
+                SourceTrust::InternalCompanyDocumentation
+            } else {
+                SourceTrust::ProjectMaintainerDocumentation
+            }
+        }
+    }
+}
+
+fn manifest_file_hash(root: &Path) -> Result<String> {
+    let path = root.join("MANIFEST.sha256");
+    let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+    Ok(hex_hash(&bytes))
 }
 
 fn write_yaml<T: Serialize>(path: &Path, value: &T) -> Result<()> {
