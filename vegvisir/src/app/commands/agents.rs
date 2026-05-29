@@ -74,11 +74,19 @@ impl TuiApplication {
     pub(crate) fn agent_command(&mut self, args: &[String]) -> anyhow::Result<String> {
         match args.first().map(String::as_str) {
             None | Some("list") => {
-                let profiles = self.agents.list()?;
+                let (profiles, warnings) = self.agents.list_lossy()?;
                 if profiles.is_empty() {
-                    return Ok("No custom agents are defined. Use /agent create <id> | <mode> | <display name> | <system prompt>.".to_string());
+                    let mut message = format!(
+                        "No custom agents are defined in {}. Use /agent create <id> | <mode> | <display name> | <system prompt>.",
+                        self.agents.root.display()
+                    );
+                    if !warnings.is_empty() {
+                        message.push_str("\n\nWarnings:\n");
+                        message.push_str(&warnings.join("\n"));
+                    }
+                    return Ok(message);
                 }
-                Ok(profiles
+                let mut lines = profiles
                     .into_iter()
                     .map(|profile| {
                         let active = if self.session.active_agent_id.as_deref() == Some(&profile.id)
@@ -96,8 +104,13 @@ impl TuiApplication {
                             profile.cms_project_id
                         )
                     })
-                    .collect::<Vec<_>>()
-                    .join("\n"))
+                    .collect::<Vec<_>>();
+                if !warnings.is_empty() {
+                    lines.push(String::new());
+                    lines.push("Warnings:".to_string());
+                    lines.extend(warnings);
+                }
+                Ok(lines.join("\n"))
             }
             Some("templates") | Some("modes") => Ok(agent_templates()
                 .into_iter()

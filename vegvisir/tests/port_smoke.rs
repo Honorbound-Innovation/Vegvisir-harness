@@ -2203,9 +2203,30 @@ fn attachments_extract_file_uri_and_keep_instruction() -> anyhow::Result<()> {
         tmp.path(),
     );
 
-    assert_eq!(content, "Summarize");
+    assert_eq!(content, format!("Summarize file://{}", file_path.display()));
     assert_eq!(attachments.len(), 1);
     assert_eq!(attachments[0].name.as_deref(), Some("sample.md"));
+    Ok(())
+}
+
+#[test]
+fn attachments_preserve_pasted_path_in_sentence() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let file_path = tmp.path().join("vegvisir-harness-developer.json");
+    std::fs::write(&file_path, r#"{"prompt":"weak"}"#)?;
+
+    let input = format!(
+        "rewrite the system prompt in this file {} and preserve skills",
+        file_path.display()
+    );
+    let (content, attachments) = extract_attachments(&input, tmp.path());
+
+    assert_eq!(content, input);
+    assert_eq!(attachments.len(), 1);
+    assert_eq!(
+        attachments[0].name.as_deref(),
+        Some("vegvisir-harness-developer.json")
+    );
     Ok(())
 }
 
@@ -3112,7 +3133,11 @@ fn tui_submit_command_appends_result_and_keeps_running() -> anyhow::Result<()> {
     assert_eq!(app.session.messages.len(), 1);
     assert_eq!(app.session.messages[0].role, "system");
     assert!(app.session.messages[0].content.contains("/models"));
-    assert_eq!(app.session.input_history, vec!["/help"]);
+    assert!(
+        app.session.input_history.is_empty(),
+        "slash commands should not be saved to normal input history: {:?}",
+        app.session.input_history
+    );
     Ok(())
 }
 
@@ -3442,6 +3467,26 @@ fn input_history_navigation_and_large_paste_rendering_match_python_tui() -> anyh
     assert!(app.input.history_move(1));
     assert_eq!(app.input.buffer, "");
 
+    app.input.history = vec![
+        "/agent list".to_string(),
+        "normal request".to_string(),
+        "/provider demo".to_string(),
+        "latest request".to_string(),
+    ];
+    app.input.clear();
+    assert!(app.input.history_move(-1));
+    assert_eq!(app.input.buffer, "latest request");
+    assert!(app.input.history_move(-1));
+    assert_eq!(app.input.buffer, "normal request");
+    assert!(app.input.history_move(-1));
+    assert_eq!(app.input.buffer, "normal request");
+    assert!(app.input.history_move(1));
+    assert_eq!(app.input.buffer, "latest request");
+    assert!(app.input.history_move(1));
+    assert_eq!(app.input.buffer, "");
+
+    app.input.history = vec!["first".to_string(), "second".to_string()];
+    app.input.clear();
     app.handle_key_event(crossterm::event::KeyEvent::new(
         crossterm::event::KeyCode::Up,
         crossterm::event::KeyModifiers::NONE,
@@ -4165,6 +4210,72 @@ fn application_runs_builtin_eval_harness() -> anyhow::Result<()> {
         .execute_command(&format!("/eval file {}", eval_file.display()))?
         .unwrap();
     assert!(file_output.contains("pass eval/custom/custom_memory_case"));
+    Ok(())
+}
+
+#[test]
+fn agent_popup_suggestions_show_selectable_agent_profiles() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let home = tmp.path().join("home");
+    let mut app = TuiApplication::with_data_root(tmp.path(), &home)?;
+
+    app.execute_command(
+        "/agent create reviewer | review | Code Reviewer | Review code carefully.",
+    )?;
+    app.execute_command("/agent create coder | build | Builder Agent | Implement code changes.")?;
+    app.execute_command("/agent use reviewer")?;
+
+    app.input.set_buffer("/agent");
+    let suggestions = app.build_suggestions();
+    assert!(
+        suggestions.iter().any(|suggestion| {
+            suggestion.value == "reviewer"
+                && suggestion.replacement.as_deref() == Some("/agent use reviewer")
+                && suggestion.description.contains("active")
+        }),
+        "{suggestions:?}"
+    );
+    assert!(
+        suggestions.iter().any(|suggestion| {
+            suggestion.value == "coder"
+                && suggestion.replacement.as_deref() == Some("/agent use coder")
+        }),
+        "{suggestions:?}"
+    );
+
+    app.input.set_buffer("/agent use rev");
+    let suggestions = app.build_suggestions();
+    assert_eq!(suggestions.len(), 1, "{suggestions:?}");
+    assert_eq!(suggestions[0].value, "reviewer");
+    assert_eq!(
+        suggestions[0].replacement.as_deref(),
+        Some("/agent use reviewer")
+    );
+    Ok(())
+}
+
+#[test]
+fn agent_list_shows_valid_agents_when_one_profile_is_invalid() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let home = tmp.path().join("home");
+    let agents = home.join("agents");
+    fs::create_dir_all(&agents)?;
+    fs::write(
+        agents.join("broken.json"),
+        r#"{"id":"broken","display_name":"Broken"}"#,
+    )?;
+    let mut app = TuiApplication::with_data_root(tmp.path(), &home)?;
+
+    let created = app
+        .execute_command("/agent create good-agent | tester | Good Agent | You are valid.")?
+        .unwrap();
+    assert!(created.contains("Created agent good-agent"));
+
+    let listed = app.execute_command("/agent list")?.unwrap();
+    assert!(listed.contains("good-agent"), "{listed}");
+    assert!(listed.contains("mode=tester"), "{listed}");
+    assert!(listed.contains("Warnings:"), "{listed}");
+    assert!(listed.contains("broken.json"), "{listed}");
     Ok(())
 }
 

@@ -4,13 +4,19 @@ use std::{
 };
 
 use crossterm::{
-    event::{
-        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event,
-    },
+    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
+
+// Crossterm's EnableMouseCapture enables button-event tracking (?1002), which
+// captures drag selection and prevents normal terminal copy/paste selection.
+// Vegvisir only needs mouse-wheel events for chat scrolling, so use normal
+// tracking (?1000) plus SGR coordinates (?1006) instead. In xterm-compatible
+// terminals this keeps wheel events flowing to the app without asking the
+// terminal to report mouse drag motion to us.
+const ENABLE_WHEEL_MOUSE_CAPTURE: &str = "\x1b[?1000h\x1b[?1006h";
+const DISABLE_WHEEL_MOUSE_CAPTURE: &str = "\x1b[?1000l\x1b[?1006l";
 
 use super::TuiApplication;
 
@@ -85,12 +91,8 @@ impl TerminalGuard {
     fn enter() -> anyhow::Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(
-            stdout,
-            EnterAlternateScreen,
-            EnableBracketedPaste,
-            EnableMouseCapture
-        )?;
+        execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
+        write!(stdout, "{ENABLE_WHEEL_MOUSE_CAPTURE}")?;
         stdout.flush()?;
         Ok(Self)
     }
@@ -100,11 +102,7 @@ impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
         let mut stdout = io::stdout();
-        let _ = execute!(
-            stdout,
-            DisableMouseCapture,
-            DisableBracketedPaste,
-            LeaveAlternateScreen
-        );
+        let _ = write!(stdout, "{DISABLE_WHEEL_MOUSE_CAPTURE}");
+        let _ = execute!(stdout, DisableBracketedPaste, LeaveAlternateScreen);
     }
 }

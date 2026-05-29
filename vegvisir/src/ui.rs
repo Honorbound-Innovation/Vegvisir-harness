@@ -214,8 +214,14 @@ pub mod input {
             self.preferred_column = None;
         }
 
+        pub fn reset_history_navigation(&mut self) {
+            self.history_index = None;
+            self.history_draft = None;
+            self.preferred_column = None;
+        }
+
         pub fn history_move(&mut self, delta: isize) -> bool {
-            if self.history.is_empty() {
+            if self.history.iter().all(|entry| is_slash_command(entry)) {
                 return false;
             }
             let current = match self.history_index {
@@ -225,25 +231,44 @@ pub mod input {
                     self.history.len() as isize
                 }
             };
-            let next = current + delta;
-            if next < 0 {
-                self.history_index = Some(0);
-                self.set_buffer(self.history[0].clone());
-                self.cursor = 0;
-                return true;
+            let mut next = current + delta;
+            loop {
+                if next < 0 {
+                    match first_non_command_history_index(&self.history) {
+                        Some(index) => {
+                            self.history_index = Some(index);
+                            self.set_buffer(self.history[index].clone());
+                        }
+                        None => return false,
+                    }
+                    self.cursor = 0;
+                    return true;
+                }
+                if next >= self.history.len() as isize {
+                    self.history_index = None;
+                    let draft = self.history_draft.take().unwrap_or_default();
+                    self.set_buffer(draft);
+                    self.cursor = 0;
+                    return true;
+                }
+                let index = next as usize;
+                if !is_slash_command(&self.history[index]) {
+                    self.history_index = Some(index);
+                    self.set_buffer(self.history[index].clone());
+                    self.cursor = 0;
+                    return true;
+                }
+                next += delta.signum();
             }
-            if next >= self.history.len() as isize {
-                self.history_index = None;
-                let draft = self.history_draft.take().unwrap_or_default();
-                self.set_buffer(draft);
-                self.cursor = 0;
-                return true;
-            }
-            self.history_index = Some(next as usize);
-            self.set_buffer(self.history[next as usize].clone());
-            self.cursor = 0;
-            true
         }
+    }
+
+    fn is_slash_command(value: &str) -> bool {
+        value.trim_start().starts_with('/')
+    }
+
+    fn first_non_command_history_index(history: &[String]) -> Option<usize> {
+        history.iter().position(|entry| !is_slash_command(entry))
     }
 
     fn char_to_byte_index(value: &str, char_index: usize) -> usize {

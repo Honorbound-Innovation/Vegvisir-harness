@@ -15,7 +15,6 @@ pub fn extract_attachments(text: &str, cwd: &Path) -> (String, Vec<Attachment>) 
             if path.exists() && path.is_file() {
                 if let Ok(attachment) = attachment_for(&path) {
                     attachments.push(attachment);
-                    return "".to_string();
                 }
             }
             captures

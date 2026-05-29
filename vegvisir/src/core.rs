@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::Context;
+use anyhow::{Context, bail};
 use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -398,20 +398,57 @@ impl AgentProfileStore {
         if !self.root.exists() {
             return Ok(profiles);
         }
+        let mut invalid = Vec::new();
         for entry in fs::read_dir(&self.root)? {
             let entry = entry?;
-            if entry
-                .path()
+            let path = entry.path();
+            if path
                 .extension()
                 .and_then(|ext| ext.to_str())
                 .map(|ext| ext == "json")
                 .unwrap_or(false)
             {
-                profiles.push(serde_json::from_str(&fs::read_to_string(entry.path())?)?);
+                match serde_json::from_str::<AgentProfile>(&fs::read_to_string(&path)?) {
+                    Ok(profile) => profiles.push(profile),
+                    Err(error) => invalid.push(format!("{}: {error}", path.display())),
+                }
             }
+        }
+        if !invalid.is_empty() {
+            bail!(
+                "failed to load {} agent profile(s) from {}:\n{}",
+                invalid.len(),
+                self.root.display(),
+                invalid.join("\n")
+            );
         }
         profiles.sort_by(|left, right| left.id.cmp(&right.id));
         Ok(profiles)
+    }
+
+    pub fn list_lossy(&self) -> anyhow::Result<(Vec<AgentProfile>, Vec<String>)> {
+        let mut profiles = Vec::new();
+        let mut warnings = Vec::new();
+        if !self.root.exists() {
+            return Ok((profiles, warnings));
+        }
+        for entry in fs::read_dir(&self.root)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext == "json")
+                .unwrap_or(false)
+            {
+                match serde_json::from_str::<AgentProfile>(&fs::read_to_string(&path)?) {
+                    Ok(profile) => profiles.push(profile),
+                    Err(error) => warnings.push(format!("skipped {}: {error}", path.display())),
+                }
+            }
+        }
+        profiles.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok((profiles, warnings))
     }
 }
 

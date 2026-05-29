@@ -1,5 +1,15 @@
 use super::*;
 
+fn agent_selection_prefix(raw: &str) -> Option<&str> {
+    if raw == "/agent" || raw == "/agent " {
+        return Some("");
+    }
+    if raw == "/agent use" || raw == "/agent use " {
+        return Some("");
+    }
+    raw.strip_prefix("/agent use ").map(str::trim)
+}
+
 impl TuiApplication {
     pub fn render(&mut self) -> String {
         let suggestions = self.build_suggestions();
@@ -32,6 +42,42 @@ impl TuiApplication {
         }
         let parts = raw.split_whitespace().collect::<Vec<_>>();
         let trailing_space = raw.ends_with(' ');
+        if let Some(prefix) = agent_selection_prefix(raw) {
+            let (profiles, warnings) = self.agents.list_lossy().unwrap_or_default();
+            let prefix_lower = prefix.to_ascii_lowercase();
+            let mut suggestions = profiles
+                .into_iter()
+                .filter(|profile| {
+                    prefix.is_empty()
+                        || profile.id.to_ascii_lowercase().starts_with(&prefix_lower)
+                        || profile
+                            .display_name
+                            .to_ascii_lowercase()
+                            .contains(&prefix_lower)
+                        || profile.mode.to_ascii_lowercase().starts_with(&prefix_lower)
+                })
+                .map(|profile| {
+                    let active = if self.session.active_agent_id.as_deref() == Some(&profile.id) {
+                        "active · "
+                    } else {
+                        ""
+                    };
+                    Suggestion::new(
+                        profile.id.clone(),
+                        format!("{active}{} · mode={}", profile.display_name, profile.mode),
+                        Some(format!("/agent use {}", profile.id)),
+                    )
+                })
+                .collect::<Vec<_>>();
+            if suggestions.is_empty() && !warnings.is_empty() {
+                suggestions.push(Suggestion::new(
+                    "agent profile warning",
+                    warnings.join("; "),
+                    Some("/agent list".to_string()),
+                ));
+            }
+            return suggestions;
+        }
         if raw.starts_with("/provider ") || raw == "/provider " {
             if trailing_space && parts.len() >= 2 {
                 return Vec::new();

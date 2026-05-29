@@ -8,8 +8,12 @@ impl TuiApplication {
             self.input.update_suggestions(Vec::new());
             return;
         }
-        self.input.push_history(raw.clone());
-        self.session.input_history = self.input.history.clone();
+        if !raw.starts_with('/') {
+            self.input.push_history(raw.clone());
+            self.session.input_history = self.input.history.clone();
+        } else {
+            self.input.reset_history_navigation();
+        }
         self.input.clear();
         self.input.update_suggestions(Vec::new());
 

@@ -25,7 +25,6 @@ const AMBER: Color = Color::Rgb(220, 170, 65);
 const RED: Color = Color::Rgb(230, 86, 86);
 const BORDER: Color = Color::Rgb(62, 66, 76);
 const PANEL: Color = Color::Rgb(16, 17, 20);
-const CHAT_BOTTOM_GAP: u16 = 1;
 const ACTIVITY_LABEL_WIDTH: usize = 18;
 
 const FALLBACK_SPINNER_VERBS: &[&str] = &[
@@ -67,7 +66,6 @@ pub fn draw(f: &mut Frame<'_>, app: &mut TuiApplication) {
         .constraints([
             Constraint::Length(2),
             Constraint::Min(6),
-            Constraint::Length(CHAT_BOTTOM_GAP),
             Constraint::Length(activity_height),
             Constraint::Length(input_height),
             Constraint::Length(1),
@@ -77,11 +75,11 @@ pub fn draw(f: &mut Frame<'_>, app: &mut TuiApplication) {
     draw_header(f, app, chunks[0]);
     draw_chat(f, app, chunks[1]);
     if activity_height > 0 {
-        draw_activity_strip(f, app, pending.as_ref(), chunks[3]);
+        draw_activity_strip(f, app, pending.as_ref(), chunks[2]);
     }
-    draw_input(f, app, chunks[4]);
-    draw_status(f, app, chunks[5]);
-    draw_suggestions(f, app, chunks[4], area);
+    draw_input(f, app, chunks[3]);
+    draw_status(f, app, chunks[4]);
+    draw_suggestions(f, app, chunks[3], area);
     if app.help_overlay_open {
         draw_help_overlay(f, app, centered_rect(92, 24, area));
     }
@@ -102,7 +100,7 @@ pub fn draw(f: &mut Frame<'_>, app: &mut TuiApplication) {
             centered_rect(88, 14, area),
         );
     }
-    set_input_cursor(f, app, chunks[4]);
+    set_input_cursor(f, app, chunks[3]);
 }
 
 fn activity_strip_height(app: &TuiApplication, pending: Option<&ApprovalRequest>) -> u16 {
@@ -143,23 +141,29 @@ fn draw_header(f: &mut Frame<'_>, app: &TuiApplication, area: Rect) {
 }
 
 fn draw_chat(f: &mut Frame<'_>, app: &TuiApplication, area: Rect) {
-    let content_width = area.width.saturating_sub(2) as usize;
+    let block = Block::default()
+        .borders(Borders::BOTTOM)
+        .border_style(Style::default().fg(BORDER));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let content_width = inner.width as usize;
     let lines = visual_chat_lines(app, content_width);
 
-    let visible_height = area.height.max(1) as usize;
+    let visible_height = inner.height.max(1) as usize;
     let max_offset = lines.len().saturating_sub(visible_height);
     let offset = app.chat_scroll_offset.min(max_offset);
     let end = lines.len().saturating_sub(offset);
     let start = end.saturating_sub(visible_height);
     let mut visible = lines[start..end].to_vec();
-    apply_scroll_indicators(&mut visible, offset, max_offset, area.width as usize);
+    apply_scroll_indicators(&mut visible, offset, max_offset, inner.width as usize);
     let paragraph = Paragraph::new(visible)
         .style(Style::default().fg(FG).bg(BG))
         // Lines are pre-wrapped before viewport slicing. Keeping Ratatui wrapping
         // enabled is harmless as a terminal safety net, but the important part is
         // that scroll math is based on visual rows, not raw markdown/logical rows.
         .wrap(Wrap { trim: false });
-    f.render_widget(paragraph, area);
+    f.render_widget(paragraph, inner);
 }
 
 fn visual_chat_lines(app: &TuiApplication, width: usize) -> Vec<Line<'static>> {
@@ -196,10 +200,9 @@ fn chat_lines(app: &TuiApplication, width: usize) -> Vec<Line<'static>> {
             .last()
             .is_some_and(|message| message.role == "assistant" && !message.content.is_empty())
         {
-            // Keep two rendered spacer rows after completed assistant output so the
-            // final line is not visually clipped by the lower TUI chrome/input area.
-            // This is a presentation-only pad; stored transcript content is unchanged.
-            lines.push(Line::from(""));
+            // Keep one rendered spacer row after completed assistant output so the
+            // final line breathes above the chat/input border. This is a
+            // presentation-only pad; stored transcript content is unchanged.
             lines.push(Line::from(""));
         }
     }
@@ -903,7 +906,8 @@ fn wrap_spans(
     let continuation_width = continuation_prefix.width();
     for span in spans {
         let style = span.style;
-        for piece in split_preserving_spaces(span.content.as_ref()) {
+        let safe_content = sanitize_display_text(span.content.as_ref());
+        for piece in split_preserving_spaces(&safe_content) {
             let piece_width = piece.width();
             if current_width > 0 && current_width + piece_width > width {
                 rows.push(Line::from(std::mem::take(&mut current)));
@@ -1858,7 +1862,7 @@ fn command_palette_lines(
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             format!(
-                "showing {}-{} of {} commands",
+                "showing {}-{} of {} items",
                 start + 1,
                 (start + visible_items).min(total),
                 total
@@ -2179,13 +2183,14 @@ fn search_rect(area: Rect) -> Rect {
 
 fn wrap_preserve(text: &str, width: usize) -> Vec<String> {
     let width = width.max(1);
-    if text.is_empty() {
+    let safe_text = sanitize_display_text(text);
+    if safe_text.is_empty() {
         return vec![String::new()];
     }
     let mut lines = Vec::new();
     let mut current = String::new();
     let mut current_width = 0;
-    for ch in text.chars() {
+    for ch in safe_text.chars() {
         let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
         if current_width + ch_width > width && !current.is_empty() {
             lines.push(std::mem::take(&mut current));
@@ -2200,13 +2205,28 @@ fn wrap_preserve(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
+fn sanitize_display_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '\t' => out.push_str("    "),
+            '\r' => out.push('␍'),
+            '\u{1b}' => out.push('␛'),
+            ch if ch.is_control() => out.push('�'),
+            ch => out.push(ch),
+        }
+    }
+    out
+}
+
 fn truncate(text: &str, width: usize) -> String {
-    if text.width() <= width {
-        return text.to_string();
+    let safe_text = sanitize_display_text(text);
+    if safe_text.width() <= width {
+        return safe_text;
     }
     let mut out = String::new();
     let mut used = 0;
-    for ch in text.chars() {
+    for ch in safe_text.chars() {
         let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
         if used + ch_width >= width.saturating_sub(1) {
             break;
@@ -2384,7 +2404,7 @@ four",
     }
 
     #[test]
-    fn ratatui_completed_assistant_message_has_two_trailing_spacer_lines() -> anyhow::Result<()> {
+    fn ratatui_completed_assistant_message_has_one_trailing_spacer_line() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let mut app =
             crate::app::TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
@@ -2396,9 +2416,39 @@ four",
         });
 
         let lines = chat_lines(&app, 80);
-        assert!(lines.len() >= 3);
-        let last_two = &lines[lines.len() - 2..];
-        assert!(last_two.iter().all(|line| line.spans.is_empty()));
+        assert!(lines.len() >= 2);
+        assert!(lines.last().is_some_and(|line| line.spans.is_empty()));
+        Ok(())
+    }
+
+    #[test]
+    fn ratatui_sanitizes_control_characters_before_rendering_chat() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app =
+            crate::app::TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.session.messages.push(ChatMessage {
+            role: "system".to_string(),
+            content: "before\rafter\x1b[31m red\x07 tail".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(90, 16)).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<Vec<_>>()
+            .join("");
+
+        assert!(rendered.contains("before␍after␛[31m red� tail"));
+        assert!(!rendered.contains('\r'));
+        assert!(!rendered.contains('\u{1b}'));
+        assert!(!rendered.contains('\u{7}'));
         Ok(())
     }
 
@@ -2436,7 +2486,7 @@ four",
         let final_line_y = final_line_y.expect("assistant content should render");
         let input_top_y = input_top_y.expect("input box title should render");
         assert!(
-            final_line_y + CHAT_BOTTOM_GAP < input_top_y,
+            final_line_y < input_top_y,
             "assistant line at y={final_line_y} should end above input top y={input_top_y}"
         );
     }
