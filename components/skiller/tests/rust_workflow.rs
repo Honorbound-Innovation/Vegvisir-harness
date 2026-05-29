@@ -3951,3 +3951,311 @@ fn eval_reports_behavioral_coverage_and_blocks_high_risk_without_safety_eval() {
         "{stdout}"
     );
 }
+
+#[test]
+fn runtime_and_domain_introspection_commands_smoke() {
+    let temp = tempdir().unwrap();
+    let docs = temp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(
+        docs.join("ops.md"),
+        "# Diagnose Service State\n\nUse `servicectl status` to inspect service state before mutation.\n\n```\nservicectl status demo\n```\n\nWarning: restart requires approval.\n",
+    )
+    .unwrap();
+
+    let bundle = temp.path().join("bundle");
+    let compile = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "compile",
+            docs.to_str().unwrap(),
+            "--out",
+            bundle.to_str().unwrap(),
+            "--name",
+            "runtime-smoke",
+            "--domain",
+            "cli-operations",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        compile.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let list = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["list", bundle.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(list.status.success());
+    let list_text = String::from_utf8_lossy(&list.stdout);
+    assert!(list_text.contains("Diagnose Service State"), "{list_text}");
+    let skill_id = list_text
+        .lines()
+        .next()
+        .and_then(|line| line.split('\t').next())
+        .expect("list output should include skill id")
+        .to_string();
+    assert!(!skill_id.is_empty());
+
+    let route = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "route",
+            bundle.to_str().unwrap(),
+            "How do I inspect service state before restart?",
+            "--limit",
+            "2",
+        ])
+        .output()
+        .unwrap();
+    assert!(route.status.success());
+    let route_text = String::from_utf8_lossy(&route.stdout);
+    assert!(route_text.contains(&skill_id), "{route_text}");
+
+    for mode in ["card", "body", "extended"] {
+        let load = Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args(["load", bundle.to_str().unwrap(), &skill_id, "--mode", mode])
+            .output()
+            .unwrap();
+        assert!(
+            load.status.success(),
+            "mode={mode} stdout={} stderr={}",
+            String::from_utf8_lossy(&load.stdout),
+            String::from_utf8_lossy(&load.stderr)
+        );
+        let text = String::from_utf8_lossy(&load.stdout);
+        assert!(
+            text.contains("Diagnose Service State") || text.contains("servicectl status"),
+            "{text}"
+        );
+    }
+
+    let profiles = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["domain-profiles"])
+        .output()
+        .unwrap();
+    assert!(profiles.status.success());
+    let profiles_text = String::from_utf8_lossy(&profiles.stdout);
+    assert!(profiles_text.contains("cli-operations"), "{profiles_text}");
+    assert!(
+        profiles_text.contains("kubernetes-operations"),
+        "{profiles_text}"
+    );
+
+    let template = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["domain-template", "cli-operations"])
+        .output()
+        .unwrap();
+    assert!(template.status.success());
+    let template_text = String::from_utf8_lossy(&template.stdout);
+    assert!(
+        template_text.contains("name: cli-operations"),
+        "{template_text}"
+    );
+    assert!(template_text.contains("known_tools"), "{template_text}");
+}
+
+#[test]
+fn specialized_compile_entrypoints_produce_valid_interface_and_repo_bundles() {
+    let temp = tempdir().unwrap();
+
+    let openapi = temp.path().join("openapi.yaml");
+    std::fs::write(
+        &openapi,
+        "openapi: 3.0.0\ninfo:\n  title: Pets API\n  version: 1.2.3\npaths:\n  /pets:\n    get:\n      summary: List pets\n# GET /pets should be used read-only.\n",
+    )
+    .unwrap();
+    let api = temp.path().join("api.txt");
+    std::fs::write(
+        &api,
+        "Version 2.0\nGET /status\nPOST /jobs\nWarning: POST requires approval and idempotency.\n",
+    )
+    .unwrap();
+    let cli = temp.path().join("cli.txt");
+    std::fs::write(
+        &cli,
+        "Version 1.4\nservicectl status\nservicectl restart demo\nWarning: restart requires approval.\n",
+    )
+    .unwrap();
+    let help = temp.path().join("help.txt");
+    std::fs::write(
+        &help,
+        "Usage: widgetctl <command>\n\nwidgetctl status\nwidgetctl delete demo\nWarning: delete is destructive.\n",
+    )
+    .unwrap();
+    let repo = temp.path().join("repo");
+    std::fs::create_dir_all(repo.join("docs")).unwrap();
+    std::fs::write(
+        repo.join("README.md"),
+        "# Diagnose Repository\n\nYou should inspect repository status first.\n\n```\nrepoctl status\n```\n",
+    )
+    .unwrap();
+    std::fs::write(
+        repo.join("src.rs"),
+        "/// Use repoctl status before mutation.\npub fn diagnose_repository() {}\n",
+    )
+    .unwrap();
+
+    let cases = [
+        (
+            "compile-openapi",
+            openapi.as_path(),
+            "openapi-bundle",
+            "OpenApi",
+            "interface_kind: api",
+        ),
+        (
+            "compile-api",
+            api.as_path(),
+            "api-bundle",
+            "ApiSpec",
+            "interface_kind: api",
+        ),
+        (
+            "compile-cli",
+            cli.as_path(),
+            "cli-bundle",
+            "CliSpec",
+            "interface_kind: cli",
+        ),
+        (
+            "compile-cli-help",
+            help.as_path(),
+            "help-bundle",
+            "CliHelp",
+            "interface_kind: cli",
+        ),
+        (
+            "compile-repo",
+            repo.as_path(),
+            "repo-bundle",
+            "Repository",
+            "source_trust:",
+        ),
+    ];
+
+    for (command, input, name, expected_source_type, expected_skill_text) in cases {
+        let out = temp.path().join(format!("out-{command}"));
+        let output = Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                command,
+                input.to_str().unwrap(),
+                "--out",
+                out.to_str().unwrap(),
+                "--name",
+                name,
+                "--domain",
+                if command.contains("cli") {
+                    "cli-operations"
+                } else {
+                    "api-operations"
+                },
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{command} stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let validate = Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args(["validate", out.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(
+            validate.status.success(),
+            "{command} validate stdout={} stderr={}",
+            String::from_utf8_lossy(&validate.stdout),
+            String::from_utf8_lossy(&validate.stderr)
+        );
+
+        let package = std::fs::read_to_string(out.join("package.yaml")).unwrap();
+        assert!(
+            package.contains(&format!("name: {name}")),
+            "{command}: {package}"
+        );
+        let sources = std::fs::read_to_string(out.join("sources/index.yaml")).unwrap();
+        assert!(
+            sources.contains(&format!("source_type: {expected_source_type}")),
+            "{command}: {sources}"
+        );
+        let skill_files: Vec<_> = std::fs::read_dir(out.join("skills"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert!(!skill_files.is_empty(), "{command} produced no skills");
+        let skills_text = skill_files
+            .iter()
+            .map(|path| std::fs::read_to_string(path).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n---\n");
+        assert!(
+            skills_text.contains(expected_skill_text),
+            "{command}: {skills_text}"
+        );
+        assert!(
+            skills_text.contains("source_trust:"),
+            "{command}: {skills_text}"
+        );
+    }
+}
+
+#[test]
+fn cli_help_advertises_final_mile_workflows() {
+    let root_help = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["--help"])
+        .output()
+        .unwrap();
+    assert!(root_help.status.success());
+    let root = String::from_utf8_lossy(&root_help.stdout);
+    for command in [
+        "forge-provider-status",
+        "forge-adapter-preflight",
+        "forge-adapter-self-test",
+        "forge-validate",
+        "forge-apply",
+        "corpus-manifest",
+        "corpus-diff",
+        "corpus-plan",
+        "corpus-status",
+        "verify-agent-proposals",
+        "verify-agent-pack",
+        "agent-builder-summary",
+        "agent-artifact-index",
+        "compile-openapi",
+        "compile-cli-help",
+    ] {
+        assert!(
+            root.contains(command),
+            "root help missing {command}: {root}"
+        );
+    }
+
+    let build_help = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["build-agent-pack", "--help"])
+        .output()
+        .unwrap();
+    assert!(build_help.status.success());
+    let build = String::from_utf8_lossy(&build_help.stdout);
+    assert!(build.contains("--lifecycle-status"), "{build}");
+    assert!(build.contains("--report"), "{build}");
+
+    let validate_help = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["forge-validate", "--help"])
+        .output()
+        .unwrap();
+    assert!(validate_help.status.success());
+    let validate = String::from_utf8_lossy(&validate_help.stdout);
+    assert!(validate.contains("--report"), "{validate}");
+
+    let apply_help = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["forge-apply", "--help"])
+        .output()
+        .unwrap();
+    assert!(apply_help.status.success());
+    let apply = String::from_utf8_lossy(&apply_help.stdout);
+    assert!(apply.contains("--report"), "{apply}");
+}
