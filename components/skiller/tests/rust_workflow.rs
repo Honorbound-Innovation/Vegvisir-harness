@@ -455,11 +455,21 @@ fn compile_forge_review_and_agent_pack_workflow() {
     let forge_summary_text = std::fs::read_to_string(forged.join("forge_summary.yaml")).unwrap();
     let forge_summary_md = std::fs::read_to_string(forged.join("forge_summary.md")).unwrap();
     assert!(forge_summary_text.contains("summary_id: forge-summary-"));
+    assert!(forge_summary_text.contains("provider_provenance:"));
+    assert!(
+        forge_summary_text.contains("provider: vegvisir")
+            || forge_summary_text.contains("provider: \"vegvisir\"")
+    );
+    assert!(forge_summary_text.contains("adapter_mode: deterministic fallback"));
+    assert!(forge_summary_text.contains("deterministic: true"));
+    assert!(forge_summary_text.contains("live_reasoning: false"));
     assert!(forge_summary_text.contains("pass_count: 9"));
     assert!(forge_summary_text.contains("pass_type: RegistryReadiness"));
     assert!(forge_summary_text.contains("required_human_review: true"));
     assert!(forge_summary_text.contains("review_finding_count:"));
     assert!(forge_summary_md.contains("# Forge Summary"));
+    assert!(forge_summary_md.contains("Provider mode: `deterministic fallback`"));
+    assert!(forge_summary_md.contains("Live reasoning: false"));
     assert!(forge_summary_md.contains("## Registry Readiness Notes"));
     assert!(forge_summary_md.contains("Human review required: true"));
 
@@ -3007,10 +3017,14 @@ fn evidence_report_includes_trust_inference_tools_and_publication_warnings() {
     assert!(
         Command::new(env!("CARGO_BIN_EXE_skiller"))
             .args([
-                "infer",
+                "forge",
                 bundle.to_str().unwrap(),
                 "--out",
                 forged.to_str().unwrap(),
+                "--provider",
+                "vegvisir",
+                "--max-skills",
+                "1",
             ])
             .status()
             .unwrap()
@@ -3060,6 +3074,14 @@ fn evidence_report_includes_trust_inference_tools_and_publication_warnings() {
     assert!(stdout.contains("## Source Trust and Rights"));
     assert!(stdout.contains("ProjectMaintainerDocumentation"));
     assert!(stdout.contains("PrivateOnly"));
+    assert!(stdout.contains("## Forge Provider Provenance"));
+    assert!(stdout.contains("Forge requests:"));
+    assert!(stdout.contains("Live reasoning requests: 0"));
+    assert!(stdout.contains("Deterministic requests:"));
+    assert!(stdout.contains("### Providers"));
+    assert!(stdout.contains("vegvisir"));
+    assert!(stdout.contains("### Adapter Modes"));
+    assert!(stdout.contains("deterministic fallback"));
     assert!(stdout.contains("## Evidence Summary by Skill"));
     assert!(stdout.contains("### Citations"));
     assert!(stdout.contains("ownership=ok"));
@@ -3097,11 +3119,30 @@ fn registry_publish_writes_rich_provenance_and_index_lifecycle_metadata() {
             .success()
     );
 
+    let forged = temp.path().join("forged");
+    let forge = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "forge",
+            bundle.to_str().unwrap(),
+            "--out",
+            forged.to_str().unwrap(),
+            "--provider",
+            "vegvisir",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        forge.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&forge.stdout),
+        String::from_utf8_lossy(&forge.stderr)
+    );
+
     let registry = temp.path().join("registry");
     let publish = Command::new(env!("CARGO_BIN_EXE_skiller"))
         .args([
             "publish",
-            bundle.to_str().unwrap(),
+            forged.to_str().unwrap(),
             "--registry",
             registry.to_str().unwrap(),
             "--force",
@@ -3116,7 +3157,7 @@ fn registry_publish_writes_rich_provenance_and_index_lifecycle_metadata() {
     );
 
     let package: serde_yaml::Value =
-        serde_yaml::from_str(&std::fs::read_to_string(bundle.join("package.yaml")).unwrap())
+        serde_yaml::from_str(&std::fs::read_to_string(forged.join("package.yaml")).unwrap())
             .unwrap();
     let bundle_id = package["bundle_id"].as_str().unwrap().to_string();
     let version = package["version"].as_str().unwrap().to_string();
@@ -3137,6 +3178,20 @@ fn registry_publish_writes_rich_provenance_and_index_lifecycle_metadata() {
             .as_object()
             .unwrap()
             .contains_key("PrivateOnly")
+    );
+    assert!(provenance["forge_request_count"].as_u64().unwrap() > 0);
+    assert!(provenance["forge_response_count"].as_u64().unwrap() > 0);
+    assert_eq!(
+        provenance["forge_live_reasoning_used"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(
+        provenance["forge_provider_summary"]["vegvisir"].as_u64(),
+        Some(9)
+    );
+    assert_eq!(
+        provenance["forge_adapter_mode_summary"]["deterministic fallback"].as_u64(),
+        Some(9)
     );
 
     let verify = Command::new(env!("CARGO_BIN_EXE_skiller"))
@@ -3171,6 +3226,18 @@ fn registry_publish_writes_rich_provenance_and_index_lifecycle_metadata() {
     );
     assert!(
         list_stdout.contains("content_manifest_hash:"),
+        "stdout was: {list_stdout}"
+    );
+    assert!(
+        list_stdout.contains("forge_request_count:"),
+        "stdout was: {list_stdout}"
+    );
+    assert!(
+        list_stdout.contains("forge_provider_summary:"),
+        "stdout was: {list_stdout}"
+    );
+    assert!(
+        list_stdout.contains("deterministic fallback"),
         "stdout was: {list_stdout}"
     );
     assert!(

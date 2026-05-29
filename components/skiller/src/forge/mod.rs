@@ -17,6 +17,8 @@ pub struct ForgeBundleSummary {
     pub bundle_id: String,
     pub bundle_version: String,
     pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_provenance: Option<ForgeProviderProvenance>,
     pub pass_count: usize,
     pub passes: Vec<ForgePassSummary>,
     pub generated_skill_count: usize,
@@ -39,6 +41,21 @@ pub struct ForgePassSummary {
     pub audit_note_count: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ForgeProviderProvenance {
+    pub provider: String,
+    pub provider_display_name: String,
+    pub deterministic: bool,
+    pub live_reasoning: bool,
+    pub adapter_mode: String,
+    pub adapter_command_configured: bool,
+    pub adapter_preflight_ok: Option<bool>,
+    pub adapter_timeout_secs: Option<u64>,
+    pub structured_envelope: bool,
+    pub secret_safe: bool,
+    pub caveats: Vec<String>,
+}
+
 pub fn summarize_forge_history(bundle: &SkillBundle) -> ForgeBundleSummary {
     let provider = bundle
         .forge_requests
@@ -52,6 +69,11 @@ pub fn summarize_forge_history(bundle: &SkillBundle) -> ForgeBundleSummary {
     let mut warnings = Vec::new();
     let mut readiness_notes = Vec::new();
     let mut passes = Vec::new();
+    let provider_provenance = bundle
+        .forge_requests
+        .first()
+        .and_then(|request| request.provider_provenance.clone())
+        .or_else(|| provider_provenance_for(provider.as_deref()));
 
     for response in &bundle.forge_responses {
         generated_skill_count += response.generated_items.len();
@@ -111,6 +133,7 @@ pub fn summarize_forge_history(bundle: &SkillBundle) -> ForgeBundleSummary {
         bundle_id: bundle.package.bundle_id.clone(),
         bundle_version: bundle.package.version.clone(),
         provider,
+        provider_provenance,
         pass_count: passes.len(),
         passes,
         generated_skill_count,
@@ -133,6 +156,24 @@ pub fn forge_summary_markdown(summary: &ForgeBundleSummary) -> String {
         "- Provider: `{}`\n",
         summary.provider.as_deref().unwrap_or("unknown")
     ));
+    if let Some(provenance) = &summary.provider_provenance {
+        out.push_str(&format!("- Provider mode: `{}`\n", provenance.adapter_mode));
+        out.push_str(&format!(
+            "- Deterministic provider: {}\n",
+            provenance.deterministic
+        ));
+        out.push_str(&format!(
+            "- Live reasoning: {}\n",
+            provenance.live_reasoning
+        ));
+        out.push_str(&format!(
+            "- Adapter configured: {}\n",
+            provenance.adapter_command_configured
+        ));
+        if let Some(ok) = provenance.adapter_preflight_ok {
+            out.push_str(&format!("- Adapter preflight OK: {}\n", ok));
+        }
+    }
     out.push_str(&format!("- Passes: {}\n", summary.pass_count));
     out.push_str(&format!(
         "- Generated skills: {}\n",
@@ -316,6 +357,24 @@ pub fn provider_status(name: &str) -> Result<ForgeProviderStatus> {
         .into_iter()
         .find(|provider| provider.name == name)
         .ok_or_else(|| anyhow!("unsupported forge provider '{name}'"))
+}
+
+fn provider_provenance_for(name: Option<&str>) -> Option<ForgeProviderProvenance> {
+    let name = name?;
+    let status = provider_status(name).ok()?;
+    Some(ForgeProviderProvenance {
+        provider: status.name,
+        provider_display_name: status.display_name,
+        deterministic: status.deterministic,
+        live_reasoning: status.live_reasoning,
+        adapter_mode: status.adapter_mode,
+        adapter_command_configured: status.adapter_command_configured,
+        adapter_preflight_ok: status.adapter_preflight_ok,
+        adapter_timeout_secs: status.adapter_timeout_secs,
+        structured_envelope: status.structured_envelope,
+        secret_safe: status.secret_safe,
+        caveats: status.caveats,
+    })
 }
 
 fn all_forge_passes() -> Vec<ForgePassType> {
@@ -772,6 +831,7 @@ fn minimal_adapter_self_test_bundle_and_request() -> (SkillBundle, ForgeRequestE
     let request = ForgeRequestEnvelope {
         request_id: stable_id("forge-adapter-self-test", "vegvisir:strict-envelope"),
         provider: "vegvisir".into(),
+        provider_provenance: provider_provenance_for(Some("vegvisir")),
         pass_type: ForgePassType::Interpretation,
         bundle_id: bundle.package.bundle_id.clone(),
         bundle_version: bundle.package.version.clone(),
@@ -1142,6 +1202,7 @@ pub fn build_request(
     ForgeRequestEnvelope {
         request_id: stable_forge_request_id(bundle, provider, &pass_type, max_skills),
         provider: provider.into(),
+        provider_provenance: provider_provenance_for(Some(provider)),
         pass_type: pass_type.clone(),
         bundle_id: bundle.package.bundle_id.clone(),
         bundle_version: bundle.package.version.clone(),
@@ -1184,6 +1245,8 @@ pub struct ForgeApplyReport {
     pub apply_id: String,
     pub request_id: String,
     pub pass_type: ForgePassType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_provenance: Option<ForgeProviderProvenance>,
     pub valid: bool,
     pub before_skill_count: usize,
     pub after_skill_count: usize,
@@ -1215,6 +1278,7 @@ pub fn apply_external_response_with_report(
     response: ForgeResponseEnvelope,
 ) -> Result<(SkillBundle, ForgeApplyReport)> {
     let validation_report = validate_response_report(&bundle, &request, &response);
+    let request_provider = request.provider.clone();
     let before_skill_count = bundle.skills.len();
     let generated_skill_ids = response
         .generated_items
@@ -1244,6 +1308,7 @@ pub fn apply_external_response_with_report(
             ),
             request_id: response.request_id.clone(),
             pass_type: response.pass_type.clone(),
+            provider_provenance: provider_provenance_for(Some(&request_provider)),
             valid: false,
             before_skill_count,
             after_skill_count: before_skill_count,
@@ -1288,6 +1353,7 @@ pub fn apply_external_response_with_report(
         ),
         request_id: response.request_id.clone(),
         pass_type: response.pass_type.clone(),
+        provider_provenance: provider_provenance_for(Some(&request_provider)),
         valid: true,
         before_skill_count,
         after_skill_count,

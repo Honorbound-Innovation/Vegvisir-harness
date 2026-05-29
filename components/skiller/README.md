@@ -33,6 +33,9 @@ cargo run -- route dist/example-skills "pod crashloop logs"
 cargo run -- load dist/example-skills <skill-id> --mode extended
 cargo run -- forge dist/example-skills --out dist/example-skills-forged --domain-profile kubernetes-operations
 cargo run -- evidence-report dist/example-skills-forged
+
+
+Evidence reports for forged bundles include Forge provider provenance, including provider name, deterministic/live mode, and adapter mode, so reviewers can tell whether output came from deterministic fallback or a configured live adapter.
 cargo run -- propose-agents dist/example-skills-forged --out dist/agents
 cargo run -- verify-agent-proposals dist/agents
 cargo run -- build-agent-pack dist/example-skills-forged --agent "Cluster Diagnostic Agent" --out dist/cluster-agent --report dist/cluster-agent-build-report.yaml

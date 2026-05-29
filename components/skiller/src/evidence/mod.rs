@@ -66,6 +66,59 @@ pub fn evidence_report_markdown(bundle: &SkillBundle) -> String {
     }
     out.push('\n');
 
+    if !bundle.forge_requests.is_empty() || !bundle.forge_responses.is_empty() {
+        out.push_str("## Forge Provider Provenance\n\n");
+        let mut provider_counts: BTreeMap<String, usize> = BTreeMap::new();
+        let mut adapter_mode_counts: BTreeMap<String, usize> = BTreeMap::new();
+        let mut live_reasoning_count = 0usize;
+        let mut deterministic_count = 0usize;
+        let mut missing_provenance_count = 0usize;
+        for request in &bundle.forge_requests {
+            if let Some(provenance) = &request.provider_provenance {
+                *provider_counts
+                    .entry(provenance.provider.clone())
+                    .or_default() += 1;
+                *adapter_mode_counts
+                    .entry(provenance.adapter_mode.clone())
+                    .or_default() += 1;
+                if provenance.live_reasoning {
+                    live_reasoning_count += 1;
+                }
+                if provenance.deterministic {
+                    deterministic_count += 1;
+                }
+            } else {
+                missing_provenance_count += 1;
+            }
+        }
+        out.push_str(&format!(
+            "- Forge requests: {}\n- Forge responses: {}\n- Live reasoning requests: {}\n- Deterministic requests: {}\n- Missing provenance records: {}\n\n",
+            bundle.forge_requests.len(),
+            bundle.forge_responses.len(),
+            live_reasoning_count,
+            deterministic_count,
+            missing_provenance_count
+        ));
+        if !provider_counts.is_empty() {
+            out.push_str("### Providers\n\n");
+            for (provider, count) in provider_counts {
+                out.push_str(&format!("- {provider}: {count} request(s)\n"));
+            }
+            out.push('\n');
+        }
+        if !adapter_mode_counts.is_empty() {
+            out.push_str("### Adapter Modes\n\n");
+            for (mode, count) in adapter_mode_counts {
+                out.push_str(&format!("- {mode}: {count} request(s)\n"));
+            }
+            out.push('\n');
+        }
+        if missing_provenance_count > 0 {
+            out.push_str("### Forge Provenance Warnings\n\n");
+            out.push_str("- Some Forge requests lack provider provenance; review the original Forge history before publication.\n\n");
+        }
+    }
+
     out.push_str("## Evidence Summary by Skill\n\n");
     for skill in &bundle.skills {
         out.push_str(&format!(

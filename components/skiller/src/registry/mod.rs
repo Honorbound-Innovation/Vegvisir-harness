@@ -638,6 +638,11 @@ pub struct ProvenanceRecord {
     pub published_skill_count: usize,
     pub high_risk_skill_count: usize,
     pub inference_record_count: usize,
+    pub forge_request_count: usize,
+    pub forge_response_count: usize,
+    pub forge_provider_summary: std::collections::BTreeMap<String, usize>,
+    pub forge_adapter_mode_summary: std::collections::BTreeMap<String, usize>,
+    pub forge_live_reasoning_used: bool,
     pub source_trust_summary: std::collections::BTreeMap<String, usize>,
     pub source_rights_summary: std::collections::BTreeMap<String, usize>,
 }
@@ -682,6 +687,28 @@ impl ProvenanceRecord {
             .iter()
             .map(|skill| skill.inference_records.len())
             .sum();
+        let mut forge_provider_summary = std::collections::BTreeMap::new();
+        let mut forge_adapter_mode_summary = std::collections::BTreeMap::new();
+        let mut forge_live_reasoning_used = false;
+        for request in &bundle.forge_requests {
+            if let Some(provenance) = &request.provider_provenance {
+                *forge_provider_summary
+                    .entry(provenance.provider.clone())
+                    .or_insert(0) += 1;
+                *forge_adapter_mode_summary
+                    .entry(provenance.adapter_mode.clone())
+                    .or_insert(0) += 1;
+                forge_live_reasoning_used |= provenance.live_reasoning;
+            } else {
+                *forge_provider_summary
+                    .entry(request.provider.clone())
+                    .or_insert(0) += 1;
+                *forge_adapter_mode_summary
+                    .entry("unknown".to_string())
+                    .or_insert(0) += 1;
+            }
+        }
+
         let mut source_trust_summary = std::collections::BTreeMap::new();
         let mut source_rights_summary = std::collections::BTreeMap::new();
         for source in &bundle.sources {
@@ -710,6 +737,11 @@ impl ProvenanceRecord {
             published_skill_count,
             high_risk_skill_count,
             inference_record_count,
+            forge_request_count: bundle.forge_requests.len(),
+            forge_response_count: bundle.forge_responses.len(),
+            forge_provider_summary,
+            forge_adapter_mode_summary,
+            forge_live_reasoning_used,
             source_trust_summary,
             source_rights_summary,
         }
@@ -727,6 +759,11 @@ pub struct RegistryEntry {
     pub source_count: Option<usize>,
     pub high_risk_skill_count: Option<usize>,
     pub inference_record_count: Option<usize>,
+    pub forge_request_count: Option<usize>,
+    pub forge_response_count: Option<usize>,
+    pub forge_provider_summary: Option<std::collections::BTreeMap<String, usize>>,
+    pub forge_adapter_mode_summary: Option<std::collections::BTreeMap<String, usize>>,
+    pub forge_live_reasoning_used: Option<bool>,
     pub readiness_ready: Option<bool>,
     pub force_published: Option<bool>,
     pub content_manifest_hash: Option<String>,
@@ -837,6 +874,19 @@ pub fn list_registry(registry: &Path) -> Result<RegistryIndex> {
                 inference_record_count: provenance
                     .as_ref()
                     .map(|record| record.inference_record_count),
+                forge_request_count: provenance.as_ref().map(|record| record.forge_request_count),
+                forge_response_count: provenance
+                    .as_ref()
+                    .map(|record| record.forge_response_count),
+                forge_provider_summary: provenance
+                    .as_ref()
+                    .map(|record| record.forge_provider_summary.clone()),
+                forge_adapter_mode_summary: provenance
+                    .as_ref()
+                    .map(|record| record.forge_adapter_mode_summary.clone()),
+                forge_live_reasoning_used: provenance
+                    .as_ref()
+                    .map(|record| record.forge_live_reasoning_used),
                 readiness_ready: provenance.as_ref().map(|record| record.readiness_ready),
                 force_published: provenance.as_ref().map(|record| record.force),
                 content_manifest_hash: provenance
