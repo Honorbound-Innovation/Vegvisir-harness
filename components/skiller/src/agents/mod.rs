@@ -103,22 +103,27 @@ pub fn write_agent_pack(bundle: &SkillBundle, agent: &str, out: &Path) -> Result
             .skills
             .iter()
             .filter(|s| {
-                s.maturity >= SkillMaturity::Level3Verified || s.status >= SkillStatus::Reviewed
+                matches!(
+                    s.status,
+                    SkillStatus::Reviewed | SkillStatus::Approved | SkillStatus::Published
+                ) && s.maturity >= SkillMaturity::Level3Verified
             })
             .map(|s| s.id.clone())
             .collect(),
         optional_skills: bundle
             .skills
             .iter()
-            .filter(|s| s.status == SkillStatus::Candidate || s.status == SkillStatus::NeedsReview)
+            .filter(|s| matches!(s.status, SkillStatus::Candidate | SkillStatus::NeedsReview))
             .map(|s| s.id.clone())
             .collect(),
         forbidden_skills: bundle
             .skills
             .iter()
             .filter(|s| {
-                s.status == SkillStatus::Unsafe
-                    || s.maturity < SkillMaturity::Level1StructuredCandidate
+                matches!(
+                    s.status,
+                    SkillStatus::Unsafe | SkillStatus::Archived | SkillStatus::Deprecated
+                ) || s.maturity < SkillMaturity::Level1StructuredCandidate
             })
             .map(|s| s.id.clone())
             .collect(),

@@ -47,23 +47,40 @@ pub struct Skill {
     pub skill_type: SkillType,
     pub scope: SkillScope,
     pub status: SkillStatus,
+    #[serde(default)]
     pub maturity: SkillMaturity,
     pub domain: Option<String>,
+    #[serde(default)]
     pub source_section_ids: Vec<String>,
+    #[serde(default)]
     pub procedure: Vec<String>,
+    #[serde(default)]
     pub inputs: Vec<String>,
+    #[serde(default)]
     pub outputs: Vec<String>,
+    #[serde(default)]
     pub guardrails: Vec<String>,
+    #[serde(default)]
     pub anti_patterns: Vec<String>,
+    #[serde(default)]
     pub evals: Vec<EvalCase>,
+    #[serde(default)]
     pub citations: Vec<Citation>,
+    #[serde(default)]
     pub confidence: ConfidenceBreakdown,
+    #[serde(default)]
     pub evidence_breakdown: EvidenceBreakdown,
+    #[serde(default)]
     pub inference_records: Vec<InferenceRecord>,
+    #[serde(default)]
     pub role_suitability: Vec<AgentRoleSuitability>,
+    #[serde(default)]
     pub tool_requirements: Vec<ToolRequirement>,
+    #[serde(default)]
     pub runtime_policy: RuntimePolicy,
+    #[serde(default)]
     pub version_applicability: VersionApplicability,
+    #[serde(default)]
     pub metadata: BTreeMap<String, String>,
 }
 
@@ -496,6 +513,12 @@ pub enum SkillMaturity {
     Level4HumanApproved,
     Level5RuntimeProven,
     Level6Certified,
+}
+
+impl Default for SkillMaturity {
+    fn default() -> Self {
+        Self::Level1StructuredCandidate
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PublishStatus {

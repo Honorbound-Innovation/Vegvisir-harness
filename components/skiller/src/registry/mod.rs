@@ -96,10 +96,49 @@ pub fn validate_bundle(bundle: &SkillBundle) -> ValidationReport {
         .iter()
         .map(|s| s.section_id.as_str())
         .collect();
+    let section_sources: std::collections::BTreeMap<_, _> = bundle
+        .sections
+        .iter()
+        .map(|s| (s.section_id.as_str(), s.source_id.as_str()))
+        .collect();
+    let source_ids: std::collections::BTreeSet<_> = bundle
+        .sources
+        .iter()
+        .map(|s| s.source_id.as_str())
+        .collect();
+    for source in &bundle.sources {
+        if let PermissionStatus::Blocked(reason) = &source.permission_status {
+            errors.push(format!(
+                "source {} permission blocked: {}",
+                source.source_id, reason
+            ));
+        }
+        if let ScanStatus::Findings(findings) = &source.secret_scan_status {
+            errors.push(format!(
+                "source {} has unresolved secret-scan findings: {}",
+                source.source_id,
+                findings.join(", ")
+            ));
+        }
+        if matches!(source.retention_policy, RetentionPolicy::DeleteAfterCompile)
+            && bundle.sections.iter().any(|section| {
+                section.source_id == source.source_id && !section.text_excerpt.trim().is_empty()
+            })
+        {
+            errors.push(format!(
+                "source {} requires delete-after-compile but retained section excerpts",
+                source.source_id
+            ));
+        }
+    }
+    let mut seen_skill_ids = std::collections::BTreeSet::new();
     if let Err(err) = crate::forge::validate_stored_forge(bundle) {
         errors.push(err.to_string());
     }
     for skill in &bundle.skills {
+        if !seen_skill_ids.insert(skill.id.as_str()) {
+            errors.push(format!("duplicate skill id {}", skill.id));
+        }
         if skill.citations.is_empty() {
             errors.push(format!("{} has no citations", skill.id));
         }
@@ -111,6 +150,95 @@ pub fn validate_bundle(bundle: &SkillBundle) -> ValidationReport {
         for sid in &skill.source_section_ids {
             if !section_ids.contains(sid.as_str()) {
                 errors.push(format!("{} references missing section {}", skill.id, sid));
+            }
+        }
+        for citation in &skill.citations {
+            if !source_ids.contains(citation.source_id.as_str()) {
+                errors.push(format!(
+                    "{} citation {} references missing source {}",
+                    skill.id, citation.citation_id, citation.source_id
+                ));
+            }
+            match section_sources.get(citation.section_id.as_str()) {
+                Some(section_source) if *section_source == citation.source_id.as_str() => {}
+                Some(section_source) => errors.push(format!(
+                    "{} citation {} source {} does not match section {} source {}",
+                    skill.id,
+                    citation.citation_id,
+                    citation.source_id,
+                    citation.section_id,
+                    section_source
+                )),
+                None => errors.push(format!(
+                    "{} citation {} references missing section {}",
+                    skill.id, citation.citation_id, citation.section_id
+                )),
+            }
+        }
+        if let Err(err) = crate::forge::validate_confidence_breakdown(
+            &format!("{} confidence", skill.id),
+            &skill.confidence,
+        ) {
+            errors.push(err.to_string());
+        }
+        if let Err(err) = crate::forge::validate_evidence_breakdown(
+            &format!("{} evidence_breakdown", skill.id),
+            &skill.evidence_breakdown,
+        ) {
+            errors.push(err.to_string());
+        }
+        for role in &skill.role_suitability {
+            if let Err(err) = crate::forge::validate_probability(
+                &format!("{} role_suitability {}", skill.id, role.role),
+                role.suitability,
+            ) {
+                errors.push(err.to_string());
+            }
+        }
+        if let Err(err) = crate::forge::validate_probability(
+            &format!("{} version_confidence", skill.id),
+            skill.version_applicability.version_confidence,
+        ) {
+            errors.push(err.to_string());
+        }
+        for version_ref in &skill.version_applicability.version_source_refs {
+            if !section_ids.contains(version_ref.as_str()) {
+                errors.push(format!(
+                    "{} version applicability references missing section {}",
+                    skill.id, version_ref
+                ));
+            }
+        }
+        for record in &skill.inference_records {
+            if let Err(err) = crate::forge::validate_probability(
+                &format!(
+                    "{} inference record {} confidence",
+                    skill.id, record.inference_id
+                ),
+                record.confidence,
+            ) {
+                errors.push(err.to_string());
+            }
+            for sid in &record.source_refs_used {
+                if !section_ids.contains(sid.as_str()) {
+                    errors.push(format!(
+                        "{} inference record {} references missing section {}",
+                        skill.id, record.inference_id, sid
+                    ));
+                }
+            }
+            for candidate_id in &record.candidate_ids_used {
+                if bundle
+                    .capability_candidates
+                    .iter()
+                    .all(|candidate| candidate.candidate_id != *candidate_id)
+                    && bundle.skills.iter().all(|skill| skill.id != *candidate_id)
+                {
+                    errors.push(format!(
+                        "{} inference record {} references unknown candidate {}",
+                        skill.id, record.inference_id, candidate_id
+                    ));
+                }
             }
         }
         if skill.evidence_breakdown.speculative_candidate > 0.4
@@ -169,18 +297,119 @@ pub struct ReadinessReport {
 pub fn readiness_report(bundle: &SkillBundle) -> ReadinessReport {
     let validation = validate_bundle(bundle);
     let mut blockers = validation.errors;
-    for s in &bundle.skills {
+    let mut warnings = validation.warnings;
+    let public_publish_requested = bundle
+        .package
+        .compatibility
+        .get("publish_visibility")
+        .map(|visibility| visibility.eq_ignore_ascii_case("public"))
+        .unwrap_or(false);
+    for source in &bundle.sources {
+        match &source.permission_status {
+            PermissionStatus::Blocked(reason) => blockers.push(format!(
+                "source {} permission blocked: {}",
+                source.source_id, reason
+            )),
+            PermissionStatus::IndexOnly => warnings.push(format!(
+                "source {} is index-only; publish should retain pointers and short excerpts only",
+                source.source_id
+            )),
+            PermissionStatus::Allowed => {}
+        }
+        if let ScanStatus::Findings(findings) = &source.secret_scan_status {
+            blockers.push(format!(
+                "source {} has unresolved secret-scan findings: {}",
+                source.source_id,
+                findings.join(", ")
+            ));
+        }
+        if public_publish_requested && !matches!(source.export_policy, ExportPolicy::PublicAllowed)
+        {
+            blockers.push(format!(
+                "source {} export policy does not allow public publication",
+                source.source_id
+            ));
+        }
+        if matches!(source.export_policy, ExportPolicy::PrivateOnly) {
+            warnings.push(format!(
+                "source {} is private-only; keep registry/export scope private",
+                source.source_id
+            ));
+        }
         if matches!(
-            s.status,
-            SkillStatus::Draft | SkillStatus::Candidate | SkillStatus::NeedsReview
+            source.visibility,
+            Visibility::Private | Visibility::Internal | Visibility::Restricted
         ) {
-            blockers.push(format!("{} is not reviewed/approved", s.id));
+            warnings.push(format!(
+                "source {} visibility is {:?}; avoid public export without explicit policy",
+                source.source_id, source.visibility
+            ));
+        }
+        if matches!(source.retention_policy, RetentionPolicy::DeleteAfterCompile) {
+            blockers.push(format!(
+                "source {} requires delete-after-compile retention handling before publication",
+                source.source_id
+            ));
+        }
+    }
+    for s in &bundle.skills {
+        match s.status {
+            SkillStatus::Draft | SkillStatus::Candidate | SkillStatus::NeedsReview => {
+                blockers.push(format!("{} is not reviewed/approved", s.id));
+            }
+            SkillStatus::Unsafe => {
+                blockers.push(format!("{} is unsafe and cannot be published", s.id))
+            }
+            SkillStatus::Archived => {
+                blockers.push(format!("{} is archived and cannot be published", s.id));
+            }
+            SkillStatus::Deprecated => {
+                blockers.push(format!("{} is deprecated and cannot be published", s.id));
+            }
+            SkillStatus::Reviewed | SkillStatus::Approved | SkillStatus::Published => {}
+        }
+
+        let high_risk_tool = s.tool_requirements.iter().any(|tool| {
+            matches!(
+                tool.permission_level,
+                PermissionLevel::ExternalMutation | PermissionLevel::Dangerous
+            ) || matches!(tool.requirement_type, ToolRequirementType::Dangerous)
+        });
+        let high_risk_runtime = s.runtime_policy.modify_external_systems;
+        if high_risk_runtime || high_risk_tool {
+            if !matches!(s.status, SkillStatus::Approved | SkillStatus::Published)
+                || s.maturity < SkillMaturity::Level4HumanApproved
+                || s.confidence.human_review < 0.5
+            {
+                blockers.push(format!(
+                    "{} is high-risk and requires human-approved Level4+ maturity before publication",
+                    s.id
+                ));
+            }
+        }
+
+        if s.runtime_policy.modify_files && !s.runtime_policy.requires_backup_or_rollback {
+            blockers.push(format!(
+                "{} can modify files without backup or rollback requirement",
+                s.id
+            ));
+        }
+
+        if s.inference_records
+            .iter()
+            .any(|record| record.required_review)
+            && !matches!(s.status, SkillStatus::Approved | SkillStatus::Published)
+        {
+            blockers.push(format!(
+                "{} contains inference records requiring human review",
+                s.id
+            ));
         }
     }
     ReadinessReport {
         ready: blockers.is_empty(),
         blockers,
-        warnings: validation.warnings,
+        warnings,
         skill_count: bundle.skills.len(),
     }
 }

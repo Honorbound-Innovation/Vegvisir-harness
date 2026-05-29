@@ -313,6 +313,16 @@ pub fn validate_response(
         .iter()
         .map(|s| s.section_id.as_str())
         .collect();
+    let section_sources: BTreeMap<_, _> = bundle
+        .sections
+        .iter()
+        .map(|s| (s.section_id.as_str(), s.source_id.as_str()))
+        .collect();
+    let source_ids: BTreeSet<_> = bundle
+        .sources
+        .iter()
+        .map(|s| s.source_id.as_str())
+        .collect();
     let skill_ids: BTreeSet<_> = bundle.skills.iter().map(|s| s.id.as_str()).collect();
     for skill in response
         .modified_items
@@ -337,13 +347,38 @@ pub fn validate_response(
                 );
             }
         }
+        validate_confidence_breakdown(
+            &format!("forge skill {} confidence", skill.id),
+            &skill.confidence,
+        )?;
+        validate_evidence_breakdown(
+            &format!("forge skill {} evidence_breakdown", skill.id),
+            &skill.evidence_breakdown,
+        )?;
         for citation in &skill.citations {
-            if !section_ids.contains(citation.section_id.as_str()) {
+            if !source_ids.contains(citation.source_id.as_str()) {
                 bail!(
+                    "forge skill {} citation {} references missing source {}",
+                    skill.id,
+                    citation.citation_id,
+                    citation.source_id
+                );
+            }
+            match section_sources.get(citation.section_id.as_str()) {
+                Some(section_source) if *section_source == citation.source_id.as_str() => {}
+                Some(section_source) => bail!(
+                    "forge skill {} citation {} source {} does not match section {} source {}",
+                    skill.id,
+                    citation.citation_id,
+                    citation.source_id,
+                    citation.section_id,
+                    section_source
+                ),
+                None => bail!(
                     "forge skill {} references missing citation section {}",
                     skill.id,
                     citation.section_id
-                );
+                ),
             }
         }
         if !skill_ids.contains(skill.id.as_str()) && skill.inference_records.is_empty() {
@@ -358,12 +393,94 @@ pub fn validate_response(
             );
         }
     }
+    for (skill_id, confidence) in &response.confidence_updates {
+        if !skill_ids.contains(skill_id.as_str())
+            && response
+                .generated_items
+                .iter()
+                .all(|skill| skill.id != *skill_id)
+            && response
+                .modified_items
+                .iter()
+                .all(|skill| skill.id != *skill_id)
+        {
+            bail!("forge confidence update references unknown skill {skill_id}");
+        }
+        validate_confidence_breakdown(&format!("forge confidence update {skill_id}"), confidence)?;
+    }
     for record in &response.evidence_records {
+        validate_probability(
+            &format!("forge evidence record {} confidence", record.inference_id),
+            record.confidence,
+        )?;
         for sid in &record.source_refs_used {
             if !section_ids.contains(sid.as_str()) {
                 bail!("forge evidence record references missing section {sid}");
             }
         }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_confidence_breakdown(
+    label: &str,
+    confidence: &ConfidenceBreakdown,
+) -> Result<()> {
+    validate_probability(&format!("{label}.raw"), confidence.raw)?;
+    validate_probability(&format!("{label}.extraction"), confidence.extraction)?;
+    validate_probability(&format!("{label}.inference"), confidence.inference)?;
+    validate_probability(&format!("{label}.procedure"), confidence.procedure)?;
+    validate_probability(&format!("{label}.guardrail"), confidence.guardrail)?;
+    validate_probability(&format!("{label}.eval"), confidence.eval)?;
+    validate_probability(&format!("{label}.routing"), confidence.routing)?;
+    validate_probability(
+        &format!("{label}.source_quality"),
+        confidence.source_quality,
+    )?;
+    validate_probability(&format!("{label}.human_review"), confidence.human_review)?;
+    validate_probability(&format!("{label}.runtime"), confidence.runtime)
+}
+
+pub(crate) fn validate_evidence_breakdown(label: &str, evidence: &EvidenceBreakdown) -> Result<()> {
+    validate_probability(
+        &format!("{label}.direct_extraction"),
+        evidence.direct_extraction,
+    )?;
+    validate_probability(
+        &format!("{label}.supporting_inference"),
+        evidence.supporting_inference,
+    )?;
+    validate_probability(
+        &format!("{label}.operational_synthesis"),
+        evidence.operational_synthesis,
+    )?;
+    validate_probability(
+        &format!("{label}.speculative_candidate"),
+        evidence.speculative_candidate,
+    )?;
+    validate_probability(
+        &format!("{label}.community_derived"),
+        evidence.community_derived,
+    )?;
+    validate_probability(
+        &format!("{label}.internal_policy_derived"),
+        evidence.internal_policy_derived,
+    )?;
+    let total = evidence.direct_extraction
+        + evidence.supporting_inference
+        + evidence.operational_synthesis
+        + evidence.speculative_candidate
+        + evidence.community_derived
+        + evidence.internal_policy_derived;
+    if total > 1.05 {
+        bail!("{label} total exceeds 1.0 tolerance: {total:.3}");
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_probability(label: &str, value: f32) -> Result<()> {
+    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+        bail!("{label} must be between 0.0 and 1.0, got {value}");
     }
     Ok(())
 }
