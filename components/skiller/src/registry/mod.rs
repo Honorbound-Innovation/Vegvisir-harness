@@ -274,17 +274,182 @@ pub struct EvalReport {
     pub passed: bool,
     pub checks: Vec<String>,
     pub failures: Vec<String>,
+    pub warnings: Vec<String>,
+    pub skill_reports: Vec<SkillEvalReport>,
+    pub total_eval_cases: usize,
+    pub skills_without_evals: usize,
+    pub safety_eval_count: usize,
+    pub routing_eval_count: usize,
+    pub source_grounding_eval_count: usize,
+    pub tool_use_planning_eval_count: usize,
 }
+
+#[derive(Debug, Serialize)]
+pub struct SkillEvalReport {
+    pub skill_id: String,
+    pub title: String,
+    pub status: SkillStatus,
+    pub maturity: SkillMaturity,
+    pub eval_count: usize,
+    pub eval_types: Vec<EvalType>,
+    pub coverage: EvalCoverage,
+    pub failures: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EvalCoverage {
+    pub has_positive: bool,
+    pub has_negative: bool,
+    pub has_safety: bool,
+    pub has_routing: bool,
+    pub has_tool_use_planning: bool,
+    pub has_source_grounding: bool,
+}
+
 pub fn eval_bundle(bundle: &SkillBundle) -> EvalReport {
-    let v = validate_bundle(bundle);
+    let validation = validate_bundle(bundle);
+    let mut failures = validation.errors;
+    let mut warnings = validation.warnings;
+    let mut skill_reports = Vec::new();
+    let mut total_eval_cases = 0usize;
+    let mut skills_without_evals = 0usize;
+    let mut safety_eval_count = 0usize;
+    let mut routing_eval_count = 0usize;
+    let mut source_grounding_eval_count = 0usize;
+    let mut tool_use_planning_eval_count = 0usize;
+
+    for skill in &bundle.skills {
+        let mut skill_failures = Vec::new();
+        let mut skill_warnings = Vec::new();
+        let mut seen_eval_ids = std::collections::BTreeSet::new();
+        let mut eval_types = Vec::new();
+        let mut coverage = EvalCoverage {
+            has_positive: false,
+            has_negative: false,
+            has_safety: false,
+            has_routing: false,
+            has_tool_use_planning: false,
+            has_source_grounding: false,
+        };
+
+        if skill.evals.is_empty() {
+            skills_without_evals += 1;
+            skill_failures.push("skill has no eval cases".to_string());
+        }
+
+        for eval in &skill.evals {
+            total_eval_cases += 1;
+            if !seen_eval_ids.insert(eval.id.as_str()) {
+                skill_failures.push(format!("duplicate eval id {}", eval.id));
+            }
+            if eval.prompt.trim().is_empty() {
+                skill_failures.push(format!("eval {} has empty prompt", eval.id));
+            }
+            if eval.expected_behavior.trim().is_empty() {
+                skill_failures.push(format!("eval {} has empty expected_behavior", eval.id));
+            }
+            match eval.eval_type {
+                EvalType::Positive => coverage.has_positive = true,
+                EvalType::Negative => coverage.has_negative = true,
+                EvalType::EdgeCase => {}
+                EvalType::Safety => {
+                    coverage.has_safety = true;
+                    safety_eval_count += 1;
+                }
+                EvalType::Routing => {
+                    coverage.has_routing = true;
+                    routing_eval_count += 1;
+                }
+                EvalType::ToolUsePlanning => {
+                    coverage.has_tool_use_planning = true;
+                    tool_use_planning_eval_count += 1;
+                }
+                EvalType::SourceGrounding => {
+                    coverage.has_source_grounding = true;
+                    source_grounding_eval_count += 1;
+                }
+            }
+            if !eval_types.iter().any(|kind| kind == &eval.eval_type) {
+                eval_types.push(eval.eval_type.clone());
+            }
+        }
+
+        let has_tool_requirements = !skill.tool_requirements.is_empty();
+        let high_risk_tool = skill.tool_requirements.iter().any(|tool| {
+            matches!(
+                tool.permission_level,
+                PermissionLevel::ExternalMutation | PermissionLevel::Dangerous
+            ) || matches!(tool.requirement_type, ToolRequirementType::Dangerous)
+        });
+        let operational = skill.runtime_policy.modify_files
+            || skill.runtime_policy.modify_external_systems
+            || has_tool_requirements;
+
+        if !coverage.has_routing {
+            skill_warnings.push("missing routing eval".into());
+        }
+        if !coverage.has_source_grounding {
+            skill_warnings.push("missing source-grounding eval".into());
+        }
+        if operational && !coverage.has_tool_use_planning {
+            skill_warnings.push("operational skill missing tool-use-planning eval".into());
+        }
+        if (high_risk_tool || skill.runtime_policy.modify_external_systems) && !coverage.has_safety
+        {
+            skill_failures.push("high-risk skill missing safety eval".into());
+        }
+        if matches!(skill.status, SkillStatus::Approved | SkillStatus::Published)
+            && (!coverage.has_source_grounding || !coverage.has_routing)
+        {
+            skill_failures.push(
+                "approved/published skill must include routing and source-grounding evals".into(),
+            );
+        }
+        if skill.confidence.eval >= 0.7 && skill.evals.len() < 2 {
+            skill_warnings.push("high eval confidence with fewer than two eval cases".into());
+        }
+
+        for failure in &skill_failures {
+            failures.push(format!("{}: {}", skill.id, failure));
+        }
+        for warning in &skill_warnings {
+            warnings.push(format!("{}: {}", skill.id, warning));
+        }
+        skill_reports.push(SkillEvalReport {
+            skill_id: skill.id.clone(),
+            title: skill.title.clone(),
+            status: skill.status.clone(),
+            maturity: skill.maturity.clone(),
+            eval_count: skill.evals.len(),
+            eval_types,
+            coverage,
+            failures: skill_failures,
+            warnings: skill_warnings,
+        });
+    }
+
     EvalReport {
-        passed: v.valid,
+        passed: failures.is_empty(),
         checks: vec![
             "schema/reference validation".into(),
             "citation presence".into(),
             "publication safety".into(),
+            "eval case structural completeness".into(),
+            "routing eval coverage".into(),
+            "source-grounding eval coverage".into(),
+            "high-risk safety eval coverage".into(),
+            "tool-use planning eval coverage".into(),
         ],
-        failures: v.errors,
+        failures,
+        warnings,
+        skill_reports,
+        total_eval_cases,
+        skills_without_evals,
+        safety_eval_count,
+        routing_eval_count,
+        source_grounding_eval_count,
+        tool_use_planning_eval_count,
     }
 }
 

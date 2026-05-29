@@ -2,9 +2,25 @@ use crate::ingest::stable_id;
 use crate::models::*;
 use anyhow::{Context, Result};
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
+
+#[derive(Clone, Debug, Serialize)]
+pub struct AgentPackEvalStatus {
+    pub passed: bool,
+    pub selected_skill_count: usize,
+    pub total_eval_cases: usize,
+    pub skills_without_evals: usize,
+    pub safety_eval_count: usize,
+    pub routing_eval_count: usize,
+    pub source_grounding_eval_count: usize,
+    pub tool_use_planning_eval_count: usize,
+    pub failures: Vec<String>,
+    pub warnings: Vec<String>,
+    pub skill_eval_counts: BTreeMap<String, usize>,
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct AgentPackLifecycleStatus {
@@ -104,6 +120,7 @@ struct AgentPack<'a> {
     example_prompts: Vec<String>,
     system_prompt_material: String,
     lifecycle_status: Option<AgentPackLifecycleStatus>,
+    eval_status: AgentPackEvalStatus,
 }
 pub fn write_agent_pack(
     bundle: &SkillBundle,
@@ -122,6 +139,7 @@ pub fn write_agent_pack(
         .iter()
         .filter(|s| selected_skill_id_set.contains(&s.id) && !is_forbidden_skill(s))
         .collect();
+    let eval_status = agent_pack_eval_status(&selected_skills);
     let pack = AgentPack {
         agent_name: agent,
         agent_version: "0.1.0",
@@ -171,9 +189,119 @@ pub fn write_agent_pack(
         system_prompt_material:
             "Use Skiller skills as governed context; do not exceed runtime permissions.".into(),
         lifecycle_status,
+        eval_status,
     };
     fs::write(out.join("agent-pack.yaml"), serde_yaml::to_string(&pack)?)?;
     Ok(())
+}
+
+fn agent_pack_eval_status(selected_skills: &[&Skill]) -> AgentPackEvalStatus {
+    let mut failures = Vec::new();
+    let mut warnings = Vec::new();
+    let mut skill_eval_counts = BTreeMap::new();
+    let mut total_eval_cases = 0usize;
+    let mut skills_without_evals = 0usize;
+    let mut safety_eval_count = 0usize;
+    let mut routing_eval_count = 0usize;
+    let mut source_grounding_eval_count = 0usize;
+    let mut tool_use_planning_eval_count = 0usize;
+
+    for skill in selected_skills {
+        skill_eval_counts.insert(skill.id.clone(), skill.evals.len());
+        total_eval_cases += skill.evals.len();
+        if skill.evals.is_empty() {
+            skills_without_evals += 1;
+            failures.push(format!("{}: skill has no eval cases", skill.id));
+        }
+
+        let mut has_safety = false;
+        let mut has_routing = false;
+        let mut has_source_grounding = false;
+        let mut has_tool_use_planning = false;
+        let mut seen_eval_ids = BTreeSet::new();
+        for eval in &skill.evals {
+            if !seen_eval_ids.insert(eval.id.as_str()) {
+                failures.push(format!("{}: duplicate eval id {}", skill.id, eval.id));
+            }
+            if eval.prompt.trim().is_empty() {
+                failures.push(format!("{}: eval {} has empty prompt", skill.id, eval.id));
+            }
+            if eval.expected_behavior.trim().is_empty() {
+                failures.push(format!(
+                    "{}: eval {} has empty expected_behavior",
+                    skill.id, eval.id
+                ));
+            }
+            match eval.eval_type {
+                EvalType::Safety => {
+                    has_safety = true;
+                    safety_eval_count += 1;
+                }
+                EvalType::Routing => {
+                    has_routing = true;
+                    routing_eval_count += 1;
+                }
+                EvalType::SourceGrounding => {
+                    has_source_grounding = true;
+                    source_grounding_eval_count += 1;
+                }
+                EvalType::ToolUsePlanning => {
+                    has_tool_use_planning = true;
+                    tool_use_planning_eval_count += 1;
+                }
+                EvalType::Positive | EvalType::Negative | EvalType::EdgeCase => {}
+            }
+        }
+
+        let has_tool_requirements = !skill.tool_requirements.is_empty();
+        let high_risk_tool = skill.tool_requirements.iter().any(|tool| {
+            matches!(
+                tool.permission_level,
+                PermissionLevel::ExternalMutation | PermissionLevel::Dangerous
+            ) || matches!(tool.requirement_type, ToolRequirementType::Dangerous)
+        });
+        let operational = skill.runtime_policy.modify_files
+            || skill.runtime_policy.modify_external_systems
+            || has_tool_requirements;
+
+        if !has_routing {
+            warnings.push(format!("{}: missing routing eval", skill.id));
+        }
+        if !has_source_grounding {
+            warnings.push(format!("{}: missing source-grounding eval", skill.id));
+        }
+        if operational && !has_tool_use_planning {
+            warnings.push(format!(
+                "{}: operational skill missing tool-use-planning eval",
+                skill.id
+            ));
+        }
+        if (high_risk_tool || skill.runtime_policy.modify_external_systems) && !has_safety {
+            failures.push(format!("{}: high-risk skill missing safety eval", skill.id));
+        }
+        if matches!(skill.status, SkillStatus::Approved | SkillStatus::Published)
+            && (!has_source_grounding || !has_routing)
+        {
+            failures.push(format!(
+                "{}: approved/published skill must include routing and source-grounding evals",
+                skill.id
+            ));
+        }
+    }
+
+    AgentPackEvalStatus {
+        passed: failures.is_empty(),
+        selected_skill_count: selected_skills.len(),
+        total_eval_cases,
+        skills_without_evals,
+        safety_eval_count,
+        routing_eval_count,
+        source_grounding_eval_count,
+        tool_use_planning_eval_count,
+        failures,
+        warnings,
+        skill_eval_counts,
+    }
 }
 
 fn read_agent_pack_lifecycle_status(path: &Path) -> Result<AgentPackLifecycleStatus> {

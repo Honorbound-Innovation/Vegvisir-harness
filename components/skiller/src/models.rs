@@ -527,7 +527,7 @@ pub enum PublishStatus {
     Published,
     Rejected,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum EvalType {
     Positive,
     Negative,
