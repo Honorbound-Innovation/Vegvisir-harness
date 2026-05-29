@@ -218,6 +218,8 @@ enum Commands {
         agent: String,
         #[arg(long)]
         out: PathBuf,
+        #[arg(long)]
+        lifecycle_status: Option<PathBuf>,
     },
     /// Publish a bundle to a filesystem registry.
     Publish {
@@ -260,6 +262,34 @@ enum Commands {
     /// Build a corpus map report from an existing bundle.
     CorpusMap {
         bundle: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Build a deterministic corpus manifest/source inventory for change detection.
+    CorpusManifest {
+        bundle: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Compare two corpus manifests and write a reviewable change report.
+    CorpusDiff {
+        old_manifest: PathBuf,
+        new_manifest: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Build a lifecycle/review plan from a corpus diff report.
+    CorpusPlan {
+        diff_report: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+    },
+
+    /// Evaluate a bundle against a corpus lifecycle plan plus validation/readiness.
+    CorpusStatus {
+        bundle: PathBuf,
+        #[arg(long)]
+        plan: PathBuf,
         #[arg(long)]
         out: PathBuf,
     },
@@ -597,9 +627,14 @@ where
             agents::write_agent_proposals(&bundle, &out)?;
             println!("wrote agent proposals to {}", out.display());
         }
-        Commands::BuildAgentPack { bundle, agent, out } => {
+        Commands::BuildAgentPack {
+            bundle,
+            agent,
+            out,
+            lifecycle_status,
+        } => {
             let bundle = registry::read_bundle(&bundle)?;
-            agents::write_agent_pack(&bundle, &agent, &out)?;
+            agents::write_agent_pack(&bundle, &agent, &out, lifecycle_status.as_deref())?;
             println!("wrote agent pack to {}", out.display());
         }
         Commands::Publish {
@@ -667,6 +702,28 @@ where
             let bundle = registry::read_bundle(&bundle)?;
             corpus::write_corpus_map(&bundle, &out)?;
             println!("wrote corpus map to {}", out.display());
+        }
+        Commands::CorpusManifest { bundle, out } => {
+            let bundle = registry::read_bundle(&bundle)?;
+            corpus::write_corpus_manifest(&bundle, &out)?;
+            println!("wrote corpus manifest to {}", out.display());
+        }
+        Commands::CorpusDiff {
+            old_manifest,
+            new_manifest,
+            out,
+        } => {
+            corpus::write_corpus_diff(&old_manifest, &new_manifest, &out)?;
+            println!("wrote corpus diff to {}", out.display());
+        }
+        Commands::CorpusPlan { diff_report, out } => {
+            corpus::write_corpus_plan(&diff_report, &out)?;
+            println!("wrote corpus lifecycle plan to {}", out.display());
+        }
+        Commands::CorpusStatus { bundle, plan, out } => {
+            let bundle = registry::read_bundle(&bundle)?;
+            corpus::write_corpus_status(&bundle, &plan, &out)?;
+            println!("wrote corpus lifecycle status to {}", out.display());
         }
         Commands::DomainTemplate { name } => {
             println!(

@@ -1928,3 +1928,469 @@ fn deterministic_compile_records_source_trust_and_version_applicability() {
         String::from_utf8_lossy(&validate.stderr)
     );
 }
+
+#[test]
+fn corpus_manifest_records_source_inventory_and_stable_hashes() {
+    let temp = tempdir().unwrap();
+    let docs = temp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(
+        docs.join("official_manual.md"),
+        "# Inspect Versioned Service\n\nVersion 2.7 requires operators to inspect service status before mutation.\n\n```\nsvcctl status\n```\n",
+    )
+    .unwrap();
+    let bundle = temp.path().join("bundle");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "compile",
+                docs.to_str().unwrap(),
+                "--out",
+                bundle.to_str().unwrap(),
+                "--name",
+                "manifest-smoke",
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let first = temp.path().join("manifest-a");
+    let second = temp.path().join("manifest-b");
+    for out in [&first, &second] {
+        let result = Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "corpus-manifest",
+                bundle.to_str().unwrap(),
+                "--out",
+                out.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "stdout={} stderr={}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+
+    let a = std::fs::read_to_string(first.join("corpus-manifest.yaml")).unwrap();
+    let b = std::fs::read_to_string(second.join("corpus-manifest.yaml")).unwrap();
+    let av: serde_yaml::Value = serde_yaml::from_str(&a).unwrap();
+    let bv: serde_yaml::Value = serde_yaml::from_str(&b).unwrap();
+    assert_eq!(av["source_hash"], bv["source_hash"]);
+    assert_eq!(av["section_hash"], bv["section_hash"]);
+    assert_eq!(av["skill_hash"], bv["skill_hash"]);
+    assert_eq!(av["source_count"].as_i64(), Some(1));
+    assert!(
+        a.contains("OfficialVendorDocumentation"),
+        "manifest was: {a}"
+    );
+    assert!(a.contains("version: '2.7'"), "manifest was: {a}");
+    assert!(a.contains("change_hints:"), "manifest was: {a}");
+    let md = std::fs::read_to_string(first.join("corpus-manifest.md")).unwrap();
+    assert!(md.contains("# Corpus Manifest"), "markdown was: {md}");
+    assert!(md.contains("Source set hash"), "markdown was: {md}");
+    assert!(
+        md.contains("OfficialVendorDocumentation"),
+        "markdown was: {md}"
+    );
+}
+
+#[test]
+fn bump_version_resets_review_maturity_and_publication_confidence() {
+    let temp = tempdir().unwrap();
+    let docs = temp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(
+        docs.join("manual.md"),
+        "# Review Deployment\n\nOperators should inspect status and validate rollback plans before deployment.\n",
+    )
+    .unwrap();
+    let bundle = temp.path().join("bundle");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "compile",
+                docs.to_str().unwrap(),
+                "--out",
+                bundle.to_str().unwrap(),
+                "--name",
+                "bump-smoke",
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let skill_path = std::fs::read_dir(bundle.join("skills"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| p.extension().and_then(|s| s.to_str()) == Some("yaml"))
+        .expect("compiled skill exists");
+    let mut skill: serde_yaml::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&skill_path).unwrap()).unwrap();
+    skill["status"] = serde_yaml::Value::from("Published");
+    skill["maturity"] = serde_yaml::Value::from("Level6Certified");
+    skill["confidence"]["human_review"] = serde_yaml::Value::from(1.0);
+    skill["confidence"]["runtime"] = serde_yaml::Value::from(0.9);
+    skill["metadata"]["published_at"] = serde_yaml::Value::from("test-time");
+    skill["metadata"]["approved_by"] = serde_yaml::Value::from("test-reviewer");
+    std::fs::write(&skill_path, serde_yaml::to_string(&skill).unwrap()).unwrap();
+
+    let bumped = temp.path().join("bumped");
+    let result = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "bump-version",
+            bundle.to_str().unwrap(),
+            "--out",
+            bumped.to_str().unwrap(),
+            "--version",
+            "2.0.0",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+
+    let bumped_skill_path = std::fs::read_dir(bumped.join("skills"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| p.extension().and_then(|s| s.to_str()) == Some("yaml"))
+        .expect("bumped skill exists");
+    let bumped_skill = std::fs::read_to_string(&bumped_skill_path).unwrap();
+    assert!(
+        bumped_skill.contains("status: NeedsReview"),
+        "skill was: {bumped_skill}"
+    );
+    assert!(
+        bumped_skill.contains("maturity: Level1StructuredCandidate"),
+        "skill was: {bumped_skill}"
+    );
+    assert!(
+        bumped_skill.contains("human_review: 0.0"),
+        "skill was: {bumped_skill}"
+    );
+    assert!(
+        bumped_skill.contains("runtime: 0.0"),
+        "skill was: {bumped_skill}"
+    );
+    assert!(
+        !bumped_skill.contains("published_at"),
+        "skill was: {bumped_skill}"
+    );
+    assert!(
+        !bumped_skill.contains("approved_by"),
+        "skill was: {bumped_skill}"
+    );
+    assert!(
+        bumped_skill.contains("Version-bumped skill requires revalidation"),
+        "skill was: {bumped_skill}"
+    );
+
+    let readiness = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["readiness", bumped.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(readiness.status.success());
+    let stdout = String::from_utf8_lossy(&readiness.stdout);
+    assert!(stdout.contains("ready: false"), "stdout was: {stdout}");
+    assert!(stdout.contains("not reviewed"), "stdout was: {stdout}");
+}
+
+#[test]
+fn corpus_diff_reports_added_and_changed_sources_for_review() {
+    let temp = tempdir().unwrap();
+    let old_docs = temp.path().join("old-docs");
+    let new_docs = temp.path().join("new-docs");
+    std::fs::create_dir_all(&old_docs).unwrap();
+    std::fs::create_dir_all(&new_docs).unwrap();
+    std::fs::write(
+        old_docs.join("manual.md"),
+        "# Tool Manual v1.0\n\nOperators should inspect status before deployment.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        new_docs.join("manual.md"),
+        "# Tool Manual v1.1\n\nOperators should inspect status and validate rollback before deployment.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        new_docs.join("runbook.md"),
+        "# Incident Runbook v1.1\n\nOperators should collect logs and escalate unsafe changes.\n",
+    )
+    .unwrap();
+
+    let old_bundle = temp.path().join("old-bundle");
+    let new_bundle = temp.path().join("new-bundle");
+    for (input, out) in [(&old_docs, &old_bundle), (&new_docs, &new_bundle)] {
+        let result = Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "compile",
+                input.to_str().unwrap(),
+                "--out",
+                out.to_str().unwrap(),
+                "--name",
+                "corpus-diff-smoke",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "stdout={} stderr={}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+
+    let old_manifest_dir = temp.path().join("old-manifest");
+    let new_manifest_dir = temp.path().join("new-manifest");
+    for (bundle, out) in [
+        (&old_bundle, &old_manifest_dir),
+        (&new_bundle, &new_manifest_dir),
+    ] {
+        let result = Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "corpus-manifest",
+                bundle.to_str().unwrap(),
+                "--out",
+                out.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "stdout={} stderr={}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+
+    let diff_dir = temp.path().join("diff");
+    let result = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "corpus-diff",
+            old_manifest_dir
+                .join("corpus-manifest.yaml")
+                .to_str()
+                .unwrap(),
+            new_manifest_dir
+                .join("corpus-manifest.yaml")
+                .to_str()
+                .unwrap(),
+            "--out",
+            diff_dir.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+
+    let yaml = std::fs::read_to_string(diff_dir.join("corpus-diff.yaml")).unwrap();
+    assert!(yaml.contains("review_required: true"), "yaml was: {yaml}");
+    assert!(
+        yaml.contains("source_set_changed: true"),
+        "yaml was: {yaml}"
+    );
+    assert!(
+        yaml.contains("section_set_changed: true"),
+        "yaml was: {yaml}"
+    );
+    assert!(yaml.contains("skill_set_changed: true"), "yaml was: {yaml}");
+    assert!(yaml.contains("added_sources:"), "yaml was: {yaml}");
+    assert!(yaml.contains("changed_sources:"), "yaml was: {yaml}");
+    assert!(yaml.contains("source(s) added"), "yaml was: {yaml}");
+    assert!(yaml.contains("source(s) changed"), "yaml was: {yaml}");
+
+    let md = std::fs::read_to_string(diff_dir.join("corpus-diff.md")).unwrap();
+    assert!(md.contains("# Corpus Diff"), "markdown was: {md}");
+    assert!(md.contains("## Review Reasons"), "markdown was: {md}");
+    assert!(md.contains("## Added Sources"), "markdown was: {md}");
+    assert!(md.contains("## Changed Sources"), "markdown was: {md}");
+
+    let plan_dir = temp.path().join("plan");
+    let result = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "corpus-plan",
+            diff_dir.join("corpus-diff.yaml").to_str().unwrap(),
+            "--out",
+            plan_dir.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let plan_yaml = std::fs::read_to_string(plan_dir.join("corpus-plan.yaml")).unwrap();
+    assert!(
+        plan_yaml.contains("plan_id: corpus-plan-"),
+        "plan yaml was: {plan_yaml}"
+    );
+    assert!(
+        plan_yaml.contains("recommended_version_bump: minor"),
+        "plan yaml was: {plan_yaml}"
+    );
+    assert!(
+        plan_yaml.contains("compile-new-source"),
+        "plan yaml was: {plan_yaml}"
+    );
+    assert!(
+        plan_yaml.contains("revalidate-changed-source"),
+        "plan yaml was: {plan_yaml}"
+    );
+    assert!(
+        plan_yaml.contains("rebuild-section-index"),
+        "plan yaml was: {plan_yaml}"
+    );
+    assert!(
+        plan_yaml.contains("rebuild-skill-review"),
+        "plan yaml was: {plan_yaml}"
+    );
+    assert!(
+        plan_yaml.contains("requires_human_review: true"),
+        "plan yaml was: {plan_yaml}"
+    );
+    let first_plan_id = plan_yaml
+        .lines()
+        .find(|line| line.starts_with("plan_id:"))
+        .unwrap()
+        .to_string();
+
+    let plan_dir_2 = temp.path().join("plan-2");
+    let result = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "corpus-plan",
+            diff_dir.join("corpus-diff.yaml").to_str().unwrap(),
+            "--out",
+            plan_dir_2.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    let plan_yaml_2 = std::fs::read_to_string(plan_dir_2.join("corpus-plan.yaml")).unwrap();
+    let second_plan_id = plan_yaml_2
+        .lines()
+        .find(|line| line.starts_with("plan_id:"))
+        .unwrap()
+        .to_string();
+    assert_eq!(first_plan_id, second_plan_id);
+
+    let plan_md = std::fs::read_to_string(plan_dir.join("corpus-plan.md")).unwrap();
+    assert!(
+        plan_md.contains("# Corpus Lifecycle Plan"),
+        "plan markdown was: {plan_md}"
+    );
+    assert!(
+        plan_md.contains("## Actions"),
+        "plan markdown was: {plan_md}"
+    );
+
+    let status_dir = temp.path().join("status");
+    let result = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "corpus-status",
+            new_bundle.to_str().unwrap(),
+            "--plan",
+            plan_dir.join("corpus-plan.yaml").to_str().unwrap(),
+            "--out",
+            status_dir.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let status_yaml = std::fs::read_to_string(status_dir.join("corpus-status.yaml")).unwrap();
+    assert!(
+        status_yaml.contains("plan_id: corpus-plan-"),
+        "status yaml was: {status_yaml}"
+    );
+    assert!(
+        status_yaml.contains("matches_plan_target: true"),
+        "status yaml was: {status_yaml}"
+    );
+    assert!(
+        status_yaml.contains("validation_valid: true"),
+        "status yaml was: {status_yaml}"
+    );
+    assert!(
+        status_yaml.contains("lifecycle_ready: false"),
+        "status yaml was: {status_yaml}"
+    );
+    assert!(
+        status_yaml.contains("human_review_required: true"),
+        "status yaml was: {status_yaml}"
+    );
+    assert!(
+        status_yaml.contains("lifecycle plan requires human review"),
+        "status yaml was: {status_yaml}"
+    );
+    assert!(
+        status_yaml.contains("bundle is not publication-ready"),
+        "status yaml was: {status_yaml}"
+    );
+    let status_md = std::fs::read_to_string(status_dir.join("corpus-status.md")).unwrap();
+    assert!(
+        status_md.contains("# Corpus Lifecycle Status"),
+        "status markdown was: {status_md}"
+    );
+    assert!(
+        status_md.contains("## Blockers"),
+        "status markdown was: {status_md}"
+    );
+
+    let agent_pack_dir = temp.path().join("agent-pack-with-lifecycle");
+    let result = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "build-agent-pack",
+            new_bundle.to_str().unwrap(),
+            "--agent",
+            "Technical Documentation Agent",
+            "--out",
+            agent_pack_dir.to_str().unwrap(),
+            "--lifecycle-status",
+            status_dir.join("corpus-status.yaml").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let pack_yaml = std::fs::read_to_string(agent_pack_dir.join("agent-pack.yaml")).unwrap();
+    assert!(
+        pack_yaml.contains("lifecycle_status:"),
+        "agent pack yaml was: {pack_yaml}"
+    );
+    assert!(
+        pack_yaml.contains("plan_id: corpus-plan-"),
+        "agent pack yaml was: {pack_yaml}"
+    );
+    assert!(
+        pack_yaml.contains("lifecycle_ready: false"),
+        "agent pack yaml was: {pack_yaml}"
+    );
+    assert!(
+        pack_yaml.contains("human_review_required: true"),
+        "agent pack yaml was: {pack_yaml}"
+    );
+}

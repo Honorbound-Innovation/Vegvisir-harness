@@ -1,10 +1,19 @@
 use crate::ingest::stable_id;
 use crate::models::*;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::Serialize;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
+
+#[derive(Clone, Debug, Serialize)]
+pub struct AgentPackLifecycleStatus {
+    pub plan_id: String,
+    pub lifecycle_ready: bool,
+    pub human_review_required: bool,
+    pub blockers: Vec<String>,
+    pub warnings: Vec<String>,
+}
 
 pub fn proposals(bundle: &SkillBundle) -> Vec<AgentProfileProposal> {
     let mut roles = BTreeSet::new();
@@ -94,9 +103,18 @@ struct AgentPack<'a> {
     evals: Vec<EvalCase>,
     example_prompts: Vec<String>,
     system_prompt_material: String,
+    lifecycle_status: Option<AgentPackLifecycleStatus>,
 }
-pub fn write_agent_pack(bundle: &SkillBundle, agent: &str, out: &Path) -> Result<()> {
+pub fn write_agent_pack(
+    bundle: &SkillBundle,
+    agent: &str,
+    out: &Path,
+    lifecycle_status_path: Option<&Path>,
+) -> Result<()> {
     fs::create_dir_all(out)?;
+    let lifecycle_status = lifecycle_status_path
+        .map(read_agent_pack_lifecycle_status)
+        .transpose()?;
     let selected_skill_ids = selected_skill_ids(bundle, agent);
     let selected_skill_id_set: BTreeSet<String> = selected_skill_ids.iter().cloned().collect();
     let selected_skills: Vec<&Skill> = bundle
@@ -152,9 +170,47 @@ pub fn write_agent_pack(bundle: &SkillBundle, agent: &str, out: &Path) -> Result
         example_prompts: vec![format!("Ask {} to solve a source-grounded task.", agent)],
         system_prompt_material:
             "Use Skiller skills as governed context; do not exceed runtime permissions.".into(),
+        lifecycle_status,
     };
     fs::write(out.join("agent-pack.yaml"), serde_yaml::to_string(&pack)?)?;
     Ok(())
+}
+
+fn read_agent_pack_lifecycle_status(path: &Path) -> Result<AgentPackLifecycleStatus> {
+    let value: serde_yaml::Value = serde_yaml::from_str(
+        &fs::read_to_string(path)
+            .with_context(|| format!("failed to read lifecycle status {}", path.display()))?,
+    )
+    .with_context(|| format!("failed to parse lifecycle status {}", path.display()))?;
+    Ok(AgentPackLifecycleStatus {
+        plan_id: value
+            .get("plan_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        lifecycle_ready: value
+            .get("lifecycle_ready")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        human_review_required: value
+            .get("human_review_required")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        blockers: yaml_string_vec(value.get("blockers")),
+        warnings: yaml_string_vec(value.get("warnings")),
+    })
+}
+
+fn yaml_string_vec(value: Option<&serde_yaml::Value>) -> Vec<String> {
+    value
+        .and_then(|v| v.as_sequence())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn selected_skill_ids(bundle: &SkillBundle, agent: &str) -> Vec<String> {
