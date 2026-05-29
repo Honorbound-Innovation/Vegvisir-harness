@@ -2,6 +2,7 @@ use crate::corpus;
 use crate::domain;
 use crate::ingest;
 use crate::models::*;
+use crate::source_meta;
 use anyhow::Result;
 use chrono::Utc;
 use std::collections::{BTreeMap, BTreeSet};
@@ -172,6 +173,15 @@ fn generate_skills_with_profile(
                 );
             }
         }
+        if let Some(source) = source {
+            metadata.insert(
+                "source_trust".into(),
+                format!("{:?}", source_meta::infer_source_trust(source)),
+            );
+            if let Some(version) = &source.version {
+                metadata.insert("source_version".into(), version.clone());
+            }
+        }
         let mut runtime_policy = RuntimePolicy::default();
         let mut skill_type = SkillType::Procedure;
         let mut tool_requirements = Vec::new();
@@ -220,7 +230,7 @@ fn generate_skills_with_profile(
             },
             eval: 0.45,
             routing: 0.55,
-            source_quality: source_quality(source),
+            source_quality: source_meta::source_trust_score(source),
             ..Default::default()
         };
         let mut guardrails = vec![
@@ -270,7 +280,7 @@ fn generate_skills_with_profile(
             role_suitability: role_suitability(domain, interface_kind, profile),
             tool_requirements,
             runtime_policy,
-            version_applicability: VersionApplicability::default(),
+            version_applicability: version_applicability(source, section),
             metadata,
         });
     }
@@ -353,13 +363,24 @@ fn detected_tools(s: &DocumentSection) -> Vec<String> {
     }
     out.into_iter().collect()
 }
-fn source_quality(source: Option<&SourceDocument>) -> f32 {
-    match source.map(|s| &s.source_type) {
-        Some(
-            SourceType::OpenApi | SourceType::ApiSpec | SourceType::CliSpec | SourceType::CliHelp,
-        ) => 0.75,
-        Some(SourceType::Markdown) => 0.65,
-        _ => 0.5,
+
+fn version_applicability(
+    source: Option<&SourceDocument>,
+    section: &DocumentSection,
+) -> VersionApplicability {
+    let Some(source) = source else {
+        return VersionApplicability::default();
+    };
+    let Some(version) = source.version.clone() else {
+        return VersionApplicability::default();
+    };
+    VersionApplicability {
+        supported_versions: vec![version],
+        unsupported_versions: vec![],
+        version_source_refs: vec![section.section_id.clone()],
+        version_confidence: 0.72,
+        migration_notes: vec![],
+        deprecated_flags: vec![],
     }
 }
 fn role_suitability(

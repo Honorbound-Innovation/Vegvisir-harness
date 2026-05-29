@@ -1,5 +1,6 @@
 use crate::ingest::hex_hash;
 use crate::models::*;
+use crate::source_meta;
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -502,7 +503,7 @@ impl ProvenanceRecord {
         let mut source_rights_summary = std::collections::BTreeMap::new();
         for source in &bundle.sources {
             *source_trust_summary
-                .entry(format!("{:?}", infer_source_trust(source)))
+                .entry(format!("{:?}", source_meta::infer_source_trust(source)))
                 .or_insert(0) += 1;
             *source_rights_summary
                 .entry(format!("{:?}", source.export_policy))
@@ -808,28 +809,6 @@ fn is_safe_manifest_relative_path(path: &Path) -> bool {
         && path
             .components()
             .all(|component| matches!(component, Component::Normal(_)))
-}
-
-fn infer_source_trust(source: &SourceDocument) -> SourceTrust {
-    match source.source_type {
-        SourceType::OpenApi | SourceType::ApiSpec => SourceTrust::OfficialApiSpecification,
-        SourceType::CliHelp | SourceType::CliSpec => SourceTrust::OfficialCliReference,
-        SourceType::Repository => SourceTrust::ProjectMaintainerDocumentation,
-        SourceType::Unknown => SourceTrust::UnknownSource,
-        _ => {
-            let origin = source.origin.to_lowercase();
-            if origin.contains("official") || origin.contains("docs.") {
-                SourceTrust::OfficialVendorDocumentation
-            } else if matches!(
-                source.visibility,
-                Visibility::Internal | Visibility::Restricted
-            ) {
-                SourceTrust::InternalCompanyDocumentation
-            } else {
-                SourceTrust::ProjectMaintainerDocumentation
-            }
-        }
-    }
 }
 
 fn manifest_file_hash(root: &Path) -> Result<String> {

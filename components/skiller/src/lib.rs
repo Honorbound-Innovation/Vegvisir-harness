@@ -10,6 +10,7 @@ pub mod registry;
 pub mod review;
 pub mod runtime;
 pub mod security;
+pub mod source_meta;
 pub mod telemetry;
 
 use anyhow::Result;

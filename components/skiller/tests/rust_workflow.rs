@@ -1865,3 +1865,66 @@ fn registry_publish_writes_rich_provenance_and_index_lifecycle_metadata() {
     );
     assert!(list_stdout.contains(&version), "stdout was: {list_stdout}");
 }
+
+#[test]
+fn deterministic_compile_records_source_trust_and_version_applicability() {
+    let temp = tempdir().unwrap();
+    let docs = temp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(
+        docs.join("official_manual.md"),
+        "# Diagnose Versioned CLI\n\nVersion 5.4 requires you to inspect status with kubectl before mutation.\n\n```\nkubectl get pods\n```\n",
+    )
+    .unwrap();
+    let bundle = temp.path().join("bundle");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "compile",
+                docs.to_str().unwrap(),
+                "--out",
+                bundle.to_str().unwrap(),
+                "--name",
+                "versioned-kube",
+                "--domain",
+                "kubernetes-operations",
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let skill_path = std::fs::read_dir(bundle.join("skills"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| p.extension().and_then(|s| s.to_str()) == Some("yaml"))
+        .expect("compiled skill exists");
+    let skill = std::fs::read_to_string(&skill_path).unwrap();
+    assert!(
+        skill.contains("source_trust: OfficialVendorDocumentation"),
+        "skill was: {skill}"
+    );
+    assert!(
+        skill.contains("source_version: '5.4'"),
+        "skill was: {skill}"
+    );
+    assert!(skill.contains("supported_versions:"), "skill was: {skill}");
+    assert!(skill.contains("- '5.4'"), "skill was: {skill}");
+    assert!(skill.contains("version_source_refs:"), "skill was: {skill}");
+    assert!(
+        skill.contains("version_confidence: 0.72"),
+        "skill was: {skill}"
+    );
+
+    let validate = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["validate", bundle.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        validate.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&validate.stdout),
+        String::from_utf8_lossy(&validate.stderr)
+    );
+}

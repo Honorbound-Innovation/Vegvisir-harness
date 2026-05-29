@@ -1,4 +1,5 @@
 use crate::models::*;
+use crate::source_meta;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub fn evidence_report_markdown(bundle: &SkillBundle) -> String {
@@ -29,7 +30,7 @@ pub fn evidence_report_markdown(bundle: &SkillBundle) -> String {
     let mut right_warnings = Vec::new();
     for source in &bundle.sources {
         *trust_counts
-            .entry(format!("{:?}", infer_source_trust(source)))
+            .entry(format!("{:?}", source_meta::infer_source_trust(source)))
             .or_default() += 1;
         if !matches!(source.permission_status, PermissionStatus::Allowed) {
             right_warnings.push(format!(
@@ -197,26 +198,4 @@ fn skill_warnings(skill: &Skill) -> Vec<String> {
         ));
     }
     warnings
-}
-
-fn infer_source_trust(source: &SourceDocument) -> SourceTrust {
-    match source.source_type {
-        SourceType::OpenApi | SourceType::ApiSpec => SourceTrust::OfficialApiSpecification,
-        SourceType::CliHelp | SourceType::CliSpec => SourceTrust::OfficialCliReference,
-        SourceType::Repository => SourceTrust::ProjectMaintainerDocumentation,
-        SourceType::Unknown => SourceTrust::UnknownSource,
-        _ => {
-            let origin = source.origin.to_lowercase();
-            if origin.contains("official") || origin.contains("docs.") {
-                SourceTrust::OfficialVendorDocumentation
-            } else if matches!(
-                source.visibility,
-                Visibility::Internal | Visibility::Restricted
-            ) {
-                SourceTrust::InternalCompanyDocumentation
-            } else {
-                SourceTrust::ProjectMaintainerDocumentation
-            }
-        }
-    }
 }

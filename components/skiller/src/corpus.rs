@@ -1,6 +1,7 @@
 use crate::domain;
 use crate::ingest;
 use crate::models::*;
+use crate::source_meta;
 use anyhow::Result;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -116,23 +117,10 @@ fn source_trust_summary(bundle: &SkillBundle) -> BTreeMap<String, usize> {
     let mut summary = BTreeMap::new();
     for source in &bundle.sources {
         *summary
-            .entry(format!("{:?}", inferred_source_trust(source)))
+            .entry(format!("{:?}", source_meta::infer_source_trust(source)))
             .or_insert(0) += 1;
     }
     summary
-}
-
-fn inferred_source_trust(source: &SourceDocument) -> SourceTrust {
-    match source.source_type {
-        SourceType::OpenApi => SourceTrust::OfficialApiSpecification,
-        SourceType::ApiSpec => SourceTrust::OfficialApiSpecification,
-        SourceType::CliSpec | SourceType::CliHelp => SourceTrust::OfficialCliReference,
-        SourceType::Repository => SourceTrust::ProjectMaintainerDocumentation,
-        SourceType::Markdown | SourceType::Text => SourceTrust::ProjectMaintainerDocumentation,
-        SourceType::Url | SourceType::Html => SourceTrust::UnknownSource,
-        SourceType::Pdf | SourceType::Epub => SourceTrust::UnknownSource,
-        SourceType::Unknown => SourceTrust::UnknownSource,
-    }
 }
 
 pub fn write_corpus_map(bundle: &SkillBundle, out: &Path) -> Result<()> {
