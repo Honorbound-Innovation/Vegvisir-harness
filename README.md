@@ -42,7 +42,7 @@ Vegvisir-harness/
 - Supports workspace/project switching with the right session and memory scope restored.
 - Renders Markdown in the TUI, including code fences and tables.
 - Exposes a JSONL app-server bridge for future external interfaces and desktop shells.
-- Integrates Skiller for compiling technical sources, repos, API specs, CLI specs, and docs into governed, source-grounded skill bundles.
+- Integrates Skiller as a first-class Vegvisir feature for compiling technical sources, repos, API specs, CLI specs, and docs into governed, source-grounded skill bundles, Forge workflows, lifecycle reports, and Agent Builder handoff artifacts.
 - Includes verification, eval, trace, and audit surfaces for production hardening.
 
 ## Terminal UI
@@ -166,10 +166,18 @@ vegvisir --provider openai-hbse --model gpt-5.5 app-server --workspace /path/to/
 Use the integrated Skiller component:
 
 ```bash
-vegvisir skiller -- compile ./docs --out ./dist/docs-skills --name docs-skills
+vegvisir skiller -- compile ./docs --out ./dist/docs-skills --name docs-skills --domain kubernetes-operations
 vegvisir skiller -- validate ./dist/docs-skills
-vegvisir skiller -- route ./dist/docs-skills "troubleshoot deployment"
+vegvisir skiller -- eval ./dist/docs-skills
+vegvisir skiller -- propose-agents ./dist/docs-skills --out ./dist/agents
+vegvisir skiller -- verify-agent-proposals ./dist/agents
+vegvisir skiller -- build-agent-pack ./dist/docs-skills --agent "Cluster Diagnostic Agent" --out ./dist/cluster-agent --report ./dist/cluster-agent-build-report.yaml
+vegvisir skiller -- verify-agent-pack ./dist/cluster-agent
+vegvisir skiller -- agent-builder-summary --proposals ./dist/agents --pack ./dist/cluster-agent --out ./dist/agent-builder-summary.yaml
+vegvisir skiller -- agent-artifact-index ./dist --out ./dist/agent-artifacts.yaml
 ```
+
+Skiller is an integrated Vegvisir feature, not a replacement for Vegvisir runtime systems. It adds governed skill compilation, Forge request/response artifacts, corpus lifecycle reports, registry publication, and Agent Builder handoff packages while Vegvisir continues to own runtime execution, memory, secrets, approvals, traces, evals, and app bridge behavior.
 
 Check the installation:
 

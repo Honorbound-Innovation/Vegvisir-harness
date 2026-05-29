@@ -386,9 +386,28 @@ Examples:
 
 ```bash
 vegvisir skiller -- --help
-vegvisir skiller -- compile ./docs --out ./dist/docs-skills --name docs-skills
+vegvisir skiller -- compile ./docs --out ./dist/docs-skills --name docs-skills --domain kubernetes-operations
 vegvisir skiller -- validate ./dist/docs-skills
 vegvisir skiller -- forge-handoff ./dist/docs-skills --out ./dist/vegvisir-handoff --pass skill-expansion
+vegvisir skiller -- forge-validate ./dist/docs-skills --request ./dist/vegvisir-handoff/forge-request.yaml --response ./dist/vegvisir-handoff/forge-response-template.yaml --report ./dist/forge-validation-report.yaml
+vegvisir skiller -- propose-agents ./dist/docs-skills --out ./dist/agents
+vegvisir skiller -- verify-agent-proposals ./dist/agents
+vegvisir skiller -- build-agent-pack ./dist/docs-skills --agent "Cluster Diagnostic Agent" --out ./dist/cluster-agent --report ./dist/cluster-agent-build-report.yaml
+vegvisir skiller -- verify-agent-pack ./dist/cluster-agent
+vegvisir skiller -- agent-builder-summary --proposals ./dist/agents --pack ./dist/cluster-agent --out ./dist/agent-builder-summary.yaml
+vegvisir skiller -- agent-artifact-index ./dist --out ./dist/agent-artifacts.yaml
+```
+
+Common Skiller workflow groups:
+
+```text
+compile / validate / eval / readiness
+forge / forge-handoff / forge-validate --report / forge-apply --report
+corpus-manifest / corpus-diff / corpus-plan / corpus-status
+propose-agents / verify-agent-proposals
+build-agent-pack --report / verify-agent-pack
+agent-builder-summary / agent-artifact-index
+publish / registry-list / verify-manifest / registry-deprecate / registry-rollback
 ```
 
 Notes:
@@ -396,6 +415,8 @@ Notes:
 - Use `--` after `skiller` so the remaining arguments are passed to Skiller.
 - Skiller's preserved upstream `legacy/` prototype is not part of the integrated Rust workspace component.
 - Skiller's Forge handoff path is designed for Vegvisir to provide the governed reasoning pass while retaining auditable request/response artifacts.
+- Skiller is an integrated Vegvisir feature for governed skill compilation, Forge workflows, lifecycle reports, and Agent Builder handoff artifacts. It does not replace Vegvisir's current runtime, CMS/ECM memory, HBSE secret handling, approvals, traces, evals, app bridge, subagents, or existing LSL skill mechanisms.
+- Generated Agent Builder artifacts include verification/report/index commands intended for GUI, desktop, and app-bridge consumers.
 
 ## TUI Slash Commands
 

@@ -323,6 +323,10 @@ pub struct AgentProfileProposal {
     pub agent_name: String,
     pub agent_purpose: String,
     pub recommended_skills: Vec<String>,
+    #[serde(default)]
+    pub selection_rationale: Vec<AgentSkillSelection>,
+    #[serde(default)]
+    pub proposal_readiness: AgentProposalReadinessStatus,
     pub required_tools: Vec<String>,
     pub allowed_actions: Vec<String>,
     pub disallowed_actions: Vec<String>,
@@ -331,6 +335,32 @@ pub struct AgentProfileProposal {
     pub escalation_policy: String,
     pub example_tasks: Vec<String>,
     pub evaluation_suite: Vec<EvalCase>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgentProposalReadinessStatus {
+    pub ready_for_packaging: bool,
+    pub ready_for_default_use_candidate: bool,
+    pub selected_skill_count: usize,
+    pub reviewed_skill_count: usize,
+    pub optional_skill_count: usize,
+    pub high_risk_skill_count: usize,
+    pub eval_case_count: usize,
+    pub routing_eval_count: usize,
+    pub source_grounding_eval_count: usize,
+    pub tool_use_planning_eval_count: usize,
+    pub blockers: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgentSkillSelection {
+    pub skill_id: String,
+    pub title: String,
+    pub score: i32,
+    pub reasons: Vec<String>,
+    pub status: Option<SkillStatus>,
+    pub maturity: Option<SkillMaturity>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

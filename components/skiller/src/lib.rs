@@ -226,6 +226,27 @@ enum Commands {
         out: PathBuf,
         #[arg(long)]
         lifecycle_status: Option<PathBuf>,
+        #[arg(long)]
+        report: Option<PathBuf>,
+    },
+    /// Verify generated agent proposal index and proposal files.
+    VerifyAgentProposals { path: PathBuf },
+    /// Verify an Agent Builder handoff package manifest.
+    VerifyAgentPack { path: PathBuf },
+    /// Write a consolidated Agent Builder summary for proposals and packs.
+    AgentBuilderSummary {
+        #[arg(long)]
+        proposals: Option<PathBuf>,
+        #[arg(long = "pack")]
+        packs: Vec<PathBuf>,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Scan Agent Builder artifacts and write a consolidated artifact index.
+    AgentArtifactIndex {
+        root: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
     },
     /// Publish a bundle to a filesystem registry.
     Publish {
@@ -660,10 +681,56 @@ where
             agent,
             out,
             lifecycle_status,
+            report,
         } => {
             let bundle = registry::read_bundle(&bundle)?;
-            agents::write_agent_pack(&bundle, &agent, &out, lifecycle_status.as_deref())?;
+            let build_report = agents::write_agent_pack_with_report(
+                &bundle,
+                &agent,
+                &out,
+                lifecycle_status.as_deref(),
+            )?;
+            if let Some(report) = report {
+                if let Some(parent) = report.parent() {
+                    if !parent.as_os_str().is_empty() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                }
+                std::fs::write(&report, serde_yaml::to_string(&build_report)?)?;
+            }
             println!("wrote agent pack to {}", out.display());
+        }
+        Commands::VerifyAgentProposals { path } => {
+            let report = agents::verify_agent_proposals(&path)?;
+            println!("{}", serde_yaml::to_string(&report)?);
+            if !report.valid {
+                std::process::exit(1);
+            }
+        }
+        Commands::VerifyAgentPack { path } => {
+            let report = agents::verify_agent_pack(&path)?;
+            println!("{}", serde_yaml::to_string(&report)?);
+            if !report.valid {
+                std::process::exit(1);
+            }
+        }
+        Commands::AgentBuilderSummary {
+            proposals,
+            packs,
+            out,
+        } => {
+            let summary = agents::write_agent_builder_summary(proposals.as_deref(), &packs, &out)?;
+            println!("{}", serde_yaml::to_string(&summary)?);
+            if !summary.valid {
+                std::process::exit(1);
+            }
+        }
+        Commands::AgentArtifactIndex { root, out } => {
+            let index = agents::write_agent_artifact_index(&root, &out)?;
+            println!("{}", serde_yaml::to_string(&index)?);
+            if !index.valid {
+                std::process::exit(1);
+            }
         }
         Commands::Publish {
             bundle,

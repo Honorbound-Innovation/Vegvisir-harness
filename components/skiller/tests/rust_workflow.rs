@@ -1147,6 +1147,7 @@ fn agent_pack_does_not_promote_unsafe_archived_or_deprecated_skills() {
     .unwrap();
 
     let out = temp.path().join("agent");
+    let build_report_path = temp.path().join("agent-build-report.yaml");
     assert!(
         Command::new(env!("CARGO_BIN_EXE_skiller"))
             .args([
@@ -1156,6 +1157,8 @@ fn agent_pack_does_not_promote_unsafe_archived_or_deprecated_skills() {
                 "Technical Documentation Agent",
                 "--out",
                 out.to_str().unwrap(),
+                "--report",
+                build_report_path.to_str().unwrap(),
             ])
             .status()
             .unwrap()
@@ -1211,6 +1214,199 @@ fn agent_pack_does_not_promote_unsafe_archived_or_deprecated_skills() {
         v.as_str()
             .is_some_and(|s| s.contains("missing source-grounding eval"))
     }));
+    let pack_readiness = &pack_yaml["pack_readiness"];
+    assert_eq!(pack_readiness["selected_skill_count"].as_i64(), Some(1));
+    assert_eq!(pack_readiness["required_skill_count"].as_i64(), Some(1));
+    assert_eq!(pack_readiness["forbidden_skill_count"].as_i64(), Some(2));
+    assert_eq!(pack_readiness["evals_passed"].as_bool(), Some(true));
+    assert_eq!(
+        pack_readiness["ready_for_runtime_use"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(
+        pack_readiness["ready_for_default_use"].as_bool(),
+        Some(false)
+    );
+    let readiness_warnings = pack_readiness["warnings"].as_sequence().unwrap();
+    assert!(readiness_warnings.iter().any(|v| {
+        v.as_str()
+            .is_some_and(|s| s.contains("lacks routing eval coverage"))
+    }));
+    assert!(readiness_warnings.iter().any(|v| {
+        v.as_str()
+            .is_some_and(|s| s.contains("lacks source-grounding eval coverage"))
+    }));
+
+    let manifest_path = out.join("agent-pack-manifest.yaml");
+    let manifest_md_path = out.join("agent-pack-manifest.md");
+    assert!(manifest_path.exists());
+    assert!(manifest_md_path.exists());
+    let manifest: serde_yaml::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    assert!(
+        manifest["pack_id"]
+            .as_str()
+            .is_some_and(|s| s.starts_with("agent-pack-")),
+        "{manifest:?}"
+    );
+    assert_eq!(
+        manifest["agent_pack_file"].as_str(),
+        Some("agent-pack.yaml")
+    );
+    assert_eq!(
+        manifest["manifest_file"].as_str(),
+        Some("agent-pack-manifest.yaml")
+    );
+    assert_eq!(
+        manifest["markdown_file"].as_str(),
+        Some("agent-pack-manifest.md")
+    );
+    assert_eq!(manifest["selected_skill_count"].as_i64(), Some(1));
+    assert_eq!(manifest["required_skill_count"].as_i64(), Some(1));
+    assert_eq!(manifest["forbidden_skill_count"].as_i64(), Some(2));
+    assert_eq!(manifest["tool_permission_count"].as_i64(), Some(1));
+    assert_eq!(manifest["eval_case_count"].as_i64(), Some(1));
+    assert_eq!(manifest["ready_for_runtime_use"].as_bool(), Some(true));
+    assert_eq!(manifest["ready_for_default_use"].as_bool(), Some(false));
+    assert_eq!(manifest["evals_passed"].as_bool(), Some(true));
+    let manifest_required = manifest["required_skill_ids"].as_sequence().unwrap();
+    let manifest_forbidden = manifest["forbidden_skill_ids"].as_sequence().unwrap();
+    assert!(
+        manifest_required
+            .iter()
+            .any(|v| v.as_str() == Some(&reviewed_id))
+    );
+    assert!(
+        manifest_forbidden
+            .iter()
+            .any(|v| v.as_str() == Some(&unsafe_id))
+    );
+    assert!(
+        manifest_forbidden
+            .iter()
+            .any(|v| v.as_str() == Some(&deprecated_id))
+    );
+    let manifest_tools = manifest["tool_permissions"].as_sequence().unwrap();
+    assert!(
+        manifest_tools
+            .iter()
+            .any(|v| v.as_str().is_some_and(|s| s.contains("safe-tool")))
+    );
+    assert!(
+        !manifest_tools
+            .iter()
+            .any(|v| v.as_str().is_some_and(|s| s.contains("dangerous-tool")))
+    );
+    let manifest_files = manifest["files"].as_sequence().unwrap();
+    assert!(
+        manifest_files
+            .iter()
+            .any(|v| v.as_str() == Some("agent-pack.yaml"))
+    );
+    assert!(
+        manifest_files
+            .iter()
+            .any(|v| v.as_str() == Some("agent-pack-manifest.yaml"))
+    );
+    assert!(
+        manifest_files
+            .iter()
+            .any(|v| v.as_str() == Some("agent-pack-manifest.md"))
+    );
+    let manifest_md = std::fs::read_to_string(manifest_md_path).unwrap();
+    assert!(
+        manifest_md.contains("# Agent Pack Manifest"),
+        "{manifest_md}"
+    );
+    assert!(manifest_md.contains("## Tool Permissions"), "{manifest_md}");
+    assert!(manifest_md.contains("safe-tool"), "{manifest_md}");
+    assert!(!manifest_md.contains("dangerous-tool"), "{manifest_md}");
+
+    let verify = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["verify-agent-pack", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(verify.status.success());
+    let verify_stdout = String::from_utf8_lossy(&verify.stdout);
+    assert!(verify_stdout.contains("valid: true"), "{verify_stdout}");
+
+    std::fs::write(
+        &manifest_path,
+        manifest_yaml_with_count(&manifest, "selected_skill_count", 99),
+    )
+    .unwrap();
+    let verify_bad = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["verify-agent-pack", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!verify_bad.status.success());
+    let bad_stdout = String::from_utf8_lossy(&verify_bad.stdout);
+    assert!(bad_stdout.contains("valid: false"), "{bad_stdout}");
+    assert!(
+        bad_stdout.contains("agent-pack-manifest.yaml is stale"),
+        "{bad_stdout}"
+    );
+    let build_report: serde_yaml::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&build_report_path).unwrap()).unwrap();
+    assert!(
+        build_report["build_id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("agent-pack-build-")),
+        "{build_report:?}"
+    );
+    assert_eq!(
+        build_report["agent_name"].as_str(),
+        Some("Technical Documentation Agent")
+    );
+    assert_eq!(build_report["selected_skill_count"].as_i64(), Some(1));
+    assert_eq!(build_report["required_skill_count"].as_i64(), Some(1));
+    assert_eq!(build_report["forbidden_skill_count"].as_i64(), Some(2));
+    assert_eq!(build_report["omitted_skill_count"].as_i64(), Some(2));
+    assert_eq!(build_report["tool_permission_count"].as_i64(), Some(1));
+    assert_eq!(build_report["eval_case_count"].as_i64(), Some(1));
+    assert_eq!(build_report["verification_valid"].as_bool(), Some(true));
+    assert_eq!(build_report["ready_for_runtime_use"].as_bool(), Some(true));
+    assert_eq!(build_report["ready_for_default_use"].as_bool(), Some(false));
+    assert!(
+        build_report["selected_skill_ids"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str() == Some(&reviewed_id))
+    );
+    assert!(
+        build_report["forbidden_skill_ids"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str() == Some(&unsafe_id))
+    );
+    assert!(
+        build_report["omitted_skill_ids"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str() == Some(&deprecated_id))
+    );
+    assert!(
+        build_report["tool_permissions"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str().is_some_and(|s| s.contains("safe-tool")))
+    );
+    assert!(
+        build_report["verification_errors"]
+            .as_sequence()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+fn manifest_yaml_with_count(manifest: &serde_yaml::Value, key: &str, value: i64) -> String {
+    let mut manifest = manifest.clone();
+    manifest[key] = serde_yaml::Value::Number(value.into());
+    serde_yaml::to_string(&manifest).unwrap()
 }
 
 #[test]
@@ -1527,6 +1723,485 @@ fn agent_proposals_are_deterministic_and_exclude_forbidden_skills() {
             .iter()
             .any(|v| v.as_str() == Some("dangerous-tool"))
     );
+}
+
+#[test]
+fn agent_role_selection_is_specific_not_small_bundle_broad() {
+    let temp = tempdir().unwrap();
+    let bundle = temp.path().join("bundle");
+    std::fs::create_dir_all(bundle.join("skills")).unwrap();
+    std::fs::create_dir_all(bundle.join("sources")).unwrap();
+    std::fs::create_dir_all(bundle.join("graph")).unwrap();
+    std::fs::create_dir_all(bundle.join("audit")).unwrap();
+
+    std::fs::write(
+        bundle.join("package.yaml"),
+        r#"---
+bundle_id: bundle-role-specific
+name: role-specific
+version: 0.1.0
+domain: kubernetes
+source_corpus: []
+review_status: Reviewed
+publish_status: Unpublished
+compatibility: {}
+created_at: 2025-01-01T00:00:00Z
+"#,
+    )
+    .unwrap();
+    std::fs::write(bundle.join("sources/index.yaml"), "[]\n").unwrap();
+    std::fs::write(bundle.join("sources/sections.yaml"), "[]\n").unwrap();
+    std::fs::write(bundle.join("graph/concepts.yaml"), "[]\n").unwrap();
+    std::fs::write(bundle.join("graph/dependencies.yaml"), "[]\n").unwrap();
+    std::fs::write(bundle.join("audit/events.yaml"), "[]\n").unwrap();
+    std::fs::write(bundle.join("candidates.yaml"), "[]\n").unwrap();
+
+    std::fs::write(
+        bundle.join("skills/cluster-diagnostic.yaml"),
+        r#"---
+id: skill-cluster-diagnostic
+title: Diagnose Kubernetes CrashLoopBackOff
+summary: Diagnose Kubernetes pods with kubectl logs, events, and status.
+skill_type: Diagnostic
+scope: TaskLevel
+status: Reviewed
+maturity: Level3Verified
+domain: kubernetes
+role_suitability:
+  - role: Cluster Diagnostic Agent
+    suitability: 0.95
+    rationale: Focused on live cluster diagnostics.
+tool_requirements:
+  - name: kubectl
+    requirement_type: ReadOnly
+    permission_level: ReadOnly
+    dry_run_available: true
+    rollback_required: false
+evals:
+  - id: eval-cluster-routing
+    prompt: Route a CrashLoopBackOff diagnosis task.
+    expected_behavior: Selects cluster diagnostic skill.
+    eval_type: Routing
+    safety_notes: []
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        bundle.join("skills/manifest-review.yaml"),
+        r#"---
+id: skill-manifest-review
+title: Review Kubernetes deployment manifest
+summary: Review manifests for resource requests, probes, labels, and unsafe configuration.
+skill_type: Review
+scope: TaskLevel
+status: Reviewed
+maturity: Level3Verified
+domain: kubernetes
+role_suitability:
+  - role: Manifest Review Agent
+    suitability: 0.95
+    rationale: Focused on static manifest review.
+tool_requirements:
+  - name: kubeconform
+    requirement_type: ReadOnly
+    permission_level: ReadOnly
+    dry_run_available: true
+    rollback_required: false
+evals:
+  - id: eval-manifest-routing
+    prompt: Route a deployment manifest review task.
+    expected_behavior: Selects manifest review skill.
+    eval_type: Routing
+    safety_notes: []
+"#,
+    )
+    .unwrap();
+
+    let proposals_dir = temp.path().join("proposals");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "propose-agents",
+                bundle.to_str().unwrap(),
+                "--out",
+                proposals_dir.to_str().unwrap(),
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let cluster =
+        std::fs::read_to_string(proposals_dir.join("cluster-diagnostic-agent.yaml")).unwrap();
+    assert!(cluster.contains("skill-cluster-diagnostic"), "{cluster}");
+    assert!(!cluster.contains("skill-manifest-review"), "{cluster}");
+    assert!(cluster.contains("kubectl"), "{cluster}");
+    assert!(!cluster.contains("kubeconform"), "{cluster}");
+    assert!(cluster.contains("selection_rationale:"), "{cluster}");
+    assert!(cluster.contains("proposal_readiness:"), "{cluster}");
+    assert!(cluster.contains("ready_for_packaging: true"), "{cluster}");
+    assert!(
+        cluster.contains("ready_for_default_use_candidate: false"),
+        "{cluster}"
+    );
+    assert!(cluster.contains("selected_skill_count: 1"), "{cluster}");
+    assert!(cluster.contains("reviewed_skill_count: 1"), "{cluster}");
+    assert!(cluster.contains("routing_eval_count: 1"), "{cluster}");
+    assert!(
+        cluster.contains("proposal lacks source-grounding eval coverage"),
+        "{cluster}"
+    );
+    assert!(cluster.contains("score:"), "{cluster}");
+    assert!(
+        cluster.contains("exact role suitability match 'Cluster Diagnostic Agent'"),
+        "{cluster}"
+    );
+    assert!(
+        cluster.contains("reviewed skill quality bonus"),
+        "{cluster}"
+    );
+
+    let proposal_index =
+        std::fs::read_to_string(proposals_dir.join("agent-proposals-index.yaml")).unwrap();
+    assert!(
+        proposal_index.contains("proposal_count: 2"),
+        "{proposal_index}"
+    );
+    assert!(
+        proposal_index.contains("ready_for_packaging_count: 2"),
+        "{proposal_index}"
+    );
+    assert!(
+        proposal_index.contains("default_use_candidate_count: 0"),
+        "{proposal_index}"
+    );
+    assert!(
+        proposal_index.contains("blocked_proposal_count: 0"),
+        "{proposal_index}"
+    );
+    assert!(
+        proposal_index.contains("warning_count:"),
+        "{proposal_index}"
+    );
+    assert!(
+        proposal_index.contains("cluster-diagnostic-agent.yaml"),
+        "{proposal_index}"
+    );
+    assert!(
+        proposal_index.contains("manifest-review-agent.yaml"),
+        "{proposal_index}"
+    );
+    assert!(proposal_index.contains("kubectl"), "{proposal_index}");
+    assert!(proposal_index.contains("kubeconform"), "{proposal_index}");
+
+    let verify = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["verify-agent-proposals", proposals_dir.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        verify.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&verify.stdout),
+        String::from_utf8_lossy(&verify.stderr)
+    );
+    let verify_stdout = String::from_utf8_lossy(&verify.stdout);
+    assert!(verify_stdout.contains("valid: true"), "{verify_stdout}");
+    assert!(
+        verify_stdout.contains("proposal_count: 2"),
+        "{verify_stdout}"
+    );
+
+    let proposal_index_md =
+        std::fs::read_to_string(proposals_dir.join("agent-proposals-index.md")).unwrap();
+    assert!(
+        proposal_index_md.contains("# Agent Proposal Index"),
+        "{proposal_index_md}"
+    );
+    assert!(
+        proposal_index_md.contains("## Proposals"),
+        "{proposal_index_md}"
+    );
+    assert!(
+        proposal_index_md.contains("### Cluster Diagnostic Agent"),
+        "{proposal_index_md}"
+    );
+    assert!(
+        proposal_index_md.contains("### Manifest Review Agent"),
+        "{proposal_index_md}"
+    );
+
+    let manifest =
+        std::fs::read_to_string(proposals_dir.join("manifest-review-agent.yaml")).unwrap();
+    assert!(manifest.contains("skill-manifest-review"), "{manifest}");
+    assert!(!manifest.contains("skill-cluster-diagnostic"), "{manifest}");
+    assert!(manifest.contains("kubeconform"), "{manifest}");
+    assert!(!manifest.contains("kubectl"), "{manifest}");
+    assert!(manifest.contains("selection_rationale:"), "{manifest}");
+    assert!(manifest.contains("proposal_readiness:"), "{manifest}");
+    assert!(manifest.contains("ready_for_packaging: true"), "{manifest}");
+    assert!(
+        manifest.contains("ready_for_default_use_candidate: false"),
+        "{manifest}"
+    );
+    assert!(
+        manifest.contains("exact role suitability match 'Manifest Review Agent'"),
+        "{manifest}"
+    );
+
+    std::fs::write(
+        proposals_dir.join("agent-proposals-index.yaml"),
+        proposal_index.replace("selected_skill_count: 1", "selected_skill_count: 99"),
+    )
+    .unwrap();
+    let verify = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["verify-agent-proposals", proposals_dir.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!verify.status.success());
+    let verify_stdout = String::from_utf8_lossy(&verify.stdout);
+    assert!(verify_stdout.contains("valid: false"), "{verify_stdout}");
+    assert!(
+        verify_stdout.contains("agent-proposals-index.yaml is stale")
+            || verify_stdout.contains("selected_skill_count mismatch"),
+        "{verify_stdout}"
+    );
+    std::fs::write(
+        proposals_dir.join("agent-proposals-index.yaml"),
+        &proposal_index,
+    )
+    .unwrap();
+
+    let cluster_pack = temp.path().join("cluster-pack");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "build-agent-pack",
+                bundle.to_str().unwrap(),
+                "--agent",
+                "Cluster Diagnostic Agent",
+                "--out",
+                cluster_pack.to_str().unwrap(),
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let pack = std::fs::read_to_string(cluster_pack.join("agent-pack.yaml")).unwrap();
+    assert!(pack.contains("skill-cluster-diagnostic"), "{pack}");
+    assert!(pack.contains("skill-manifest-review"), "{pack}");
+    assert!(
+        pack.contains("omitted because it did not match the requested agent role"),
+        "{pack}"
+    );
+    assert!(pack.contains("kubectl:ReadOnly"), "{pack}");
+    assert!(!pack.contains("kubeconform:ReadOnly"), "{pack}");
+    assert!(pack.contains("selection_report:"), "{pack}");
+    assert!(pack.contains("selected_skill_count: 1"), "{pack}");
+    assert!(pack.contains("omitted_skills:"), "{pack}");
+    assert!(pack.contains("pack_readiness:"), "{pack}");
+    assert!(pack.contains("ready_for_runtime_use: true"), "{pack}");
+    assert!(pack.contains("ready_for_default_use: false"), "{pack}");
+    assert!(
+        pack.contains("agent pack lacks source-grounding eval coverage"),
+        "{pack}"
+    );
+    assert!(
+        pack.contains("exact role suitability match 'Cluster Diagnostic Agent'"),
+        "{pack}"
+    );
+
+    let summary_path = temp.path().join("agent-builder-summary.yaml");
+    let summary = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "agent-builder-summary",
+            "--proposals",
+            proposals_dir.to_str().unwrap(),
+            "--pack",
+            cluster_pack.to_str().unwrap(),
+            "--out",
+            summary_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        summary.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&summary.stdout),
+        String::from_utf8_lossy(&summary.stderr)
+    );
+    let summary_yaml = std::fs::read_to_string(&summary_path).unwrap();
+    assert!(
+        summary_yaml.contains("summary_id: agent-builder-summary-"),
+        "{summary_yaml}"
+    );
+    assert!(summary_yaml.contains("valid: true"), "{summary_yaml}");
+    assert!(summary_yaml.contains("proposal_count: 2"), "{summary_yaml}");
+    assert!(summary_yaml.contains("pack_count: 1"), "{summary_yaml}");
+    assert!(
+        summary_yaml.contains("ready_for_packaging_count: 2"),
+        "{summary_yaml}"
+    );
+    assert!(
+        summary_yaml.contains("runtime_ready_pack_count: 1"),
+        "{summary_yaml}"
+    );
+    assert!(
+        summary_yaml.contains("Cluster Diagnostic Agent"),
+        "{summary_yaml}"
+    );
+    assert!(summary_yaml.contains("kubectl:ReadOnly"), "{summary_yaml}");
+    let summary_md = std::fs::read_to_string(summary_path.with_extension("md")).unwrap();
+    assert!(
+        summary_md.contains("# Agent Builder Summary")
+            && summary_md.contains("## Proposals")
+            && summary_md.contains("## Agent Packs"),
+        "{summary_md}"
+    );
+
+    let pack_manifest =
+        std::fs::read_to_string(cluster_pack.join("agent-pack-manifest.yaml")).unwrap();
+    std::fs::write(
+        cluster_pack.join("agent-pack-manifest.yaml"),
+        pack_manifest.replace("selected_skill_count: 1", "selected_skill_count: 99"),
+    )
+    .unwrap();
+    let invalid_summary_path = temp.path().join("agent-builder-summary-invalid.yaml");
+    let invalid_summary = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "agent-builder-summary",
+            "--proposals",
+            proposals_dir.to_str().unwrap(),
+            "--pack",
+            cluster_pack.to_str().unwrap(),
+            "--out",
+            invalid_summary_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!invalid_summary.status.success());
+    let invalid_yaml = std::fs::read_to_string(&invalid_summary_path).unwrap();
+    assert!(invalid_yaml.contains("valid: false"), "{invalid_yaml}");
+    assert!(
+        invalid_yaml.contains("agent-pack-manifest.yaml is stale")
+            || invalid_yaml.contains("agent-pack-manifest.yaml is stale or does not match"),
+        "{invalid_yaml}"
+    );
+
+    // Restore the pack manifest, then build a directory-wide artifact index that
+    // discovers proposal indexes, agent packs, build reports, and summaries.
+    std::fs::write(cluster_pack.join("agent-pack-manifest.yaml"), pack_manifest).unwrap();
+    let build_report = temp.path().join("cluster-pack-build-report.yaml");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "build-agent-pack",
+                bundle.to_str().unwrap(),
+                "--agent",
+                "Cluster Diagnostic Agent",
+                "--out",
+                cluster_pack.to_str().unwrap(),
+                "--report",
+                build_report.to_str().unwrap(),
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let artifact_index = temp.path().join("agent-artifacts.yaml");
+    let artifact = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "agent-artifact-index",
+            temp.path().to_str().unwrap(),
+            "--out",
+            artifact_index.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        artifact.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&artifact.stdout),
+        String::from_utf8_lossy(&artifact.stderr)
+    );
+    let artifact_yaml = std::fs::read_to_string(&artifact_index).unwrap();
+    assert!(
+        artifact_yaml.contains("index_id: agent-artifacts-"),
+        "{artifact_yaml}"
+    );
+    assert!(artifact_yaml.contains("valid: true"), "{artifact_yaml}");
+    assert!(
+        artifact_yaml.contains("proposal_directory_count: 1"),
+        "{artifact_yaml}"
+    );
+    assert!(
+        artifact_yaml.contains("proposal_count: 2"),
+        "{artifact_yaml}"
+    );
+    assert!(
+        artifact_yaml.contains("pack_directory_count: 1"),
+        "{artifact_yaml}"
+    );
+    assert!(
+        artifact_yaml.contains("summary_count: 1"),
+        "{artifact_yaml}"
+    );
+    assert!(
+        artifact_yaml.contains("build_report_count: 1"),
+        "{artifact_yaml}"
+    );
+    assert!(
+        artifact_yaml.contains("Cluster Diagnostic Agent"),
+        "{artifact_yaml}"
+    );
+    assert!(artifact_yaml.contains("kubectl"), "{artifact_yaml}");
+    let artifact_md = std::fs::read_to_string(artifact_index.with_extension("md")).unwrap();
+    assert!(
+        artifact_md.contains("# Agent Artifact Index"),
+        "{artifact_md}"
+    );
+    assert!(
+        artifact_md.contains("## Proposal Directories"),
+        "{artifact_md}"
+    );
+    assert!(artifact_md.contains("## Agent Packs"), "{artifact_md}");
+
+    // Corrupting an indexed pack artifact should make the artifact index invalid
+    // while still writing machine-readable diagnostics.
+    let restored_pack_manifest =
+        std::fs::read_to_string(cluster_pack.join("agent-pack-manifest.yaml")).unwrap();
+    std::fs::write(
+        cluster_pack.join("agent-pack-manifest.yaml"),
+        "stale: true
+",
+    )
+    .unwrap();
+    let bad_artifact_index = temp.path().join("agent-artifacts-invalid.yaml");
+    let bad_artifact = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "agent-artifact-index",
+            temp.path().to_str().unwrap(),
+            "--out",
+            bad_artifact_index.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!bad_artifact.status.success());
+    let bad_artifact_yaml = std::fs::read_to_string(&bad_artifact_index).unwrap();
+    assert!(
+        bad_artifact_yaml.contains("valid: false"),
+        "{bad_artifact_yaml}"
+    );
+    assert!(
+        bad_artifact_yaml.contains("agent-pack-manifest.yaml is stale")
+            || bad_artifact_yaml.contains("agent-pack-manifest.yaml is stale or does not match")
+            || bad_artifact_yaml.contains("agent-pack-manifest.yaml is malformed"),
+        "{bad_artifact_yaml}"
+    );
+    std::fs::write(
+        cluster_pack.join("agent-pack-manifest.yaml"),
+        restored_pack_manifest,
+    )
+    .unwrap();
 }
 
 #[test]

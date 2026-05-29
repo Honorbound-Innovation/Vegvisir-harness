@@ -17,9 +17,11 @@ The current root implementation is Rust. The earlier Python prototype is preserv
 - Forge provider adapter layer with strict request/response envelopes, stored Forge audit artifacts, deterministic `mock` provider, and a `vegvisir` provider boundary for full Vegvisir integration.
 - Mock/local Forge pass for schema-safe enhancement, inference records, evidence reports, critique reports, and inferred workflow candidates.
 - Built-in domain profile listing.
-- Agent profile proposal and `agent-pack.yaml` handoff generation.
+- Agent profile proposal, proposal indexes, verified agent-pack handoff generation, pack manifests, build reports, and consolidated Agent Builder artifact indexes.
 - Filesystem registry publication with readiness gates, provenance, manifest verification, deprecation records, rollback markers, and refreshed registry indexes.
 - Static telemetry-based improvement proposals.
+- Corpus lifecycle artifacts: manifest, diff, plan, status, and lifecycle-aware agent-pack handoff metadata.
+- Behavioral eval coverage reports for skill bundles and agent-ready packs.
 
 ## Install / run
 
@@ -32,7 +34,11 @@ cargo run -- load dist/example-skills <skill-id> --mode extended
 cargo run -- forge dist/example-skills --out dist/example-skills-forged --domain-profile kubernetes-operations
 cargo run -- evidence-report dist/example-skills-forged
 cargo run -- propose-agents dist/example-skills-forged --out dist/agents
-cargo run -- build-agent-pack dist/example-skills-forged --agent "Cluster Diagnostic Agent" --out dist/cluster-agent
+cargo run -- verify-agent-proposals dist/agents
+cargo run -- build-agent-pack dist/example-skills-forged --agent "Cluster Diagnostic Agent" --out dist/cluster-agent --report dist/cluster-agent-build-report.yaml
+cargo run -- verify-agent-pack dist/cluster-agent
+cargo run -- agent-builder-summary --proposals dist/agents --pack dist/cluster-agent --out dist/agent-builder-summary.yaml
+cargo run -- agent-artifact-index dist --out dist/agent-artifacts.yaml
 ```
 
 ## CLI overview
@@ -53,14 +59,18 @@ skiller eval <bundle>
 skiller forge <bundle> --out <bundle> [--provider mock|vegvisir] [--domain-profile <profile>]
 skiller forge-request <bundle> --out <request.yaml> [--pass <pass>] [--domain-profile <profile>]
 skiller forge-handoff <bundle> --out <dir> [--pass <pass>] [--domain-profile <profile>]
-skiller forge-validate <bundle> --request <request.yaml> --response <response.yaml>
-skiller forge-apply <bundle> --request <request.yaml> --response <response.yaml> --out <bundle>
+skiller forge-validate <bundle> --request <request.yaml> --response <response.yaml> [--report <report.yaml>]
+skiller forge-apply <bundle> --request <request.yaml> --response <response.yaml> --out <bundle> [--report <report.yaml>]
 skiller infer <bundle> --out <bundle>
 skiller critique <bundle> --out <report.md>
 skiller evidence-report <bundle>
 skiller domain-profiles
 skiller propose-agents <bundle> --out <dir>
-skiller build-agent-pack <bundle> --agent <name> --out <dir>
+skiller verify-agent-proposals <dir>
+skiller build-agent-pack <bundle> --agent <name> --out <dir> [--lifecycle-status <status.yaml>] [--report <report.yaml>]
+skiller verify-agent-pack <dir>
+skiller agent-builder-summary [--proposals <dir>] [--pack <dir>]... --out <summary.yaml>
+skiller agent-artifact-index <root> --out <index.yaml>
 skiller readiness <bundle>
 skiller publish <bundle> --registry <dir> [--force]
 skiller registry-list <registry>
@@ -69,6 +79,10 @@ skiller registry-deprecate <registry> <bundle-id> <version> --reason <reason> [-
 skiller registry-rollback <registry> <bundle-id> <to-version> --reason <reason>
 skiller improve-from-telemetry <bundle> --out <dir>
 skiller corpus-map <bundle> --out <dir>
+skiller corpus-manifest <bundle> --out <dir>
+skiller corpus-diff <old-manifest.yaml> <new-manifest.yaml> --out <dir>
+skiller corpus-plan <corpus-diff.yaml> --out <dir>
+skiller corpus-status <bundle> --plan <corpus-plan.yaml> --out <dir>
 skiller domain-template <name>
 skiller bump-version <bundle> --out <bundle> [--version <version>]
 ```
@@ -132,7 +146,7 @@ cargo run -- forge dist/example-skills \
   --domain-profile kubernetes-operations
 ```
 
-The forged bundle stores `forge_requests.yaml` and `forge_responses.yaml` so Vegvisir-powered changes remain reviewable and auditable.
+The forged bundle stores `forge_requests.yaml`, `forge_responses.yaml`, `forge_summary.yaml`, and `forge_summary.md` so Vegvisir-powered changes remain reviewable and auditable. `skiller validate` revalidates the stored Forge history and summary artifacts.
 
 For first-class Vegvisir integration, Skiller can export a complete handoff directory for Vegvisir:
 
@@ -160,15 +174,41 @@ cargo run -- forge-request dist/example-skills \
 # Vegvisir reads the request and writes a ForgeResponseEnvelope.
 cargo run -- forge-validate dist/example-skills \
   --request dist/vegvisir-request.yaml \
-  --response dist/vegvisir-response.yaml
+  --response dist/vegvisir-response.yaml \
+  --report dist/vegvisir-validation-report.yaml
 
 cargo run -- forge-apply dist/example-skills \
   --request dist/vegvisir-request.yaml \
   --response dist/vegvisir-response.yaml \
-  --out dist/example-skills-forged
+  --out dist/example-skills-forged \
+  --report dist/vegvisir-apply-report.yaml
 ```
 
-`forge-validate` and `forge-apply` validate the response before mutating any bundle: request/pass IDs must match, citations and source sections must exist, new skills require inference records, secret-like material is rejected, and external mutation policies must require approval.
+`forge-validate` and `forge-apply` validate the response before mutating any bundle: request/pass IDs must match, citations and source sections must exist, new skills require inference records, secret-like material is rejected, confidence/evidence scores must be bounded, and external mutation policies must require approval. Optional report outputs are machine-readable YAML for GUI/desktop workflows.
+
+
+## Corpus lifecycle workflow
+
+Skiller can emit deterministic corpus lifecycle artifacts for large or evolving documentation sets:
+
+```bash
+skiller corpus-manifest dist/example-skills --out dist/lifecycle/v1
+skiller corpus-manifest dist/example-skills-v2 --out dist/lifecycle/v2
+skiller corpus-diff dist/lifecycle/v1/corpus-manifest.yaml dist/lifecycle/v2/corpus-manifest.yaml --out dist/lifecycle/diff
+skiller corpus-plan dist/lifecycle/diff/corpus-diff.yaml --out dist/lifecycle/plan
+skiller corpus-status dist/example-skills-v2 --plan dist/lifecycle/plan/corpus-plan.yaml --out dist/lifecycle/status
+```
+
+The manifest records source, section, and skill set hashes. The diff reports added, removed, and changed sources. The plan turns changes into deterministic review actions. The status command combines validation, readiness, and lifecycle action state so changed corpora do not silently flow into publication or Agent Builder defaults.
+
+`build-agent-pack` can include lifecycle state:
+
+```bash
+skiller build-agent-pack dist/example-skills-v2 \
+  --agent "Cluster Diagnostic Agent" \
+  --out dist/cluster-agent \
+  --lifecycle-status dist/lifecycle/status/corpus-status.yaml
+```
 
 ## Registry lifecycle
 
@@ -239,6 +279,48 @@ skiller apply-review dist/example-skills-forged \
 `apply-review` records an audit event, updates per-skill review metadata, promotes approved skills to `Reviewed` / Level 3 verified, keeps changed skills in `NeedsReview`, and marks unsafe skills as `Unsafe` with approval/rollback gates.
 
 Agent packs include selected, required, optional, and forbidden skill groups, exported eval cases, tool permissions, runtime policy, context policy, memory policy, and approval policy for Vegvisir Agent Builder ingestion.
+
+Generated proposal directories include:
+
+- individual `<agent>.yaml` proposal files
+- `agent-proposals-index.yaml`
+- `agent-proposals-index.md`
+
+Verify them with:
+
+```bash
+skiller verify-agent-proposals dist/agents
+```
+
+Generated agent-pack directories include:
+
+- `agent-pack.yaml`
+- `agent-pack-manifest.yaml`
+- `agent-pack-manifest.md`
+
+Build reports and verification are available for GUI/desktop workflows:
+
+```bash
+skiller build-agent-pack dist/example-skills-forged \
+  --agent "Cluster Diagnostic Agent" \
+  --out dist/cluster-agent \
+  --report dist/cluster-agent-build-report.yaml
+
+skiller verify-agent-pack dist/cluster-agent
+```
+
+To consolidate Agent Builder artifacts:
+
+```bash
+skiller agent-builder-summary \
+  --proposals dist/agents \
+  --pack dist/cluster-agent \
+  --out dist/agent-builder-summary.yaml
+
+skiller agent-artifact-index dist --out dist/agent-artifacts.yaml
+```
+
+These commands emit YAML and Markdown summaries that expose selection rationale, readiness, lifecycle state, eval status, tool permissions, verification errors, and generated file references.
 
 ## Language pivot note
 
