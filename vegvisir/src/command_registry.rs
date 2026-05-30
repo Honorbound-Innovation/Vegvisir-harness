@@ -175,6 +175,12 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
             &[],
         ),
         cmd(
+            "/auto",
+            "enable or disable autonomous working mode for unattended project work",
+            "/auto [status|on|off]",
+            &["/autonomous"],
+        ),
+        cmd(
             "/tool-limit",
             "show or set max tool-call rounds per model turn",
             "/tool-limit [show|<rounds>|default]",

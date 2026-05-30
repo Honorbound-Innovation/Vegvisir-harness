@@ -135,9 +135,14 @@ fn draw_header(f: &mut Frame<'_>, app: &TuiApplication, area: Rect) {
         " Vegvisir ",
         Style::default().fg(FG).bg(BG).add_modifier(Modifier::BOLD),
     );
+    let auto = if app.autonomous_mode_enabled {
+        " auto=on"
+    } else {
+        ""
+    };
     let meta = format!(
-        " provider={} model={} workspace={} ",
-        app.session.current_provider, app.session.current_model, app.session.cwd
+        " provider={} model={}{} workspace={} ",
+        app.session.current_provider, app.session.current_model, auto, app.session.cwd
     );
     let line = Line::from(vec![title, Span::styled(meta, Style::default().fg(DIM))]);
     let paragraph = Paragraph::new(vec![line, Line::from("")])
@@ -1774,6 +1779,10 @@ fn help_overlay_lines(app: &TuiApplication, width: usize, height: usize) -> Vec<
         ("/work", "open recent work, command, and tool activity"),
         ("/context", "inspect current context and memory use"),
         ("/tools", "show or change available tool permissions"),
+        (
+            "/auto",
+            "toggle autonomous working mode for unattended workflows",
+        ),
     ];
     for (name, description) in common {
         push_help_command_line(&mut lines, name, description, width);

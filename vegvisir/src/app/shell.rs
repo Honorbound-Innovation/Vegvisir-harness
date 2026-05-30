@@ -235,6 +235,7 @@ impl TuiApplication {
             "/handoff" => self.summary_command(&args, true)?,
             "/help" => self.help(),
             "/tools" => self.tools_command(&args),
+            "/auto" => self.autonomous_command(&args),
             "/tool-limit" => self.tool_limit_command(&args),
             "/approvals" => self.approvals_command(&args),
             "/skills" => self.skills_command(&args)?,

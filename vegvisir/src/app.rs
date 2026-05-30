@@ -87,6 +87,7 @@ pub struct TuiApplication {
     pub redraw_requested: bool,
     pub risky_tools_enabled: bool,
     pub dangerously_bypass_approvals_and_sandbox: bool,
+    pub autonomous_mode_enabled: bool,
     pub mcp_servers: Vec<crate::core::McpServerConfig>,
     pub hbse_services: Vec<HbseServiceRef>,
     pub pending_send: Option<JoinHandle<anyhow::Result<SessionState>>>,
@@ -431,6 +432,7 @@ impl TuiApplication {
             redraw_requested: false,
             risky_tools_enabled: false,
             dangerously_bypass_approvals_and_sandbox,
+            autonomous_mode_enabled: false,
             mcp_servers,
             hbse_services,
             pending_send: None,
@@ -1367,6 +1369,38 @@ mod tests {
         app.handle_key_event(KeyEvent::new(KeyCode::F(12), KeyModifiers::NONE));
         assert!(app.mouse_capture_enabled);
         Ok(())
+    }
+
+    #[test]
+    fn autonomous_command_toggles_runtime_mode() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        assert!(!app.autonomous_mode_enabled);
+
+        let response = app.execute_command("/auto on")?.unwrap();
+        assert!(app.autonomous_mode_enabled);
+        assert!(response.contains("Autonomous working mode enabled"));
+
+        let status = app.execute_command("/auto status")?.unwrap();
+        assert!(status.contains("Autonomous working mode: enabled"));
+
+        let response = app.execute_command("/auto off")?.unwrap();
+        assert!(!app.autonomous_mode_enabled);
+        assert!(response.contains("disabled"));
+
+        let response = app.execute_command("/autonomous on")?.unwrap();
+        assert!(app.autonomous_mode_enabled);
+        assert!(response.contains("Autonomous working mode enabled"));
+        Ok(())
+    }
+
+    #[test]
+    fn autonomous_contract_wraps_user_task_for_model_turn() {
+        let wrapped = crate::app::runtime::apply_autonomous_mode_contract("build the feature");
+        assert!(wrapped.contains("Vegvisir autonomous working mode is ENABLED"));
+        assert!(wrapped.contains("unattended project-work mode"));
+        assert!(wrapped.contains("User task:\nbuild the feature"));
+        assert!(wrapped.contains("Stop and request approval"));
     }
 
     #[test]

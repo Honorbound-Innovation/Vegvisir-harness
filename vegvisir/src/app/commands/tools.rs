@@ -119,6 +119,51 @@ impl TuiApplication {
         )
     }
 
+    pub(crate) fn autonomous_command(&mut self, args: &[String]) -> String {
+        match args.first().map(String::as_str) {
+            None | Some("status") | Some("show") => self.autonomous_status_message(),
+            Some("on") | Some("enable") | Some("enabled") | Some("start") => {
+                self.autonomous_mode_enabled = true;
+                self.logger.emit(
+                    "autonomous_mode_enabled",
+                    json!({
+                        "session": self.session.session_id,
+                        "workspace": self.cwd.display().to_string(),
+                    }),
+                );
+                format!(
+                    "Autonomous working mode enabled for this running TUI session.\n\n{}",
+                    autonomous_mode_summary()
+                )
+            }
+            Some("off") | Some("disable") | Some("disabled") | Some("stop") => {
+                self.autonomous_mode_enabled = false;
+                self.logger.emit(
+                    "autonomous_mode_disabled",
+                    json!({
+                        "session": self.session.session_id,
+                        "workspace": self.cwd.display().to_string(),
+                    }),
+                );
+                "Autonomous working mode disabled. Vegvisir is back in normal interactive mode."
+                    .to_string()
+            }
+            Some(_) => "Usage: /auto [status|on|off]".to_string(),
+        }
+    }
+
+    fn autonomous_status_message(&self) -> String {
+        format!(
+            "Autonomous working mode: {}\n\n{}\n\nNotes:\n- This is not Vegvisir's default mode.\n- It affects new model turns while enabled.\n- Approval and sandbox policy still apply unless dangerous bypass was selected at startup.",
+            if self.autonomous_mode_enabled {
+                "enabled"
+            } else {
+                "disabled"
+            },
+            autonomous_mode_summary()
+        )
+    }
+
     fn tool_commands_command(&mut self, args: &[String]) -> String {
         match args.first().map(String::as_str) {
             None | Some("list") | Some("show") | Some("status") => {
@@ -410,4 +455,8 @@ fn tool_command_update_message(
     } else {
         lines.join("\n")
     }
+}
+
+fn autonomous_mode_summary() -> &'static str {
+    "When enabled, each model turn gets an autonomous-work contract: plan the full workflow, execute available safe steps without waiting for unnecessary chat confirmation, run focused verification, keep progress visible, preserve user work, and stop for approvals, secrets, destructive actions, or unclear scope."
 }

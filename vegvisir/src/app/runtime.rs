@@ -57,6 +57,7 @@ impl TuiApplication {
         let cwd = self.cwd.clone();
         let data_root = self.data_root.clone();
         let lsl_config = self.lsl_runtime_config();
+        let autonomous_mode_enabled = self.autonomous_mode_enabled;
         let (stream_tx, stream_rx) = mpsc::channel();
         let (steering_tx, steering_rx) = mpsc::channel();
         let cancel_token = Arc::new(AtomicBool::new(false));
@@ -111,6 +112,11 @@ impl TuiApplication {
                 &worker_session,
                 &lsl_config,
             )?;
+            let model_content = if autonomous_mode_enabled {
+                apply_autonomous_mode_contract(&model_content)
+            } else {
+                model_content
+            };
             let envelope = cms.prepare_cached_prompt(
                 &model_content,
                 worker_session.current_provider.clone(),
@@ -666,4 +672,24 @@ fn new_spinner_verb_seed(session_id: &str) -> u64 {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     hash ^ now
+}
+
+pub(crate) fn apply_autonomous_mode_contract(content: &str) -> String {
+    format!(
+        "{contract}\n\nUser task:\n{content}",
+        contract = r#"[Vegvisir autonomous working mode is ENABLED]
+You are operating in an unattended project-work mode for this turn.
+
+Runtime contract:
+- Treat the user task as permission to complete the whole coherent workflow, not merely the next small step.
+- Orient, plan, inspect evidence, implement, verify, and summarize without waiting for unnecessary chat confirmation.
+- Use available tools proactively and keep visible progress through tool/activity events.
+- Prefer reversible, scoped edits; preserve unrelated user work.
+- Run focused tests/builds/checks when practical, and report verification clearly.
+- Continue through routine fix/test iterations until the workflow is complete, blocked, cancelled, or requires user authority.
+- Stop and request approval for destructive operations, privileged actions, secret use, external side effects, ambiguous scope, or policy-required approvals.
+- Never ask for plaintext secrets; use HBSE secret refs when credentials are required.
+- End with a concise completion report: changed files, tests/checks run, unresolved risks, and exact next steps if blocked."#,
+        content = content
+    )
 }
