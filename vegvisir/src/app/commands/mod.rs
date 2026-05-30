@@ -7,4 +7,5 @@ mod providers;
 mod sessions;
 mod skills;
 mod speech;
+mod summary;
 mod tools;

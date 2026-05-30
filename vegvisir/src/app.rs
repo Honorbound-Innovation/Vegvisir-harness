@@ -1241,6 +1241,54 @@ mod tests {
     }
 
     #[test]
+    fn session_summary_command_generates_and_saves_file() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace)?;
+        let mut app = TuiApplication::with_data_root(&workspace, tmp.path().join("home"))?;
+        app.session.title = "Summary Test".to_string();
+        app.session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "Please fix the thing".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        app.session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: "Fixed it and cargo check passed.".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        let response = app.execute_command("/summary --file summary.md")?.unwrap();
+        assert!(response.contains("# Session Summary"));
+        assert!(response.contains("Saved summary to"));
+        let saved = std::fs::read_to_string(workspace.join("summary.md"))?;
+        assert!(saved.contains("Summary Test"));
+        assert!(saved.contains("Please fix the thing"));
+        assert!(saved.contains("cargo check passed"));
+        Ok(())
+    }
+
+    #[test]
+    fn handoff_command_generates_handoff_summary() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace)?;
+        let mut app = TuiApplication::with_data_root(&workspace, tmp.path().join("home"))?;
+        app.session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "Continue the Ghidra headless work".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        let response = app.execute_command("/handoff")?.unwrap();
+        assert!(response.contains("# Agent Handoff Summary"));
+        assert!(response.contains("Known Open Items / Next Exact Steps"));
+        assert!(response.contains("Handoff Notes for Next Agent"));
+        Ok(())
+    }
+
+    #[test]
     fn chat_search_opens_filters_and_jumps_matches() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;

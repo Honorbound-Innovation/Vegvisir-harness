@@ -155,6 +155,18 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
             "/speech transcribe <audio-file>|status",
             &["/stt"],
         ),
+        cmd(
+            "/summary",
+            "generate a structured session summary; can save to file or CMS memory",
+            "/summary [--handoff] [--save] [--file <path>] [--memory] [--global] [--since-start|--since-last]",
+            &["/session-summary"],
+        ),
+        cmd(
+            "/handoff",
+            "generate an agent handoff summary for resuming work",
+            "/handoff [--save] [--file <path>] [--memory] [--global]",
+            &[],
+        ),
         cmd("/help", "show command reference", "/help", &[]),
         cmd(
             "/tools",
