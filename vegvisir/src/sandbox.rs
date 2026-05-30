@@ -43,13 +43,29 @@ impl WorkspaceSandbox {
         let resolved = if candidate.exists() {
             candidate.canonicalize()?
         } else {
-            let parent = candidate.parent().unwrap_or(&self.root);
-            parent
-                .canonicalize()?
-                .join(candidate.file_name().unwrap_or_default())
+            self.resolve_missing_candidate(&candidate)?
         };
         if !self.bypass && resolved != self.root && !resolved.starts_with(&self.root) {
             anyhow::bail!("Path escapes workspace: {raw}");
+        }
+        Ok(resolved)
+    }
+
+    fn resolve_missing_candidate(&self, candidate: &Path) -> anyhow::Result<PathBuf> {
+        let mut existing = candidate;
+        let mut missing_components = Vec::new();
+        while !existing.exists() {
+            let Some(parent) = existing.parent() else {
+                anyhow::bail!("Path has no existing ancestor: {}", candidate.display());
+            };
+            if let Some(name) = existing.file_name() {
+                missing_components.push(name.to_os_string());
+            }
+            existing = parent;
+        }
+        let mut resolved = existing.canonicalize()?;
+        for component in missing_components.into_iter().rev() {
+            resolved.push(component);
         }
         Ok(resolved)
     }
@@ -65,5 +81,35 @@ impl WorkspaceSandbox {
         }
         fs::write(&target, content)?;
         Ok(target)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn writes_new_nested_paths_inside_workspace() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let sandbox = WorkspaceSandbox::new(dir.path())?;
+        let written = sandbox.write_text("new/dir/file.txt", "ok")?;
+        assert!(written.starts_with(dir.path().canonicalize()?));
+        assert_eq!(
+            fs::read_to_string(dir.path().join("new/dir/file.txt"))?,
+            "ok"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_missing_paths_that_escape_workspace() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let sandbox = WorkspaceSandbox::new(dir.path())?;
+        let err = sandbox
+            .write_text("../escape/file.txt", "nope")
+            .unwrap_err();
+        assert!(err.to_string().contains("escapes workspace"));
+        Ok(())
     }
 }

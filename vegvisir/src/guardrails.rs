@@ -224,10 +224,22 @@ impl ApprovalLedger {
             let _ = fs::create_dir_all(parent);
         }
         if let Ok(state) = self.state.lock() {
-            let _ = fs::write(
-                path,
-                serde_json::to_string_pretty(&*state).unwrap_or_default(),
-            );
+            match serde_json::to_string_pretty(&*state) {
+                Ok(json) => {
+                    if let Err(error) = fs::write(path, json) {
+                        eprintln!(
+                            "warning: failed to save approval ledger {}: {error}",
+                            path.display()
+                        );
+                    }
+                }
+                Err(error) => {
+                    eprintln!(
+                        "warning: failed to serialize approval ledger {}: {error}",
+                        path.display()
+                    );
+                }
+            }
         }
     }
 }

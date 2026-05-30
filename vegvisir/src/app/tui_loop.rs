@@ -12,7 +12,7 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 
-use super::TuiApplication;
+use super::{PendingEditorKind, TuiApplication};
 
 impl TuiApplication {
     pub fn run(&mut self) -> anyhow::Result<()> {
@@ -41,6 +41,9 @@ impl TuiApplication {
             self.poll_stream_events();
             self.poll_pending_send();
             self.poll_background_jobs();
+            if self.pending_editor_action.is_some() {
+                run_pending_editor_action(self, &mut terminal, &mut mouse_capture_applied)?;
+            }
             if last_activity_pulse.elapsed() >= Duration::from_millis(150) {
                 self.pulse_activity();
                 last_activity_pulse = Instant::now();
@@ -70,6 +73,76 @@ impl TuiApplication {
         terminal.show_cursor()?;
         Ok(())
     }
+}
+
+fn run_pending_editor_action(
+    app: &mut TuiApplication,
+    terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
+    mouse_capture_applied: &mut bool,
+) -> anyhow::Result<()> {
+    let Some(action) = app.pending_editor_action.take() else {
+        return Ok(());
+    };
+
+    terminal.show_cursor()?;
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        DisableMouseCapture,
+        DisableBracketedPaste,
+        LeaveAlternateScreen
+    )?;
+    terminal.backend_mut().flush()?;
+    *mouse_capture_applied = false;
+
+    let edit_result = match action.kind {
+        PendingEditorKind::KaProfile => crate::persona::run_editor_for_path(&action.path),
+    };
+
+    let mut stdout = io::stdout();
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableBracketedPaste,
+        EnableMouseCapture
+    )?;
+    enable_raw_mode()?;
+    stdout.flush()?;
+    *mouse_capture_applied = true;
+    app.mouse_capture_enabled = true;
+    app.clear_requested = true;
+
+    match edit_result {
+        Ok(()) => match action.kind {
+            PendingEditorKind::KaProfile => {
+                match crate::persona::get_persona_with_root(&app.data_root, &action.id) {
+                    Ok(Some(profile)) => app.push_system_message(format!(
+                        "Edited ka `{}` ({}) at {}.",
+                        profile.id,
+                        profile.display_name,
+                        action.path.display()
+                    )),
+                    Ok(None) => app.push_system_message(format!(
+                        "Editor closed, but ka `{}` could not be loaded from {}.",
+                        action.id,
+                        action.path.display()
+                    )),
+                    Err(error) => app.push_system_message(format!(
+                        "Editor closed, but ka `{}` failed validation: {error}",
+                        action.id
+                    )),
+                }
+            }
+        },
+        Err(error) => app.push_system_message(format!(
+            "Editor failed for ka `{}` at {}: {error}",
+            action.id,
+            action.path.display()
+        )),
+    }
+    app.autosave_session();
+    app.redraw_requested = true;
+    Ok(())
 }
 
 pub fn run_tui() -> anyhow::Result<()> {

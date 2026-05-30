@@ -93,6 +93,7 @@ pub struct TuiApplication {
     pending_stream: Option<Receiver<StreamEvent>>,
     pending_cancel: Option<Arc<AtomicBool>>,
     pending_steering: Option<Sender<String>>,
+    pub pending_editor_action: Option<PendingEditorAction>,
     pub command_palette_open: bool,
     pub help_overlay_open: bool,
     pub diff_overlay: Option<DiffOverlay>,
@@ -127,6 +128,18 @@ enum StreamEvent {
         summary: String,
         detail: Option<String>,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingEditorAction {
+    pub kind: PendingEditorKind,
+    pub id: String,
+    pub path: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PendingEditorKind {
+    KaProfile,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -421,6 +434,7 @@ impl TuiApplication {
             pending_stream: None,
             pending_cancel: None,
             pending_steering: None,
+            pending_editor_action: None,
             command_palette_open: false,
             help_overlay_open: false,
             diff_overlay: None,
@@ -793,6 +807,23 @@ mod tests {
                 .unwrap_or_default()
                 .contains("# Communication ka")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn ka_edit_queues_tui_safe_editor_action() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        let response = app.persona_command(&["edit".to_string(), "bug_goblin".to_string()])?;
+        assert!(response.contains("Opening editor for ka `bug_goblin`"));
+        let action = app
+            .pending_editor_action
+            .as_ref()
+            .expect("ka edit queues external editor action");
+        assert_eq!(action.kind, crate::app::PendingEditorKind::KaProfile);
+        assert_eq!(action.id, "bug_goblin");
+        assert!(action.path.ends_with("ka/bug_goblin.json"));
+        assert!(action.path.exists());
         Ok(())
     }
 

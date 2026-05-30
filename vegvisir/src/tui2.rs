@@ -3336,7 +3336,7 @@ four",
     }
 
     #[test]
-    fn ratatui_rust_code_blocks_use_tree_sitter_highlighting() {
+    fn ratatui_rust_code_blocks_apply_token_level_highlighting() {
         let markdown = "```rust\nfn main() { let value = 42; println!(\"{value}\"); }\n```";
         let lines = render_markdown(markdown, 100, Style::default().fg(FG));
         let spans = lines

@@ -35,7 +35,7 @@ pub fn route(bundle: &SkillBundle, query: &str, limit: usize) -> Vec<RouteHit> {
         })
         .filter(|h| h.score > 0.0)
         .collect();
-    hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+    hits.sort_by(|a, b| b.score.total_cmp(&a.score));
     hits.truncate(limit);
     hits
 }

@@ -1,9 +1,12 @@
 use crate::{
-    app::{apply_persona_to_system_prompt, strip_persona_from_system_prompt},
+    app::{
+        PendingEditorAction, PendingEditorKind, apply_persona_to_system_prompt,
+        strip_persona_from_system_prompt,
+    },
     persona::{
-        DEFAULT_PERSONA_ID, draft_persona, edit_persona_file, get_builtin_persona,
-        get_persona_with_root, import_persona_file, list_personas_with_root, persona_path,
-        render_persona_prompt_section, save_custom_persona,
+        DEFAULT_PERSONA_ID, draft_persona, get_builtin_persona, get_persona_with_root,
+        import_persona_file, list_personas_with_root, persona_path, render_persona_prompt_section,
+        save_custom_persona,
     },
 };
 
@@ -156,9 +159,16 @@ impl TuiApplication {
             let profile = draft_persona(id, &title_from_id(id));
             save_custom_persona(&self.data_root, &profile)?;
         }
-        edit_persona_file(&path)?;
-        let _ = get_persona_with_root(&self.data_root, id)?;
-        Ok(format!("Edited ka `{}` at {}", id, path.display()))
+        self.pending_editor_action = Some(PendingEditorAction {
+            kind: PendingEditorKind::KaProfile,
+            id: id.to_string(),
+            path: path.clone(),
+        });
+        Ok(format!(
+            "Opening editor for ka `{}` at {}. Vegvisir will temporarily restore the terminal and then resume the TUI when the editor exits.",
+            id,
+            path.display()
+        ))
     }
 }
 

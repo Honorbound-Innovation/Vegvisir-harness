@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     sync::Arc,
     thread,
     time::{Duration, Instant},
@@ -363,6 +363,30 @@ fn compact_text_middle(value: &str, max_bytes: usize, label: &str) -> String {
     )
 }
 
+fn spawn_command_in_own_process_group(command: &mut Command) -> std::io::Result<Child> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    command.spawn()
+}
+
+fn terminate_child_process_group(child: &mut Child) {
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(-(child.id() as i32), libc::SIGKILL);
+    }
+    let _ = child.kill();
+}
+
 pub fn build_builtin_registry(workspace: impl AsRef<Path>) -> anyhow::Result<ToolRegistry> {
     build_builtin_registry_with_cms(
         workspace.as_ref(),
@@ -544,13 +568,13 @@ pub fn build_builtin_registry_with_cms_and_mode(
                 .and_then(Value::as_u64)
                 .unwrap_or(20000)
                 .clamp(1024, 1_000_000) as usize;
-            let mut child = match Command::new(parts[0])
+            let mut command = Command::new(parts[0]);
+            command
                 .args(&parts[1..])
                 .current_dir(&run_root)
                 .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-            {
+                .stderr(Stdio::piped());
+            let mut child = match spawn_command_in_own_process_group(&mut command) {
                 Ok(child) => child,
                 Err(error) => return Observation::err(error.to_string(), "CommandError"),
             };
@@ -562,7 +586,7 @@ pub fn build_builtin_registry_with_cms_and_mode(
                     Ok(None) => {
                         if started.elapsed() >= Duration::from_secs(timeout) {
                             timed_out = true;
-                            let _ = child.kill();
+                            terminate_child_process_group(&mut child);
                             break;
                         }
                         thread::sleep(Duration::from_millis(20));
@@ -644,13 +668,13 @@ pub fn build_builtin_registry_with_cms_and_mode(
                 .and_then(Value::as_u64)
                 .unwrap_or(40000)
                 .clamp(1024, 1_000_000) as usize;
-            let mut child = match Command::new(parts[0])
+            let mut command = Command::new(parts[0]);
+            command
                 .args(&parts[1..])
                 .current_dir(&test_root)
                 .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-            {
+                .stderr(Stdio::piped());
+            let mut child = match spawn_command_in_own_process_group(&mut command) {
                 Ok(child) => child,
                 Err(error) => return Observation::err(error.to_string(), "CommandError"),
             };
@@ -662,7 +686,7 @@ pub fn build_builtin_registry_with_cms_and_mode(
                     Ok(None) => {
                         if started.elapsed() >= Duration::from_secs(timeout) {
                             timed_out = true;
-                            let _ = child.kill();
+                            terminate_child_process_group(&mut child);
                             break;
                         }
                         thread::sleep(Duration::from_millis(20));

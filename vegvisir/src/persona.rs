@@ -334,10 +334,17 @@ pub fn draft_persona(id: &str, display_name: &str) -> PersonaProfile {
 }
 
 pub fn edit_persona_file(path: &Path) -> anyhow::Result<()> {
+    run_editor_for_path(path)
+}
+
+pub fn run_editor_for_path(path: &Path) -> anyhow::Result<()> {
     let editor = std::env::var("VISUAL")
         .or_else(|_| std::env::var("EDITOR"))
         .unwrap_or_else(|_| "nano".to_string());
-    let status = Command::new(&editor)
+    let mut parts = split_editor_command(&editor)?;
+    let program = parts.remove(0);
+    let status = Command::new(&program)
+        .args(parts)
         .arg(path)
         .status()
         .with_context(|| format!("launching editor `{editor}`"))?;
@@ -345,6 +352,46 @@ pub fn edit_persona_file(path: &Path) -> anyhow::Result<()> {
         bail!("editor `{editor}` exited with status {status}");
     }
     Ok(())
+}
+
+pub fn split_editor_command(editor: &str) -> anyhow::Result<Vec<String>> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut chars = editor.chars().peekable();
+    let mut quote: Option<char> = None;
+    while let Some(ch) = chars.next() {
+        match (quote, ch) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), '\\') => {
+                if let Some(next) = chars.next() {
+                    current.push(next);
+                }
+            }
+            (Some(_), c) => current.push(c),
+            (None, '\'' | '"') => quote = Some(ch),
+            (None, '\\') => {
+                if let Some(next) = chars.next() {
+                    current.push(next);
+                }
+            }
+            (None, c) if c.is_whitespace() => {
+                if !current.is_empty() {
+                    parts.push(std::mem::take(&mut current));
+                }
+            }
+            (None, c) => current.push(c),
+        }
+    }
+    if let Some(q) = quote {
+        bail!("unterminated quote {q:?} in editor command `{editor}`");
+    }
+    if !current.is_empty() {
+        parts.push(current);
+    }
+    if parts.is_empty() {
+        bail!("editor command is empty");
+    }
+    Ok(parts)
 }
 
 pub fn render_persona_prompt_section(profile: &PersonaProfile) -> String {
@@ -440,6 +487,19 @@ mod tests {
             get_persona("chaotic-competent").unwrap().id,
             "chaotic_competent"
         );
+    }
+
+    #[test]
+    fn splits_editor_command_with_arguments() -> anyhow::Result<()> {
+        assert_eq!(
+            split_editor_command("code --wait")?,
+            vec!["code".to_string(), "--wait".to_string()]
+        );
+        assert_eq!(
+            split_editor_command("vim -f 'some file'")?,
+            vec!["vim".to_string(), "-f".to_string(), "some file".to_string()]
+        );
+        Ok(())
     }
 
     #[test]

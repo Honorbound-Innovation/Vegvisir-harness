@@ -1,6 +1,7 @@
 use crate::app::TuiApplication;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 impl TuiApplication {
     pub(crate) fn speech_command(&mut self, args: &[String]) -> anyhow::Result<String> {
@@ -128,6 +129,8 @@ fn speech_backends() -> Vec<SpeechBackend> {
     ]
 }
 
+const SPEECH_TIMEOUT: Duration = Duration::from_secs(180);
+
 fn transcribe_audio_file(path: &Path) -> anyhow::Result<String> {
     for backend in speech_backends() {
         if !executable_in_path(backend.command) {
@@ -147,29 +150,44 @@ fn transcribe_audio_file(path: &Path) -> anyhow::Result<String> {
 }
 
 fn run_openai_whisper(command: &str, path: &Path) -> anyhow::Result<String> {
-    let output = Command::new(command)
-        .arg(path)
-        .args(["--output_format", "txt", "--fp16", "False"])
-        .output()?;
+    let out_dir = std::env::temp_dir().join(format!(
+        "vegvisir-whisper-{}-{}",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    std::fs::create_dir_all(&out_dir)?;
+    let output = run_command_with_timeout(
+        Command::new(command)
+            .arg(path)
+            .args(["--output_format", "txt", "--output_dir"])
+            .arg(&out_dir)
+            .args(["--fp16", "False"]),
+        SPEECH_TIMEOUT,
+    )?;
     if !output.status.success() {
+        let _ = std::fs::remove_dir_all(&out_dir);
         anyhow::bail!(
             "{command} failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if !stdout.is_empty() {
-        return Ok(strip_whisper_noise(&stdout));
-    }
-    Ok(String::new())
+    let transcript = find_first_txt_file(&out_dir)
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .map(|text| strip_whisper_noise(&text))
+        .filter(|text| !text.trim().is_empty())
+        .unwrap_or_else(|| strip_whisper_noise(&String::from_utf8_lossy(&output.stdout)));
+    let _ = std::fs::remove_dir_all(&out_dir);
+    Ok(transcript)
 }
 
 fn run_whisper_cli(command: &str, path: &Path) -> anyhow::Result<String> {
-    let output = Command::new(command)
-        .arg("-f")
-        .arg(path)
-        .arg("--no-timestamps")
-        .output()?;
+    let output = run_command_with_timeout(
+        Command::new(command)
+            .arg("-f")
+            .arg(path)
+            .arg("--no-timestamps"),
+        SPEECH_TIMEOUT,
+    )?;
     if !output.status.success() {
         anyhow::bail!(
             "{command} failed: {}",
@@ -178,6 +196,59 @@ fn run_whisper_cli(command: &str, path: &Path) -> anyhow::Result<String> {
     }
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     Ok(strip_whisper_noise(&stdout))
+}
+
+fn find_first_txt_file(dir: &Path) -> Option<PathBuf> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("txt"))
+}
+
+fn run_command_with_timeout(
+    command: &mut Command,
+    timeout: Duration,
+) -> anyhow::Result<std::process::Output> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    let mut child = command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    let started = std::time::Instant::now();
+    loop {
+        if child.try_wait()?.is_some() {
+            return Ok(child.wait_with_output()?);
+        }
+        if started.elapsed() >= timeout {
+            kill_process_tree(&mut child);
+            anyhow::bail!(
+                "speech transcription timed out after {} seconds",
+                timeout.as_secs()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn kill_process_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(-(child.id() as i32), libc::SIGKILL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn strip_whisper_noise(text: &str) -> String {
@@ -195,4 +266,19 @@ fn executable_in_path(command: &str) -> bool {
         return false;
     };
     std::env::split_paths(&paths).any(|dir| dir.join(command).is_file())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_whisper_noise_removes_language_lines() {
+        assert_eq!(
+            strip_whisper_noise(
+                "Detecting language using up to the first 30 seconds.\nDetected language: English\nhello world"
+            ),
+            "hello world"
+        );
+    }
 }

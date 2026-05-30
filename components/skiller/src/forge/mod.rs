@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::Path;
+use std::process::Child;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -698,6 +699,34 @@ impl ForgeProvider for VegvisirForgeProvider {
     }
 }
 
+fn spawn_adapter_command(command: &str) -> std::io::Result<Child> {
+    let mut cmd = std::process::Command::new(command);
+    cmd.stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    cmd.spawn()
+}
+
+fn terminate_adapter_process_group(child: &mut Child) {
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(-(child.id() as i32), libc::SIGKILL);
+    }
+    let _ = child.kill();
+}
+
 fn vegvisir_adapter_timeout_secs() -> u64 {
     std::env::var(VEGVISIR_FORGE_ADAPTER_TIMEOUT_ENV)
         .ok()
@@ -732,7 +761,7 @@ fn wait_for_adapter_output(
         }
 
         if started.elapsed() >= timeout {
-            let _ = child.kill();
+            terminate_adapter_process_group(&mut child);
             let output = child.wait_with_output().ok();
             let stderr = output
                 .as_ref()
@@ -965,11 +994,7 @@ fn run_vegvisir_adapter_command(request: &ForgeRequestEnvelope) -> Result<ForgeR
 
     let timeout_secs = vegvisir_adapter_timeout_secs();
     let request_yaml = serde_yaml::to_string(request)?;
-    let mut child = std::process::Command::new(&command)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
+    let mut child = spawn_adapter_command(&command)
         .map_err(|err| anyhow!("failed to start Vegvisir Forge adapter '{command}': {err}"))?;
 
     {

@@ -337,13 +337,18 @@ fn record_plan_evidence(state: &mut RunState, evidence: &str) {
     for item in items {
         if item.get("status").and_then(Value::as_str) == Some("in_progress") {
             let short: String = evidence.chars().take(1000).collect();
-            item.as_object_mut()
-                .unwrap()
+            let Some(obj) = item.as_object_mut() else {
+                continue;
+            };
+            let evidence = obj
                 .entry("evidence")
-                .or_insert_with(|| Value::Array(Vec::new()))
-                .as_array_mut()
-                .unwrap()
-                .push(Value::String(short));
+                .or_insert_with(|| Value::Array(Vec::new()));
+            if !evidence.is_array() {
+                *evidence = Value::Array(Vec::new());
+            }
+            if let Some(entries) = evidence.as_array_mut() {
+                entries.push(Value::String(short));
+            }
             return;
         }
     }
@@ -362,9 +367,9 @@ fn complete_plan(state: &mut RunState) {
     };
     for item in items {
         if item.get("status").and_then(Value::as_str) == Some("in_progress") {
-            item.as_object_mut()
-                .unwrap()
-                .insert("status".to_string(), Value::String("passed".to_string()));
+            if let Some(obj) = item.as_object_mut() {
+                obj.insert("status".to_string(), Value::String("passed".to_string()));
+            }
         }
     }
 }
