@@ -332,9 +332,12 @@ impl TuiApplication {
         let hbse_services =
             HbseServiceRefStore::new(data_root.join("hbse-services.json")).load()?;
         let logger = EventLogger::new(Some(data_root.join("traces").join("tui.jsonl")));
-        let approvals =
+        let mut approvals =
             crate::guardrails::ApprovalLedger::new_persisted(data_root.join("approvals.json"))
                 .unwrap_or_default();
+        if dangerously_bypass_approvals_and_sandbox {
+            approvals.clear_pending();
+        }
         let tool_executor = ToolExecutor {
             registry: tool_registry.clone(),
             guardrails: GuardrailEngine {
@@ -597,10 +600,14 @@ impl TuiApplication {
         self.tool_registry = tool_registry.clone();
         self.tool_executor.registry = tool_registry;
         self.tool_executor.guardrails.policy.allow_risky_tools = allow_risky_tools;
+        self.tool_executor.guardrails.policy.require_human_approval = !bypass;
         self.tool_executor
             .guardrails
             .policy
             .bypass_approvals_and_sandbox = bypass;
+        if bypass {
+            self.tool_executor.guardrails.approvals.clear_pending();
+        }
         Ok(())
     }
 
@@ -1011,8 +1018,8 @@ mod tests {
             role: "assistant".to_string(),
             content: "**Thinking trace**\n\nworking\n\n**Answer**\n\nDone.\n\nSummary:\n- final line visible".to_string(),
             attachments: Vec::new(),
-            created_at: chrono::Utc::now(),
-        });
+                    created_at: chrono::Utc::now(),
+});
 
         app.merge_live_reasoning_trace(&mut completed);
 
@@ -1039,6 +1046,45 @@ mod tests {
         app.redraw_requested = false;
         app.pulse_activity();
         assert!(app.redraw_requested);
+        Ok(())
+    }
+
+    #[test]
+    fn dangerous_bypass_startup_clears_persisted_pending_approvals() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let cwd = temp.path().join("workspace");
+        std::fs::create_dir_all(&cwd)?;
+        let data_root = temp.path().join("data");
+        std::fs::create_dir_all(&data_root)?;
+
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "path".to_string(),
+            serde_json::Value::String("x".to_string()),
+        );
+        let request = crate::guardrails::ApprovalRequest {
+            id: "stale-approval".to_string(),
+            tool_name: "write_file".to_string(),
+            args,
+            reason: "stale approval from a prior non-yolo session".to_string(),
+            risk_label: "risky".to_string(),
+        };
+        let mut ledger =
+            crate::guardrails::ApprovalLedger::new_persisted(data_root.join("approvals.json"))?;
+        ledger.enqueue(request);
+        assert_eq!(ledger.pending_len(), 1);
+
+        let app = TuiApplication::with_data_root_and_dangerous_bypass(&cwd, &data_root, true)?;
+
+        assert!(app.dangerously_bypass_approvals_and_sandbox);
+        assert!(
+            app.tool_executor
+                .guardrails
+                .policy
+                .bypass_approvals_and_sandbox
+        );
+        assert!(!app.tool_executor.guardrails.policy.require_human_approval);
+        assert_eq!(app.tool_executor.guardrails.approvals.pending_len(), 0);
         Ok(())
     }
 
@@ -1091,16 +1137,16 @@ mod tests {
         assert!(transcript.contains("Tool failed: run_command"));
         assert!(transcript.contains("stderr: simulated failure"));
         assert!(
-            transcript.contains("I hit an error before I could produce the normal final summary")
+            transcript.contains("Turn failed before the model produced a normal final summary")
         );
         assert!(transcript.contains("Recent tool/progress events:"));
         assert!(transcript.contains("Failure:"));
         assert!(transcript.contains("simulated provider abort"));
         assert!(app.session.messages.iter().any(|message| {
-            message.role == "assistant"
+            message.role == "system"
                 && message
                     .content
-                    .contains("I hit an error before I could produce")
+                    .contains("Turn failed before the model produced a normal final summary")
         }));
         Ok(())
     }

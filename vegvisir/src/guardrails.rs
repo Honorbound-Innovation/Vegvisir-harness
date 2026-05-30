@@ -73,6 +73,13 @@ impl ApprovalLedger {
             .unwrap_or_default()
     }
 
+    pub fn clear_pending(&mut self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.pending.clear();
+        }
+        self.save();
+    }
+
     pub fn pending_len(&self) -> usize {
         self.state
             .lock()
@@ -395,6 +402,23 @@ mod tests {
             args,
             risk_label: "filesystem-write".to_string(),
         }
+    }
+
+    #[test]
+    fn approval_ledger_clear_pending_removes_stale_requests() {
+        let mut ledger = ApprovalLedger::default();
+        let request = sample_request();
+        let id = request.id.clone();
+        ledger.enqueue(request);
+        assert_eq!(ledger.pending_len(), 1);
+
+        ledger.clear_pending();
+
+        assert_eq!(ledger.pending_len(), 0);
+        assert!(matches!(
+            ledger.resolution(&id, "write_file", &serde_json::Map::new()),
+            ApprovalResolution::Missing
+        ));
     }
 
     #[test]

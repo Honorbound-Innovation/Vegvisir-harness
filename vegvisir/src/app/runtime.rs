@@ -424,7 +424,7 @@ Steering: {display_content}{attachment_note}"
             .collect::<Vec<_>>();
 
         let mut content = String::from(
-            "I hit an error before I could produce the normal final summary. Here is what I can preserve from the turn.
+            "Turn failed before the model produced a normal final summary. Preserved recovery context follows.
 
 ",
         );
@@ -456,12 +456,7 @@ Failure:
 Next step: I should retry or continue from the last successful step instead of leaving the turn silently truncated.",
         );
 
-        self.session.messages.push(ChatMessage {
-            role: "assistant".to_string(),
-            content,
-            attachments: Vec::new(),
-            created_at: chrono::Utc::now(),
-        });
+        self.push_live_tool_message(content);
     }
 
     pub(crate) fn push_live_tool_message(&mut self, content: String) {

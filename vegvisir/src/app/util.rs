@@ -399,4 +399,5 @@ pub(crate) fn is_live_tool_message(content: &str) -> bool {
     content.starts_with("Running tool: ")
         || content.starts_with("Tool finished: ")
         || content.starts_with("Tool failed: ")
+        || content.starts_with("Turn failed before the model produced a normal final summary.")
 }

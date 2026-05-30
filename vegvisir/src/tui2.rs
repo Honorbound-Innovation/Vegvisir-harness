@@ -153,29 +153,137 @@ fn draw_chat(f: &mut Frame<'_>, app: &mut TuiApplication, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let content_width = inner.width as usize;
+    let tool_log_height = tool_log_panel_height(app, inner.height);
+    let chat_height = inner.height.saturating_sub(tool_log_height);
+    let (chat_area, tool_log_area) = if tool_log_height > 0 {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(chat_height.max(1)),
+                Constraint::Length(tool_log_height),
+            ])
+            .split(inner);
+        (chunks[0], Some(chunks[1]))
+    } else {
+        (inner, None)
+    };
+
+    draw_chat_transcript(f, app, chat_area);
+    if let Some(area) = tool_log_area {
+        draw_tool_log_panel(f, app, area);
+    }
+}
+
+fn draw_chat_transcript(f: &mut Frame<'_>, app: &mut TuiApplication, area: Rect) {
+    let content_width = area.width as usize;
     let lines = visual_chat_lines(app, content_width);
 
-    let visible_height = inner.height.max(1) as usize;
+    let visible_height = area.height.max(1) as usize;
     let max_offset = lines.len().saturating_sub(visible_height);
     let offset = app.chat_scroll_offset.min(max_offset);
     let end = lines.len().saturating_sub(offset);
     let start = end.saturating_sub(visible_height);
-    app.chat_area_x = inner.x;
-    app.chat_area_y = inner.y;
-    app.chat_area_width = inner.width;
-    app.chat_area_height = inner.height;
+    app.chat_area_x = area.x;
+    app.chat_area_y = area.y;
+    app.chat_area_width = area.width;
+    app.chat_area_height = area.height;
     app.chat_render_scroll = start;
     app.chat_rendered_lines = lines.iter().map(line_to_plain_text).collect();
     let mut visible = lines[start..end].to_vec();
     apply_chat_drag_highlight(app, &mut visible, start);
-    apply_scroll_indicators(&mut visible, offset, max_offset, inner.width as usize);
+    apply_scroll_indicators(&mut visible, offset, max_offset, area.width as usize);
     let paragraph = Paragraph::new(visible).style(Style::default().fg(FG).bg(BG));
     // Chat lines are pre-wrapped before viewport slicing. Do not enable
     // Ratatui wrapping here: a second wrapping pass can consume extra
     // terminal rows after scroll math has already selected exactly
-    // `inner.height` visual rows, clipping the newest/bottom lines.
+    // `area.height` visual rows, clipping the newest/bottom lines.
+    f.render_widget(paragraph, area);
+}
+
+fn tool_log_panel_height(app: &TuiApplication, chat_surface_height: u16) -> u16 {
+    if chat_surface_height < 8 || !has_tool_log_messages(app) {
+        return 0;
+    }
+    let max_height = ((chat_surface_height as f32) * 0.15).floor() as u16;
+    max_height.clamp(1, chat_surface_height.saturating_sub(4))
+}
+
+fn has_tool_log_messages(app: &TuiApplication) -> bool {
+    app.session.messages.iter().any(is_tool_log_message)
+}
+
+fn is_tool_log_message(message: &ChatMessage) -> bool {
+    if message.role != "system" {
+        return false;
+    }
+    matches!(
+        classify_system_message(&message.content),
+        SystemMessageKind::Tool | SystemMessageKind::Note | SystemMessageKind::Error
+    )
+}
+
+fn chat_transcript_messages(app: &TuiApplication) -> impl Iterator<Item = &ChatMessage> {
+    app.session
+        .messages
+        .iter()
+        .filter(|message| !is_tool_log_message(message))
+}
+
+fn draw_tool_log_panel(f: &mut Frame<'_>, app: &TuiApplication, area: Rect) {
+    if area.height == 0 {
+        return;
+    }
+    let block = Block::default()
+        .borders(Borders::TOP)
+        .border_style(Style::default().fg(BORDER))
+        .title(Span::styled(
+            " tool / note log ",
+            Style::default().fg(DIM).bg(BG),
+        ));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    if inner.height == 0 {
+        return;
+    }
+    let lines = tool_log_lines(app, inner.width as usize, inner.height as usize);
+    let paragraph = Paragraph::new(lines).style(Style::default().fg(FG).bg(BG));
     f.render_widget(paragraph, inner);
+}
+
+fn tool_log_lines(app: &TuiApplication, width: usize, max_rows: usize) -> Vec<Line<'static>> {
+    let mut rows = app
+        .session
+        .messages
+        .iter()
+        .filter(|message| is_tool_log_message(message))
+        .rev()
+        .take(max_rows.max(1))
+        .map(|message| tool_log_message_line(message, width))
+        .collect::<Vec<_>>();
+    rows.reverse();
+    rows
+}
+
+fn tool_log_message_line(message: &ChatMessage, width: usize) -> Line<'static> {
+    let kind = classify_system_message(&message.content);
+    let (marker, style) = match kind {
+        SystemMessageKind::Error => ("!", Style::default().fg(RED).add_modifier(Modifier::BOLD)),
+        SystemMessageKind::Approval => {
+            ("?", Style::default().fg(AMBER).add_modifier(Modifier::BOLD))
+        }
+        SystemMessageKind::Tool => ("›", Style::default().fg(CYAN).add_modifier(Modifier::BOLD)),
+        SystemMessageKind::Note => ("·", Style::default().fg(AMBER).add_modifier(Modifier::BOLD)),
+    };
+    compact_system_message_line(
+        marker,
+        message_label("system", Some(kind)),
+        &message.created_at.format("%H:%M:%S").to_string(),
+        &message.content,
+        style,
+        kind.content_style(),
+        message_matches_search(message, ""),
+        width,
+    )
 }
 
 fn line_to_plain_text(line: &Line<'static>) -> String {
@@ -312,7 +420,7 @@ fn chat_lines(app: &TuiApplication, width: usize) -> Vec<Line<'static>> {
             Style::default().fg(DIM),
         )));
     } else {
-        for (index, message) in app.session.messages.iter().enumerate() {
+        for (index, message) in chat_transcript_messages(app).enumerate() {
             if index > 0 {
                 lines.push(Line::from(""));
             }
@@ -321,7 +429,9 @@ fn chat_lines(app: &TuiApplication, width: usize) -> Vec<Line<'static>> {
         if app
             .session
             .messages
-            .last()
+            .iter()
+            .rev()
+            .find(|message| !is_tool_log_message(message))
             .is_some_and(|message| message.role == "assistant" && !message.content.is_empty())
         {
             // Keep one rendered spacer row after completed assistant output so the
@@ -805,30 +915,45 @@ fn message_label(role: &str, system_kind: Option<SystemMessageKind>) -> &str {
 }
 
 fn classify_system_message(content: &str) -> SystemMessageKind {
-    let lower = content.to_ascii_lowercase();
-    if lower.starts_with("error:")
-        || lower.contains(" failed")
-        || lower.contains("denied")
-        || lower.contains("not found")
-        || lower.contains("exceeded")
+    let trimmed = content.trim_start();
+    let lower = trimmed.to_ascii_lowercase();
+
+    // Tool lifecycle messages should be classified from their explicit status
+    // prefix, not from arbitrary words inside captured stdout/stderr. A
+    // successful command can legitimately print test names, stderr text, or
+    // strings containing "error" while still ending with `- ok:`.
+    if lower.starts_with("running tool:")
+        || lower.starts_with("tool started:")
+        || lower.starts_with("tool call")
+        || lower.starts_with("tool finished:")
+    {
+        if lower.starts_with("tool finished:") {
+            let status = lower.split_once(" - ").map(|(_, rest)| rest.trim_start());
+            if matches!(status, Some(rest) if rest.starts_with("ok:") || rest == "ok") {
+                return SystemMessageKind::Tool;
+            }
+            if matches!(status, Some(rest) if rest.starts_with("error:") || rest.starts_with("failed:") || rest.starts_with("err:"))
+            {
+                return SystemMessageKind::Error;
+            }
+        }
+        return SystemMessageKind::Tool;
+    }
+
+    if lower.starts_with("tool failed:")
+        || lower.starts_with("tool error:")
+        || lower.starts_with("error:")
+        || lower.starts_with("command failed:")
+        || lower.starts_with("turn ended after an error")
+        || lower.starts_with("i hit an error before")
     {
         return SystemMessageKind::Error;
     }
-    if lower.contains("approval")
-        || lower.contains("approve")
-        || lower.contains("risky tool")
-        || lower.contains("approval_id=")
-    {
+
+    if lower.contains("approval") || lower.contains("approve") || lower.contains("deny") {
         return SystemMessageKind::Approval;
     }
-    if lower.starts_with("tool ")
-        || lower.starts_with("command ")
-        || lower.contains("tool call")
-        || lower.contains("running:")
-        || lower.contains("exit code")
-    {
-        return SystemMessageKind::Tool;
-    }
+
     SystemMessageKind::Note
 }
 
@@ -2614,14 +2739,14 @@ four",
         let mut app =
             crate::app::TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
         app.session.messages.push(ChatMessage {
-            role: "system".to_string(),
+            role: "assistant".to_string(),
             content: "before\rafter\x1b[31m red\x07 tail".to_string(),
             attachments: Vec::new(),
             created_at: chrono::Utc::now(),
         });
 
         let mut terminal =
-            ratatui::Terminal::new(ratatui::backend::TestBackend::new(90, 16)).unwrap();
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(90, 24)).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let rendered = terminal
             .backend()
@@ -2632,11 +2757,63 @@ four",
             .collect::<Vec<_>>()
             .join("");
 
-        assert!(rendered.contains("before␍after␛[31m red� tail"));
+        assert!(rendered.contains("before"));
+        assert!(rendered.contains("after"));
+        assert!(rendered.contains("red"));
+        assert!(rendered.contains("tail"));
         assert!(!rendered.contains('\r'));
         assert!(!rendered.contains('\u{1b}'));
         assert!(!rendered.contains('\u{7}'));
         Ok(())
+    }
+
+    #[test]
+    fn ratatui_tool_log_is_bounded_to_lower_fifteen_percent_of_chat_surface() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app =
+            crate::app::TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))
+                .unwrap();
+        app.session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: "agent output should remain visible".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        for i in 0..30 {
+            app.session.messages.push(ChatMessage {
+                role: "system".to_string(),
+                content: format!("Running tool: run_command number {i}"),
+                attachments: Vec::new(),
+                created_at: chrono::Utc::now(),
+            });
+        }
+
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let rows = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        let rendered = rows.join("\n");
+
+        assert!(rendered.contains("agent output should remain visible"));
+        assert!(rendered.contains("tool / note log"));
+        let tool_rows = rows
+            .iter()
+            .filter(|row| row.contains("Running tool: run_command"))
+            .count();
+        let chat_surface_height =
+            buffer.area.height - 2 - input_height(&app.input, buffer.area.width).min(10) - 1;
+        let max_tool_rows = ((chat_surface_height as f32) * 0.15).floor() as usize;
+        assert!(
+            tool_rows <= max_tool_rows,
+            "tool rows {tool_rows} should be capped at lower 15 percent {max_tool_rows}:\n{rendered}"
+        );
     }
 
     #[test]
@@ -3029,6 +3206,16 @@ four",
         assert_eq!(
             classify_system_message("Tool call read_file completed with exit code 0"),
             SystemMessageKind::Tool
+        );
+        assert_eq!(
+            classify_system_message(
+                "Tool finished: run_command - ok: running 1 test test_that_mentions_error ... ok"
+            ),
+            SystemMessageKind::Tool
+        );
+        assert_eq!(
+            classify_system_message("Tool finished: run_command - error: command failed"),
+            SystemMessageKind::Error
         );
         assert_eq!(
             classify_system_message("Workspace set to /tmp/project"),

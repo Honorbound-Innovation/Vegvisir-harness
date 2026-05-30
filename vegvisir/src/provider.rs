@@ -3752,6 +3752,9 @@ fn wait_for_tool_approval(
     approval_id: &str,
     cancel_token: Option<&Arc<AtomicBool>>,
 ) -> anyhow::Result<()> {
+    if executor.guardrails.policy.bypass_approvals_and_sandbox {
+        return Ok(());
+    }
     loop {
         if cancel_token
             .map(|token| token.load(Ordering::SeqCst))
