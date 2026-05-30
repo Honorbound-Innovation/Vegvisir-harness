@@ -257,15 +257,20 @@ impl TuiApplication {
             }
             let handle = self.pending_speech_jobs.remove(speech_index);
             match handle.join() {
-                Ok(Ok(text)) => {
-                    let text = text.trim().to_string();
+                Ok(Ok(result)) => {
+                    let text = result.transcript.trim().to_string();
                     if text.is_empty() {
-                        self.push_system_message(
-                            "Speech push-to-talk completed but returned no text.",
-                        );
+                        self.push_system_message(format!(
+                            "Speech push-to-talk completed but returned no text. {}; audio kept at {} for inspection.",
+                            result.summary(),
+                            result.audio_path.display()
+                        ));
                     } else {
                         self.insert_speech_text(&text);
-                        self.push_system_message("Speech push-to-talk transcript inserted into the input buffer. Review/edit, then press Enter to send.");
+                        self.push_system_message(format!(
+                            "Speech push-to-talk transcript inserted into the input buffer. Review/edit, then press Enter to send. {}",
+                            result.summary()
+                        ));
                     }
                 }
                 Ok(Err(error)) => {

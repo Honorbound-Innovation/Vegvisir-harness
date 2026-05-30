@@ -140,10 +140,8 @@ impl TuiApplication {
         }
         let seconds = self.speech_ptt_seconds;
         self.session.activity = format!("recording speech for {seconds}s");
-        self.pending_speech_jobs.push(std::thread::spawn(move || {
-            let text = record_and_transcribe(seconds)?;
-            Ok(text)
-        }));
+        self.pending_speech_jobs
+            .push(std::thread::spawn(move || record_and_transcribe(seconds)));
         self.redraw_requested = true;
         Ok(())
     }
@@ -151,7 +149,7 @@ impl TuiApplication {
 
 fn speech_usage() -> String {
     format!(
-        "Usage:\n  /speech status\n  /speech transcribe <audio-file>\n  /speech ptt\n  /speech ptt-key <F1..F24|Ctrl+letter|off>\n  /speech ptt-seconds <1..30>\n  /stt transcribe <audio-file>\n\n{}",
+        "Usage:\n  /speech status\n  /speech transcribe <audio-file>\n  /speech ptt\n  /speech ptt-key <F1..F24|Ctrl+letter|off>\n  /speech ptt-seconds <1..30>\n  /stt transcribe <audio-file>\n\nPush-to-talk key binding is off by default. Use `/speech ptt` manually, or `/speech ptt-key F8` to enable a key later.\n\n{}",
         speech_install_help()
     )
 }
@@ -179,6 +177,14 @@ fn resolve_speech_audio_path(cwd: &Path, value: &str) -> anyhow::Result<PathBuf>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn speech_ptt_key_defaults_off() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        assert_eq!(app.speech_ptt_key, None);
+        Ok(())
+    }
 
     #[test]
     fn speech_ptt_key_command_persists_key() -> anyhow::Result<()> {

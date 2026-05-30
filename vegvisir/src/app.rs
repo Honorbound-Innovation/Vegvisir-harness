@@ -91,7 +91,7 @@ pub struct TuiApplication {
     pub hbse_services: Vec<HbseServiceRef>,
     pub pending_send: Option<JoinHandle<anyhow::Result<SessionState>>>,
     pending_background_jobs: Vec<JoinHandle<anyhow::Result<String>>>,
-    pending_speech_jobs: Vec<JoinHandle<anyhow::Result<String>>>,
+    pending_speech_jobs: Vec<JoinHandle<anyhow::Result<crate::speech::SpeechTranscriptionResult>>>,
     pub speech_ptt_key: Option<PushToTalkKey>,
     pub speech_ptt_seconds: u64,
     pending_stream: Option<Receiver<StreamEvent>>,
@@ -439,8 +439,7 @@ impl TuiApplication {
             speech_ptt_key: defaults
                 .get("speech_ptt_key")
                 .and_then(Value::as_str)
-                .and_then(PushToTalkKey::parse)
-                .or(Some(PushToTalkKey::F(8))),
+                .and_then(PushToTalkKey::parse),
             speech_ptt_seconds: defaults
                 .get("speech_ptt_seconds")
                 .and_then(Value::as_u64)
@@ -831,6 +830,41 @@ mod tests {
                 .unwrap_or_default()
                 .contains("# Communication ka")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn completed_speech_job_inserts_transcript_into_input() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.pending_speech_jobs.push(std::thread::spawn(|| {
+            Ok(crate::speech::SpeechTranscriptionResult {
+                transcript: "hello from speech".to_string(),
+                recorder: "test recorder".to_string(),
+                audio_path: std::path::PathBuf::from("/tmp/test-speech.wav"),
+                audio_bytes: 4096,
+                kept_audio: false,
+            })
+        }));
+        for _ in 0..20 {
+            if app
+                .pending_speech_jobs
+                .first()
+                .is_some_and(|job| job.is_finished())
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        assert!(app.poll_background_jobs());
+        assert_eq!(app.input.buffer, "hello from speech");
+        assert!(app.session.messages.iter().any(|message| {
+            message.role == "system"
+                && message
+                    .content
+                    .contains("transcript inserted into the input buffer")
+        }));
         Ok(())
     }
 

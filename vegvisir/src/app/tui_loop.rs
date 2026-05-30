@@ -65,7 +65,10 @@ impl TuiApplication {
                 self.clear_requested = false;
                 self.redraw_requested = true;
             }
-            if self.redraw_requested || !self.pending_background_jobs.is_empty() {
+            if self.redraw_requested
+                || !self.pending_background_jobs.is_empty()
+                || !self.pending_speech_jobs.is_empty()
+            {
                 self.redraw_requested = false;
                 terminal.draw(|frame| crate::tui2::draw(frame, self))?;
             }

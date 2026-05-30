@@ -9,6 +9,31 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 pub const DEFAULT_PTT_SECONDS: u64 = 8;
 const SPEECH_TIMEOUT: Duration = Duration::from_secs(180);
 
+#[derive(Clone, Debug)]
+pub struct SpeechTranscriptionResult {
+    pub transcript: String,
+    pub recorder: String,
+    pub audio_path: PathBuf,
+    pub audio_bytes: u64,
+    pub kept_audio: bool,
+}
+
+impl SpeechTranscriptionResult {
+    pub fn summary(&self) -> String {
+        let preview = self.transcript.trim().chars().take(120).collect::<String>();
+        format!(
+            "Speech push-to-talk used {recorder}; captured {bytes} bytes; transcript preview: {preview}",
+            recorder = self.recorder,
+            bytes = self.audio_bytes,
+            preview = if preview.is_empty() {
+                "<empty>".to_string()
+            } else {
+                preview
+            }
+        )
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PushToTalkKey {
     F(u8),
@@ -149,45 +174,84 @@ pub fn speech_backend_status() -> String {
 }
 
 pub fn transcribe_audio_file(path: &Path) -> anyhow::Result<String> {
+    let mut attempted = Vec::new();
+    let mut errors = Vec::new();
     for backend in speech_backends() {
         if !executable_in_path(backend.command) {
             continue;
         }
+        attempted.push(backend.command);
         let result = match backend.kind {
             SpeechBackendKind::OpenAiWhisper => run_openai_whisper(backend.command, path),
             SpeechBackendKind::WhisperCli => run_whisper_cli(backend.command, path),
         };
         match result {
             Ok(text) if !text.trim().is_empty() => return Ok(text),
-            Ok(_) => continue,
-            Err(_) => continue,
+            Ok(_) => errors.push(format!("{} returned an empty transcript", backend.command)),
+            Err(error) => errors.push(format!("{} failed: {error}", backend.command)),
         }
     }
-    anyhow::bail!("no usable local Whisper speech-to-text backend found")
+    if attempted.is_empty() {
+        anyhow::bail!("no local Whisper speech-to-text backend found on PATH")
+    }
+    anyhow::bail!(
+        "no usable local Whisper speech-to-text backend produced text: {}",
+        errors.join("; ")
+    )
 }
 
-pub fn record_and_transcribe(seconds: u64) -> anyhow::Result<String> {
+pub fn record_and_transcribe(seconds: u64) -> anyhow::Result<SpeechTranscriptionResult> {
     let seconds = seconds.clamp(1, 30);
     let audio_path = std::env::temp_dir().join(format!(
         "vegvisir-ptt-{}-{}.wav",
         std::process::id(),
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
     ));
-    let record_result = record_audio_clip(&audio_path, seconds);
-    if let Err(error) = record_result {
-        let _ = std::fs::remove_file(&audio_path);
-        return Err(error);
+    let recorder = match record_audio_clip(&audio_path, seconds) {
+        Ok(recorder) => recorder,
+        Err(error) => {
+            let _ = std::fs::remove_file(&audio_path);
+            return Err(error);
+        }
+    };
+    let audio_bytes = std::fs::metadata(&audio_path)
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+    if audio_bytes < 1024 {
+        anyhow::bail!(
+            "push-to-talk recorder {recorder} produced an unexpectedly small audio file ({audio_bytes} bytes) at {}",
+            audio_path.display()
+        );
     }
-    let transcript = transcribe_audio_file(&audio_path);
-    let _ = std::fs::remove_file(&audio_path);
-    transcript
+    match transcribe_audio_file(&audio_path) {
+        Ok(transcript) => {
+            let transcript = transcript.trim().to_string();
+            let kept_audio = transcript.is_empty();
+            if !kept_audio {
+                let _ = std::fs::remove_file(&audio_path);
+            }
+            Ok(SpeechTranscriptionResult {
+                transcript,
+                recorder,
+                audio_path,
+                audio_bytes,
+                kept_audio,
+            })
+        }
+        Err(error) => Err(anyhow::anyhow!(
+            "speech transcription failed after recording {audio_bytes} bytes with {recorder}; kept audio at {} for inspection: {error}",
+            audio_path.display()
+        )),
+    }
 }
 
-fn record_audio_clip(path: &Path, seconds: u64) -> anyhow::Result<()> {
+fn record_audio_clip(path: &Path, seconds: u64) -> anyhow::Result<String> {
+    let mut attempted = Vec::new();
     for backend in recorder_backends() {
         if !executable_in_path(backend.command) {
             continue;
         }
+        attempted.push(backend.command);
         let timeout = Duration::from_secs(seconds.saturating_add(5));
         let result = match backend.kind {
             RecorderBackendKind::FfmpegPulse => run_command_with_timeout(
@@ -207,12 +271,23 @@ fn record_audio_clip(path: &Path, seconds: u64) -> anyhow::Result<()> {
             ),
         };
         match result {
-            Ok(output) if output.status.success() && path.is_file() => return Ok(()),
+            Ok(output) if output.status.success() && path.is_file() => {
+                let bytes = std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
+                if bytes >= 1024 {
+                    return Ok(format!("{} ({})", backend.command, backend.label));
+                }
+            }
             Ok(_) | Err(_) => continue,
         }
     }
+    if attempted.is_empty() {
+        anyhow::bail!(
+            "no local audio recorder found on PATH; install ffmpeg with PulseAudio support or arecord"
+        )
+    }
     anyhow::bail!(
-        "no usable local audio recorder found; install ffmpeg with PulseAudio support or arecord"
+        "local audio recorders were found ({}) but none produced a usable audio file",
+        attempted.join(", ")
     )
 }
 
