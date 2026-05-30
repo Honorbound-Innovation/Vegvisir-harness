@@ -68,6 +68,17 @@ impl TuiApplication {
             self.redraw_requested = true;
             return;
         }
+        if self
+            .speech_ptt_key
+            .as_ref()
+            .is_some_and(|ptt_key| ptt_key.matches(&key))
+        {
+            if let Err(error) = self.start_push_to_talk_transcription() {
+                self.push_system_message(format!("Speech push-to-talk failed: {error}"));
+            }
+            self.redraw_requested = true;
+            return;
+        }
         if should_refresh_suggestions_before_key(&key) {
             let suggestions = self.build_suggestions();
             self.input.update_suggestions(suggestions);

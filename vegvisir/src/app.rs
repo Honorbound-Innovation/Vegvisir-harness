@@ -41,6 +41,7 @@ use crate::{
         ConversationRunner, ProviderRouter, ProviderRunEvent, configured_max_tool_rounds_label,
         direct_provider_auth_allowed, set_runtime_max_tool_rounds,
     },
+    speech::{DEFAULT_PTT_SECONDS, PushToTalkKey},
     subagents::{SubAgentStatus, SubAgentTaskRecord},
     tools::{ToolExecutor, ToolRegistry, build_builtin_registry_with_cms_and_mode},
     types::ToolCall,
@@ -90,6 +91,9 @@ pub struct TuiApplication {
     pub hbse_services: Vec<HbseServiceRef>,
     pub pending_send: Option<JoinHandle<anyhow::Result<SessionState>>>,
     pending_background_jobs: Vec<JoinHandle<anyhow::Result<String>>>,
+    pending_speech_jobs: Vec<JoinHandle<anyhow::Result<String>>>,
+    pub speech_ptt_key: Option<PushToTalkKey>,
+    pub speech_ptt_seconds: u64,
     pending_stream: Option<Receiver<StreamEvent>>,
     pending_cancel: Option<Arc<AtomicBool>>,
     pending_steering: Option<Sender<String>>,
@@ -431,6 +435,17 @@ impl TuiApplication {
             hbse_services,
             pending_send: None,
             pending_background_jobs: Vec::new(),
+            pending_speech_jobs: Vec::new(),
+            speech_ptt_key: defaults
+                .get("speech_ptt_key")
+                .and_then(Value::as_str)
+                .and_then(PushToTalkKey::parse)
+                .or(Some(PushToTalkKey::F(8))),
+            speech_ptt_seconds: defaults
+                .get("speech_ptt_seconds")
+                .and_then(Value::as_u64)
+                .unwrap_or(DEFAULT_PTT_SECONDS)
+                .clamp(1, 30),
             pending_stream: None,
             pending_cancel: None,
             pending_steering: None,
@@ -704,6 +719,15 @@ impl TuiApplication {
         if let Some(persona) = &self.session.active_persona_id {
             data.insert("active_persona_id".to_string(), json!(persona));
         }
+        if let Some(key) = &self.speech_ptt_key {
+            data.insert("speech_ptt_key".to_string(), json!(key.to_config_string()));
+        } else {
+            data.remove("speech_ptt_key");
+        }
+        data.insert(
+            "speech_ptt_seconds".to_string(),
+            json!(self.speech_ptt_seconds),
+        );
         self.config.save(&data)
     }
 }

@@ -1,7 +1,11 @@
-use crate::app::TuiApplication;
+use crate::{
+    app::TuiApplication,
+    speech::{
+        PushToTalkKey, record_and_transcribe, speech_backend_status, strip_whisper_noise,
+        transcribe_audio_file,
+    },
+};
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::Duration;
 
 impl TuiApplication {
     pub(crate) fn speech_command(&mut self, args: &[String]) -> anyhow::Result<String> {
@@ -9,40 +13,20 @@ impl TuiApplication {
             return Ok(speech_usage());
         };
         match subcommand {
-            "status" => Ok(speech_status()),
+            "status" => Ok(self.speech_status_message()),
             "transcribe" => {
                 let Some(path) = args.get(1) else {
                     return Ok("Usage: /speech transcribe <audio-file>".to_string());
                 };
                 let audio_path = resolve_speech_audio_path(&self.cwd, path)?;
-                match transcribe_audio_file(&audio_path) {
-                    Ok(text) => {
-                        let text = text.trim().to_string();
-                        if text.is_empty() {
-                            return Ok(format!(
-                                "Speech transcription completed but returned no text for {}.",
-                                audio_path.display()
-                            ));
-                        }
-                        if !self.input.buffer.is_empty()
-                            && !self.input.buffer.ends_with(char::is_whitespace)
-                        {
-                            self.input.append_text(" ", false);
-                        }
-                        self.input.append_text(&text, false);
-                        self.input.update_suggestions(Vec::new());
-                        self.redraw_requested = true;
-                        Ok(format!(
-                            "Transcribed {} into the input buffer using local speech-to-text. Review/edit, then press Enter to send.",
-                            audio_path.display()
-                        ))
-                    }
-                    Err(error) => Ok(format!(
-                        "Speech transcription failed for {}: {error}\n\n{}",
-                        audio_path.display(),
-                        speech_install_help()
-                    )),
-                }
+                self.transcribe_audio_into_input(&audio_path)
+            }
+            "ptt-status" | "push-to-talk-status" => Ok(self.speech_status_message()),
+            "ptt-key" | "push-to-talk-key" => self.speech_ptt_key_command(&args[1..]),
+            "ptt-seconds" | "push-to-talk-seconds" => self.speech_ptt_seconds_command(&args[1..]),
+            "ptt" | "push-to-talk" => {
+                self.start_push_to_talk_transcription()?;
+                Ok("Push-to-talk recording started. Speak now; transcript will be inserted into the input buffer when ready.".to_string())
             }
             other => Ok(format!(
                 "Unknown /speech command: {other}\n{}",
@@ -50,36 +34,130 @@ impl TuiApplication {
             )),
         }
     }
+
+    pub(crate) fn speech_status_message(&self) -> String {
+        let ptt = self
+            .speech_ptt_key
+            .as_ref()
+            .map(|key| key.label())
+            .unwrap_or_else(|| "off".to_string());
+        format!(
+            "{}\n\nPush-to-talk:\n- key: {}\n- clip length: {}s\n\n{}",
+            speech_backend_status(),
+            ptt,
+            self.speech_ptt_seconds,
+            speech_install_help()
+        )
+    }
+
+    fn speech_ptt_key_command(&mut self, args: &[String]) -> anyhow::Result<String> {
+        let Some(value) = args.first().map(String::as_str) else {
+            let current = self
+                .speech_ptt_key
+                .as_ref()
+                .map(|key| key.label())
+                .unwrap_or_else(|| "off".to_string());
+            return Ok(format!(
+                "Current push-to-talk key: {current}\nUsage: /speech ptt-key <F1..F24|Ctrl+letter|off>"
+            ));
+        };
+        if value.eq_ignore_ascii_case("off") || value.eq_ignore_ascii_case("none") {
+            self.speech_ptt_key = None;
+            self.save_config_defaults()?;
+            return Ok("Push-to-talk key disabled.".to_string());
+        }
+        let Some(key) = PushToTalkKey::parse(value) else {
+            return Ok("Invalid push-to-talk key. Use F1..F24, Ctrl+letter, or off.".to_string());
+        };
+        let label = key.label();
+        self.speech_ptt_key = Some(key);
+        self.save_config_defaults()?;
+        Ok(format!(
+            "Push-to-talk key set to {label}. Press {label} to record a {}s clip and transcribe it into the input buffer.",
+            self.speech_ptt_seconds
+        ))
+    }
+
+    fn speech_ptt_seconds_command(&mut self, args: &[String]) -> anyhow::Result<String> {
+        let Some(value) = args.first() else {
+            return Ok(format!(
+                "Current push-to-talk clip length: {}s\nUsage: /speech ptt-seconds <1..30>",
+                self.speech_ptt_seconds
+            ));
+        };
+        let Ok(seconds) = value.parse::<u64>() else {
+            return Ok("Invalid clip length. Use a number from 1 to 30.".to_string());
+        };
+        self.speech_ptt_seconds = seconds.clamp(1, 30);
+        self.save_config_defaults()?;
+        Ok(format!(
+            "Push-to-talk clip length set to {}s.",
+            self.speech_ptt_seconds
+        ))
+    }
+
+    fn transcribe_audio_into_input(&mut self, audio_path: &Path) -> anyhow::Result<String> {
+        match transcribe_audio_file(audio_path) {
+            Ok(text) => {
+                let text = text.trim().to_string();
+                if text.is_empty() {
+                    return Ok(format!(
+                        "Speech transcription completed but returned no text for {}.",
+                        audio_path.display()
+                    ));
+                }
+                self.insert_speech_text(&text);
+                Ok(format!(
+                    "Transcribed {} into the input buffer using local speech-to-text. Review/edit, then press Enter to send.",
+                    audio_path.display()
+                ))
+            }
+            Err(error) => Ok(format!(
+                "Speech transcription failed for {}: {error}\n\n{}",
+                audio_path.display(),
+                speech_install_help()
+            )),
+        }
+    }
+
+    pub(crate) fn insert_speech_text(&mut self, text: &str) {
+        let text = strip_whisper_noise(text).trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        if !self.input.buffer.is_empty() && !self.input.buffer.ends_with(char::is_whitespace) {
+            self.input.append_text(" ", false);
+        }
+        self.input.append_text(&text, false);
+        self.input.update_suggestions(Vec::new());
+        self.redraw_requested = true;
+    }
+
+    pub(crate) fn start_push_to_talk_transcription(&mut self) -> anyhow::Result<()> {
+        if !self.pending_speech_jobs.is_empty() {
+            self.push_system_message("Speech transcription is already running.");
+            return Ok(());
+        }
+        let seconds = self.speech_ptt_seconds;
+        self.session.activity = format!("recording speech for {seconds}s");
+        self.pending_speech_jobs.push(std::thread::spawn(move || {
+            let text = record_and_transcribe(seconds)?;
+            Ok(text)
+        }));
+        self.redraw_requested = true;
+        Ok(())
+    }
 }
 
 fn speech_usage() -> String {
     format!(
-        "Usage:\n  /speech status\n  /speech transcribe <audio-file>\n  /stt transcribe <audio-file>\n\n{}",
-        speech_install_help()
-    )
-}
-
-fn speech_status() -> String {
-    let backends = speech_backends()
-        .into_iter()
-        .map(|backend| {
-            let status = if executable_in_path(backend.command) {
-                "available"
-            } else {
-                "missing"
-            };
-            format!("- {} ({}): {}", backend.command, backend.label, status)
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!(
-        "Speech-to-text backend status:\n{backends}\n\nVegvisir currently uses local Whisper-compatible CLI tools only. No audio or credentials are sent to a remote provider by this command.\n\n{}",
+        "Usage:\n  /speech status\n  /speech transcribe <audio-file>\n  /speech ptt\n  /speech ptt-key <F1..F24|Ctrl+letter|off>\n  /speech ptt-seconds <1..30>\n  /stt transcribe <audio-file>\n\n{}",
         speech_install_help()
     )
 }
 
 fn speech_install_help() -> &'static str {
-    "Do not run `cargo install whisper`: the crates.io `whisper` package is an old unrelated database crate and does not provide speech-to-text.\n\nInstall one of these real Whisper STT backends instead:\n  - OpenAI Whisper Python CLI: `pipx install openai-whisper` or `python3 -m pip install --user openai-whisper`\n  - whisper.cpp: build/install whisper.cpp so `whisper-cli` is on PATH\n\nThen run `/speech transcribe path/to/audio.wav`."
+    "Do not run `cargo install whisper`: the crates.io `whisper` package is an old unrelated database crate and does not provide speech-to-text.\n\nInstall one of these real Whisper STT backends instead:\n  - OpenAI Whisper Python CLI: `pipx install openai-whisper` or `python3 -m pip install --user openai-whisper`\n  - whisper.cpp: build/install whisper.cpp so `whisper-cli` is on PATH\n\nFor push-to-talk recording, install `ffmpeg` with PulseAudio support or `arecord`."
 }
 
 fn resolve_speech_audio_path(cwd: &Path, value: &str) -> anyhow::Result<PathBuf> {
@@ -98,187 +176,17 @@ fn resolve_speech_audio_path(cwd: &Path, value: &str) -> anyhow::Result<PathBuf>
     Ok(resolved)
 }
 
-struct SpeechBackend {
-    command: &'static str,
-    label: &'static str,
-    kind: SpeechBackendKind,
-}
-
-enum SpeechBackendKind {
-    OpenAiWhisper,
-    WhisperCli,
-}
-
-fn speech_backends() -> Vec<SpeechBackend> {
-    vec![
-        SpeechBackend {
-            command: "whisper",
-            label: "OpenAI Whisper Python CLI, not the crates.io Rust crate",
-            kind: SpeechBackendKind::OpenAiWhisper,
-        },
-        SpeechBackend {
-            command: "whisper-cli",
-            label: "whisper.cpp CLI",
-            kind: SpeechBackendKind::WhisperCli,
-        },
-        SpeechBackend {
-            command: "whisper.cpp",
-            label: "whisper.cpp CLI compatibility name",
-            kind: SpeechBackendKind::WhisperCli,
-        },
-    ]
-}
-
-const SPEECH_TIMEOUT: Duration = Duration::from_secs(180);
-
-fn transcribe_audio_file(path: &Path) -> anyhow::Result<String> {
-    for backend in speech_backends() {
-        if !executable_in_path(backend.command) {
-            continue;
-        }
-        let result = match backend.kind {
-            SpeechBackendKind::OpenAiWhisper => run_openai_whisper(backend.command, path),
-            SpeechBackendKind::WhisperCli => run_whisper_cli(backend.command, path),
-        };
-        match result {
-            Ok(text) if !text.trim().is_empty() => return Ok(text),
-            Ok(_) => continue,
-            Err(_) => continue,
-        }
-    }
-    anyhow::bail!("no usable local Whisper speech-to-text backend found")
-}
-
-fn run_openai_whisper(command: &str, path: &Path) -> anyhow::Result<String> {
-    let out_dir = std::env::temp_dir().join(format!(
-        "vegvisir-whisper-{}-{}",
-        std::process::id(),
-        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
-    ));
-    std::fs::create_dir_all(&out_dir)?;
-    let output = run_command_with_timeout(
-        Command::new(command)
-            .arg(path)
-            .args(["--output_format", "txt", "--output_dir"])
-            .arg(&out_dir)
-            .args(["--fp16", "False"]),
-        SPEECH_TIMEOUT,
-    )?;
-    if !output.status.success() {
-        let _ = std::fs::remove_dir_all(&out_dir);
-        anyhow::bail!(
-            "{command} failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    let transcript = find_first_txt_file(&out_dir)
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .map(|text| strip_whisper_noise(&text))
-        .filter(|text| !text.trim().is_empty())
-        .unwrap_or_else(|| strip_whisper_noise(&String::from_utf8_lossy(&output.stdout)));
-    let _ = std::fs::remove_dir_all(&out_dir);
-    Ok(transcript)
-}
-
-fn run_whisper_cli(command: &str, path: &Path) -> anyhow::Result<String> {
-    let output = run_command_with_timeout(
-        Command::new(command)
-            .arg("-f")
-            .arg(path)
-            .arg("--no-timestamps"),
-        SPEECH_TIMEOUT,
-    )?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "{command} failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    Ok(strip_whisper_noise(&stdout))
-}
-
-fn find_first_txt_file(dir: &Path) -> Option<PathBuf> {
-    std::fs::read_dir(dir)
-        .ok()?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("txt"))
-}
-
-fn run_command_with_timeout(
-    command: &mut Command,
-    timeout: Duration,
-) -> anyhow::Result<std::process::Output> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        unsafe {
-            command.pre_exec(|| {
-                if libc::setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-    }
-    let mut child = command
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()?;
-    let started = std::time::Instant::now();
-    loop {
-        if child.try_wait()?.is_some() {
-            return Ok(child.wait_with_output()?);
-        }
-        if started.elapsed() >= timeout {
-            kill_process_tree(&mut child);
-            anyhow::bail!(
-                "speech transcription timed out after {} seconds",
-                timeout.as_secs()
-            );
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
-fn kill_process_tree(child: &mut std::process::Child) {
-    #[cfg(unix)]
-    unsafe {
-        libc::kill(-(child.id() as i32), libc::SIGKILL);
-    }
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-fn strip_whisper_noise(text: &str) -> String {
-    text.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .filter(|line| !line.starts_with("Detecting language"))
-        .filter(|line| !line.starts_with("Detected language"))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn executable_in_path(command: &str) -> bool {
-    let Some(paths) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&paths).any(|dir| dir.join(command).is_file())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn strip_whisper_noise_removes_language_lines() {
-        assert_eq!(
-            strip_whisper_noise(
-                "Detecting language using up to the first 30 seconds.\nDetected language: English\nhello world"
-            ),
-            "hello world"
-        );
+    fn speech_ptt_key_command_persists_key() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        let response = app.speech_command(&["ptt-key".into(), "F9".into()])?;
+        assert!(response.contains("F9"));
+        assert_eq!(app.speech_ptt_key, Some(PushToTalkKey::F(9)));
+        Ok(())
     }
 }

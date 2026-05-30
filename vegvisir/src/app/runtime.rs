@@ -248,6 +248,35 @@ impl TuiApplication {
             }
             changed = true;
         }
+
+        let mut speech_index = 0usize;
+        while speech_index < self.pending_speech_jobs.len() {
+            if !self.pending_speech_jobs[speech_index].is_finished() {
+                speech_index += 1;
+                continue;
+            }
+            let handle = self.pending_speech_jobs.remove(speech_index);
+            match handle.join() {
+                Ok(Ok(text)) => {
+                    let text = text.trim().to_string();
+                    if text.is_empty() {
+                        self.push_system_message(
+                            "Speech push-to-talk completed but returned no text.",
+                        );
+                    } else {
+                        self.insert_speech_text(&text);
+                        self.push_system_message("Speech push-to-talk transcript inserted into the input buffer. Review/edit, then press Enter to send.");
+                    }
+                }
+                Ok(Err(error)) => {
+                    self.push_system_message(format!("Speech push-to-talk failed: {error}"))
+                }
+                Err(_) => self.push_system_message("Speech push-to-talk job panicked."),
+            }
+            self.session.activity.clear();
+            changed = true;
+        }
+
         if changed {
             self.autosave_session();
             self.chat_scroll_offset = 0;
