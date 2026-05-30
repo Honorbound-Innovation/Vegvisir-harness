@@ -536,6 +536,23 @@ fn compile_forge_review_and_agent_pack_workflow() {
     assert!(pack.contains("approval_policy"));
     assert!(pack.contains("eval_status:"));
     assert!(pack.contains("selected_skill_count:"));
+    assert!(pack.contains("system_prompt_material:"));
+    assert!(pack.contains(
+        "You are Cluster Diagnostic Agent, a specialized Vegvisir agent created by Skiller"
+    ));
+    assert!(pack.contains("# Operating rules"));
+    assert!(pack.contains("# Runtime posture"));
+    assert!(pack.contains("# Embedded USRL contract"));
+    assert!(pack.contains("```usrl"));
+    assert!(pack.contains("contract ClusterDiagnosticAgentAgentContract"));
+    assert!(pack.contains("section Metadata"));
+    assert!(pack.contains("section RuntimeFacts"));
+    assert!(pack.contains("section Permissions"));
+    assert!(pack.contains("section Constraints"));
+    assert!(pack.contains("section Stages"));
+    assert!(pack.contains("section Triggers"));
+    assert!(pack.contains("deny \"request_plaintext_credentials\""));
+    assert!(pack.contains("require \"approval_when_runtime_or_skill_policy_requires\""));
 }
 
 #[test]

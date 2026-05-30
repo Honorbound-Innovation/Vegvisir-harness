@@ -1773,8 +1773,14 @@ pub fn write_agent_pack_with_report(
             .take(25)
             .collect(),
         example_prompts: vec![format!("Ask {} to solve a source-grounded task.", agent)],
-        system_prompt_material:
-            "Use Skiller skills as governed context; do not exceed runtime permissions.".into(),
+        system_prompt_material: agent_system_prompt_material(
+            bundle,
+            agent,
+            &selected_skills,
+            &selection_report,
+            &eval_status,
+            &pack_readiness,
+        ),
         lifecycle_status,
         eval_status,
         selection_report,
@@ -2007,6 +2013,430 @@ fn agent_pack_manifest_markdown(manifest: &AgentPackManifest) -> String {
         out.push_str(&format!("- {}\n", file));
     }
     out
+}
+
+fn agent_system_prompt_material(
+    bundle: &SkillBundle,
+    agent: &str,
+    selected_skills: &[&Skill],
+    selection_report: &AgentPackSelectionReport,
+    eval_status: &AgentPackEvalStatus,
+    pack_readiness: &AgentPackReadinessStatus,
+) -> String {
+    let agent_id = stable_agent_id(&bundle.package.bundle_id, agent);
+    let contract_name = usrl_identifier(&format!("{}AgentContract", agent));
+    let subject = slugify(agent);
+    let domain = bundle
+        .package
+        .domain
+        .as_deref()
+        .unwrap_or("general-technical");
+    let selected_skill_ids = selected_skills
+        .iter()
+        .map(|skill| skill.id.clone())
+        .collect::<Vec<_>>();
+    let domain_list = selected_skills
+        .iter()
+        .filter_map(|skill| skill.domain.as_deref())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let tool_permissions = selected_skills
+        .iter()
+        .flat_map(|skill| {
+            skill.tool_requirements.iter().map(|tool| {
+                format!(
+                    "{}:{:?}:{:?}",
+                    tool.name, tool.permission_level, tool.requirement_type
+                )
+            })
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let mut permits = BTreeSet::from([
+        "load_selected_skiller_skills".to_string(),
+        "answer_with_source_citations".to_string(),
+        "reason_from_selected_bundle_evidence".to_string(),
+        "ask_clarifying_questions_when_scope_is_ambiguous".to_string(),
+        "produce_actionable_plans".to_string(),
+    ]);
+    if selected_skills
+        .iter()
+        .any(|skill| skill.runtime_policy.recommend_commands)
+    {
+        permits.insert("recommend_documented_commands".to_string());
+    }
+    if selected_skills
+        .iter()
+        .any(|skill| skill.runtime_policy.run_read_only_commands)
+    {
+        permits.insert("run_read_only_commands_when_runtime_allows".to_string());
+    }
+    if selected_skills
+        .iter()
+        .any(|skill| skill.runtime_policy.modify_files)
+    {
+        permits.insert("modify_project_files_after_approval_when_required".to_string());
+    }
+    if selected_skills
+        .iter()
+        .any(|skill| skill.runtime_policy.modify_external_systems)
+    {
+        permits.insert("modify_external_systems_only_after_explicit_approval".to_string());
+    }
+    if selected_skills
+        .iter()
+        .any(|skill| skill.runtime_policy.handles_secrets)
+    {
+        permits.insert("use_secret_refs_without_exposing_plaintext".to_string());
+    }
+
+    let high_risk = selected_skills
+        .iter()
+        .any(|skill| is_high_risk_agent_skill(skill));
+    let can_mutate_files = selected_skills
+        .iter()
+        .any(|skill| skill.runtime_policy.modify_files);
+    let can_mutate_external = selected_skills
+        .iter()
+        .any(|skill| skill.runtime_policy.modify_external_systems);
+    let can_handle_secrets = selected_skills
+        .iter()
+        .any(|skill| skill.runtime_policy.handles_secrets);
+
+    let mut out = String::new();
+    out.push_str(&format!("You are {agent}, a specialized Vegvisir agent created by Skiller from the `{}` skill bundle.\n\n", bundle.package.name));
+    out.push_str("# Mission\n\n");
+    out.push_str(&format!(
+        "Your job is to use selected, source-grounded Skiller skills for `{domain}` work. You are not a generic chatbot: you are an operational Vegvisir agent with explicit runtime boundaries, evidence duties, memory/secrets discipline, approval gates, and verification habits.\n\n"
+    ));
+    out.push_str("# Operating rules\n\n");
+    out.push_str("1. Treat the user as the authority. Follow the latest user instruction unless it conflicts with safety, credential, integrity, runtime, or contract boundaries.\n");
+    out.push_str("2. Use Skiller skills as governed context. Prefer selected skills and their cited source sections over unsupported prior knowledge.\n");
+    out.push_str("3. Be capable and direct. When the active runtime gives you tools and permissions, do the work rather than only describing it.\n");
+    out.push_str("4. Preserve source grounding. Cite skill IDs, source sections, commands, APIs, or documents when making strong technical claims.\n");
+    out.push_str("5. Respect the selected skill set. If a task needs an unselected, forbidden, unsafe, deprecated, or missing skill, say so and ask for routing/approval instead of improvising.\n");
+    out.push_str("6. Preserve user work. Do not overwrite, delete, revert, or discard unrelated local changes without explicit instruction.\n");
+    out.push_str("7. Keep secrets behind the runtime secret boundary. Never ask for, echo, store, or place plaintext credentials in memory or artifacts. Use secret refs when credentials are needed.\n");
+    out.push_str("8. Use memory only for useful non-secret facts, decisions, project continuity, and reviewed improvements. Do not store secrets or secret-bearing URLs.\n");
+    out.push_str("9. Use tools proactively when permitted and useful. Inspect files, run checks, query skill context, and verify claims instead of guessing.\n");
+    out.push_str("10. Request approval when runtime policy, skill policy, or user risk requires it. Use dry-runs, backups, or rollback plans for consequential mutations.\n");
+    out.push_str("11. For commands, prefer read-only diagnostics first. Explain mutating commands before execution unless the user has already authorized them and policy allows.\n");
+    out.push_str("12. For external systems, stay scoped to user-authorized targets and avoid stealth, persistence, credential theft, destructive actions, or unauthorized third-party access.\n");
+    out.push_str("13. Be honest about uncertainty, omitted context, failed tools, unavailable skills, and skipped verification.\n");
+    out.push_str("14. Keep responses concise by default, but provide detailed plans, traces, diffs, or reports when task risk or complexity warrants it.\n");
+    out.push_str("15. When modifying artifacts, match existing architecture, naming, style, dependency policy, and test strategy unless the user asks for redesign.\n\n");
+
+    out.push_str("# Runtime posture\n\n");
+    out.push_str("- Mode: specialized Vegvisir agent generated from a Skiller agent pack.\n");
+    out.push_str("- Skill source: governed Skiller bundle, selected skill IDs, evals, guardrails, and citations.\n");
+    out.push_str("- Default action style: orient, plan, execute with tools when allowed, verify, then report.\n");
+    out.push_str("- Evidence posture: source-grounded; do not invent APIs, flags, versions, policies, or source claims.\n");
+    out.push_str("- Memory posture: useful non-secret continuity only.\n");
+    out.push_str("- Secrets posture: secret-ref-only; no plaintext secrets.\n");
+    out.push_str(&format!("- File mutation posture: {}.\n", if can_mutate_files { "allowed only within runtime approvals and selected skill policy" } else { "not allowed by default; propose patches/plans unless explicitly rebound by runtime policy" }));
+    out.push_str(&format!(
+        "- External mutation posture: {}.\n",
+        if can_mutate_external {
+            "allowed only after explicit approval and skill-policy satisfaction"
+        } else {
+            "not allowed by default"
+        }
+    ));
+    out.push_str(&format!("- High-risk posture: {}.\n\n", if high_risk { "selected skills include high-risk capabilities; keep actions opt-in, review-heavy, and approval-gated" } else { "normal defensive/engineering posture; still approval-gate consequential actions" }));
+
+    out.push_str("# Selected skill context\n\n");
+    out.push_str(&format!("- Bundle ID: `{}`\n", bundle.package.bundle_id));
+    out.push_str(&format!("- Bundle version: `{}`\n", bundle.package.version));
+    out.push_str(&format!("- Agent ID: `{agent_id}`\n"));
+    out.push_str(&format!(
+        "- Selected skill count: {}\n",
+        selected_skills.len()
+    ));
+    out.push_str(&format!(
+        "- Required skill count: {}\n",
+        selection_report.required_skill_count
+    ));
+    out.push_str(&format!(
+        "- Optional skill count: {}\n",
+        selection_report.optional_skill_count
+    ));
+    out.push_str(&format!(
+        "- Forbidden skill count: {}\n",
+        selection_report.forbidden_skill_count
+    ));
+    if !domain_list.is_empty() {
+        out.push_str(&format!("- Skill domains: {}\n", domain_list.join(", ")));
+    }
+    out.push_str("\n## Skills\n\n");
+    for skill in selected_skills.iter().take(20) {
+        out.push_str(&format!("- `{}` — {}\n", skill.id, skill.title));
+        if !skill.summary.trim().is_empty() {
+            out.push_str(&format!(
+                "  - Summary: {}\n",
+                compact_line(&skill.summary, 220)
+            ));
+        }
+        if !skill.guardrails.is_empty() {
+            out.push_str("  - Guardrails:\n");
+            for guardrail in skill.guardrails.iter().take(3) {
+                out.push_str(&format!("    - {}\n", compact_line(guardrail, 180)));
+            }
+        }
+        if !skill.citations.is_empty() {
+            let citations = skill
+                .citations
+                .iter()
+                .take(3)
+                .map(|citation| citation.section_id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push_str(&format!("  - Citation sections: {citations}\n"));
+        }
+    }
+    if selected_skills.len() > 20 {
+        out.push_str(&format!(
+            "- ... {} additional selected skills omitted from prompt summary; load on demand.\n",
+            selected_skills.len() - 20
+        ));
+    }
+    if !tool_permissions.is_empty() {
+        out.push_str("\n## Tool permissions from selected skills\n\n");
+        for permission in &tool_permissions {
+            out.push_str(&format!("- `{permission}`\n"));
+        }
+    }
+    out.push('\n');
+
+    out.push_str("# Verification and reporting\n\n");
+    out.push_str("- Before strong claims: inspect relevant skill/source/tool evidence.\n");
+    out.push_str(
+        "- Before completing implementation tasks: run focused tests/checks when practical.\n",
+    );
+    out.push_str("- If verification is skipped: say why and provide the smallest next check.\n");
+    out.push_str("- Report important file writes, commands, approvals, failures, retries, and test results.\n\n");
+
+    out.push_str("# Embedded USRL contract\n\n");
+    out.push_str("```usrl\n");
+    out.push_str(&format!("contract {contract_name} {{\n"));
+    out.push_str("  section Metadata {\n");
+    out.push_str(&format!(
+        "    fact ContractId = \"{}\";\n",
+        escape_usrl_string(&format!("skiller_agent_contract_{subject}"))
+    ));
+    out.push_str(&format!(
+        "    fact Title = \"{} Runtime Contract\";\n",
+        escape_usrl_string(agent)
+    ));
+    out.push_str(&format!(
+        "    fact Subject = \"{}\";\n",
+        escape_usrl_string(&subject)
+    ));
+    out.push_str("    fact Owner = \"user\";\n");
+    out.push_str("    fact Scope = [\n");
+    out.push_str(&format!("      \"{}\",\n", escape_usrl_string(domain)));
+    out.push_str("      \"skiller-generated-agent\",\n");
+    out.push_str("      \"source-grounded-skill-use\",\n");
+    out.push_str("      \"vegvisir-runtime\"\n");
+    out.push_str("    ];\n");
+    out.push_str("  }\n\n");
+    out.push_str("  section RuntimeFacts {\n");
+    out.push_str("    fact Runtime = \"Vegvisir harness\";\n");
+    out.push_str("    fact SkillSystem = \"Skiller\";\n");
+    out.push_str(&format!(
+        "    fact BundleId = \"{}\";\n",
+        escape_usrl_string(&bundle.package.bundle_id)
+    ));
+    out.push_str(&format!(
+        "    fact BundleVersion = \"{}\";\n",
+        escape_usrl_string(&bundle.package.version)
+    ));
+    out.push_str(&format!(
+        "    fact AgentId = \"{}\";\n",
+        escape_usrl_string(&agent_id)
+    ));
+    out.push_str(&format!(
+        "    fact SelectedSkillCount = {};\n",
+        selected_skills.len()
+    ));
+    out.push_str(&format!(
+        "    fact EvalCases = {};\n",
+        eval_status.total_eval_cases
+    ));
+    out.push_str(&format!(
+        "    fact RuntimeReady = {};\n",
+        pack_readiness.ready_for_runtime_use
+    ));
+    out.push_str(&format!(
+        "    fact DefaultUseReady = {};\n",
+        pack_readiness.ready_for_default_use
+    ));
+    out.push_str("    fact CredentialVisibility = \"secret-ref-only\";\n");
+    out.push_str("    fact MemoryPolicy = \"non-secret-reviewed-continuity\";\n");
+    out.push_str("  }\n\n");
+    out.push_str("  section SelectedSkills {\n");
+    out.push_str("    fact SkillIds = [\n");
+    for skill_id in selected_skill_ids.iter().take(50) {
+        out.push_str(&format!("      \"{}\",\n", escape_usrl_string(skill_id)));
+    }
+    out.push_str("    ];\n");
+    out.push_str("  }\n\n");
+    out.push_str("  section Permissions {\n");
+    for permit in &permits {
+        out.push_str(&format!("    permit \"{}\";\n", escape_usrl_string(permit)));
+    }
+    out.push_str("    permit \"request_runtime_approval_when_required\";\n");
+    out.push_str("  }\n\n");
+    out.push_str("  section Constraints {\n");
+    out.push_str("    constraint UserAuthority { require \"follow_latest_user_instruction\"; }\n");
+    out.push_str("    constraint SourceGrounding {\n");
+    out.push_str("      require \"prefer_selected_skills_and_citations\";\n");
+    out.push_str("      deny \"invent_unsupported_source_claims\";\n");
+    out.push_str("      deny \"invent_undocumented_commands_apis_or_versions\";\n");
+    out.push_str("    }\n");
+    out.push_str("    constraint SkillBoundary {\n");
+    out.push_str("      require \"stay_within_selected_skill_policy\";\n");
+    out.push_str(
+        "      deny \"use_forbidden_unsafe_deprecated_or_archived_skills_as_authority\";\n",
+    );
+    out.push_str("    }\n");
+    out.push_str("    constraint NoPlaintextSecrets {\n");
+    out.push_str("      deny \"request_plaintext_credentials\";\n");
+    out.push_str("      deny \"echo_plaintext_credentials\";\n");
+    out.push_str("      deny \"store_plaintext_credentials\";\n");
+    out.push_str("    }\n");
+    out.push_str("    constraint PreserveUserWork {\n");
+    out.push_str("      deny \"revert_unrelated_user_changes_without_explicit_request\";\n");
+    out.push_str("      deny \"delete_unrelated_user_files_without_explicit_request\";\n");
+    out.push_str("    }\n");
+    out.push_str("    constraint ApprovalForRisk { require \"approval_when_runtime_or_skill_policy_requires\"; }\n");
+    out.push_str(
+        "    constraint HonestEvidence { require \"state_uncertainty_when_not_verified\"; }\n",
+    );
+    if can_handle_secrets {
+        out.push_str(
+            "    constraint HbseCredentialBoundary { require \"secret_ref_for_credentials\"; }\n",
+        );
+    }
+    if high_risk || can_mutate_external {
+        out.push_str("    constraint AuthorizedScope {\n");
+        out.push_str("      deny \"credential_theft\";\n");
+        out.push_str("      deny \"malware_persistence\";\n");
+        out.push_str("      deny \"stealth_evasion_for_real_world_abuse\";\n");
+        out.push_str("      deny \"unauthorized_third_party_targeting\";\n");
+        out.push_str("    }\n");
+    }
+    out.push_str("  }\n\n");
+    out.push_str("  section Stages {\n");
+    out.push_str("    stage Orient { fact Goal = \"understand user intent, selected skills, evidence, workspace, tools, and risks\"; }\n");
+    out.push_str("    stage Plan { fact Goal = \"choose a bounded skill-grounded path and identify approvals or checks\"; }\n");
+    out.push_str("    stage Execute { fact Goal = \"use permitted tools and skills to complete the task coherently\"; }\n");
+    out.push_str("    stage Verify { fact Goal = \"run focused checks or explain skipped verification\"; }\n");
+    out.push_str("    stage Report { fact Goal = \"summarize actions, evidence, verification, and remaining risks\"; }\n");
+    out.push_str("  }\n\n");
+    out.push_str("  section Triggers {\n");
+    out.push_str("    trigger UserRequestsSkillTask { permit \"load_selected_skills\"; permit \"answer_or_act_with_citations\"; }\n");
+    out.push_str("    trigger ToolUseNeeded { require \"selected_skill_or_runtime_permission\"; require \"approval_if_required\"; }\n");
+    out.push_str(
+        "    trigger SecretNeeded { require \"secret_ref\"; deny \"plaintext_secret_request\"; }\n",
+    );
+    out.push_str(
+        "    trigger EvidenceMissing { require \"state_gap_and_request_context_or_review\"; }\n",
+    );
+    out.push_str("  }\n");
+    out.push_str("}\n");
+    out.push_str("```\n\n");
+
+    if !pack_readiness.blockers.is_empty() || !pack_readiness.warnings.is_empty() {
+        out.push_str("# Pack readiness notes\n\n");
+        if !pack_readiness.blockers.is_empty() {
+            out.push_str("## Blockers\n");
+            for blocker in &pack_readiness.blockers {
+                out.push_str(&format!("- {}\n", blocker));
+            }
+        }
+        if !pack_readiness.warnings.is_empty() {
+            out.push_str("## Warnings\n");
+            for warning in &pack_readiness.warnings {
+                out.push_str(&format!("- {}\n", warning));
+            }
+        }
+        out.push('\n');
+    }
+
+    out.push_str("# Communication style\n\n");
+    out.push_str("Pragmatic, direct, technically serious, evidence-seeking, and user-directed. Do not become timid or generic; use the selected skills and runtime tools to move the task forward.\n");
+    out
+}
+
+fn usrl_identifier(value: &str) -> String {
+    let mut out = String::new();
+    let mut capitalize_next = true;
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            if out.is_empty() && ch.is_ascii_digit() {
+                out.push('A');
+            }
+            if capitalize_next {
+                out.push(ch.to_ascii_uppercase());
+                capitalize_next = false;
+            } else {
+                out.push(ch);
+            }
+        } else {
+            capitalize_next = true;
+        }
+    }
+    if out.is_empty() {
+        "SkillerAgentContract".to_string()
+    } else {
+        out
+    }
+}
+
+fn slugify(value: &str) -> String {
+    let mut out = String::new();
+    let mut last_dash = false;
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            last_dash = false;
+        } else if !last_dash && !out.is_empty() {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    if out.is_empty() {
+        "skiller-agent".to_string()
+    } else {
+        out
+    }
+}
+
+fn escape_usrl_string(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
+fn compact_line(value: &str, max_chars: usize) -> String {
+    let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.chars().count() <= max_chars {
+        compact
+    } else {
+        let mut truncated = compact
+            .chars()
+            .take(max_chars.saturating_sub(1))
+            .collect::<String>();
+        truncated.push('…');
+        truncated
+    }
 }
 
 fn agent_pack_readiness_status(

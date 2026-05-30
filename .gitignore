@@ -13,7 +13,8 @@
 *.log
 *.tmp
 *.bak
-components/t3code-overlay/apps/server/fibonacci_next.py
+components/t3-overlay/
+components/t3code-overlay/
 
 # Ignore ad-hoc Markdown notes/idea files outside documentation.
 *.md
