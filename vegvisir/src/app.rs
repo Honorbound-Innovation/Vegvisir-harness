@@ -33,6 +33,9 @@ use crate::{
     memory::{VegvisirCms, VegvisirCmsConfig, default_vegvisir_data_root},
     model_discovery::discover_provider_models,
     observability::EventLogger,
+    persona::{
+        DEFAULT_PERSONA_ID, KA_PROMPT_HEADING, get_persona_with_root, render_persona_prompt_section,
+    },
     policy::RuntimePolicy,
     provider::{
         ConversationRunner, ProviderRouter, ProviderRunEvent, configured_max_tool_rounds_label,
@@ -348,6 +351,7 @@ impl TuiApplication {
         };
         let mut session = SessionState::new(&cwd, tools, skills);
         session.system_prompt = default_system_prompt();
+        session.active_persona_id = Some(DEFAULT_PERSONA_ID.to_string());
         if let Some(provider) = defaults.get("current_provider").and_then(Value::as_str) {
             session.current_provider = provider.to_string();
         }
@@ -357,6 +361,16 @@ impl TuiApplication {
         if let Some(prompt) = defaults.get("system_prompt").and_then(Value::as_str) {
             session.system_prompt = prompt.to_string();
         }
+        if let Some(persona) = defaults.get("active_persona_id").and_then(Value::as_str)
+            && get_persona_with_root(&data_root, persona)?.is_some()
+        {
+            session.active_persona_id = Some(persona.to_string());
+        }
+        session.system_prompt = apply_persona_to_system_prompt(
+            &session.system_prompt,
+            session.active_persona_id.as_deref(),
+            &data_root,
+        );
         let mut provider_registry = ProviderRegistry::default_catalog()?;
         set_openai_sso_auth_root(&mut provider_registry, &data_root);
         let models = ModelRegistry::default_catalog()?;
@@ -662,8 +676,13 @@ impl TuiApplication {
         );
         data.insert(
             "system_prompt".to_string(),
-            json!(self.session.system_prompt),
+            json!(strip_persona_from_system_prompt(
+                &self.session.system_prompt
+            )),
         );
+        if let Some(persona) = &self.session.active_persona_id {
+            data.insert("active_persona_id".to_string(), json!(persona));
+        }
         self.config.save(&data)
     }
 }
@@ -675,6 +694,44 @@ pub(crate) fn terminal_frame(rendered: &str) -> String {
         .map(|line| format!("{line}\x1b[K"))
         .collect::<Vec<_>>()
         .join("\r\n")
+}
+
+pub(crate) fn apply_persona_to_system_prompt(
+    base_prompt: &str,
+    persona_id: Option<&str>,
+    data_root: &Path,
+) -> String {
+    let base = strip_persona_from_system_prompt(base_prompt);
+    let Some(persona_id) = persona_id else {
+        return base;
+    };
+    let Ok(Some(persona)) = get_persona_with_root(data_root, persona_id) else {
+        return base;
+    };
+    let section = render_persona_prompt_section(&persona);
+    if base.trim().is_empty() {
+        section
+    } else {
+        format!("{}\n\n{}", base.trim_end(), section)
+    }
+}
+
+pub(crate) fn strip_persona_from_system_prompt(prompt: &str) -> String {
+    for heading in [
+        KA_PROMPT_HEADING,
+        "# Communication persona",
+        "# Communication soul",
+    ] {
+        let marker = format!("\n\n{heading}\n");
+        if let Some(index) = prompt.find(&marker) {
+            return prompt[..index].trim_end().to_string();
+        }
+        let start_marker = format!("{heading}\n");
+        if prompt.starts_with(&start_marker) {
+            return String::new();
+        }
+    }
+    prompt.to_string()
 }
 
 #[cfg(test)]
@@ -690,6 +747,46 @@ mod tests {
             super::terminal_frame("one\ntwo\nthree"),
             "one\x1b[K\r\ntwo\x1b[K\r\nthree\x1b[K"
         );
+    }
+
+    #[test]
+    fn persona_set_updates_system_prompt_and_defaults() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        let response =
+            app.persona_command(&["set".to_string(), "chaotic_competent".to_string()])?;
+        assert!(response.contains("Ka set to chaotic_competent"));
+        assert_eq!(
+            app.session.active_persona_id.as_deref(),
+            Some("chaotic_competent")
+        );
+        assert!(app.session.system_prompt.contains("# Communication ka"));
+        assert!(
+            app.session
+                .system_prompt
+                .contains("Active ka/persona: `chaotic_competent`")
+        );
+        assert!(
+            app.session
+                .system_prompt
+                .contains("Ka/persona controls delivery style only")
+        );
+
+        let defaults = app.config.load()?;
+        assert_eq!(
+            defaults
+                .get("active_persona_id")
+                .and_then(serde_json::Value::as_str),
+            Some("chaotic_competent")
+        );
+        assert!(
+            !defaults
+                .get("system_prompt")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .contains("# Communication ka")
+        );
+        Ok(())
     }
 
     #[test]

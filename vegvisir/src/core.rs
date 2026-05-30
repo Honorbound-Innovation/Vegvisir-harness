@@ -464,6 +464,8 @@ pub struct SessionState {
     pub active_agent_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_agent_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_persona_id: Option<String>,
     pub cwd: String,
     #[serde(default)]
     pub messages: Vec<ChatMessage>,
@@ -505,6 +507,7 @@ impl SessionState {
             system_prompt: String::new(),
             active_agent_id: None,
             active_agent_name: None,
+            active_persona_id: None,
             cwd: cwd.as_ref().display().to_string(),
             messages: Vec::new(),
             pending_attachments: Vec::new(),

@@ -542,11 +542,13 @@ fn compile_forge_review_and_agent_pack_workflow() {
     ));
     assert!(pack.contains("# Operating rules"));
     assert!(pack.contains("# Runtime posture"));
-    assert!(pack.contains("soul:"));
-    assert!(pack.contains("id: practical_engineer"));
-    assert!(pack.contains("# Communication soul"));
-    assert!(pack.contains("Soul/persona controls delivery style only"));
-    assert!(pack.contains("soul_must_not_override_usrl"));
+    assert!(pack.contains("ka:"));
+    assert!(pack.contains("id: vegvisir_default"));
+    assert!(pack.contains("display_name: Vegvisir Default"));
+    assert!(pack.contains("# Communication ka"));
+    assert!(pack.contains("pragmatic_agentic_working_partner"));
+    assert!(pack.contains("Ka/persona controls delivery style only"));
+    assert!(pack.contains("ka_must_not_override_usrl"));
     assert!(pack.contains("clarity_over_character"));
     assert!(pack.contains("# Embedded USRL contract"));
     assert!(pack.contains("```usrl"));

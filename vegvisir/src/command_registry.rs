@@ -144,6 +144,12 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
             &[],
         ),
         cmd(
+            "/ka",
+            "list, show, set, create, import, or edit the active communication ka/persona",
+            "/ka [list|show [id]|set <id>|create <id> [name]|import <path>|edit <id>|clear|default]",
+            &["/persona", "/soul"],
+        ),
+        cmd(
             "/speech",
             "transcribe an audio file into the input buffer using a local Whisper-compatible CLI",
             "/speech transcribe <audio-file>|status",
@@ -314,6 +320,26 @@ fn command_args(command_name: &str, rest: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ka_command_aliases_parse_to_canonical_command() {
+        let registry = CommandRegistry::with_defaults();
+        let (command, args) = registry
+            .parse_with_aliases("/persona set chaotic_competent")
+            .expect("persona alias should parse");
+        assert_eq!(command, "/ka");
+        assert_eq!(
+            args,
+            vec!["set".to_string(), "chaotic_competent".to_string()]
+        );
+        let (command, _) = registry
+            .parse_with_aliases("/soul set chaotic_competent")
+            .expect("deprecated soul alias should still parse");
+        assert_eq!(command, "/ka");
+        let ka = registry.get("/ka").expect("ka command exists");
+        assert!(ka.aliases.contains(&"/persona".to_string()));
+        assert!(ka.aliases.contains(&"/soul".to_string()));
+    }
 
     #[test]
     fn speech_command_alias_parses_to_canonical_command() {

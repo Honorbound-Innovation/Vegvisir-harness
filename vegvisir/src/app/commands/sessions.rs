@@ -14,6 +14,7 @@ impl TuiApplication {
         next.system_prompt = self.session.system_prompt.clone();
         next.active_agent_id = self.session.active_agent_id.clone();
         next.active_agent_name = self.session.active_agent_name.clone();
+        next.active_persona_id = self.session.active_persona_id.clone();
         next.cwd = self.cwd.display().to_string();
         next.context_limit = self.session.context_limit;
         self.session = next;
@@ -383,6 +384,7 @@ impl TuiApplication {
         next.system_prompt = self.session.system_prompt.clone();
         next.active_agent_id = self.session.active_agent_id.clone();
         next.active_agent_name = self.session.active_agent_name.clone();
+        next.active_persona_id = self.session.active_persona_id.clone();
         next.context_limit = self.session.context_limit;
         self.session = next;
         format!("Branched {old_id} into {}", self.session.session_id)
@@ -491,12 +493,20 @@ impl TuiApplication {
         }
         match args[0].as_str() {
             "default" | "reset-default" => {
-                self.session.system_prompt = default_system_prompt();
+                self.session.system_prompt = apply_persona_to_system_prompt(
+                    &default_system_prompt(),
+                    self.session.active_persona_id.as_deref(),
+                    &self.data_root,
+                );
                 self.save_config_defaults()?;
                 return Ok("Harness system prompt reset to the Vegvisir default.".to_string());
             }
             "clear" => {
-                self.session.system_prompt.clear();
+                self.session.system_prompt = apply_persona_to_system_prompt(
+                    "",
+                    self.session.active_persona_id.as_deref(),
+                    &self.data_root,
+                );
                 self.save_config_defaults()?;
                 return Ok("Harness system prompt cleared.".to_string());
             }
@@ -505,10 +515,16 @@ impl TuiApplication {
                 if content.is_empty() {
                     return Ok("Usage: /system append <text>".to_string());
                 }
-                if !self.session.system_prompt.is_empty() {
-                    self.session.system_prompt.push('\n');
+                let mut base = strip_persona_from_system_prompt(&self.session.system_prompt);
+                if !base.is_empty() {
+                    base.push('\n');
                 }
-                self.session.system_prompt.push_str(&content);
+                base.push_str(&content);
+                self.session.system_prompt = apply_persona_to_system_prompt(
+                    &base,
+                    self.session.active_persona_id.as_deref(),
+                    &self.data_root,
+                );
                 self.save_config_defaults()?;
                 return Ok("Appended to harness system prompt.".to_string());
             }
@@ -517,9 +533,19 @@ impl TuiApplication {
                 if content.is_empty() {
                     return Ok("Usage: /system set <text>".to_string());
                 }
-                self.session.system_prompt = content;
+                self.session.system_prompt = apply_persona_to_system_prompt(
+                    &content,
+                    self.session.active_persona_id.as_deref(),
+                    &self.data_root,
+                );
             }
-            other => self.session.system_prompt = other.to_string(),
+            other => {
+                self.session.system_prompt = apply_persona_to_system_prompt(
+                    other,
+                    self.session.active_persona_id.as_deref(),
+                    &self.data_root,
+                );
+            }
         }
         self.save_config_defaults()?;
         Ok("Harness system prompt updated.".to_string())

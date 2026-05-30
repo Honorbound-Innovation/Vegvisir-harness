@@ -839,7 +839,8 @@ impl TuiApplication {
     }
 
     fn effective_agent_system_prompt(&self, profile: &AgentProfile) -> String {
-        let mut sections = vec![profile.system_prompt.trim().to_string()]
+        let base_prompt = crate::app::strip_persona_from_system_prompt(&profile.system_prompt);
+        let mut sections = vec![base_prompt.trim().to_string()]
             .into_iter()
             .filter(|section| !section.is_empty())
             .collect::<Vec<_>>();

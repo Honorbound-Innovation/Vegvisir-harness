@@ -2,6 +2,7 @@ mod agents;
 mod mcp_hbse;
 mod memory;
 mod misc;
+mod persona;
 mod providers;
 mod sessions;
 mod skills;

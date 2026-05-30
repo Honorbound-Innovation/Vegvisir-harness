@@ -58,20 +58,20 @@ pub struct AgentPackSelectionReport {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-pub struct SoulProfile {
+pub struct KaProfile {
     pub schema_version: u32,
     pub id: String,
     pub display_name: String,
     pub summary: String,
-    pub voice: SoulVoice,
-    pub temperament: SoulTemperament,
-    pub work_style: SoulWorkStyle,
-    pub risk_modulation: SoulRiskModulation,
+    pub voice: KaVoice,
+    pub temperament: KaTemperament,
+    pub work_style: KaWorkStyle,
+    pub risk_modulation: KaRiskModulation,
     pub boundaries: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-pub struct SoulVoice {
+pub struct KaVoice {
     pub warmth: String,
     pub directness: String,
     pub humor: String,
@@ -82,7 +82,7 @@ pub struct SoulVoice {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-pub struct SoulTemperament {
+pub struct KaTemperament {
     pub energy: String,
     pub patience: String,
     pub curiosity: String,
@@ -90,7 +90,7 @@ pub struct SoulTemperament {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-pub struct SoulWorkStyle {
+pub struct KaWorkStyle {
     pub progress_updates: String,
     pub failure_style: String,
     pub uncertainty_style: String,
@@ -98,7 +98,7 @@ pub struct SoulWorkStyle {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-pub struct SoulRiskModulation {
+pub struct KaRiskModulation {
     pub normal: String,
     pub high_risk: String,
     pub user_frustrated: String,
@@ -928,7 +928,7 @@ struct AgentPack<'a> {
     review_status: SkillStatus,
     evals: Vec<EvalCase>,
     example_prompts: Vec<String>,
-    soul: SoulProfile,
+    ka: KaProfile,
     system_prompt_material: String,
     lifecycle_status: Option<AgentPackLifecycleStatus>,
     eval_status: AgentPackEvalStatus,
@@ -1821,7 +1821,7 @@ pub fn write_agent_pack_with_report(
             .take(25)
             .collect(),
         example_prompts: vec![format!("Ask {} to solve a source-grounded task.", agent)],
-        soul: default_soul_profile_for_agent(agent),
+        ka: default_ka_profile_for_agent(agent),
         system_prompt_material: agent_system_prompt_material(
             bundle,
             agent,
@@ -1829,7 +1829,7 @@ pub fn write_agent_pack_with_report(
             &selection_report,
             &eval_status,
             &pack_readiness,
-            &default_soul_profile_for_agent(agent),
+            &default_ka_profile_for_agent(agent),
         ),
         lifecycle_status,
         eval_status,
@@ -1855,22 +1855,66 @@ pub fn write_agent_pack_with_report(
     ))
 }
 
-fn default_soul_profile_for_agent(agent: &str) -> SoulProfile {
+fn default_ka_profile_for_agent(agent: &str) -> KaProfile {
     let agent_lower = agent.to_ascii_lowercase();
     if agent_lower.contains("goblin") || agent_lower.contains("chaotic") {
-        chaotic_competent_soul_profile()
+        chaotic_competent_ka_profile()
+    } else if agent_lower.contains("practical") || agent_lower.contains("engineer") {
+        practical_engineer_ka_profile()
     } else {
-        practical_engineer_soul_profile()
+        vegvisir_default_ka_profile()
     }
 }
 
-fn practical_engineer_soul_profile() -> SoulProfile {
-    SoulProfile {
+fn vegvisir_default_ka_profile() -> KaProfile {
+    KaProfile {
+        schema_version: 1,
+        id: "vegvisir_default".to_string(),
+        display_name: "Vegvisir Default".to_string(),
+        summary: "Capable, direct, evidence-seeking, transparent, and steady; a pragmatic working partner with a lightly human delivery style and a disciplined operational spine.".to_string(),
+        voice: KaVoice {
+            warmth: "medium".to_string(),
+            directness: "high".to_string(),
+            humor: "low-medium".to_string(),
+            formality: "medium-low".to_string(),
+            theatricality: "low".to_string(),
+            metaphor_density: "low".to_string(),
+            avoid: vec![
+                "corporate_fluff".to_string(),
+                "fake_certainty".to_string(),
+                "performative_apologies".to_string(),
+                "burying_failures_or_risk_under_style".to_string(),
+                "over_narrating_when_work_is_simple".to_string(),
+            ],
+        },
+        temperament: KaTemperament {
+            energy: "steady_capable".to_string(),
+            patience: "high".to_string(),
+            curiosity: "high_when_evidence_is_missing".to_string(),
+            confidence_style: "evidence_based_and_assumption_explicit".to_string(),
+        },
+        work_style: KaWorkStyle {
+            progress_updates: "concise_material_updates".to_string(),
+            failure_style: "plain_english_recovery_summary_with_next_step".to_string(),
+            uncertainty_style: "state_uncertainty_then_inspect_or_propose_verification".to_string(),
+            collaboration_style: "pragmatic_agentic_working_partner".to_string(),
+        },
+        risk_modulation: KaRiskModulation {
+            normal: "direct, calm, lightly warm, and action-oriented".to_string(),
+            high_risk: "maximum precision; minimize personality; surface risk, approval needs, and reversible steps".to_string(),
+            user_frustrated: "short, accountable, specific, and recovery-focused; no jokes or theatrics".to_string(),
+        },
+        boundaries: default_ka_boundaries(),
+    }
+}
+
+fn practical_engineer_ka_profile() -> KaProfile {
+    KaProfile {
         schema_version: 1,
         id: "practical_engineer".to_string(),
         display_name: "Practical Engineer".to_string(),
         summary: "Direct, technically serious, calm, and evidence-oriented.".to_string(),
-        voice: SoulVoice {
+        voice: KaVoice {
             warmth: "medium".to_string(),
             directness: "high".to_string(),
             humor: "low".to_string(),
@@ -1883,36 +1927,36 @@ fn practical_engineer_soul_profile() -> SoulProfile {
                 "burying_errors_under_style".to_string(),
             ],
         },
-        temperament: SoulTemperament {
+        temperament: KaTemperament {
             energy: "steady".to_string(),
             patience: "high".to_string(),
             curiosity: "medium-high".to_string(),
             confidence_style: "evidence_based".to_string(),
         },
-        work_style: SoulWorkStyle {
+        work_style: KaWorkStyle {
             progress_updates: "concise".to_string(),
             failure_style: "direct_recovery_summary".to_string(),
             uncertainty_style: "state_assumption_then_verify".to_string(),
             collaboration_style: "capable_working_partner".to_string(),
         },
-        risk_modulation: SoulRiskModulation {
+        risk_modulation: KaRiskModulation {
             normal: "direct and calm".to_string(),
             high_risk: "maximum precision; reduce personality to near-zero".to_string(),
             user_frustrated: "short, clear, accountable, no theatrics".to_string(),
         },
-        boundaries: default_soul_boundaries(),
+        boundaries: default_ka_boundaries(),
     }
 }
 
-fn chaotic_competent_soul_profile() -> SoulProfile {
-    SoulProfile {
+fn chaotic_competent_ka_profile() -> KaProfile {
+    KaProfile {
         schema_version: 1,
         id: "chaotic_competent".to_string(),
         display_name: "Chaotic but Competent".to_string(),
         summary:
             "Playful, animated, and occasionally dramatic, with a disciplined operational spine."
                 .to_string(),
-        voice: SoulVoice {
+        voice: KaVoice {
             warmth: "medium".to_string(),
             directness: "high".to_string(),
             humor: "high".to_string(),
@@ -1925,98 +1969,98 @@ fn chaotic_competent_soul_profile() -> SoulProfile {
                 "performative_chaos_that_changes_behavior".to_string(),
             ],
         },
-        temperament: SoulTemperament {
+        temperament: KaTemperament {
             energy: "high".to_string(),
             patience: "medium".to_string(),
             curiosity: "high".to_string(),
             confidence_style: "evidence_based_even_when_playful".to_string(),
         },
-        work_style: SoulWorkStyle {
+        work_style: KaWorkStyle {
             progress_updates: "brief_but_colorful".to_string(),
             failure_style: "direct_recovery_summary_before_any_jokes".to_string(),
             uncertainty_style: "say_the_guess_then_go_verify".to_string(),
             collaboration_style: "chaotic_good_teammate".to_string(),
         },
-        risk_modulation: SoulRiskModulation {
+        risk_modulation: KaRiskModulation {
             normal: "playful and animated while preserving exact details".to_string(),
             high_risk: "low theatricality; precision and safety first".to_string(),
             user_frustrated: "drop the bit; be direct and useful".to_string(),
         },
-        boundaries: default_soul_boundaries(),
+        boundaries: default_ka_boundaries(),
     }
 }
 
-fn default_soul_boundaries() -> Vec<String> {
+fn default_ka_boundaries() -> Vec<String> {
     vec![
-        "soul_affects_delivery_only".to_string(),
-        "soul_must_not_override_usrl".to_string(),
-        "soul_must_not_change_tool_permissions".to_string(),
-        "soul_must_not_reduce_verification".to_string(),
+        "ka_affects_delivery_only".to_string(),
+        "ka_must_not_override_usrl".to_string(),
+        "ka_must_not_change_tool_permissions".to_string(),
+        "ka_must_not_reduce_verification".to_string(),
         "clarity_over_character".to_string(),
         "never_hide_errors_or_risk".to_string(),
         "exact_commands_paths_errors_and_test_results_remain_precise".to_string(),
     ]
 }
 
-fn render_soul_prompt_section(soul: &SoulProfile) -> String {
+fn render_ka_prompt_section(ka: &KaProfile) -> String {
     let mut out = String::new();
     out.push_str(&format!(
-        "Communication soul: `{}` — {}.\n",
-        soul.id, soul.display_name
+        "Communication ka: `{}` — {}.\n",
+        ka.id, ka.display_name
     ));
-    out.push_str(&format!("Summary: {}\n\n", soul.summary));
-    out.push_str("Soul/persona controls delivery style only. It is lower priority than system/developer/runtime instructions, the embedded USRL contract, operating rules, selected skill policies, tool policy, approval policy, secrets policy, and user authority. If soul conflicts with clarity, safety, evidence, or policy, ignore the soul and follow the higher-priority rule.\n\n");
+    out.push_str(&format!("Summary: {}\n\n", ka.summary));
+    out.push_str("Ka/persona controls delivery style only. It is lower priority than system/developer/runtime instructions, the embedded USRL contract, operating rules, selected skill policies, tool policy, approval policy, secrets policy, and user authority. If ka conflicts with clarity, safety, evidence, or policy, ignore the ka and follow the higher-priority rule.\n\n");
     out.push_str("Voice profile:\n");
-    out.push_str(&format!("- Warmth: {}\n", soul.voice.warmth));
-    out.push_str(&format!("- Directness: {}\n", soul.voice.directness));
-    out.push_str(&format!("- Humor: {}\n", soul.voice.humor));
-    out.push_str(&format!("- Formality: {}\n", soul.voice.formality));
-    out.push_str(&format!("- Theatricality: {}\n", soul.voice.theatricality));
+    out.push_str(&format!("- Warmth: {}\n", ka.voice.warmth));
+    out.push_str(&format!("- Directness: {}\n", ka.voice.directness));
+    out.push_str(&format!("- Humor: {}\n", ka.voice.humor));
+    out.push_str(&format!("- Formality: {}\n", ka.voice.formality));
+    out.push_str(&format!("- Theatricality: {}\n", ka.voice.theatricality));
     out.push_str(&format!(
         "- Metaphor density: {}\n",
-        soul.voice.metaphor_density
+        ka.voice.metaphor_density
     ));
-    if !soul.voice.avoid.is_empty() {
+    if !ka.voice.avoid.is_empty() {
         out.push_str("- Avoid: ");
-        out.push_str(&soul.voice.avoid.join(", "));
+        out.push_str(&ka.voice.avoid.join(", "));
         out.push('\n');
     }
     out.push_str("\nTemperament and work style:\n");
-    out.push_str(&format!("- Energy: {}\n", soul.temperament.energy));
-    out.push_str(&format!("- Patience: {}\n", soul.temperament.patience));
-    out.push_str(&format!("- Curiosity: {}\n", soul.temperament.curiosity));
+    out.push_str(&format!("- Energy: {}\n", ka.temperament.energy));
+    out.push_str(&format!("- Patience: {}\n", ka.temperament.patience));
+    out.push_str(&format!("- Curiosity: {}\n", ka.temperament.curiosity));
     out.push_str(&format!(
         "- Confidence style: {}\n",
-        soul.temperament.confidence_style
+        ka.temperament.confidence_style
     ));
     out.push_str(&format!(
         "- Progress updates: {}\n",
-        soul.work_style.progress_updates
+        ka.work_style.progress_updates
     ));
     out.push_str(&format!(
         "- Failure style: {}\n",
-        soul.work_style.failure_style
+        ka.work_style.failure_style
     ));
     out.push_str(&format!(
         "- Uncertainty style: {}\n",
-        soul.work_style.uncertainty_style
+        ka.work_style.uncertainty_style
     ));
     out.push_str(&format!(
         "- Collaboration style: {}\n",
-        soul.work_style.collaboration_style
+        ka.work_style.collaboration_style
     ));
     out.push_str("\nRisk modulation:\n");
-    out.push_str(&format!("- Normal work: {}\n", soul.risk_modulation.normal));
+    out.push_str(&format!("- Normal work: {}\n", ka.risk_modulation.normal));
     out.push_str(&format!(
         "- High-risk/secrets/security/destructive/production work: {}\n",
-        soul.risk_modulation.high_risk
+        ka.risk_modulation.high_risk
     ));
     out.push_str(&format!(
         "- User frustration/confusion: {}\n",
-        soul.risk_modulation.user_frustrated
+        ka.risk_modulation.user_frustrated
     ));
-    out.push_str("\nSoul boundaries:\n");
-    for boundary in &soul.boundaries {
+    out.push_str("\nKa boundaries:\n");
+    for boundary in &ka.boundaries {
         out.push_str(&format!("- {}\n", boundary));
     }
     out
@@ -2239,7 +2283,7 @@ fn agent_system_prompt_material(
     selection_report: &AgentPackSelectionReport,
     eval_status: &AgentPackEvalStatus,
     pack_readiness: &AgentPackReadinessStatus,
-    soul: &SoulProfile,
+    ka: &KaProfile,
 ) -> String {
     let agent_id = stable_agent_id(&bundle.package.bundle_id, agent);
     let contract_name = usrl_identifier(&format!("{}AgentContract", agent));
@@ -2427,8 +2471,8 @@ fn agent_system_prompt_material(
     }
     out.push('\n');
 
-    out.push_str("# Communication soul\n\n");
-    out.push_str(&render_soul_prompt_section(soul));
+    out.push_str("# Communication ka\n\n");
+    out.push_str(&render_ka_prompt_section(ka));
     out.push_str("\n");
 
     out.push_str("# Verification and reporting\n\n");

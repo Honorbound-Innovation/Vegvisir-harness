@@ -67,17 +67,18 @@ fn speech_status() -> String {
             } else {
                 "missing"
             };
-            format!("- {}: {}", backend.command, status)
+            format!("- {} ({}): {}", backend.command, backend.label, status)
         })
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "Speech-to-text backend status:\n{backends}\n\nVegvisir currently uses local Whisper-compatible CLI tools only. No audio or credentials are sent to a remote provider by this command."
+        "Speech-to-text backend status:\n{backends}\n\nVegvisir currently uses local Whisper-compatible CLI tools only. No audio or credentials are sent to a remote provider by this command.\n\n{}",
+        speech_install_help()
     )
 }
 
 fn speech_install_help() -> &'static str {
-    "Install a local Whisper-compatible CLI such as `whisper` from openai-whisper or `whisper-cli`/`whisper.cpp`, then run `/speech transcribe path/to/audio.wav`."
+    "Do not run `cargo install whisper`: the crates.io `whisper` package is an old unrelated database crate and does not provide speech-to-text.\n\nInstall one of these real Whisper STT backends instead:\n  - OpenAI Whisper Python CLI: `pipx install openai-whisper` or `python3 -m pip install --user openai-whisper`\n  - whisper.cpp: build/install whisper.cpp so `whisper-cli` is on PATH\n\nThen run `/speech transcribe path/to/audio.wav`."
 }
 
 fn resolve_speech_audio_path(cwd: &Path, value: &str) -> anyhow::Result<PathBuf> {
@@ -98,6 +99,7 @@ fn resolve_speech_audio_path(cwd: &Path, value: &str) -> anyhow::Result<PathBuf>
 
 struct SpeechBackend {
     command: &'static str,
+    label: &'static str,
     kind: SpeechBackendKind,
 }
 
@@ -110,14 +112,17 @@ fn speech_backends() -> Vec<SpeechBackend> {
     vec![
         SpeechBackend {
             command: "whisper",
+            label: "OpenAI Whisper Python CLI, not the crates.io Rust crate",
             kind: SpeechBackendKind::OpenAiWhisper,
         },
         SpeechBackend {
             command: "whisper-cli",
+            label: "whisper.cpp CLI",
             kind: SpeechBackendKind::WhisperCli,
         },
         SpeechBackend {
             command: "whisper.cpp",
+            label: "whisper.cpp CLI compatibility name",
             kind: SpeechBackendKind::WhisperCli,
         },
     ]
@@ -138,7 +143,7 @@ fn transcribe_audio_file(path: &Path) -> anyhow::Result<String> {
             Err(_) => continue,
         }
     }
-    anyhow::bail!("no usable local Whisper backend found")
+    anyhow::bail!("no usable local Whisper speech-to-text backend found")
 }
 
 fn run_openai_whisper(command: &str, path: &Path) -> anyhow::Result<String> {
