@@ -35,6 +35,161 @@ fn strip_ansi(text: &str) -> String {
 }
 
 impl TuiApplication {
+    pub(crate) fn session_status_command(&mut self, _args: &[String]) -> String {
+        let body = self.session_status_report();
+        self.info_scroll_offset = 0;
+        self.info_overlay = Some(InfoOverlay {
+            title: "session status".to_string(),
+            body: body.clone(),
+        });
+        body
+    }
+
+    fn session_status_report(&self) -> String {
+        let message_count = self.session.messages.len();
+        let user_messages = self
+            .session
+            .messages
+            .iter()
+            .filter(|message| message.role == "user")
+            .count();
+        let assistant_messages = self
+            .session
+            .messages
+            .iter()
+            .filter(|message| message.role == "assistant")
+            .count();
+        let system_messages = self
+            .session
+            .messages
+            .iter()
+            .filter(|message| message.role == "system")
+            .count();
+        let attachment_count: usize = self
+            .session
+            .messages
+            .iter()
+            .map(|message| message.attachments.len())
+            .sum::<usize>()
+            + self.session.pending_attachments.len();
+        let session_age = chrono::Utc::now()
+            .signed_duration_since(self.session.created_at)
+            .num_seconds()
+            .max(0);
+        let provider_reported_total = self
+            .session
+            .provider_reported_input_tokens
+            .saturating_add(self.session.provider_reported_output_tokens);
+        let local_total = self
+            .session
+            .input_tokens_used
+            .saturating_add(self.session.output_tokens_used);
+        let context_percent = if self.session.context_limit > 0 {
+            (local_total as f64 / self.session.context_limit as f64) * 100.0
+        } else {
+            0.0
+        };
+        let pending_approvals = self.tool_executor.guardrails.approvals.pending_len();
+        let recent_events = self.logger.events().len();
+        let token_source = if provider_reported_total > 0 {
+            "mixed: provider-reported where available, local tiktoken for streaming/unsupported providers"
+        } else {
+            "local tiktoken count"
+        };
+        let active_agent = self
+            .session
+            .active_agent_name
+            .as_deref()
+            .or(self.session.active_agent_id.as_deref())
+            .unwrap_or("none");
+        format!(
+            "Session status\n\
+             session_id: {}\n\
+             title: {}\n\
+             workspace: {}\n\
+             created_at: {}\n\
+             age: {}\n\
+             status: {}\n\
+             activity: {}\n\
+             provider: {}\n\
+             model: {}\n\
+             active_agent: {}\n\
+             autonomous_mode: {}\n\
+             risky_tools: {}\n\
+             dangerous_bypass: {}\n\n\
+             Token telemetry\n\
+             source: {}\n\
+             input_tokens: {}\n\
+             output_tokens: {}\n\
+             total_tokens: {}\n\
+             provider_reported_input_tokens: {}\n\
+             provider_reported_output_tokens: {}\n\
+             provider_reported_total_tokens: {}\n\
+             context_limit: {}\n\
+             context_used_estimate: {:.1}%\n\n\
+             Session telemetry\n\
+             messages: {} total / {} user / {} assistant / {} system\n\
+             attachments: {} active+pending\n\
+             pending_approvals: {}\n\
+             pending_model_response: {}\n\
+             pending_background_jobs: {}\n\
+             last_latency_ms: {}\n\
+             trace_events: {}",
+            self.session.session_id,
+            self.session.title,
+            self.cwd.display(),
+            self.session.created_at.to_rfc3339(),
+            format_duration(session_age),
+            self.session.status,
+            if self.session.activity.trim().is_empty() {
+                "none"
+            } else {
+                self.session.activity.as_str()
+            },
+            self.session.current_provider,
+            self.session.current_model,
+            active_agent,
+            if self.autonomous_mode_enabled {
+                "enabled"
+            } else {
+                "disabled"
+            },
+            if self.tool_executor.guardrails.policy.allow_risky_tools {
+                "enabled"
+            } else {
+                "disabled"
+            },
+            if self.dangerously_bypass_approvals_and_sandbox {
+                "enabled"
+            } else {
+                "disabled"
+            },
+            token_source,
+            self.session.input_tokens_used,
+            self.session.output_tokens_used,
+            local_total,
+            self.session.provider_reported_input_tokens,
+            self.session.provider_reported_output_tokens,
+            provider_reported_total,
+            self.session.context_limit,
+            context_percent,
+            message_count,
+            user_messages,
+            assistant_messages,
+            system_messages,
+            attachment_count,
+            pending_approvals,
+            if self.pending_send.is_some() {
+                "yes"
+            } else {
+                "no"
+            },
+            self.pending_background_jobs.len(),
+            self.session.last_latency_ms,
+            recent_events,
+        )
+    }
+
     pub(crate) fn work_command(&mut self, args: &[String]) -> String {
         let limit = parse_limit(args, 40);
         let body = self.work_activity_report(limit);
@@ -530,5 +685,18 @@ impl TuiApplication {
             .unwrap_or_else(|| path.display().to_string());
         self.session.pending_attachments.push(attachment);
         Ok(format!("Attached {name}"))
+    }
+}
+
+fn format_duration(seconds: i64) -> String {
+    let hours = seconds / 3600;
+    let minutes = (seconds % 3600) / 60;
+    let secs = seconds % 60;
+    if hours > 0 {
+        format!("{hours}h {minutes}m {secs}s")
+    } else if minutes > 0 {
+        format!("{minutes}m {secs}s")
+    } else {
+        format!("{secs}s")
     }
 }

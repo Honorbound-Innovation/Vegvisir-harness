@@ -30,6 +30,7 @@ pub mod setup;
 pub mod speech;
 pub mod state;
 pub mod subagents;
+pub mod telemetry;
 pub mod tools;
 pub mod tui2;
 pub mod types;

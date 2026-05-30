@@ -207,6 +207,7 @@ impl TuiApplication {
             }
             "/cancel" => self.cancel_pending_response(),
             "/history" => self.history(),
+            "/status" => self.session_status_command(&args),
             "/diff" => self.diff_command(&args)?,
             "/save" => format!(
                 "Saved session to {}",

@@ -259,6 +259,7 @@ fn should_show_info_overlay(command: &str, response: &str) -> bool {
             | "/system"
             | "/system-prompt"
             | "/trace"
+            | "/status"
             | "/config"
             | "/mcp"
             | "/hbse"
@@ -1368,6 +1369,166 @@ mod tests {
 
         app.handle_key_event(KeyEvent::new(KeyCode::F(12), KeyModifiers::NONE));
         assert!(app.mouse_capture_enabled);
+        Ok(())
+    }
+
+    #[test]
+    fn load_session_restores_saved_session_and_normalizes_runtime_state() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace)?;
+        let data_root = tmp.path().join("home");
+        let mut app = TuiApplication::with_data_root(&workspace, &data_root)?;
+        let original_id = app.session.session_id.clone();
+        app.session.title = "loadable".to_string();
+        app.session.status = "streaming".to_string();
+        app.session.activity = "old in-flight activity".to_string();
+        app.session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "saved user message".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        app.sessions.save(&app.session)?;
+
+        app.execute_command("/new throwaway")?;
+        assert_ne!(app.session.session_id, original_id);
+
+        let response = app
+            .execute_command(&format!("/load {original_id}"))?
+            .unwrap();
+
+        assert!(response.contains(&format!("Loaded session {original_id}")));
+        assert_eq!(app.session.session_id, original_id);
+        assert_eq!(app.session.status, "ready");
+        assert!(app.session.activity.is_empty());
+        assert_eq!(app.session.cwd, workspace.display().to_string());
+        assert_eq!(app.sessions.cwd, workspace);
+        assert_eq!(app.session.messages.len(), 1);
+        assert_eq!(app.session.messages[0].content, "saved user message");
+        assert_eq!(app.chat_scroll_offset, 0);
+        assert!(app.redraw_requested);
+        Ok(())
+    }
+
+    #[test]
+    fn load_session_resolves_unique_prefix_and_reports_missing_ids() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace)?;
+        let data_root = tmp.path().join("home");
+        let mut app = TuiApplication::with_data_root(&workspace, &data_root)?;
+        let session_id = app.session.session_id.clone();
+        app.session.title = "prefix-loadable".to_string();
+        app.sessions.save(&app.session)?;
+
+        app.execute_command("/new throwaway")?;
+        assert_ne!(app.session.session_id, session_id);
+
+        let prefix = &session_id[..8];
+        let response = app.execute_command(&format!("/load {prefix}"))?.unwrap();
+        assert!(response.contains(&format!("Loaded session {session_id}")));
+        assert_eq!(app.session.session_id, session_id);
+
+        let response = app.execute_command("/load definitely-missing")?.unwrap();
+        assert!(response.contains("No saved session matching 'definitely-missing'"));
+        assert!(response.contains(&app.sessions.store.root.display().to_string()));
+        assert!(response.contains("Use /sessions to list saved session ids."));
+        Ok(())
+    }
+
+    #[test]
+    fn load_session_falls_back_to_default_xdg_session_root() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace)?;
+        let custom_data_root = tmp.path().join("workspace-data");
+        let default_data_root = tmp.path().join("xdg-data").join("vegvisir");
+        let mut source_app = TuiApplication::with_data_root(&workspace, &default_data_root)?;
+        let session_id = source_app.session.session_id.clone();
+        source_app.session.title = "default-root-loadable".to_string();
+        source_app.session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "saved in default xdg root".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        source_app.sessions.save(&source_app.session)?;
+        drop(source_app);
+
+        let previous_xdg = std::env::var_os("XDG_DATA_HOME");
+        unsafe {
+            std::env::set_var("XDG_DATA_HOME", tmp.path().join("xdg-data"));
+        }
+        let result = (|| -> anyhow::Result<()> {
+            let mut app = TuiApplication::with_data_root(&workspace, &custom_data_root)?;
+            assert_ne!(app.sessions.store.root, default_data_root.join("sessions"));
+
+            let response = app
+                .execute_command(&format!("/load {session_id}"))?
+                .unwrap();
+
+            assert!(response.contains(&format!("Loaded session {session_id}")));
+            assert_eq!(app.session.session_id, session_id);
+            assert_eq!(app.session.messages.len(), 1);
+            assert_eq!(app.session.messages[0].content, "saved in default xdg root");
+            Ok(())
+        })();
+        unsafe {
+            match previous_xdg {
+                Some(value) => std::env::set_var("XDG_DATA_HOME", value),
+                None => std::env::remove_var("XDG_DATA_HOME"),
+            }
+        }
+        result
+    }
+
+    #[test]
+    fn load_session_with_missing_saved_workspace_stays_in_active_workspace() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace)?;
+        let data_root = tmp.path().join("home");
+        let mut app = TuiApplication::with_data_root(&workspace, &data_root)?;
+        let session_id = app.session.session_id.clone();
+        app.session.cwd = tmp.path().join("deleted-workspace").display().to_string();
+        app.sessions.save(&app.session)?;
+
+        let response = app
+            .execute_command(&format!("/load {session_id}"))?
+            .unwrap();
+
+        assert!(response.contains(&format!("Loaded session {session_id}")));
+        assert_eq!(app.session.session_id, session_id);
+        assert_eq!(app.cwd, workspace);
+        assert_eq!(app.sessions.cwd, workspace);
+        assert_eq!(app.session.cwd, workspace.display().to_string());
+        Ok(())
+    }
+
+    #[test]
+    fn status_command_reports_session_telemetry() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.session.input_tokens_used = 123;
+        app.session.output_tokens_used = 45;
+        app.session.provider_reported_input_tokens = 100;
+        app.session.provider_reported_output_tokens = 40;
+        app.session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "hello".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+
+        let response = app.execute_command("/session-status")?.unwrap();
+
+        assert!(response.contains("Session status"));
+        assert!(response.contains("input_tokens: 123"));
+        assert!(response.contains("output_tokens: 45"));
+        assert!(response.contains("total_tokens: 168"));
+        assert!(response.contains("provider_reported_total_tokens: 140"));
+        assert!(app.info_overlay.is_some());
         Ok(())
     }
 

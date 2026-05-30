@@ -18,9 +18,16 @@ impl TuiApplication {
         self.input.update_suggestions(Vec::new());
 
         if raw.starts_with('/') {
+            let suppress_command_chat_response = self
+                .commands
+                .parse_with_aliases(&raw)
+                .map(|(command, _)| command == "/load")
+                .unwrap_or(false);
             match self.execute_command(&raw) {
                 Ok(Some(response)) if !response.is_empty() => {
-                    self.push_system_message(response);
+                    if !suppress_command_chat_response {
+                        self.push_system_message(response);
+                    }
                     self.autosave_session();
                 }
                 Ok(_) => {

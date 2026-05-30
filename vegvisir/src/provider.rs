@@ -21,6 +21,7 @@ use crate::{
     environment::get_env,
     guardrails::ApprovalResolution,
     openai_sso::{codex_base_url, load_fresh_tokens_for_metadata},
+    telemetry::selected_usage_or_counted,
     tools::{ToolExecutor, ToolRegistry},
     types::{Observation, ToolCall},
 };
@@ -107,6 +108,33 @@ pub fn set_runtime_max_tool_rounds(limit: Option<usize>) -> Option<usize> {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TokenUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
+impl TokenUsage {
+    pub fn total(self) -> u64 {
+        self.input_tokens.saturating_add(self.output_tokens)
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProviderResponse {
+    pub content: String,
+    pub usage: Option<TokenUsage>,
+}
+
+impl ProviderResponse {
+    pub fn new(content: String) -> Self {
+        Self {
+            content,
+            usage: None,
+        }
+    }
+}
+
 pub trait ProviderAdapter {
     fn config(&self) -> &ProviderConfig;
     fn complete(
@@ -115,6 +143,16 @@ pub trait ProviderAdapter {
         model: &ModelInfo,
         selected_provider: &str,
     ) -> anyhow::Result<String>;
+
+    fn complete_with_usage(
+        &self,
+        messages: &[ChatMessage],
+        model: &ModelInfo,
+        selected_provider: &str,
+    ) -> anyhow::Result<ProviderResponse> {
+        self.complete(messages, model, selected_provider)
+            .map(ProviderResponse::new)
+    }
 
     fn complete_envelope(
         &self,
@@ -159,6 +197,18 @@ pub trait ProviderAdapter {
             "Provider {} does not support native tool calls.",
             model.provider
         )
+    }
+
+    fn complete_with_tools_usage(
+        &self,
+        messages: &[ChatMessage],
+        model: &ModelInfo,
+        tools: &[Value],
+        execute_tool: &mut dyn FnMut(&str, Map<String, Value>) -> String,
+        selected_provider: &str,
+    ) -> anyhow::Result<ProviderResponse> {
+        self.complete_with_tools(messages, model, tools, execute_tool, selected_provider)
+            .map(ProviderResponse::new)
     }
 
     fn complete_with_tools_streaming(
@@ -333,6 +383,20 @@ impl ProviderAdapter for OpenAICompatibleProviderAdapter {
             return self.post_response_streaming(messages, model, &mut |_| {});
         }
         self.post_chat_completion(model, openai_messages(messages), None)
+    }
+
+    fn complete_with_usage(
+        &self,
+        messages: &[ChatMessage],
+        model: &ModelInfo,
+        _selected_provider: &str,
+    ) -> anyhow::Result<ProviderResponse> {
+        if openai_compatible_uses_responses_api(&self.config) {
+            return self
+                .post_response_streaming(messages, model, &mut |_| {})
+                .map(ProviderResponse::new);
+        }
+        self.post_chat_completion_with_usage(model, openai_messages(messages), None)
     }
 
     fn complete_envelope(
@@ -585,6 +649,51 @@ impl OpenAICompatibleProviderAdapter {
             })
         }
     }
+
+    fn post_chat_completion_with_usage(
+        &self,
+        model: &ModelInfo,
+        messages: Vec<Value>,
+        metadata: Option<Value>,
+    ) -> anyhow::Result<ProviderResponse> {
+        let api_key = optional_provider_env(&self.config)?;
+        let base_url = self
+            .config
+            .base_url
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("Provider {} has no base_url", self.config.name))?;
+        let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+        let mut payload = json!({
+            "model": model.name,
+            "messages": messages,
+            "stream": false
+        });
+        let store = provider_store_enabled(&self.config);
+        if store {
+            payload["store"] = json!(true);
+        }
+        if store && let Some(metadata) = metadata {
+            payload["metadata"] = metadata;
+        }
+        let mut request = ureq::post(&url)
+            .set("Content-Type", "application/json")
+            .set("Accept", "application/json");
+        if let Some(api_key) = api_key {
+            request = request.set("Authorization", &format!("Bearer {api_key}"));
+        }
+        let response: Value =
+            send_provider_json(request, payload, &self.config.name)?.into_json()?;
+        let content = extract_openai_compatible_text(&response).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Provider {} response did not include assistant text",
+                self.config.name
+            )
+        })?;
+        Ok(ProviderResponse {
+            content,
+            usage: extract_provider_usage(&response),
+        })
+    }
 }
 
 impl ProviderAdapter for HBSEOpenAICompatibleProviderAdapter {
@@ -602,6 +711,20 @@ impl ProviderAdapter for HBSEOpenAICompatibleProviderAdapter {
             return self.post_response_streaming(messages, model, &mut |_| {});
         }
         self.post_chat_completion(model, openai_messages(messages), None)
+    }
+
+    fn complete_with_usage(
+        &self,
+        messages: &[ChatMessage],
+        model: &ModelInfo,
+        _selected_provider: &str,
+    ) -> anyhow::Result<ProviderResponse> {
+        if openai_compatible_uses_responses_api(&self.config) {
+            return self
+                .post_response_streaming(messages, model, &mut |_| {})
+                .map(ProviderResponse::new);
+        }
+        self.post_chat_completion_with_usage(model, openai_messages(messages), None)
     }
 
     fn complete_envelope(
@@ -901,6 +1024,65 @@ impl HBSEOpenAICompatibleProviderAdapter {
                 )
             })
         }
+    }
+
+    fn post_chat_completion_with_usage(
+        &self,
+        model: &ModelInfo,
+        messages: Vec<Value>,
+        metadata: Option<Value>,
+    ) -> anyhow::Result<ProviderResponse> {
+        let base_url = self
+            .config
+            .base_url
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("Provider {} has no base_url", self.config.name))?;
+        let mut payload = json!({
+            "model": model.name,
+            "messages": messages,
+            "stream": false,
+        });
+        let store = provider_store_enabled(&self.config);
+        if store {
+            payload["store"] = json!(true);
+        }
+        if store && let Some(metadata) = metadata {
+            payload["metadata"] = metadata;
+        }
+        let response = hbse_provider_http_with_url(
+            &self.config,
+            &format!("{}/chat/completions", base_url.trim_end_matches('/')),
+            "application/json",
+            serde_json::to_string(&payload)?,
+        )?;
+        let status = response
+            .get("status_code")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let body = response
+            .get("body")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        if status >= 400 {
+            anyhow::bail!(
+                "{} request failed through HBSE: {} {}",
+                self.config.name,
+                status,
+                body.chars().take(400).collect::<String>()
+            );
+        }
+        let value: Value = serde_json::from_str(&body)?;
+        let content = extract_openai_compatible_text(&value).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Provider {} response did not include assistant text",
+                self.config.name
+            )
+        })?;
+        Ok(ProviderResponse {
+            content,
+            usage: extract_provider_usage(&value),
+        })
     }
 }
 
@@ -2361,6 +2543,28 @@ fn openai_messages(messages: &[ChatMessage]) -> Vec<Value> {
         .collect()
 }
 
+fn extract_provider_usage(response: &Value) -> Option<TokenUsage> {
+    let usage = response.get("usage")?;
+    let input_tokens = usage
+        .get("prompt_tokens")
+        .or_else(|| usage.get("input_tokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let output_tokens = usage
+        .get("completion_tokens")
+        .or_else(|| usage.get("output_tokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if input_tokens == 0 && output_tokens == 0 {
+        None
+    } else {
+        Some(TokenUsage {
+            input_tokens,
+            output_tokens,
+        })
+    }
+}
+
 fn extract_openai_compatible_text(response: &Value) -> Option<String> {
     response
         .pointer("/choices/0/message/content")
@@ -2990,6 +3194,41 @@ impl ProviderAdapter for ProviderAdapterKind {
             Self::Google(adapter) => adapter.complete(messages, model, selected_provider),
             Self::HBSEGoogle(adapter) => adapter.complete(messages, model, selected_provider),
             Self::OpenAISso(adapter) => adapter.complete(messages, model, selected_provider),
+        }
+    }
+
+    fn complete_with_usage(
+        &self,
+        messages: &[ChatMessage],
+        model: &ModelInfo,
+        selected_provider: &str,
+    ) -> anyhow::Result<ProviderResponse> {
+        match self {
+            Self::Demo(adapter) => adapter.complete_with_usage(messages, model, selected_provider),
+            Self::OpenAICompatible(adapter) => {
+                adapter.complete_with_usage(messages, model, selected_provider)
+            }
+            Self::HBSEOpenAICompatible(adapter) => {
+                adapter.complete_with_usage(messages, model, selected_provider)
+            }
+            Self::HBSEAzureOpenAI(adapter) => {
+                adapter.complete_with_usage(messages, model, selected_provider)
+            }
+            Self::Anthropic(adapter) => {
+                adapter.complete_with_usage(messages, model, selected_provider)
+            }
+            Self::HBSEAnthropic(adapter) => {
+                adapter.complete_with_usage(messages, model, selected_provider)
+            }
+            Self::Google(adapter) => {
+                adapter.complete_with_usage(messages, model, selected_provider)
+            }
+            Self::HBSEGoogle(adapter) => {
+                adapter.complete_with_usage(messages, model, selected_provider)
+            }
+            Self::OpenAISso(adapter) => {
+                adapter.complete_with_usage(messages, model, selected_provider)
+            }
         }
     }
 
@@ -3889,7 +4128,7 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
             );
         }
         let started = Instant::now();
-        let response = if self
+        let provider_response = if self
             .provider
             .supports_tool_calls(model, &session.current_provider)
             && self.tools.is_some()
@@ -3953,7 +4192,7 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
                 inject_steering_into_observation(&steering_rx, session, observation_text)
             };
             let _ = session_id;
-            let response = self.provider.complete_with_tools(
+            let response = self.provider.complete_with_tools_usage(
                 &provider_messages,
                 model,
                 &tools,
@@ -3966,10 +4205,21 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
             let _ = drain_steering_messages(&steering_rx, session);
             response
         } else {
-            self.provider
-                .complete(&provider_messages, model, &session.current_provider)?
+            self.provider.complete_with_usage(
+                &provider_messages,
+                model,
+                &session.current_provider,
+            )?
         };
         let _ = drain_steering_messages(&self.steering_rx, session);
+        let response = provider_response.content;
+        update_session_token_usage(
+            session,
+            model.name.as_str(),
+            content,
+            &response,
+            provider_response.usage,
+        );
         session.messages.push(ChatMessage {
             role: "assistant".to_string(),
             content: response.clone(),
@@ -3977,9 +4227,6 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
             created_at: chrono::Utc::now(),
         });
         session.last_latency_ms = started.elapsed().as_millis() as u64;
-        session.tokens_used += (content.split_whitespace().count()
-            + response.split_whitespace().count())
-        .max(1) as u64;
         session.status = "ready".to_string();
         session.activity.clear();
         Ok(response)
@@ -4162,10 +4409,8 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
             created_at: chrono::Utc::now(),
         });
         session.last_latency_ms = started.elapsed().as_millis() as u64;
-        session.tokens_used += (content.split_whitespace().count()
-            + response.split_whitespace().count()
-            + envelope.manifest.total_prompt_tokens)
-            .max(1) as u64;
+        let input_text = format!("{}\n{}", envelope.model_request.prompt, content);
+        update_session_token_usage(session, model.name.as_str(), &input_text, &response, None);
         session.status = "ready".to_string();
         session.activity.clear();
         Ok(response)
@@ -4173,6 +4418,30 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
 
     fn emit_event(&self, event: ProviderRunEvent) {
         emit_provider_event(&self.event_sink, event);
+    }
+}
+
+fn update_session_token_usage(
+    session: &mut SessionState,
+    model: &str,
+    input_text: &str,
+    output_text: &str,
+    provider_usage: Option<TokenUsage>,
+) {
+    let reported_usage = provider_usage;
+    let (usage, source) = selected_usage_or_counted(reported_usage, model, input_text, output_text);
+    session.input_tokens_used = session.input_tokens_used.saturating_add(usage.input_tokens);
+    session.output_tokens_used = session
+        .output_tokens_used
+        .saturating_add(usage.output_tokens);
+    session.tokens_used = session.tokens_used.saturating_add(usage.total());
+    if reported_usage.is_some() && source == crate::telemetry::TokenCountSource::ProviderReported {
+        session.provider_reported_input_tokens = session
+            .provider_reported_input_tokens
+            .saturating_add(usage.input_tokens);
+        session.provider_reported_output_tokens = session
+            .provider_reported_output_tokens
+            .saturating_add(usage.output_tokens);
     }
 }
 

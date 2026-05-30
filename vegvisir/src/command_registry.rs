@@ -102,6 +102,12 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
         ),
         cmd("/history", "show conversation history", "/history", &[]),
         cmd(
+            "/status",
+            "show session token counts and telemetry",
+            "/status",
+            &["/session-status", "/telemetry"],
+        ),
+        cmd(
             "/diff",
             "show the current workspace git diff; supports delta and difftastic when installed",
             "/diff [semantic|difftastic|delta|unified] [--staged|--cached|--stat] [path]",

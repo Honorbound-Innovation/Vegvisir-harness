@@ -478,6 +478,14 @@ pub struct SessionState {
     #[serde(default)]
     pub input_history: Vec<String>,
     pub tokens_used: u64,
+    #[serde(default)]
+    pub input_tokens_used: u64,
+    #[serde(default)]
+    pub output_tokens_used: u64,
+    #[serde(default)]
+    pub provider_reported_input_tokens: u64,
+    #[serde(default)]
+    pub provider_reported_output_tokens: u64,
     pub context_limit: u64,
     pub last_latency_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -515,6 +523,10 @@ impl SessionState {
             enabled_skills: skills,
             input_history: Vec::new(),
             tokens_used: 0,
+            input_tokens_used: 0,
+            output_tokens_used: 0,
+            provider_reported_input_tokens: 0,
+            provider_reported_output_tokens: 0,
             context_limit: 8192,
             last_latency_ms: 0,
             last_prompt_cache_key: None,
@@ -610,6 +622,10 @@ impl SessionManager {
     pub fn reset(&self, session: &mut SessionState) {
         session.messages.clear();
         session.tokens_used = 0;
+        session.input_tokens_used = 0;
+        session.output_tokens_used = 0;
+        session.provider_reported_input_tokens = 0;
+        session.provider_reported_output_tokens = 0;
         session.status = "ready".to_string();
         session.activity.clear();
         session.activity_tick = 0;

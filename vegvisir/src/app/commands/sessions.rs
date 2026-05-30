@@ -1,3 +1,5 @@
+use anyhow::Context;
+
 use super::super::*;
 
 impl TuiApplication {
@@ -44,25 +46,171 @@ impl TuiApplication {
     }
 
     pub(crate) fn load_session_command(&mut self, args: &[String]) -> anyhow::Result<String> {
-        let Some(session_id) = args.first() else {
+        let Some(session_id) = args.first().map(|id| id.trim()).filter(|id| !id.is_empty()) else {
             return Ok("Usage: /load <session-id>".to_string());
         };
+
+        let (_session_id, mut loaded) = match self.resolve_session_id_for_load(session_id)? {
+            SessionLoadResolution::Resolved(session_id) => {
+                let loaded = self.sessions.load(&session_id).with_context(|| {
+                    format!(
+                        "loading session {} from {}",
+                        session_id,
+                        self.sessions.store.path_for(&session_id).display()
+                    )
+                })?;
+                (session_id, loaded)
+            }
+            SessionLoadResolution::ResolvedExternal { session_id, path } => {
+                let loaded = serde_json::from_str::<SessionState>(&std::fs::read_to_string(&path)?)
+                    .with_context(|| {
+                        format!("loading session {} from {}", session_id, path.display())
+                    })?;
+                (session_id, loaded)
+            }
+            SessionLoadResolution::Ambiguous(matches) => {
+                return Ok(format!(
+                    "Session id prefix '{session_id}' is ambiguous. Matches:\n{}",
+                    matches.join("\n")
+                ));
+            }
+            SessionLoadResolution::NotFound { recent, searched } => {
+                let mut message = format!(
+                    "No saved session matching '{session_id}'.\nSearched current session store: {}",
+                    self.sessions.store.root.display()
+                );
+                for path in searched.iter().take(8) {
+                    message.push_str(&format!("\nAlso searched: {}", path.display()));
+                }
+                if !recent.is_empty() {
+                    message.push_str("\nRecent sessions:\n");
+                    message.push_str(&recent.join("\n"));
+                }
+                message.push_str("\nUse /sessions to list saved session ids.");
+                message.push_str("\nUse /config status to confirm the active sessions path.");
+                return Ok(message);
+            }
+        };
+
         self.autosave_session();
-        let loaded = self.sessions.load(session_id)?;
         let loaded_cwd = PathBuf::from(&loaded.cwd);
-        self.session = loaded;
         if loaded_cwd.exists() && loaded_cwd.is_dir() {
             self.set_workspace_root(loaded_cwd)?;
+            loaded.cwd = self.cwd.display().to_string();
+        } else {
+            self.sessions.cwd = self.cwd.clone();
+            loaded.cwd = self.cwd.display().to_string();
         }
+
+        self.session = loaded;
+        self.session.status = "ready".to_string();
+        self.session.activity.clear();
+        self.session.activity_tick = 0;
+        self.session.spinner_verb_seed = 0;
         self.apply_session_workspace_state()?;
         self.input.history = self.session.input_history.clone();
+        self.input.clear();
+        self.input.update_suggestions(Vec::new());
+        self.command_palette_open = false;
+        self.info_scroll_offset = 0;
+        self.info_overlay = Some(InfoOverlay {
+            title: "load".to_string(),
+            body: format!(
+                "Loaded session {} with {} message(s).",
+                self.session.session_id,
+                self.session.messages.len()
+            ),
+        });
         self.chat_scroll_offset = 0;
         self.redraw_requested = true;
+        self.autosave_session();
         Ok(format!(
             "Loaded session {} with {} message(s).",
             self.session.session_id,
             self.session.messages.len()
         ))
+    }
+
+    fn resolve_session_id_for_load(
+        &self,
+        requested_session_id: &str,
+    ) -> anyhow::Result<SessionLoadResolution> {
+        if self.sessions.store.path_for(requested_session_id).exists() {
+            return Ok(SessionLoadResolution::Resolved(
+                requested_session_id.to_string(),
+            ));
+        }
+
+        let external_roots = self.external_session_roots_for_load();
+        for root in &external_roots {
+            let path = root.join(format!("{requested_session_id}.json"));
+            if path.exists() {
+                return Ok(SessionLoadResolution::ResolvedExternal {
+                    session_id: requested_session_id.to_string(),
+                    path,
+                });
+            }
+        }
+
+        let sessions = self.sessions.list()?;
+        let matches = sessions
+            .iter()
+            .filter(|session| session.session_id.starts_with(requested_session_id))
+            .collect::<Vec<_>>();
+        if matches.len() == 1 {
+            return Ok(SessionLoadResolution::Resolved(
+                matches[0].session_id.clone(),
+            ));
+        }
+        if matches.len() > 1 {
+            return Ok(SessionLoadResolution::Ambiguous(
+                matches
+                    .into_iter()
+                    .map(format_session_load_candidate)
+                    .collect(),
+            ));
+        }
+
+        Ok(SessionLoadResolution::NotFound {
+            recent: sessions
+                .iter()
+                .take(10)
+                .map(format_session_load_candidate)
+                .collect(),
+            searched: external_roots,
+        })
+    }
+
+    fn external_session_roots_for_load(&self) -> Vec<PathBuf> {
+        let mut roots = Vec::new();
+        self.add_session_roots_for_data_root(&mut roots, &self.data_root);
+
+        // When Vegvisir is launched with a workspace-local/custom data root, older sessions may
+        // still live in the default per-user XDG data root, e.g.
+        // /home/<user>/.local/share/vegvisir/sessions.  /load should be able to recover those
+        // sessions by id instead of only checking the active workspace/session store.
+        let default_data_root = crate::memory::default_vegvisir_data_root();
+        if default_data_root != self.data_root {
+            self.add_session_roots_for_data_root(&mut roots, &default_data_root);
+        }
+
+        roots
+    }
+
+    fn add_session_roots_for_data_root(&self, roots: &mut Vec<PathBuf>, data_root: &Path) {
+        let local = session_root_for_user(data_root, "local-user");
+        if local != self.sessions.store.root && !roots.contains(&local) {
+            roots.push(local);
+        }
+        let users_root = data_root.join("users");
+        if let Ok(entries) = std::fs::read_dir(users_root) {
+            for entry in entries.flatten() {
+                let path = entry.path().join("sessions");
+                if path != self.sessions.store.root && path.is_dir() && !roots.contains(&path) {
+                    roots.push(path);
+                }
+            }
+        }
     }
 
     pub(crate) fn projects_command(&mut self, args: &[String]) -> anyhow::Result<String> {
@@ -550,4 +698,29 @@ impl TuiApplication {
         self.save_config_defaults()?;
         Ok("Harness system prompt updated.".to_string())
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SessionLoadResolution {
+    Resolved(String),
+    ResolvedExternal {
+        session_id: String,
+        path: PathBuf,
+    },
+    Ambiguous(Vec<String>),
+    NotFound {
+        recent: Vec<String>,
+        searched: Vec<PathBuf>,
+    },
+}
+
+fn format_session_load_candidate(session: &SessionState) -> String {
+    format!(
+        "{}  {}  messages={}  title={}  cwd={}",
+        session.session_id,
+        session.created_at.format("%Y-%m-%d %H:%M:%S"),
+        session.messages.len(),
+        session.title,
+        session.cwd
+    )
 }
