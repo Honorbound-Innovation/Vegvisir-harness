@@ -713,7 +713,7 @@ pub fn build_builtin_registry_with_cms_and_mode(
     let skiller_compile_sandbox = sandbox.clone();
     registry.register(Tool::new(
         "skiller_compile",
-        "Compile local source files/directories into a Skiller skill bundle using the integrated Skiller component.",
+        "Compile local source files/directories into a deterministic Skiller draft bundle and return a Vegvisir Forge request/prompt for default model refinement before final use.",
         Arc::new(move |args| {
             let Some(input) = args.get("input").and_then(Value::as_str) else { return Observation::err("Missing input", "ValueError"); };
             let Some(out) = args.get("out").and_then(Value::as_str) else { return Observation::err("Missing out", "ValueError"); };
@@ -725,16 +725,33 @@ pub fn build_builtin_registry_with_cms_and_mode(
                 let bundle_id = bundle.package.bundle_id.clone();
                 let skill_count = bundle.skills.len();
                 let source_count = bundle.sources.len();
+                let forge_request = skiller_forge::build_vegvisir_handoff(
+                    &bundle,
+                    ForgePassType::SkillExpansion,
+                    domain,
+                    skill_count.clamp(1, 100),
+                );
+                let forge_prompt = skiller_forge::vegvisir_prompt_markdown(&forge_request);
+                let response_template = skiller_forge::response_template_for(&forge_request);
                 skiller_registry::write_bundle(&bundle, &out_path)?;
-                Ok((bundle_id, skill_count, source_count))
+                Ok((bundle_id, skill_count, source_count, forge_request, forge_prompt, response_template))
             }) {
-                Ok((bundle_id, skill_count, source_count)) => {
+                Ok((bundle_id, skill_count, source_count, forge_request, forge_prompt, response_template)) => {
+                    let request_id = forge_request.request_id.clone();
                     let mut data = Map::new();
                     data.insert("bundle_id".to_string(), json!(bundle_id));
                     data.insert("skill_count".to_string(), json!(skill_count));
                     data.insert("source_count".to_string(), json!(source_count));
                     data.insert("out".to_string(), json!(out));
-                    Observation { ok: true, content: format!("Compiled Skiller bundle {bundle_id} to {out} ({skill_count} skills, {source_count} sources)."), data, error: None }
+                    data.insert("deterministic_stage".to_string(), json!(true));
+                    data.insert("forge_required_by_default".to_string(), json!(true));
+                    data.insert("default_forge_pass".to_string(), json!("SkillExpansion"));
+                    data.insert("forge_request_id".to_string(), json!(request_id));
+                    data.insert("forge_request".to_string(), serde_json::to_value(&forge_request).unwrap_or(Value::Null));
+                    data.insert("forge_response_template".to_string(), serde_json::to_value(&response_template).unwrap_or(Value::Null));
+                    data.insert("forge_prompt".to_string(), json!(forge_prompt));
+                    data.insert("recommended_apply_tool".to_string(), json!("skiller_forge_apply"));
+                    Observation { ok: true, content: format!("Compiled deterministic Skiller draft bundle {bundle_id} to {out} ({skill_count} skills, {source_count} sources). Forge refinement is required by default before treating this as agent-ready: use the included ForgeRequestEnvelope ({request_id}) as model context, then apply the model's ForgeResponseEnvelope with skiller_forge_apply."), data, error: None }
                 }
                 Err(error) => Observation::err(error.to_string(), "SkillerCompileError"),
             }
@@ -746,7 +763,7 @@ pub fn build_builtin_registry_with_cms_and_mode(
     let skiller_compile_cli_help_sandbox = sandbox.clone();
     registry.register(Tool::new(
         "skiller_compile_cli_help",
-        "Compile captured CLI help/manpage text into a Skiller CLI operation skill bundle.",
+        "Compile captured CLI help/manpage text into a deterministic Skiller CLI draft bundle and return a Vegvisir Forge request/prompt for default model refinement before final use.",
         Arc::new(move |args| {
             let Some(input) = args.get("input").and_then(Value::as_str) else { return Observation::err("Missing input", "ValueError"); };
             let Some(out) = args.get("out").and_then(Value::as_str) else { return Observation::err("Missing out", "ValueError"); };
@@ -758,16 +775,33 @@ pub fn build_builtin_registry_with_cms_and_mode(
                 let bundle_id = bundle.package.bundle_id.clone();
                 let skill_count = bundle.skills.len();
                 let source_count = bundle.sources.len();
+                let forge_request = skiller_forge::build_vegvisir_handoff(
+                    &bundle,
+                    ForgePassType::SkillExpansion,
+                    domain,
+                    skill_count.clamp(1, 100),
+                );
+                let forge_prompt = skiller_forge::vegvisir_prompt_markdown(&forge_request);
+                let response_template = skiller_forge::response_template_for(&forge_request);
                 skiller_registry::write_bundle(&bundle, &out_path)?;
-                Ok((bundle_id, skill_count, source_count))
+                Ok((bundle_id, skill_count, source_count, forge_request, forge_prompt, response_template))
             }) {
-                Ok((bundle_id, skill_count, source_count)) => {
+                Ok((bundle_id, skill_count, source_count, forge_request, forge_prompt, response_template)) => {
+                    let request_id = forge_request.request_id.clone();
                     let mut data = Map::new();
                     data.insert("bundle_id".to_string(), json!(bundle_id));
                     data.insert("skill_count".to_string(), json!(skill_count));
                     data.insert("source_count".to_string(), json!(source_count));
                     data.insert("out".to_string(), json!(out));
-                    Observation { ok: true, content: format!("Compiled Skiller CLI help bundle {bundle_id} to {out} ({skill_count} skills, {source_count} sources)."), data, error: None }
+                    data.insert("deterministic_stage".to_string(), json!(true));
+                    data.insert("forge_required_by_default".to_string(), json!(true));
+                    data.insert("default_forge_pass".to_string(), json!("SkillExpansion"));
+                    data.insert("forge_request_id".to_string(), json!(request_id));
+                    data.insert("forge_request".to_string(), serde_json::to_value(&forge_request).unwrap_or(Value::Null));
+                    data.insert("forge_response_template".to_string(), serde_json::to_value(&response_template).unwrap_or(Value::Null));
+                    data.insert("forge_prompt".to_string(), json!(forge_prompt));
+                    data.insert("recommended_apply_tool".to_string(), json!("skiller_forge_apply"));
+                    Observation { ok: true, content: format!("Compiled deterministic Skiller CLI help draft bundle {bundle_id} to {out} ({skill_count} skills, {source_count} sources). Forge refinement is required by default before treating this as agent-ready: use the included ForgeRequestEnvelope ({request_id}) as model context, then apply the model's ForgeResponseEnvelope with skiller_forge_apply."), data, error: None }
                 }
                 Err(error) => Observation::err(error.to_string(), "SkillerCompileError"),
             }
@@ -1696,6 +1730,33 @@ mod skiller_tool_tests {
             }))?,
         });
         assert!(compile.ok, "{}", compile.content);
+        assert!(
+            compile
+                .content
+                .contains("Forge refinement is required by default")
+        );
+        assert_eq!(
+            compile.data.get("forge_required_by_default"),
+            Some(&json!(true))
+        );
+        assert_eq!(
+            compile.data.get("default_forge_pass"),
+            Some(&json!("SkillExpansion"))
+        );
+        assert_eq!(
+            compile.data.get("recommended_apply_tool"),
+            Some(&json!("skiller_forge_apply"))
+        );
+        assert!(compile.data.get("forge_request").is_some());
+        assert!(compile.data.get("forge_response_template").is_some());
+        assert!(
+            compile
+                .data
+                .get("forge_prompt")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("Vegvisir Skiller Forge Request")
+        );
         assert!(workspace.path().join("bundle/package.yaml").exists());
 
         let validate = executor.execute(ToolCall {
@@ -1771,6 +1832,17 @@ mod skiller_tool_tests {
             }))?,
         });
         assert!(compile.ok, "{}", compile.content);
+        assert!(
+            compile
+                .content
+                .contains("Forge refinement is required by default")
+        );
+        assert_eq!(
+            compile.data.get("forge_required_by_default"),
+            Some(&json!(true))
+        );
+        assert!(compile.data.get("forge_request").is_some());
+        assert!(compile.data.get("forge_response_template").is_some());
 
         let request_obs = executor.execute(ToolCall {
             name: "skiller_forge_request".to_string(),

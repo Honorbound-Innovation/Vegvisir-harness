@@ -946,6 +946,69 @@ mod tests {
     }
 
     #[test]
+    fn failed_worker_final_drain_preserves_tool_failure_context() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        let (tx, rx) = mpsc::channel();
+        app.pending_stream = Some(rx);
+        app.session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: String::new(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+
+        tx.send(StreamEvent::ToolStart {
+            name: "run_command".to_string(),
+            args: r#"{"command":["false"]}"#.to_string(),
+        })?;
+        tx.send(StreamEvent::ToolEnd {
+            name: "run_command".to_string(),
+            ok: false,
+            summary: "ToolError: command exited with status 1".to_string(),
+            detail: Some("stderr: simulated failure".to_string()),
+        })?;
+        drop(tx);
+
+        // This mirrors poll_pending_send's worker-error path: drain final stream
+        // events before clearing pending_stream and add an assistant-facing
+        // recovery summary. The previous behavior cleared pending_stream first,
+        // losing the ToolEnd detail and making the turn look silently truncated.
+        app.poll_stream_events();
+        app.pending_stream = None;
+        app.pop_empty_assistant_placeholder();
+        app.push_turn_failure_summary("simulated provider abort".to_string());
+
+        let transcript = app
+            .session
+            .messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join(
+                "
+---
+",
+            );
+        assert!(transcript.contains("Running tool: run_command"));
+        assert!(transcript.contains("Tool failed: run_command"));
+        assert!(transcript.contains("stderr: simulated failure"));
+        assert!(
+            transcript.contains("I hit an error before I could produce the normal final summary")
+        );
+        assert!(transcript.contains("Recent tool/progress events:"));
+        assert!(transcript.contains("Failure:"));
+        assert!(transcript.contains("simulated provider abort"));
+        assert!(app.session.messages.iter().any(|message| {
+            message.role == "assistant"
+                && message
+                    .content
+                    .contains("I hit an error before I could produce")
+        }));
+        Ok(())
+    }
+
+    #[test]
     fn chat_search_opens_filters_and_jumps_matches() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;

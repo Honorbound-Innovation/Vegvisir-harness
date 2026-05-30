@@ -229,6 +229,7 @@ impl TuiApplication {
             "/system-prompt" => self.system_command(&[])?,
             "/agent" => self.agent_command(&args)?,
             "/attach" => self.attach_command(&args)?,
+            "/speech" => self.speech_command(&args)?,
             "/help" => self.help(),
             "/tools" => self.tools_command(&args),
             "/tool-limit" => self.tool_limit_command(&args),

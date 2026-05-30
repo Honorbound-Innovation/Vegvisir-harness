@@ -170,12 +170,11 @@ fn draw_chat(f: &mut Frame<'_>, app: &mut TuiApplication, area: Rect) {
     let mut visible = lines[start..end].to_vec();
     apply_chat_drag_highlight(app, &mut visible, start);
     apply_scroll_indicators(&mut visible, offset, max_offset, inner.width as usize);
-    let paragraph = Paragraph::new(visible)
-        .style(Style::default().fg(FG).bg(BG))
-        // Lines are pre-wrapped before viewport slicing. Keeping Ratatui wrapping
-        // enabled is harmless as a terminal safety net, but the important part is
-        // that scroll math is based on visual rows, not raw markdown/logical rows.
-        .wrap(Wrap { trim: false });
+    let paragraph = Paragraph::new(visible).style(Style::default().fg(FG).bg(BG));
+    // Chat lines are pre-wrapped before viewport slicing. Do not enable
+    // Ratatui wrapping here: a second wrapping pass can consume extra
+    // terminal rows after scroll math has already selected exactly
+    // `inner.height` visual rows, clipping the newest/bottom lines.
     f.render_widget(paragraph, inner);
 }
 

@@ -143,6 +143,12 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
             "/attach [path|clear]",
             &[],
         ),
+        cmd(
+            "/speech",
+            "transcribe an audio file into the input buffer using a local Whisper-compatible CLI",
+            "/speech transcribe <audio-file>|status",
+            &["/stt"],
+        ),
         cmd("/help", "show command reference", "/help", &[]),
         cmd(
             "/tools",
@@ -303,4 +309,24 @@ fn command_args(command_name: &str, rest: &str) -> Vec<String> {
         }
     }
     rest.split_whitespace().map(str::to_string).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn speech_command_alias_parses_to_canonical_command() {
+        let registry = CommandRegistry::with_defaults();
+        let (command, args) = registry
+            .parse_with_aliases("/stt transcribe sample.wav")
+            .expect("speech alias should parse");
+        assert_eq!(command, "/speech");
+        assert_eq!(
+            args,
+            vec!["transcribe".to_string(), "sample.wav".to_string()]
+        );
+        let speech = registry.get("/speech").expect("speech command exists");
+        assert!(speech.aliases.contains(&"/stt".to_string()));
+    }
 }

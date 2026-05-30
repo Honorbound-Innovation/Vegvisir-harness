@@ -180,6 +180,12 @@ impl TuiApplication {
         }
         match handle.join() {
             Ok(Ok(mut session)) => {
+                // Drain any final streamed tool/activity events before replacing
+                // the live session. A worker can finish between the regular
+                // poll_stream_events() call and this join path; without this
+                // drain, final ToolEnd/error observations can be lost and the
+                // turn appears to stop without explaining what happened.
+                self.poll_stream_events();
                 self.merge_live_tool_messages(&mut session);
                 self.merge_live_reasoning_trace(&mut session);
                 self.session = session;
@@ -189,6 +195,10 @@ impl TuiApplication {
                 self.autosave_session();
             }
             Ok(Err(error)) => {
+                // Preserve final tool failure/progress events before clearing
+                // pending_stream. This keeps failed-tool turns from ending as a
+                // silent/empty assistant message with no "what failed" context.
+                self.poll_stream_events();
                 self.session.status = "ready".to_string();
                 self.session.activity.clear();
                 self.pending_stream = None;
@@ -199,18 +209,21 @@ impl TuiApplication {
                     self.pop_last_assistant_response();
                     self.push_system_message("Cancelled in-flight model response.");
                 } else {
-                    self.push_system_message(format!("Error: {error}"));
+                    self.push_turn_failure_summary(error.to_string());
                 }
                 self.autosave_session();
             }
             Err(_) => {
+                self.poll_stream_events();
                 self.session.status = "ready".to_string();
                 self.session.activity.clear();
                 self.pending_stream = None;
                 self.pending_cancel = None;
                 self.pending_steering = None;
                 self.pop_empty_assistant_placeholder();
-                self.push_system_message("Error: provider worker panicked.");
+                self.push_turn_failure_summary(
+                    "provider worker panicked before completing the turn".to_string(),
+                );
                 self.autosave_session();
             }
         }
@@ -395,6 +408,62 @@ Steering: {display_content}{attachment_note}"
         }
     }
 
+    pub(crate) fn push_turn_failure_summary(&mut self, error: String) {
+        let recent_tool_messages = self
+            .session
+            .messages
+            .iter()
+            .rev()
+            .take(12)
+            .filter(|message| message.role == "system" && is_live_tool_message(&message.content))
+            .take(4)
+            .map(|message| first_nonempty_line(&message.content).to_string())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>();
+
+        let mut content = String::from(
+            "I hit an error before I could produce the normal final summary. Here is what I can preserve from the turn.
+
+",
+        );
+        if recent_tool_messages.is_empty() {
+            content.push_str(
+                "What happened: no final tool/progress event was available before the turn failed.
+",
+            );
+        } else {
+            content.push_str(
+                "Recent tool/progress events:
+",
+            );
+            for line in recent_tool_messages {
+                content.push_str("- ");
+                content.push_str(&line);
+                content.push('\n');
+            }
+        }
+        content.push_str(
+            "
+Failure:
+",
+        );
+        content.push_str(error.trim());
+        content.push_str(
+            "
+
+Next step: I should retry or continue from the last successful step instead of leaving the turn silently truncated.",
+        );
+
+        self.session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content,
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+    }
+
     pub(crate) fn push_live_tool_message(&mut self, content: String) {
         if self
             .session
@@ -533,6 +602,14 @@ Steering: {display_content}{attachment_note}"
         self.session.activity_tick = self.session.activity_tick.saturating_add(1);
         self.redraw_requested = true;
     }
+}
+
+fn first_nonempty_line(content: &str) -> &str {
+    content
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or(content)
+        .trim()
 }
 
 fn spawn_cms_complete_turn_writeback(

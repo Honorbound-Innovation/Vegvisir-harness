@@ -5,4 +5,5 @@ mod misc;
 mod providers;
 mod sessions;
 mod skills;
+mod speech;
 mod tools;
