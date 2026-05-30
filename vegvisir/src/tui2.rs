@@ -10,7 +10,7 @@ use std::sync::OnceLock;
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
-    app::{DiffOverlay, InfoOverlay, TuiApplication},
+    app::{DiffOverlay, DiffOverlayRenderCache, DiffRenderer, InfoOverlay, TuiApplication},
     core::{Attachment, ChatMessage},
     guardrails::ApprovalRequest,
     ui::input::InputState,
@@ -83,8 +83,14 @@ pub fn draw(f: &mut Frame<'_>, app: &mut TuiApplication) {
     if app.help_overlay_open {
         draw_help_overlay(f, app, centered_rect(92, 24, area));
     }
-    if let Some(diff) = app.diff_overlay.as_ref() {
-        draw_diff_overlay(f, app, diff, centered_rect(120, 34, area));
+    if app.diff_overlay.is_some() {
+        let area = centered_rect(120, 34, area);
+        // Temporarily take the overlay so we can update its render cache while
+        // still borrowing the rest of app for scroll state.
+        if let Some(mut diff) = app.diff_overlay.take() {
+            draw_diff_overlay(f, app, &mut diff, area);
+            app.diff_overlay = Some(diff);
+        }
     }
     if let Some(info) = app.info_overlay.as_ref() {
         draw_info_overlay(f, app, info, centered_rect(110, 30, area));
@@ -140,7 +146,7 @@ fn draw_header(f: &mut Frame<'_>, app: &TuiApplication, area: Rect) {
     f.render_widget(paragraph, area);
 }
 
-fn draw_chat(f: &mut Frame<'_>, app: &TuiApplication, area: Rect) {
+fn draw_chat(f: &mut Frame<'_>, app: &mut TuiApplication, area: Rect) {
     let block = Block::default()
         .borders(Borders::BOTTOM)
         .border_style(Style::default().fg(BORDER));
@@ -155,7 +161,14 @@ fn draw_chat(f: &mut Frame<'_>, app: &TuiApplication, area: Rect) {
     let offset = app.chat_scroll_offset.min(max_offset);
     let end = lines.len().saturating_sub(offset);
     let start = end.saturating_sub(visible_height);
+    app.chat_area_x = inner.x;
+    app.chat_area_y = inner.y;
+    app.chat_area_width = inner.width;
+    app.chat_area_height = inner.height;
+    app.chat_render_scroll = start;
+    app.chat_rendered_lines = lines.iter().map(line_to_plain_text).collect();
     let mut visible = lines[start..end].to_vec();
+    apply_chat_drag_highlight(app, &mut visible, start);
     apply_scroll_indicators(&mut visible, offset, max_offset, inner.width as usize);
     let paragraph = Paragraph::new(visible)
         .style(Style::default().fg(FG).bg(BG))
@@ -164,6 +177,118 @@ fn draw_chat(f: &mut Frame<'_>, app: &TuiApplication, area: Rect) {
         // that scroll math is based on visual rows, not raw markdown/logical rows.
         .wrap(Wrap { trim: false });
     f.render_widget(paragraph, inner);
+}
+
+fn line_to_plain_text(line: &Line<'static>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>()
+}
+
+fn apply_chat_drag_highlight(
+    app: &TuiApplication,
+    visible: &mut [Line<'static>],
+    visible_start: usize,
+) {
+    let (Some(anchor), Some(current)) = (app.drag_anchor, app.drag_current) else {
+        return;
+    };
+    let Some((start_line, start_col, end_line, end_col)) = chat_drag_bounds(app, anchor, current)
+    else {
+        return;
+    };
+    let highlight = Style::default()
+        .fg(BG)
+        .bg(CYAN)
+        .add_modifier(Modifier::BOLD);
+    for (row, line) in visible.iter_mut().enumerate() {
+        let absolute_line = visible_start + row;
+        if absolute_line < start_line || absolute_line > end_line {
+            continue;
+        }
+        let from = if absolute_line == start_line {
+            start_col
+        } else {
+            0
+        };
+        let to = if absolute_line == end_line {
+            end_col
+        } else {
+            usize::MAX
+        };
+        *line = highlight_line_columns(line, from, to, highlight);
+    }
+}
+
+fn chat_drag_bounds(
+    app: &TuiApplication,
+    anchor: (u16, u16),
+    current: (u16, u16),
+) -> Option<(usize, usize, usize, usize)> {
+    let point = |(col, row): (u16, u16)| -> Option<(usize, usize)> {
+        let row_in_chat = row.checked_sub(app.chat_area_y)? as usize;
+        if row_in_chat >= app.chat_area_height as usize {
+            return None;
+        }
+        let col_in_chat = col.saturating_sub(app.chat_area_x) as usize;
+        Some((app.chat_render_scroll + row_in_chat, col_in_chat))
+    };
+    let a = point(anchor)?;
+    let b = point(current)?;
+    if a <= b {
+        Some((a.0, a.1, b.0, b.1))
+    } else {
+        Some((b.0, b.1, a.0, a.1))
+    }
+}
+
+fn highlight_line_columns(
+    line: &Line<'static>,
+    start_col: usize,
+    end_col: usize,
+    highlight: Style,
+) -> Line<'static> {
+    use unicode_width::UnicodeWidthChar;
+    if end_col <= start_col {
+        return line.clone();
+    }
+    let mut spans = Vec::new();
+    let mut col = 0usize;
+    for span in &line.spans {
+        let mut normal = String::new();
+        let mut selected = String::new();
+        let flush = |spans: &mut Vec<Span<'static>>,
+                     normal: &mut String,
+                     selected: &mut String,
+                     style: Style| {
+            if !normal.is_empty() {
+                spans.push(Span::styled(std::mem::take(normal), style));
+            }
+            if !selected.is_empty() {
+                spans.push(Span::styled(std::mem::take(selected), highlight));
+            }
+        };
+        for ch in span.content.as_ref().chars() {
+            let width = UnicodeWidthChar::width(ch).unwrap_or(0).max(1);
+            let next = col + width;
+            let is_selected = next > start_col && col < end_col;
+            if is_selected {
+                if !normal.is_empty() {
+                    spans.push(Span::styled(std::mem::take(&mut normal), span.style));
+                }
+                selected.push(ch);
+            } else {
+                if !selected.is_empty() {
+                    spans.push(Span::styled(std::mem::take(&mut selected), highlight));
+                }
+                normal.push(ch);
+            }
+            col = next;
+        }
+        flush(&mut spans, &mut normal, &mut selected, span.style);
+    }
+    Line::from(spans)
 }
 
 fn visual_chat_lines(app: &TuiApplication, width: usize) -> Vec<Line<'static>> {
@@ -1067,6 +1192,9 @@ fn highlight_code_piece(language: &str, piece: &str, fallback: Style) -> Vec<Spa
     if matches!(language, "json" | "jsonc") {
         return highlight_json_piece(piece, fallback);
     }
+    if is_rust_language(language) {
+        return highlight_rust_piece(piece, fallback);
+    }
     if !is_code_language(language) {
         return vec![Span::styled(piece.to_string(), fallback)];
     }
@@ -1081,6 +1209,10 @@ fn highlight_code_piece(language: &str, piece: &str, fallback: Style) -> Vec<Spa
         )];
     }
     highlight_language_piece(piece, fallback)
+}
+
+fn is_rust_language(language: &str) -> bool {
+    matches!(language, "rust" | "rs")
 }
 
 fn is_code_language(language: &str) -> bool {
@@ -1112,6 +1244,16 @@ fn is_code_language(language: &str) -> bool {
             | "sh"
             | "shell"
     )
+}
+
+fn highlight_rust_piece(piece: &str, fallback: Style) -> Vec<Span<'static>> {
+    // Keep the TUI input path responsive: this function runs while chat is
+    // rendered, including redraws caused by ordinary typing. Tree-sitter was
+    // previously invoked per wrapped Rust line here, which made every keystroke
+    // reparse visible chat code. Use the lightweight lexer in the hot path; a
+    // cached/full-block Tree-sitter highlighter can be reintroduced off this
+    // path later.
+    highlight_language_piece(piece, fallback)
 }
 
 fn highlight_language_piece(piece: &str, fallback: Style) -> Vec<Span<'static>> {
@@ -1544,11 +1686,11 @@ fn push_help_command_line(
     ]));
 }
 
-fn draw_diff_overlay(f: &mut Frame<'_>, app: &TuiApplication, diff: &DiffOverlay, area: Rect) {
+fn draw_diff_overlay(f: &mut Frame<'_>, app: &TuiApplication, diff: &mut DiffOverlay, area: Rect) {
     f.render_widget(Clear, area);
     let visible_height = area.height.saturating_sub(6).max(1) as usize;
     let content_width = area.width.saturating_sub(4) as usize;
-    let all_lines = diff_overlay_lines(diff, content_width);
+    let all_lines = cached_diff_overlay_lines(diff, content_width);
     let max_offset = all_lines.len().saturating_sub(visible_height);
     let offset = app.diff_scroll_offset.min(max_offset);
     let end = all_lines.len().saturating_sub(offset);
@@ -1557,11 +1699,12 @@ fn draw_diff_overlay(f: &mut Frame<'_>, app: &TuiApplication, diff: &DiffOverlay
     apply_scroll_indicators(&mut visible, offset, max_offset, content_width);
 
     let summary = format!(
-        " {} file{}  +{} -{}   PgUp/PgDn scroll   End follow   Esc close ",
+        " {} file{}  +{} -{}  {}   PgUp/PgDn scroll   End follow   Esc close ",
         diff.files_changed,
         if diff.files_changed == 1 { "" } else { "s" },
         diff.added_lines,
-        diff.removed_lines
+        diff.removed_lines,
+        diff.rendered_by.label()
     );
     let paragraph = Paragraph::new(visible)
         .style(Style::default().fg(FG).bg(PANEL))
@@ -1577,7 +1720,25 @@ fn draw_diff_overlay(f: &mut Frame<'_>, app: &TuiApplication, diff: &DiffOverlay
     f.render_widget(paragraph, area);
 }
 
+fn cached_diff_overlay_lines(diff: &mut DiffOverlay, width: usize) -> &[Line<'static>] {
+    let cache_matches = diff
+        .rendered_lines_cache
+        .as_ref()
+        .is_some_and(|cache| cache.width == width);
+    if !cache_matches {
+        let lines = diff_overlay_lines(diff, width);
+        diff.rendered_lines_cache = Some(DiffOverlayRenderCache { width, lines });
+    }
+    diff.rendered_lines_cache
+        .as_ref()
+        .map(|cache| cache.lines.as_slice())
+        .unwrap_or(&[])
+}
+
 fn diff_overlay_lines(diff: &DiffOverlay, width: usize) -> Vec<Line<'static>> {
+    if diff.rendered_by != DiffRenderer::Unified {
+        return external_diff_overlay_lines(diff, width);
+    }
     let mut lines = Vec::new();
     let mut current_file: Option<String> = None;
     for raw in diff.diff.lines() {
@@ -1613,6 +1774,31 @@ fn diff_overlay_lines(diff: &DiffOverlay, width: usize) -> Vec<Line<'static>> {
             }
         } else {
             push_wrapped_diff_line(&mut lines, raw, width, " ", Color::Rgb(185, 190, 200));
+        }
+    }
+    if lines.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No diff content.",
+            Style::default().fg(DIM),
+        )));
+    }
+    lines
+}
+
+fn external_diff_overlay_lines(diff: &DiffOverlay, width: usize) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    for raw in diff.diff.lines() {
+        let style = if raw.starts_with('+') {
+            Style::default().fg(GREEN)
+        } else if raw.starts_with('-') {
+            Style::default().fg(RED)
+        } else if raw.contains("---") || raw.contains("+++") || raw.contains("changed") {
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Rgb(185, 190, 200))
+        };
+        for chunk in wrap_preserve(raw, width.max(1)) {
+            lines.push(Line::from(Span::styled(chunk, style)));
         }
     }
     if lines.is_empty() {
@@ -1926,9 +2112,11 @@ fn draw_status(f: &mut Frame<'_>, app: &TuiApplication, area: Rect) {
     } else if app.input.buffer.starts_with('/') {
         "Enter run command | Tab complete | Esc close"
     } else if app.session.status == "streaming" {
-        "Ctrl+C cancel/quit | PgUp read history | End follow"
+        "Ctrl+C cancel/quit | PgUp read history | End follow | F12 native select"
+    } else if app.mouse_capture_enabled {
+        "Enter send | drag copy chat | wheel scroll | F12 native select | Ctrl+C quit"
     } else {
-        "Enter send | Ctrl+P commands | ? help | PgUp/PgDn scroll | Ctrl+C quit"
+        "Mouse capture OFF: terminal selection active | F12 restore mouse | Ctrl+C quit"
     };
     let text = format!(
         " {} | session {} | ctx {}/{} | tools {} | skills {}{} | {} ",
@@ -2773,6 +2961,7 @@ four",
     fn ratatui_diff_overlay_summarizes_patch_for_review() {
         let overlay = DiffOverlay {
             title: "Git diff".to_string(),
+            rendered_by: DiffRenderer::Unified,
             diff: [
                 "diff --git a/src/lib.rs b/src/lib.rs",
                 "@@ -1,2 +1,3 @@",
@@ -2784,6 +2973,7 @@ four",
             files_changed: 1,
             added_lines: 2,
             removed_lines: 1,
+            rendered_lines_cache: None,
         };
         let lines = diff_overlay_lines(&overlay, 80);
         let rendered = lines
@@ -2957,5 +3147,51 @@ four",
                 .first()
                 .is_some_and(|span| span.content.as_ref() == "> ")
         );
+    }
+
+    #[test]
+    fn ratatui_rust_code_blocks_use_tree_sitter_highlighting() {
+        let markdown = "```rust\nfn main() { let value = 42; println!(\"{value}\"); }\n```";
+        let lines = render_markdown(markdown, 100, Style::default().fg(FG));
+        let spans = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .collect::<Vec<_>>();
+        assert!(
+            spans
+                .iter()
+                .any(|span| span.content.as_ref() == "fn" && span.style.fg == Some(CYAN))
+        );
+        assert!(
+            spans
+                .iter()
+                .any(|span| span.content.as_ref().contains("42") && span.style.fg == Some(AMBER))
+        );
+        assert!(
+            spans
+                .iter()
+                .any(|span| span.content.as_ref().contains("\"{value}\"")
+                    && span.style.fg == Some(GREEN))
+        );
+    }
+
+    #[test]
+    fn ratatui_external_diff_overlay_renders_text_output() {
+        let overlay = DiffOverlay {
+            title: "Git diff (difftastic)".to_string(),
+            rendered_by: DiffRenderer::Difftastic,
+            diff: "src/lib.rs --- Rust\n1 + changed".to_string(),
+            files_changed: 0,
+            added_lines: 0,
+            removed_lines: 0,
+            rendered_lines_cache: None,
+        };
+        let lines = diff_overlay_lines(&overlay, 80);
+        let rendered = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect::<String>();
+        assert!(rendered.contains("src/lib.rs"));
+        assert!(rendered.contains("changed"));
     }
 }

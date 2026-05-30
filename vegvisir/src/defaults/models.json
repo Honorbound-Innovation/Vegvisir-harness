@@ -41,6 +41,7 @@
     {"name": "grok-4", "provider": "xai", "display_name": "Grok 4", "context_window": 256000},
 
     {"name": "azure:gpt-5.4", "provider": "azure-openai", "display_name": "Azure GPT-5.4 Deployment", "context_window": 400000},
+    {"name": "lmstudio-local", "provider": "lmstudio", "display_name": "LM Studio Local Model", "context_window": 128000},
     {"name": "llama3.1", "provider": "ollama", "display_name": "Ollama Llama 3.1", "context_window": 128000},
     {"name": "qwen2.5-coder", "provider": "ollama", "display_name": "Ollama Qwen Coder", "context_window": 128000}
   ]

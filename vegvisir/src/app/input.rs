@@ -63,6 +63,11 @@ impl TuiApplication {
     }
 
     pub fn handle_key_event(&mut self, key: KeyEvent) {
+        if key.code == KeyCode::F(12) {
+            self.toggle_mouse_capture_mode();
+            self.redraw_requested = true;
+            return;
+        }
         if should_refresh_suggestions_before_key(&key) {
             let suggestions = self.build_suggestions();
             self.input.update_suggestions(suggestions);
@@ -475,6 +480,32 @@ impl TuiApplication {
     }
 
     pub fn handle_mouse_event(&mut self, mouse: MouseEvent) {
+        match mouse.kind {
+            MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
+                if self.can_start_chat_drag(mouse.column, mouse.row) {
+                    self.drag_anchor = Some((mouse.column, mouse.row));
+                    self.drag_current = Some((mouse.column, mouse.row));
+                    self.redraw_requested = true;
+                } else {
+                    self.drag_anchor = None;
+                    self.drag_current = None;
+                }
+                return;
+            }
+            MouseEventKind::Drag(crossterm::event::MouseButton::Left) => {
+                if self.drag_anchor.is_some() {
+                    self.drag_current = Some((mouse.column, mouse.row));
+                    self.redraw_requested = true;
+                }
+                return;
+            }
+            MouseEventKind::Up(crossterm::event::MouseButton::Left) => {
+                self.handle_chat_mouse_up(mouse.column, mouse.row);
+                self.redraw_requested = true;
+                return;
+            }
+            _ => {}
+        }
         let delta = match mouse.kind {
             MouseEventKind::ScrollUp => 3isize,
             MouseEventKind::ScrollDown => -3isize,
@@ -532,4 +563,165 @@ impl TuiApplication {
         }
         self.redraw_requested = true;
     }
+}
+
+impl TuiApplication {
+    pub(crate) fn toggle_mouse_capture_mode(&mut self) {
+        self.mouse_capture_enabled = !self.mouse_capture_enabled;
+        self.drag_anchor = None;
+        self.drag_current = None;
+        let message = if self.mouse_capture_enabled {
+            "Mouse capture ON: wheel scroll and in-app drag copy enabled (F12 releases native selection)."
+        } else {
+            "Mouse capture OFF: terminal-native text selection enabled (F12 restores wheel/in-app copy)."
+        };
+        self.push_system_message(message);
+    }
+
+    fn can_start_chat_drag(&self, col: u16, row: u16) -> bool {
+        self.mouse_capture_enabled
+            && !self.help_overlay_open
+            && self.diff_overlay.is_none()
+            && self.info_overlay.is_none()
+            && !self.search_open
+            && !self.command_palette_open
+            && self.tool_executor.guardrails.approvals.pending_len() == 0
+            && self.point_in_chat_area(col, row)
+    }
+
+    fn point_in_chat_area(&self, col: u16, row: u16) -> bool {
+        let Some(x_end) = self.chat_area_x.checked_add(self.chat_area_width) else {
+            return false;
+        };
+        let Some(y_end) = self.chat_area_y.checked_add(self.chat_area_height) else {
+            return false;
+        };
+        col >= self.chat_area_x && col < x_end && row >= self.chat_area_y && row < y_end
+    }
+
+    pub(crate) fn handle_chat_mouse_up(&mut self, col: u16, row: u16) {
+        let Some(anchor) = self.drag_anchor.take() else {
+            self.drag_current = None;
+            return;
+        };
+        self.drag_current = None;
+        let text = self.extract_chat_drag_selection(anchor, (col, row));
+        if text.trim().is_empty() {
+            return;
+        }
+        if Self::copy_to_clipboard(&text) {
+            self.push_system_message("Copied selected chat text to clipboard.");
+        } else {
+            self.push_system_message(
+                "Could not copy selection: install pbcopy, wl-copy, xclip, or xsel.",
+            );
+        }
+    }
+
+    pub(crate) fn extract_chat_drag_selection(
+        &self,
+        anchor: (u16, u16),
+        end: (u16, u16),
+    ) -> String {
+        if self.chat_rendered_lines.is_empty() || self.chat_area_height == 0 {
+            return String::new();
+        }
+        let Some((start_line, start_col, end_line, end_col)) = self.drag_bounds(anchor, end) else {
+            return String::new();
+        };
+        let mut out = Vec::new();
+        for line_index in start_line..=end_line {
+            let Some(line) = self.chat_rendered_lines.get(line_index) else {
+                continue;
+            };
+            let from = if line_index == start_line {
+                start_col
+            } else {
+                0
+            };
+            let to = if line_index == end_line {
+                end_col
+            } else {
+                usize::MAX
+            };
+            let selected = slice_display_columns(line, from, to);
+            out.push(selected.trim_end().to_string());
+        }
+        out.join("\n")
+    }
+
+    fn drag_bounds(
+        &self,
+        anchor: (u16, u16),
+        end: (u16, u16),
+    ) -> Option<(usize, usize, usize, usize)> {
+        let point = |(col, row): (u16, u16)| -> Option<(usize, usize)> {
+            let row_in_chat = row.checked_sub(self.chat_area_y)? as usize;
+            if row_in_chat >= self.chat_area_height as usize {
+                return None;
+            }
+            let col_in_chat = col.saturating_sub(self.chat_area_x) as usize;
+            Some((self.chat_render_scroll + row_in_chat, col_in_chat))
+        };
+        let a = point(anchor)?;
+        let b = point(end)?;
+        if a <= b {
+            Some((a.0, a.1, b.0, b.1))
+        } else {
+            Some((b.0, b.1, a.0, a.1))
+        }
+    }
+
+    fn copy_to_clipboard(text: &str) -> bool {
+        #[cfg(target_os = "macos")]
+        let candidates: &[(&str, &[&str])] = &[("pbcopy", &[])];
+        #[cfg(not(target_os = "macos"))]
+        let candidates: &[(&str, &[&str])] = &[
+            ("wl-copy", &[]),
+            ("xclip", &["-selection", "clipboard"]),
+            ("xsel", &["--clipboard", "--input"]),
+        ];
+        for (program, args) in candidates {
+            let Ok(mut child) = Command::new(program)
+                .args(*args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+            else {
+                continue;
+            };
+            if let Some(stdin) = child.stdin.as_mut() {
+                use std::io::Write;
+                if stdin.write_all(text.as_bytes()).is_err() {
+                    continue;
+                }
+            }
+            if child.wait().is_ok_and(|status| status.success()) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+fn slice_display_columns(text: &str, start_col: usize, end_col: usize) -> String {
+    use unicode_width::UnicodeWidthChar;
+    if end_col <= start_col {
+        return String::new();
+    }
+    let mut out = String::new();
+    let mut col = 0usize;
+    for ch in text.chars() {
+        let width = UnicodeWidthChar::width(ch).unwrap_or(0).max(1);
+        let next = col + width;
+        if next > start_col && col < end_col {
+            out.push(ch);
+        }
+        col = next;
+        if col >= end_col {
+            break;
+        }
+    }
+    out
 }

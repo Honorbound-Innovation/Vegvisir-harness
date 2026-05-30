@@ -12,7 +12,7 @@ use crate::{
 pub fn discover_provider_models(provider: &ProviderConfig) -> anyhow::Result<Vec<ModelInfo>> {
     match provider.kind.as_str() {
         "demo" => Ok(Vec::new()),
-        "openai" | "openai_compatible" => discover_openai_compatible_models(provider),
+        "openai" | "openai_compatible" | "lmstudio" => discover_openai_compatible_models(provider),
         "hbse_openai_compatible" | "hbse_anthropic" => {
             discover_hbse_openai_compatible_models(provider)
         }
@@ -99,7 +99,7 @@ pub fn discover_hbse_openai_compatible_models(
         "GET",
         &format!("{}/models", base_url.trim_end_matches('/')),
         Value::Object(headers),
-        Value::Null,
+        Value::String(String::new()),
     )?;
     let data: Value = serde_json::from_str(&body)
         .map_err(|_| anyhow::anyhow!("{} model discovery returned invalid JSON", provider.name))?;
@@ -142,9 +142,16 @@ fn hbse_model_discovery_request(
         .unwrap_or("model.discovery");
     let timeout_seconds = provider
         .metadata
-        .get("timeout_seconds")
+        .get("hbse_model_discovery_timeout_seconds")
+        .or_else(|| provider.metadata.get("timeout_seconds"))
         .and_then(Value::as_f64)
         .unwrap_or(0.0);
+    let max_response_bytes = provider
+        .metadata
+        .get("hbse_model_discovery_max_response_bytes")
+        .or_else(|| provider.metadata.get("max_response_bytes"))
+        .and_then(Value::as_u64)
+        .unwrap_or(10 * 1024 * 1024);
     let payload = json!({
         "command": "provider_http",
         "secret_ref": secret_ref,
@@ -157,6 +164,7 @@ fn hbse_model_discovery_request(
         "credential_header": provider.metadata.get("credential_header").and_then(Value::as_str).unwrap_or("Authorization"),
         "credential_prefix": provider.metadata.get("credential_prefix").and_then(Value::as_str).unwrap_or("Bearer "),
         "timeout_seconds": timeout_seconds,
+        "max_response_bytes": max_response_bytes,
     });
     let response = hbse_request(provider, payload)?;
     let status = response
@@ -263,7 +271,7 @@ pub fn discover_hbse_google_models(provider: &ProviderConfig) -> anyhow::Result<
         "GET",
         &format!("{}/models", base_url.trim_end_matches('/')),
         json!({"Accept": "application/json"}),
-        Value::Null,
+        Value::String(String::new()),
     )?;
     let data: Value = serde_json::from_str(&response)?;
     Ok(parse_google_model_list(

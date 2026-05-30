@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     sync::{
         Arc,
         atomic::AtomicBool,
@@ -99,6 +100,15 @@ pub struct TuiApplication {
     pub search_open: bool,
     pub search_query: String,
     pub search_match_index: usize,
+    pub mouse_capture_enabled: bool,
+    pub chat_area_x: u16,
+    pub chat_area_y: u16,
+    pub chat_area_width: u16,
+    pub chat_area_height: u16,
+    pub chat_render_scroll: usize,
+    pub chat_rendered_lines: Vec<String>,
+    pub drag_anchor: Option<(u16, u16)>,
+    pub drag_current: Option<(u16, u16)>,
 }
 
 enum StreamEvent {
@@ -116,13 +126,38 @@ enum StreamEvent {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiffRenderer {
+    Unified,
+    Delta,
+    Difftastic,
+}
+
+impl DiffRenderer {
+    pub fn label(self) -> &'static str {
+        match self {
+            DiffRenderer::Unified => "unified",
+            DiffRenderer::Delta => "delta",
+            DiffRenderer::Difftastic => "difftastic",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiffOverlay {
     pub title: String,
     pub diff: String,
+    pub rendered_by: DiffRenderer,
     pub files_changed: usize,
     pub added_lines: usize,
     pub removed_lines: usize,
+    pub rendered_lines_cache: Option<DiffOverlayRenderCache>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiffOverlayRenderCache {
+    pub width: usize,
+    pub lines: Vec<ratatui::text::Line<'static>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -151,6 +186,10 @@ fn should_refresh_suggestions_before_key(key: &KeyEvent) -> bool {
 }
 
 fn diff_overlay_from_patch(title: &str, diff: &str) -> DiffOverlay {
+    diff_overlay_from_rendered(title, diff, DiffRenderer::Unified)
+}
+
+fn diff_overlay_from_rendered(title: &str, diff: &str, rendered_by: DiffRenderer) -> DiffOverlay {
     let files_changed = diff
         .lines()
         .filter(|line| line.starts_with("diff --git "))
@@ -166,9 +205,11 @@ fn diff_overlay_from_patch(title: &str, diff: &str) -> DiffOverlay {
     DiffOverlay {
         title: title.to_string(),
         diff: diff.to_string(),
+        rendered_by,
         files_changed,
         added_lines,
         removed_lines,
+        rendered_lines_cache: None,
     }
 }
 
@@ -373,6 +414,15 @@ impl TuiApplication {
             search_open: false,
             search_query: String::new(),
             search_match_index: 0,
+            mouse_capture_enabled: true,
+            chat_area_x: 0,
+            chat_area_y: 0,
+            chat_area_width: 0,
+            chat_area_height: 0,
+            chat_render_scroll: 0,
+            chat_rendered_lines: Vec::new(),
+            drag_anchor: None,
+            drag_current: None,
         };
         app.autoload_workspace_session()?;
         app.rebuild_tooling_for_cms()?;
@@ -933,6 +983,46 @@ mod tests {
         assert!(app.chat_scroll_offset < first_offset);
         app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(!app.search_open);
+        Ok(())
+    }
+
+    #[test]
+    fn chat_drag_selection_extracts_rendered_text() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.chat_area_x = 2;
+        app.chat_area_y = 3;
+        app.chat_area_height = 4;
+        app.chat_render_scroll = 10;
+        app.chat_rendered_lines = vec![String::new(); 12];
+        app.chat_rendered_lines
+            .push("  hello selectable world".to_string());
+
+        let selected = app.extract_chat_drag_selection((10, 5), (20, 5));
+
+        assert_eq!(selected, "selectable");
+        Ok(())
+    }
+
+    #[test]
+    fn f12_toggles_mouse_capture_mode() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        assert!(app.mouse_capture_enabled);
+
+        app.handle_key_event(KeyEvent::new(KeyCode::F(12), KeyModifiers::NONE));
+        assert!(!app.mouse_capture_enabled);
+        assert!(
+            app.session
+                .messages
+                .last()
+                .unwrap()
+                .content
+                .contains("Mouse capture OFF")
+        );
+
+        app.handle_key_event(KeyEvent::new(KeyCode::F(12), KeyModifiers::NONE));
+        assert!(app.mouse_capture_enabled);
         Ok(())
     }
 

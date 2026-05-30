@@ -4,19 +4,13 @@ use std::{
 };
 
 use crossterm::{
-    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event},
+    event::{
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-
-// Crossterm's EnableMouseCapture enables button-event tracking (?1002), which
-// captures drag selection and prevents normal terminal copy/paste selection.
-// Vegvisir only needs mouse-wheel events for chat scrolling, so use normal
-// tracking (?1000) plus SGR coordinates (?1006) instead. In xterm-compatible
-// terminals this keeps wheel events flowing to the app without asking the
-// terminal to report mouse drag motion to us.
-const ENABLE_WHEEL_MOUSE_CAPTURE: &str = "\x1b[?1000h\x1b[?1006h";
-const DISABLE_WHEEL_MOUSE_CAPTURE: &str = "\x1b[?1000l\x1b[?1006l";
 
 use super::TuiApplication;
 
@@ -27,6 +21,7 @@ impl TuiApplication {
         let mut terminal = ratatui::Terminal::new(backend)?;
         terminal.clear()?;
         terminal.draw(|frame| crate::tui2::draw(frame, self))?;
+        let mut mouse_capture_applied = true;
         let mut last_activity_pulse = Instant::now();
         while self.running {
             if event::poll(Duration::from_millis(50))? {
@@ -49,6 +44,17 @@ impl TuiApplication {
             if last_activity_pulse.elapsed() >= Duration::from_millis(150) {
                 self.pulse_activity();
                 last_activity_pulse = Instant::now();
+            }
+            if self.mouse_capture_enabled != mouse_capture_applied {
+                if self.mouse_capture_enabled {
+                    execute!(terminal.backend_mut(), EnableMouseCapture)?;
+                } else {
+                    execute!(terminal.backend_mut(), DisableMouseCapture)?;
+                    self.drag_anchor = None;
+                    self.drag_current = None;
+                }
+                mouse_capture_applied = self.mouse_capture_enabled;
+                self.redraw_requested = true;
             }
             if self.clear_requested {
                 terminal.clear()?;
@@ -91,8 +97,12 @@ impl TerminalGuard {
     fn enter() -> anyhow::Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
-        write!(stdout, "{ENABLE_WHEEL_MOUSE_CAPTURE}")?;
+        execute!(
+            stdout,
+            EnterAlternateScreen,
+            EnableBracketedPaste,
+            EnableMouseCapture
+        )?;
         stdout.flush()?;
         Ok(Self)
     }
@@ -102,7 +112,11 @@ impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
         let mut stdout = io::stdout();
-        let _ = write!(stdout, "{DISABLE_WHEEL_MOUSE_CAPTURE}");
-        let _ = execute!(stdout, DisableBracketedPaste, LeaveAlternateScreen);
+        let _ = execute!(
+            stdout,
+            DisableMouseCapture,
+            DisableBracketedPaste,
+            LeaveAlternateScreen
+        );
     }
 }

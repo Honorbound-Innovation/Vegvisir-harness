@@ -8851,3 +8851,102 @@ fn app_server_bridge_streams_demo_turn_and_reports_status() -> anyhow::Result<()
     );
     Ok(())
 }
+
+#[test]
+fn bridge_models_list_filters_requested_provider_aliases() -> anyhow::Result<()> {
+    let workspace = tempdir()?;
+    let data_root = tempdir()?;
+    let input = [
+        json!({
+            "id": "init",
+            "method": "initialize",
+            "params": {
+                "clientInfo": { "name": "test-client" },
+                "capabilities": {}
+            }
+        })
+        .to_string(),
+        json!({
+            "id": "initialized",
+            "method": "initialized",
+            "params": {}
+        })
+        .to_string(),
+        json!({
+            "id": "models-provider",
+            "method": "models.list",
+            "params": { "provider": "openrouter-hbse" }
+        })
+        .to_string(),
+        json!({
+            "id": "models-model-provider",
+            "method": "models.list",
+            "params": { "modelProvider": "openrouter-hbse" }
+        })
+        .to_string(),
+        json!({
+            "id": "codex-model-list",
+            "method": "model/list",
+            "params": { "modelProvider": "openrouter-hbse" }
+        })
+        .to_string(),
+        json!({
+            "id": "bye",
+            "method": "shutdown",
+            "params": {}
+        })
+        .to_string(),
+    ]
+    .join("\n");
+    let mut output = Vec::new();
+    run_app_server_with_io(
+        std::io::Cursor::new(input),
+        &mut output,
+        BridgeOptions {
+            workspace: workspace.path().to_path_buf(),
+            data_root: Some(data_root.path().to_path_buf()),
+            provider: Some("demo".to_string()),
+            model: Some("demo-local".to_string()),
+            agent: None,
+            dangerously_bypass_approvals_and_sandbox: false,
+        },
+    )?;
+
+    let output = String::from_utf8(output)?;
+    let events = output
+        .lines()
+        .map(serde_json::from_str::<Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    for id in ["models-provider", "models-model-provider"] {
+        let event = events
+            .iter()
+            .find(|event| event["type"] == "models.list" && event["id"] == id)
+            .expect("models.list event");
+        assert_eq!(event["payload"]["requested_provider"], "openrouter-hbse");
+        let models = event["payload"]["models"].as_array().unwrap();
+        assert!(
+            models
+                .iter()
+                .any(|model| model["id"] == "openai/gpt-5.4"
+                    && model["provider"] == "openrouter-hbse"),
+            "provider-filtered models should include OpenRouter-compatible catalog entries: {event:?}"
+        );
+        assert!(
+            !models.iter().any(|model| model["id"] == "demo-local"),
+            "provider-filtered models must not be the global catalog: {event:?}"
+        );
+        assert!(event["payload"]["all_models"].as_array().unwrap().len() >= models.len());
+    }
+
+    let response = events
+        .iter()
+        .find(|event| event["id"] == "codex-model-list")
+        .expect("model/list response");
+    let data = response["result"]["data"]
+        .as_array()
+        .unwrap_or_else(|| panic!("model/list response missing data array: {response:?}"));
+    assert!(data.iter().any(|model| model["id"] == "openai/gpt-5.4"));
+    assert!(!data.iter().any(|model| model["id"] == "demo-local"));
+    Ok(())
+}

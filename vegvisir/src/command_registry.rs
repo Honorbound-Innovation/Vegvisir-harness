@@ -103,8 +103,8 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
         cmd("/history", "show conversation history", "/history", &[]),
         cmd(
             "/diff",
-            "show the current workspace git diff",
-            "/diff [--staged|--cached|--stat] [path]",
+            "show the current workspace git diff; supports delta and difftastic when installed",
+            "/diff [semantic|difftastic|delta|unified] [--staged|--cached|--stat] [path]",
             &[],
         ),
         cmd("/save", "save the current session", "/save", &[]),

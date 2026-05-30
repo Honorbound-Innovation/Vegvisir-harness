@@ -1,5 +1,39 @@
 use super::super::*;
 
+fn command_available(name: &str) -> bool {
+    std::process::Command::new(name)
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+fn command_output(mut command: std::process::Command, label: &str) -> anyhow::Result<String> {
+    let output = command.output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        anyhow::bail!(
+            "{label} failed{}",
+            if stderr.is_empty() {
+                String::new()
+            } else {
+                format!(": {stderr}")
+            }
+        );
+    }
+    Ok(strip_ansi(&String::from_utf8_lossy(&output.stdout)))
+}
+
+fn strip_ansi(text: &str) -> String {
+    static ANSI_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    ANSI_RE
+        .get_or_init(|| regex::Regex::new(r"\x1b\[[0-?]*[ -/]*[@-~]").expect("valid ansi regex"))
+        .replace_all(text, "")
+        .to_string()
+}
+
 impl TuiApplication {
     pub(crate) fn work_command(&mut self, args: &[String]) -> String {
         let limit = parse_limit(args, 40);
@@ -92,15 +126,102 @@ impl TuiApplication {
         let stat = args
             .iter()
             .any(|arg| matches!(arg.as_str(), "--stat" | "stat"));
+        let renderer = args
+            .iter()
+            .find_map(|arg| match arg.as_str() {
+                "semantic" | "difftastic" | "--semantic" | "--difftastic" => {
+                    Some(DiffRenderer::Difftastic)
+                }
+                "delta" | "--delta" => Some(DiffRenderer::Delta),
+                "unified" | "--unified" | "patch" | "--patch" => Some(DiffRenderer::Unified),
+                _ => None,
+            })
+            .unwrap_or(DiffRenderer::Unified);
         let paths = args
             .iter()
             .filter(|arg| {
                 !matches!(
                     arg.as_str(),
-                    "--staged" | "--cached" | "staged" | "cached" | "--stat" | "stat"
+                    "--staged"
+                        | "--cached"
+                        | "staged"
+                        | "cached"
+                        | "--stat"
+                        | "stat"
+                        | "semantic"
+                        | "difftastic"
+                        | "--semantic"
+                        | "--difftastic"
+                        | "delta"
+                        | "--delta"
+                        | "unified"
+                        | "--unified"
+                        | "patch"
+                        | "--patch"
                 )
             })
             .collect::<Vec<_>>();
+
+        let diff = match renderer {
+            DiffRenderer::Unified => self.git_diff_output(staged, stat, &paths)?,
+            DiffRenderer::Delta if stat => self.git_diff_output(staged, stat, &paths)?,
+            DiffRenderer::Difftastic if stat => self.git_diff_output(staged, stat, &paths)?,
+            DiffRenderer::Delta => match self.delta_diff_output(staged, &paths)? {
+                Some(rendered) => rendered,
+                None => {
+                    let unified = self.git_diff_output(staged, false, &paths)?;
+                    format!(
+                        "delta is not installed or failed; showing unified diff instead.\n\n{unified}"
+                    )
+                }
+            },
+            DiffRenderer::Difftastic => match self.difftastic_diff_output(staged, &paths)? {
+                Some(rendered) => rendered,
+                None => {
+                    let unified = self.git_diff_output(staged, false, &paths)?;
+                    format!(
+                        "difft/difftastic is not installed or failed; showing unified diff instead.\n\n{unified}"
+                    )
+                }
+            },
+        };
+
+        if diff.trim().is_empty() {
+            return Ok(if staged {
+                "No staged changes.".to_string()
+            } else {
+                "No workspace changes.".to_string()
+            });
+        }
+        if stat {
+            return Ok(format!("Git diff stat\n\n```text\n{diff}\n```"));
+        }
+        let title = match renderer {
+            DiffRenderer::Unified => "Git diff",
+            DiffRenderer::Delta => "Git diff (delta)",
+            DiffRenderer::Difftastic => "Git diff (difftastic)",
+        };
+        let overlay = if renderer == DiffRenderer::Unified {
+            diff_overlay_from_patch(title, &diff)
+        } else {
+            diff_overlay_from_rendered(title, &diff, renderer)
+        };
+        self.diff_scroll_offset = 0;
+        self.diff_overlay = Some(overlay);
+        let fence = if renderer == DiffRenderer::Unified {
+            "diff"
+        } else {
+            "text"
+        };
+        Ok(format!("{title}\n\n```{fence}\n{diff}\n```"))
+    }
+
+    fn git_diff_output(
+        &self,
+        staged: bool,
+        stat: bool,
+        paths: &[&String],
+    ) -> anyhow::Result<String> {
         let mut command = std::process::Command::new("git");
         command
             .arg("-C")
@@ -121,33 +242,72 @@ impl TuiApplication {
                 command.arg(path);
             }
         }
-        let output = command.output()?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            anyhow::bail!(
-                "git diff failed{}",
-                if stderr.is_empty() {
-                    String::new()
-                } else {
-                    format!(": {stderr}")
-                }
-            );
+        command_output(command, "git diff")
+    }
+
+    fn delta_diff_output(&self, staged: bool, paths: &[&String]) -> anyhow::Result<Option<String>> {
+        if !command_available("delta") {
+            return Ok(None);
         }
-        let diff = String::from_utf8_lossy(&output.stdout).to_string();
-        if diff.trim().is_empty() {
-            return Ok(if staged {
-                "No staged changes.".to_string()
-            } else {
-                "No workspace changes.".to_string()
-            });
+        let unified = self.git_diff_output(staged, false, paths)?;
+        if unified.trim().is_empty() {
+            return Ok(Some(unified));
         }
-        if stat {
-            return Ok(format!("Git diff stat\n\n```text\n{diff}\n```"));
+        let mut child = std::process::Command::new("delta")
+            .arg("--color=never")
+            .arg("--line-numbers")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+        if let Some(stdin) = child.stdin.as_mut() {
+            use std::io::Write;
+            stdin.write_all(unified.as_bytes())?;
         }
-        let overlay = diff_overlay_from_patch("Git diff", &diff);
-        self.diff_scroll_offset = 0;
-        self.diff_overlay = Some(overlay);
-        Ok(format!("Git diff\n\n```diff\n{diff}\n```"))
+        let output = child.wait_with_output()?;
+        if output.status.success() {
+            Ok(Some(strip_ansi(&String::from_utf8_lossy(&output.stdout))))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn difftastic_diff_output(
+        &self,
+        staged: bool,
+        paths: &[&String],
+    ) -> anyhow::Result<Option<String>> {
+        let executable = if command_available("difft") {
+            "difft"
+        } else if command_available("difftastic") {
+            "difftastic"
+        } else {
+            return Ok(None);
+        };
+        let mut command = std::process::Command::new("git");
+        command
+            .arg("-C")
+            .arg(&self.cwd)
+            .arg("--no-pager")
+            .arg("diff")
+            .arg("--ext-diff")
+            .arg("--color=never")
+            .env("GIT_EXTERNAL_DIFF", executable)
+            .env("DFT_COLOR", "never")
+            .env("DFT_DISPLAY", "inline");
+        if staged {
+            command.arg("--cached");
+        }
+        if !paths.is_empty() {
+            command.arg("--");
+            for path in paths {
+                command.arg(path);
+            }
+        }
+        match command_output(command, "git diff with difftastic") {
+            Ok(output) => Ok(Some(strip_ansi(&output))),
+            Err(_) => Ok(None),
+        }
     }
 
     pub(crate) fn config_command(&mut self, args: &[String]) -> anyhow::Result<String> {

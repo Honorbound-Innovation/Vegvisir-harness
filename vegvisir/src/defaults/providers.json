@@ -157,7 +157,8 @@
         "hbse_secret_ref": "secret://vegvisir/providers/openrouter/default",
         "hbse_consumer": "vegvisir.provider.openrouter-hbse",
         "hbse_purpose": "model.chat",
-        "hbse_model_discovery_purpose": "model.discovery"
+        "hbse_model_discovery_purpose": "model.discovery",
+        "hbse_model_discovery_max_response_bytes": 67108864
       }
     },
     {
@@ -283,6 +284,18 @@
         "credential_prefix": "",
         "api_version": "2024-10-21",
         "configuration": "Set base_url or metadata.azure_endpoint to your Azure OpenAI endpoint and metadata.azure_deployment to the deployment name."
+      }
+    },
+    {
+      "name": "lmstudio",
+      "display_name": "LM Studio Local",
+      "kind": "lmstudio",
+      "base_url": "http://localhost:11435/v1",
+      "auth_type": "none",
+      "enabled": true,
+      "metadata": {
+        "stream": false,
+        "note": "LM Studio exposes an OpenAI-compatible local server at http://localhost:11435/v1 by default. Start the LM Studio local server before selecting this provider."
       }
     },
     {

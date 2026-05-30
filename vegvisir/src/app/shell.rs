@@ -122,9 +122,19 @@ impl TuiApplication {
             } else {
                 "/model"
             };
-            return self
-                .models
-                .by_provider(&self.session.current_provider)
+            let provider = &self.session.current_provider;
+            let mut models = self.models.by_provider(provider);
+            if provider.ends_with("-hbse") {
+                let direct_provider = provider.trim_end_matches("-hbse");
+                let has_hbse_specific_models =
+                    models.iter().any(|model| model.provider == *provider);
+                if has_hbse_specific_models {
+                    models.retain(|model| {
+                        model.provider == *provider || model.provider != direct_provider
+                    });
+                }
+            }
+            return models
                 .into_iter()
                 .filter(|model| model.name.starts_with(prefix))
                 .map(|model| {

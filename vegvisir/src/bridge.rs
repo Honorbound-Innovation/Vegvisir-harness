@@ -94,8 +94,11 @@ struct SystemPromptSetParams {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ModelsListParams {
     refresh: Option<bool>,
+    #[serde(alias = "modelProvider")]
+    provider: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -376,15 +379,28 @@ fn handle_request(
         }
         "model/list" => {
             ensure_initialized(state)?;
+            let params: ModelsListParams =
+                serde_json::from_value(request.params).unwrap_or(ModelsListParams {
+                    refresh: None,
+                    provider: None,
+                });
+            let requested_provider = params
+                .provider
+                .clone()
+                .unwrap_or_else(|| app.session.current_provider.clone());
+            if params.refresh.unwrap_or(false) {
+                let _ = app.refresh_provider_models(&requested_provider);
+            }
             let data: Vec<Value> = app
                 .models
-                .list()
+                .by_provider(&requested_provider)
                 .into_iter()
                 .map(|model| {
                     json!({
                         "id": model.name,
                         "name": model.display_name.as_deref().unwrap_or(&model.name),
-                        "provider": model.provider,
+                        "provider": requested_provider,
+                        "modelProvider": model.provider,
                         "contextWindow": model.context_window,
                         "supported": model.enabled,
                     })
@@ -588,13 +604,27 @@ fn handle_request(
             )?;
         }
         "models.list" => {
-            let params: ModelsListParams = serde_json::from_value(request.params)
-                .unwrap_or(ModelsListParams { refresh: None });
+            let params: ModelsListParams =
+                serde_json::from_value(request.params).unwrap_or(ModelsListParams {
+                    refresh: None,
+                    provider: None,
+                });
+            let requested_provider = params
+                .provider
+                .clone()
+                .unwrap_or_else(|| app.session.current_provider.clone());
             let refresh_notes = if params.refresh.unwrap_or(false) {
-                app.refresh_all_provider_models()
+                if params.provider.is_some() {
+                    app.refresh_provider_models(&requested_provider)
+                        .map(|note| vec![format!("{requested_provider}: {note}")])
+                        .unwrap_or_default()
+                } else {
+                    app.refresh_all_provider_models()
+                }
             } else {
                 Vec::new()
             };
+            let models = models_for_provider(app, &requested_provider);
             emit_legacy(
                 stdout,
                 BridgeEvent {
@@ -602,7 +632,10 @@ fn handle_request(
                     id: request.id,
                     payload: json!({
                         "current_model": app.session.current_model,
-                        "models": app.models.list(),
+                        "current_provider": app.session.current_provider,
+                        "requested_provider": requested_provider,
+                        "models": models,
+                        "all_models": app.models.list(),
                         "provider_models": provider_models(app),
                         "refresh_notes": refresh_notes,
                     }),
@@ -1044,6 +1077,29 @@ fn pending_approvals(app: &TuiApplication) -> Vec<Value> {
         .pending()
         .into_values()
         .map(|request| json!(request))
+        .collect()
+}
+
+fn models_for_provider(app: &TuiApplication, provider: &str) -> Vec<Value> {
+    app.models
+        .by_provider(provider)
+        .into_iter()
+        .map(|model| {
+            json!({
+                "id": model.name,
+                "name": model.name,
+                "display_name": model.display_name.as_deref().unwrap_or(&model.name),
+                "displayName": model.display_name.as_deref().unwrap_or(&model.name),
+                "provider": provider,
+                "modelProvider": model.provider,
+                "context_window": model.context_window,
+                "contextWindow": model.context_window,
+                "supports_streaming": model.supports_streaming,
+                "supportsStreaming": model.supports_streaming,
+                "supported": model.enabled,
+                "source": model.metadata.get("source").and_then(Value::as_str).unwrap_or("catalog"),
+            })
+        })
         .collect()
 }
 
