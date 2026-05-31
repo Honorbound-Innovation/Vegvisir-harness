@@ -26,6 +26,7 @@ const RED: Color = Color::Rgb(230, 86, 86);
 const BORDER: Color = Color::Rgb(62, 66, 76);
 const PANEL: Color = Color::Rgb(16, 17, 20);
 const ACTIVITY_LABEL_WIDTH: usize = 18;
+const THINKING_TRACE_VISIBLE_SECONDS: i64 = 3;
 
 const FALLBACK_SPINNER_VERBS: &[&str] = &[
     "Architecting",
@@ -825,8 +826,9 @@ fn message_lines(message: &ChatMessage, width: usize, search_query: &str) -> Vec
         header_spans.push(Span::styled("  match", Style::default().fg(AMBER)));
     }
     let header = Line::from(header_spans);
+    let display_content = visible_chat_message_content(message);
     let rendered = render_markdown(
-        &message.content,
+        &display_content,
         width.saturating_sub(2).max(10),
         content_style,
     );
@@ -837,6 +839,57 @@ fn message_lines(message: &ChatMessage, width: usize, search_query: &str) -> Vec
         out.push(Line::from(spans));
     }
     out
+}
+
+fn visible_chat_message_content(message: &ChatMessage) -> String {
+    if message.role != "assistant" || !contains_thinking_trace(&message.content) {
+        return message.content.clone();
+    }
+    let age = chrono::Utc::now().signed_duration_since(message.created_at);
+    if age.num_seconds() < THINKING_TRACE_VISIBLE_SECONDS {
+        return message.content.clone();
+    }
+    strip_thinking_trace_sections(&message.content)
+}
+
+fn contains_thinking_trace(content: &str) -> bool {
+    content
+        .lines()
+        .any(|line| line.trim().eq_ignore_ascii_case("**Thinking trace**"))
+}
+
+fn strip_thinking_trace_sections(content: &str) -> String {
+    let mut out = Vec::new();
+    let mut skipping_trace = false;
+    let mut pending_blank = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.eq_ignore_ascii_case("**Thinking trace**") {
+            skipping_trace = true;
+            pending_blank = false;
+            continue;
+        }
+        if skipping_trace {
+            if trimmed.eq_ignore_ascii_case("**Answer**") {
+                skipping_trace = false;
+                pending_blank = false;
+                continue;
+            }
+            continue;
+        }
+        if trimmed.is_empty() {
+            pending_blank = !out.is_empty();
+            continue;
+        }
+        if pending_blank && !out.is_empty() {
+            out.push(String::new());
+        }
+        pending_blank = false;
+        out.push(line.to_string());
+    }
+
+    out.join("\n")
 }
 
 fn compact_system_message_line(
@@ -3096,6 +3149,80 @@ mod tests {
         assert!(!chat.contains("Tool finished: run_command"));
         assert!(tool_log.contains("Tool finished: run_command"));
         Ok(())
+    }
+
+    #[test]
+    fn ratatui_thinking_trace_is_temporarily_visible_then_hidden() {
+        let fresh = ChatMessage {
+            role: "assistant".to_string(),
+            content: "**Thinking trace**\n\nworking through it\n\n**Answer**\n\nDone.".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        };
+        let fresh_rendered = message_lines(&fresh, 100, "")
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect::<String>();
+        assert!(fresh_rendered.contains("Thinking trace"));
+        assert!(fresh_rendered.contains("working through it"));
+        assert!(fresh_rendered.contains("Done."));
+
+        let expired = ChatMessage {
+            role: "assistant".to_string(),
+            content: fresh.content.clone(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now()
+                - chrono::Duration::seconds(THINKING_TRACE_VISIBLE_SECONDS + 1),
+        };
+        let expired_rendered = message_lines(&expired, 100, "")
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect::<String>();
+        assert!(!expired_rendered.contains("Thinking trace"));
+        assert!(!expired_rendered.contains("working through it"));
+        assert!(!expired_rendered.contains("Answer"));
+        assert!(expired_rendered.contains("Done."));
+        assert!(expired.content.contains("working through it"));
+    }
+
+    #[test]
+    fn ratatui_multiple_expired_thinking_traces_are_hidden_from_chat_only() {
+        let message = ChatMessage {
+            role: "assistant".to_string(),
+            content: [
+                "**Thinking trace**",
+                "",
+                "first transient thought",
+                "",
+                "**Answer**",
+                "",
+                "First visible answer.",
+                "",
+                "**Thinking trace**",
+                "",
+                "second transient thought",
+                "",
+                "**Answer**",
+                "",
+                "Second visible answer.",
+            ]
+            .join("\n"),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now()
+                - chrono::Duration::seconds(THINKING_TRACE_VISIBLE_SECONDS + 1),
+        };
+
+        let rendered = message_lines(&message, 100, "")
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect::<String>();
+
+        assert!(!rendered.contains("first transient thought"));
+        assert!(!rendered.contains("second transient thought"));
+        assert!(rendered.contains("First visible answer."));
+        assert!(rendered.contains("Second visible answer."));
+        assert!(message.content.contains("first transient thought"));
+        assert!(message.content.contains("second transient thought"));
     }
 
     #[test]
