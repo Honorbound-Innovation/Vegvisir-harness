@@ -290,6 +290,7 @@ fn handle_connection(
                 "status_code": response.status_code,
                 "headers": response.headers,
                 "body": response.body,
+                "body_base64": response.body_base64,
                 "redacted": response.redacted,
                 "peer": peer,
             }))
@@ -303,6 +304,7 @@ struct BrokeredHttpResponse {
     status_code: u16,
     headers: serde_json::Map<String, Value>,
     body: String,
+    body_base64: Option<String>,
     redacted: bool,
 }
 
@@ -414,6 +416,10 @@ fn brokered_http_request(
         .get("max_response_bytes")
         .and_then(Value::as_u64)
         .unwrap_or(10 * 1024 * 1024) as usize;
+    let response_body_base64 = request
+        .get("response_body_base64")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let agent = Agent::new();
     let mut req = agent.request(&method, url);
     if timeout > 0.0 {
@@ -424,10 +430,10 @@ fn brokered_http_request(
             req = req.set(key, value);
         }
     }
-    let result = if let Some(body) = body {
-        req.send_bytes(body)
-    } else {
-        req.call()
+    let result = match body {
+        Some(body) if is_multipart_request(&headers) => send_multipart_bytes(req, body),
+        Some(body) => req.send_bytes(body),
+        None => req.call(),
     };
     let response = match result {
         Ok(response) => response,
@@ -451,14 +457,25 @@ fn brokered_http_request(
     if body_bytes.len() > max_response_bytes {
         return Err(BrokerError::ResponseTooLarge);
     }
-    let body_text = String::from_utf8_lossy(&body_bytes);
-    let (body, body_changed) = redact_known_secret(&body_text, &secret);
-    Ok(BrokeredHttpResponse {
-        status_code,
-        headers: response_headers,
-        body,
-        redacted: headers_changed || body_changed,
-    })
+    if response_body_base64 {
+        Ok(BrokeredHttpResponse {
+            status_code,
+            headers: response_headers,
+            body: String::new(),
+            body_base64: Some(base64_encode(&body_bytes)),
+            redacted: headers_changed,
+        })
+    } else {
+        let body_text = String::from_utf8_lossy(&body_bytes);
+        let (body, body_changed) = redact_known_secret(&body_text, &secret);
+        Ok(BrokeredHttpResponse {
+            status_code,
+            headers: response_headers,
+            body,
+            body_base64: None,
+            redacted: headers_changed || body_changed,
+        })
+    }
 }
 
 fn validate_http_gateway_listen(config: &HttpGatewayConfig) -> Result<(), BrokerError> {
@@ -917,6 +934,27 @@ fn assert_no_secret_leak(
     Ok(())
 }
 
+fn is_multipart_request(headers: &serde_json::Map<String, Value>) -> bool {
+    headers.iter().any(|(key, value)| {
+        key.eq_ignore_ascii_case("content-type")
+            && value
+                .as_str()
+                .map(|value| value.to_ascii_lowercase().starts_with("multipart/form-data"))
+                .unwrap_or(false)
+    })
+}
+
+fn send_multipart_bytes(request: ureq::Request, body: &[u8]) -> Result<ureq::Response, ureq::Error> {
+    // Multipart providers are often strict about request framing. ureq::Request::send(reader)
+    // uses chunked transfer encoding unless Content-Length is set, and some OpenAI-compatible
+    // transcription endpoints reject chunked multipart bodies as "Could not parse multipart
+    // form". Set the exact byte count before streaming the caller-built body so the boundary
+    // and payload reach the provider unchanged.
+    request
+        .set("Content-Length", &body.len().to_string())
+        .send(std::io::Cursor::new(body.to_vec()))
+}
+
 fn json_string_path(value: &Value, path: &str) -> Result<String, BrokerError> {
     let mut current = value;
     for segment in path.split('.') {
@@ -1115,6 +1153,19 @@ mod tests {
             http_gateway_upstream_url("https://api.openai.com", "/v1/models"),
             "https://api.openai.com/v1/models"
         );
+    }
+
+    #[test]
+    fn multipart_detection_is_case_insensitive() {
+        let mut headers = serde_json::Map::new();
+        headers.insert(
+            "Content-Type".to_string(),
+            Value::String("multipart/form-data; boundary=vegvisir-test".to_string()),
+        );
+        assert!(is_multipart_request(&headers));
+
+        headers.insert("Content-Type".to_string(), Value::String("application/json".to_string()));
+        assert!(!is_multipart_request(&headers));
     }
 
     #[test]

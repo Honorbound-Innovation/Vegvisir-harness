@@ -235,6 +235,7 @@ impl TuiApplication {
             "/ka" => self.persona_command(&args)?,
             "/profile" => self.profile_command(&args)?,
             "/speech" => self.speech_command(&args)?,
+            "/tts" => self.tts_command(&args)?,
             "/summary" | "/session-summary" => self.summary_command(&args, false)?,
             "/handoff" => self.summary_command(&args, true)?,
             "/help" => self.help(),

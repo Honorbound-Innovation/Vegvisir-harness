@@ -2205,6 +2205,7 @@ fn responses_tool_loop_streaming(
     payload["stream"] = Value::Bool(true);
     payload["tool_choice"] = Value::String("auto".to_string());
     payload["tools"] = Value::Array(tools.iter().map(responses_tool_schema).collect());
+    let mut observations = Vec::<(String, String)>::new();
     for _ in 0..max_tool_rounds {
         let response = post_response(payload.clone())?;
         let tool_calls = response_function_calls(&response);
@@ -2230,7 +2231,9 @@ fn responses_tool_loop_streaming(
             let result = if index == 0 {
                 let result =
                     completed_tool_observation(&call.name, &execute_tool(&call.name, call.args));
-                truncate_model_observation(&result)
+                let result = truncate_model_observation(&result);
+                observations.push((call.name.clone(), result.clone()));
+                result
             } else {
                 deferred_tool_observation(&call.name)
             };
@@ -2241,7 +2244,7 @@ fn responses_tool_loop_streaming(
             }));
         }
     }
-    anyhow::bail!("model exceeded Vegvisir tool-call round limit ({max_tool_rounds}).")
+    tool_round_limit_result(&observations, max_tool_rounds)
 }
 
 fn response_function_calls(response: &Value) -> Vec<ResponseFunctionCall> {
@@ -3767,22 +3770,7 @@ pub fn openai_tool_loop(
             }));
         }
     }
-    if !observations.is_empty() {
-        let summary = observations
-            .iter()
-            .rev()
-            .take(3)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .map(|(name, content)| format!("[{name}]\n{content}"))
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        return Ok(format!(
-            "Tool-call round limit reached before the model produced a final answer. Latest tool observations:\n\n{summary}"
-        ));
-    }
-    anyhow::bail!("model exceeded Vegvisir tool-call round limit ({max_tool_rounds}).")
+    tool_round_limit_result(&observations, max_tool_rounds)
 }
 
 pub fn openai_tool_loop_streaming(
@@ -3840,24 +3828,9 @@ pub fn openai_tool_loop_streaming(
             }));
         }
     }
-    if !observations.is_empty() {
-        let summary = observations
-            .iter()
-            .rev()
-            .take(3)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .map(|(name, content)| format!("[{name}]\n{content}"))
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        let message = format!(
-            "Tool-call round limit reached before the model produced a final answer. Latest tool observations:\n\n{summary}"
-        );
-        on_delta(&message);
-        return Ok(message);
-    }
-    anyhow::bail!("model exceeded Vegvisir tool-call round limit ({max_tool_rounds}).")
+    let result = tool_round_limit_result(&observations, max_tool_rounds)?;
+    on_delta(&result);
+    Ok(result)
 }
 
 #[derive(Default)]
@@ -3954,9 +3927,28 @@ fn truncate_model_observation(value: &str) -> String {
 }
 
 fn completed_tool_observation(name: &str, content: &str) -> String {
+    let trimmed = content.trim_end();
+    let status = if trimmed
+        .lines()
+        .next()
+        .map(|line| {
+            let lower = line.trim_start().to_ascii_lowercase();
+            lower.starts_with("toolerror:")
+                || lower.starts_with("approvalrequired:")
+                || lower.starts_with("permissiondenied:")
+                || lower.starts_with("invalidtoolarguments:")
+                || lower.starts_with("unknowntool:")
+                || lower.starts_with("testsfailed:")
+        })
+        .unwrap_or(false)
+    {
+        "failed"
+    } else {
+        "completed"
+    };
     format!(
-        "[Vegvisir tool completed]\nname: {name}\nstatus: completed\n\n{}",
-        content.trim_end()
+        "[Vegvisir tool completed]\nname: {name}\nstatus: {status}\n\n{}",
+        trimmed
     )
 }
 
@@ -4003,7 +3995,7 @@ fn tool_round_limit_result(
             .collect::<Vec<_>>()
             .join("\n\n");
         return Ok(format!(
-            "Tool-call round limit reached before the model produced a final answer. Latest tool observations:\n\n{summary}"
+            "Tool-call round limit reached before the model produced a final answer. Latest tool observations:\n\n{summary}\n\nRecovery guidance: do not repeat the same failed tool call unless the previous observation shows a clear corrected input. Summarize the failure, switch strategy, or ask the user only if blocked."
         ));
     }
     anyhow::bail!("model exceeded Vegvisir tool-call round limit ({max_tool_rounds}).")
@@ -4799,6 +4791,25 @@ pub mod test_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completed_tool_observation_marks_tool_errors_failed() {
+        let observation = completed_tool_observation("run_tests", "TestsFailed: one test failed");
+        assert!(observation.contains("status: failed"));
+    }
+
+    #[test]
+    fn tool_round_limit_returns_recovery_guidance_instead_of_error_when_observations_exist() {
+        let observations = vec![(
+            "run_tests".to_string(),
+            completed_tool_observation("run_tests", "TestsFailed: one test failed"),
+        )];
+        let result = tool_round_limit_result(&observations, 1)
+            .expect("observed tool loops should produce a recoverable summary");
+        assert!(result.contains("Tool-call round limit reached"));
+        assert!(result.contains("Recovery guidance"));
+        assert!(result.contains("do not repeat the same failed tool call"));
+    }
 
     #[test]
     fn responses_stream_surfaces_reasoning_summary_before_answer() -> anyhow::Result<()> {

@@ -98,6 +98,7 @@ impl TuiApplication {
         self.redraw_requested
             || !self.pending_background_jobs.is_empty()
             || !self.pending_speech_jobs.is_empty()
+            || self.active_speech_recording.is_some()
     }
 
     pub(crate) fn drain_before_terminal_exit(&mut self) {

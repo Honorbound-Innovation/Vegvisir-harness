@@ -2,7 +2,7 @@ use std::{
     io::{BufRead, BufReader, Write},
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::{Child, Command, Output, Stdio},
     time::{Duration, Instant},
 };
 
@@ -13,11 +13,15 @@ use serde_json::{Value, json};
 use crate::core::ProviderConfig;
 
 pub const DEFAULT_PTT_SECONDS: u64 = 8;
+pub const DEFAULT_PTT_KEY: PushToTalkKey = PushToTalkKey::F(9);
 pub const OPENAI_HBSE_SPEECH_PROVIDER: &str = "openai-hbse";
-pub const OPENAI_HBSE_SPEECH_MODEL: &str = "gpt-realtime-whisper";
+pub const OPENAI_HBSE_SPEECH_MODEL: &str = "gpt-4o-mini-transcribe";
+pub const OPENAI_HBSE_TTS_MODEL: &str = "gpt-4o-mini-tts";
+pub const DEFAULT_TTS_VOICE: &str = "alloy";
 const SPEECH_TIMEOUT: Duration = Duration::from_secs(180);
 const SPEECH_HBSE_TIMEOUT_SECONDS: u64 = 180;
 const SPEECH_HBSE_MAX_RESPONSE_BYTES: u64 = 2 * 1024 * 1024;
+const TTS_HBSE_MAX_RESPONSE_BYTES: u64 = 24 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct SpeechTranscriptionResult {
@@ -26,6 +30,44 @@ pub struct SpeechTranscriptionResult {
     pub audio_path: PathBuf,
     pub audio_bytes: u64,
     pub kept_audio: bool,
+}
+
+pub struct ActiveSpeechRecording {
+    pub audio_path: PathBuf,
+    pub recorder: String,
+    child: Child,
+    started_at: Instant,
+}
+
+impl ActiveSpeechRecording {
+    pub fn elapsed(&self) -> Duration {
+        self.started_at.elapsed()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct TextToSpeechResult {
+    pub audio_path: PathBuf,
+    pub audio_bytes: u64,
+    pub model: String,
+    pub voice: String,
+    pub playback: Option<String>,
+}
+
+impl TextToSpeechResult {
+    pub fn summary(&self) -> String {
+        let playback = self
+            .playback
+            .as_deref()
+            .unwrap_or("saved only; no local audio player was available");
+        format!(
+            "TTS generated {bytes} bytes with {model}/{voice}; audio: {path}; playback: {playback}",
+            bytes = self.audio_bytes,
+            model = self.model,
+            voice = self.voice,
+            path = self.audio_path.display(),
+        )
+    }
 }
 
 impl SpeechTranscriptionResult {
@@ -188,6 +230,171 @@ pub fn speech_backend_status() -> String {
     )
 }
 
+pub fn synthesize_text_to_speech_with_provider(
+    text: &str,
+    provider: &ProviderConfig,
+    voice: Option<&str>,
+    output_path: Option<&Path>,
+    play: bool,
+) -> anyhow::Result<TextToSpeechResult> {
+    let text = text.trim();
+    if text.is_empty() {
+        anyhow::bail!("text-to-speech input is empty");
+    }
+    let voice = voice
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DEFAULT_TTS_VOICE)
+        .to_string();
+    let audio = synthesize_text_to_speech_openai_hbse(text, provider, &voice)?;
+    if audio.len() < 128 {
+        anyhow::bail!(
+            "text-to-speech response was unexpectedly small ({} bytes)",
+            audio.len()
+        );
+    }
+    let audio_path = output_path
+        .map(Path::to_path_buf)
+        .unwrap_or_else(default_tts_output_path);
+    if let Some(parent) = audio_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&audio_path, &audio)?;
+    let playback = if play {
+        Some(play_audio_file(&audio_path)?)
+    } else {
+        None
+    };
+    Ok(TextToSpeechResult {
+        audio_path,
+        audio_bytes: audio.len() as u64,
+        model: OPENAI_HBSE_TTS_MODEL.to_string(),
+        voice,
+        playback,
+    })
+}
+
+fn synthesize_text_to_speech_openai_hbse(
+    text: &str,
+    provider: &ProviderConfig,
+    voice: &str,
+) -> anyhow::Result<Vec<u8>> {
+    if provider.name != OPENAI_HBSE_SPEECH_PROVIDER && provider.kind != "hbse_openai_compatible" {
+        anyhow::bail!(
+            "text-to-speech requires HBSE-routed OpenAI-compatible provider {}; got {}",
+            OPENAI_HBSE_SPEECH_PROVIDER,
+            provider.name
+        );
+    }
+    let base_url = provider
+        .base_url
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("provider {} has no base_url", provider.name))?;
+    let payload = json!({
+        "model": provider
+            .metadata
+            .get("tts_model")
+            .and_then(Value::as_str)
+            .unwrap_or(OPENAI_HBSE_TTS_MODEL),
+        "voice": voice,
+        "input": text,
+        "response_format": "mp3",
+    });
+    let response = hbse_provider_http_binary_response(
+        provider,
+        &format!("{}/audio/speech", base_url.trim_end_matches('/')),
+        "application/json",
+        serde_json::to_vec(&payload)?,
+        provider
+            .metadata
+            .get("hbse_tts_purpose")
+            .and_then(Value::as_str)
+            .unwrap_or("model.speech.synthesis"),
+        TTS_HBSE_MAX_RESPONSE_BYTES,
+    )?;
+    let status = response
+        .get("status_code")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    if status >= 400 {
+        let body = response.get("body").and_then(Value::as_str).unwrap_or("");
+        anyhow::bail!(
+            "{} text-to-speech failed through HBSE: {} {}",
+            provider.name,
+            status,
+            body.chars().take(1000).collect::<String>()
+        );
+    }
+    let encoded = response
+        .get("body_base64")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            let body = response.get("body").and_then(Value::as_str).unwrap_or("");
+            anyhow::anyhow!(
+                "{} text-to-speech response did not include binary body_base64; body excerpt: {}",
+                provider.name,
+                body.chars().take(600).collect::<String>()
+            )
+        })?;
+    STANDARD
+        .decode(encoded)
+        .map_err(|error| anyhow::anyhow!("invalid base64 TTS response from HBSE broker: {error}"))
+}
+
+fn default_tts_output_path() -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "vegvisir-tts-{}-{}.mp3",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ))
+}
+
+fn play_audio_file(path: &Path) -> anyhow::Result<String> {
+    let candidates: &[(&str, &[&str])] = &[
+        ("ffplay", &["-nodisp", "-autoexit", "-loglevel", "error"]),
+        ("mpv", &["--really-quiet"]),
+        ("paplay", &[]),
+        ("aplay", &[]),
+    ];
+    let mut missing = Vec::new();
+    let mut failures = Vec::new();
+    for (command, args) in candidates {
+        if !executable_in_path(command) {
+            missing.push(*command);
+            continue;
+        }
+        let output = run_command_with_timeout(
+            Command::new(command)
+                .args(*args)
+                .arg(path)
+                .stdin(Stdio::null()),
+            Duration::from_secs(120),
+        );
+        match output {
+            Ok(output) if output.status.success() => return Ok((*command).to_string()),
+            Ok(output) => failures.push(format!(
+                "{} exited with {}; stdout: {}; stderr: {}",
+                command,
+                output.status,
+                output_excerpt(&output.stdout),
+                output_excerpt(&output.stderr)
+            )),
+            Err(error) => failures.push(format!("{} failed to run: {error}", command)),
+        }
+    }
+    if failures.is_empty() {
+        anyhow::bail!(
+            "no local audio player found on PATH; tried {}",
+            missing.join(", ")
+        );
+    }
+    anyhow::bail!(
+        "local audio playback failed. Missing players: {}; playback diagnostics: {}",
+        missing.join(", "),
+        failures.join("; ")
+    )
+}
+
 pub fn transcribe_audio_file_with_provider(
     path: &Path,
     provider: &ProviderConfig,
@@ -223,6 +430,61 @@ pub fn transcribe_audio_file(path: &Path) -> anyhow::Result<String> {
         "no usable local Whisper speech-to-text backend produced text: {}",
         errors.join("; ")
     )
+}
+
+pub fn start_push_to_talk_recording() -> anyhow::Result<ActiveSpeechRecording> {
+    let audio_path = std::env::temp_dir().join(format!(
+        "vegvisir-ptt-{}-{}.wav",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    match start_audio_recording(&audio_path) {
+        Ok(recording) => Ok(recording),
+        Err(error) => {
+            let _ = std::fs::remove_file(&audio_path);
+            Err(error)
+        }
+    }
+}
+
+pub fn stop_recording_and_transcribe_with_provider(
+    mut recording: ActiveSpeechRecording,
+    provider: &ProviderConfig,
+) -> anyhow::Result<SpeechTranscriptionResult> {
+    stop_audio_recording(&mut recording)?;
+    let audio_path = recording.audio_path.clone();
+    let recorder = recording.recorder.clone();
+    let audio_bytes = std::fs::metadata(&audio_path)
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+    if audio_bytes < 1024 {
+        anyhow::bail!(
+            "push-to-talk recorder {recorder} produced an unexpectedly small audio file ({audio_bytes} bytes) at {}",
+            audio_path.display()
+        );
+    }
+    match transcribe_audio_file_with_provider(&audio_path, provider) {
+        Ok(transcript) => {
+            let transcript = transcript.trim().to_string();
+            let kept_audio = transcript.is_empty();
+            if !kept_audio {
+                let _ = std::fs::remove_file(&audio_path);
+            }
+            Ok(SpeechTranscriptionResult {
+                transcript,
+                recorder: format!(
+                    "{recorder}; STT {OPENAI_HBSE_SPEECH_PROVIDER}/{OPENAI_HBSE_SPEECH_MODEL}"
+                ),
+                audio_path,
+                audio_bytes,
+                kept_audio,
+            })
+        }
+        Err(error) => Err(anyhow::anyhow!(
+            "speech transcription failed after recording {audio_bytes} bytes with {recorder}; kept audio at {} for inspection: {error}",
+            audio_path.display()
+        )),
+    }
 }
 
 pub fn record_and_transcribe(seconds: u64) -> anyhow::Result<SpeechTranscriptionResult> {
@@ -320,8 +582,111 @@ pub fn record_and_transcribe_with_provider(
     }
 }
 
+fn start_audio_recording(path: &Path) -> anyhow::Result<ActiveSpeechRecording> {
+    let mut attempted = Vec::new();
+    let mut failures = Vec::new();
+    for backend in recorder_backends() {
+        if !executable_in_path(backend.command) {
+            continue;
+        }
+        attempted.push(backend.command);
+        let child = match backend.kind {
+            RecorderBackendKind::FfmpegPulse => spawn_recording_command(
+                Command::new(backend.command)
+                    .args(["-hide_banner", "-loglevel", "error", "-y"])
+                    .args(["-f", "pulse", "-i", "default"])
+                    .args(["-ac", "1", "-ar", "16000"])
+                    .arg(path),
+            ),
+            RecorderBackendKind::Arecord => spawn_recording_command(
+                Command::new(backend.command)
+                    .args(["-q", "-f", "S16_LE", "-r", "16000", "-c", "1"])
+                    .arg(path),
+            ),
+        };
+        match child {
+            Ok(child) => {
+                return Ok(ActiveSpeechRecording {
+                    audio_path: path.to_path_buf(),
+                    recorder: format!("{} ({})", backend.command, backend.label),
+                    child,
+                    started_at: Instant::now(),
+                });
+            }
+            Err(error) => failures.push(format!("{} could not start: {error}", backend.command)),
+        }
+    }
+    if attempted.is_empty() {
+        anyhow::bail!(
+            "no local audio recorder found on PATH; install ffmpeg with PulseAudio support or arecord"
+        )
+    }
+    anyhow::bail!(
+        "local audio recorders were found ({}) but none could start. Recorder diagnostics: {}",
+        attempted.join(", "),
+        failures.join("; ")
+    )
+}
+
+fn spawn_recording_command(command: &mut Command) -> anyhow::Result<Child> {
+    command.stdin(Stdio::null());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    Ok(command.spawn()?)
+}
+
+fn stop_audio_recording(recording: &mut ActiveSpeechRecording) -> anyhow::Result<()> {
+    if recording.elapsed() < Duration::from_millis(250) {
+        std::thread::sleep(Duration::from_millis(250) - recording.elapsed());
+    }
+    terminate_recording_process(&mut recording.child, Duration::from_secs(5))
+}
+
+fn terminate_recording_process(
+    child: &mut Child,
+    graceful_timeout: Duration,
+) -> anyhow::Result<()> {
+    if child.try_wait()?.is_some() {
+        let _ = child.wait();
+        return Ok(());
+    }
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(-(child.id() as i32), libc::SIGINT);
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+    }
+    let started = Instant::now();
+    loop {
+        if child.try_wait()?.is_some() {
+            let _ = child.wait();
+            return Ok(());
+        }
+        if started.elapsed() >= graceful_timeout {
+            kill_process_tree(child);
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 fn record_audio_clip(path: &Path, seconds: u64) -> anyhow::Result<String> {
     let mut attempted = Vec::new();
+    let mut failures = Vec::new();
     for backend in recorder_backends() {
         if !executable_in_path(backend.command) {
             continue;
@@ -351,8 +716,27 @@ fn record_audio_clip(path: &Path, seconds: u64) -> anyhow::Result<String> {
                 if bytes >= 1024 {
                     return Ok(format!("{} ({})", backend.command, backend.label));
                 }
+                failures.push(format!(
+                    "{} exited successfully but produced only {} bytes at {}; stdout: {}; stderr: {}",
+                    backend.command,
+                    bytes,
+                    path.display(),
+                    output_excerpt(&output.stdout),
+                    output_excerpt(&output.stderr)
+                ));
             }
-            Ok(_) | Err(_) => continue,
+            Ok(output) => {
+                let bytes = std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
+                failures.push(format!(
+                    "{} exited with {}; output file bytes: {}; stdout: {}; stderr: {}",
+                    backend.command,
+                    output.status,
+                    bytes,
+                    output_excerpt(&output.stdout),
+                    output_excerpt(&output.stderr)
+                ));
+            }
+            Err(error) => failures.push(format!("{} could not complete: {error}", backend.command)),
         }
     }
     if attempted.is_empty() {
@@ -361,9 +745,19 @@ fn record_audio_clip(path: &Path, seconds: u64) -> anyhow::Result<String> {
         )
     }
     anyhow::bail!(
-        "local audio recorders were found ({}) but none produced a usable audio file",
-        attempted.join(", ")
+        "local audio recorders were found ({}) but none produced a usable audio file. Recorder diagnostics: {}",
+        attempted.join(", "),
+        failures.join("; ")
     )
+}
+
+fn output_excerpt(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return "<empty>".to_string();
+    }
+    trimmed.chars().take(600).collect()
 }
 
 fn run_openai_whisper(command: &str, path: &Path) -> anyhow::Result<String> {
@@ -420,11 +814,17 @@ fn transcribe_audio_file_openai_hbse(
     provider: &ProviderConfig,
 ) -> anyhow::Result<String> {
     let boundary = format!(
-        "----vegvisir-speech-{}-{}",
+        "vegvisir-speech-{}-{}",
         std::process::id(),
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
     );
-    let body = openai_transcription_multipart_body(path, OPENAI_HBSE_SPEECH_MODEL, &boundary)?;
+    let model = provider
+        .metadata
+        .get("stt_model")
+        .or_else(|| provider.metadata.get("speech_model"))
+        .and_then(Value::as_str)
+        .unwrap_or(OPENAI_HBSE_SPEECH_MODEL);
+    let body = openai_transcription_multipart_body(path, model, &boundary)?;
     let base_url = provider
         .base_url
         .as_deref()
@@ -460,8 +860,9 @@ fn transcribe_audio_file_openai_hbse(
         .filter(|text| !text.trim().is_empty())
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "{} speech response did not include transcript text",
-                provider.name
+                "{} speech response did not include transcript text. Response body excerpt: {}",
+                provider.name,
+                body.chars().take(600).collect::<String>()
             )
         })
 }
@@ -471,6 +872,9 @@ fn openai_transcription_multipart_body(
     model: &str,
     boundary: &str,
 ) -> anyhow::Result<Vec<u8>> {
+    if boundary.starts_with("--") {
+        anyhow::bail!("multipart boundary value must not include leading dashes; got {boundary:?}");
+    }
     let filename = path
         .file_name()
         .and_then(|value| value.to_str())
@@ -530,6 +934,55 @@ fn hbse_provider_http_binary(
     content_type: &str,
     body: Vec<u8>,
 ) -> anyhow::Result<Value> {
+    hbse_provider_http_binary_with_options(
+        provider,
+        url,
+        content_type,
+        body,
+        provider
+            .metadata
+            .get("hbse_speech_purpose")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                provider
+                    .metadata
+                    .get("hbse_purpose")
+                    .and_then(Value::as_str)
+            })
+            .unwrap_or("model.speech.transcription"),
+        SPEECH_HBSE_MAX_RESPONSE_BYTES,
+        false,
+    )
+}
+
+fn hbse_provider_http_binary_response(
+    provider: &ProviderConfig,
+    url: &str,
+    content_type: &str,
+    body: Vec<u8>,
+    purpose: &str,
+    max_response_bytes: u64,
+) -> anyhow::Result<Value> {
+    hbse_provider_http_binary_with_options(
+        provider,
+        url,
+        content_type,
+        body,
+        purpose,
+        max_response_bytes,
+        true,
+    )
+}
+
+fn hbse_provider_http_binary_with_options(
+    provider: &ProviderConfig,
+    url: &str,
+    content_type: &str,
+    body: Vec<u8>,
+    purpose: &str,
+    max_response_bytes: u64,
+    response_body_base64: bool,
+) -> anyhow::Result<Value> {
     let socket_path = crate::provider::hbse_default_or_configured_socket(provider);
     let secret_ref = provider
         .metadata
@@ -544,17 +997,6 @@ fn hbse_provider_http_binary(
         .and_then(Value::as_str)
         .map(str::to_string)
         .unwrap_or_else(|| format!("vegvisir.provider.{}", provider.name));
-    let purpose = provider
-        .metadata
-        .get("hbse_speech_purpose")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            provider
-                .metadata
-                .get("hbse_purpose")
-                .and_then(Value::as_str)
-        })
-        .unwrap_or("model.speech.transcription");
     let payload = json!({
         "command": "provider_http",
         "secret_ref": secret_ref,
@@ -570,7 +1012,8 @@ fn hbse_provider_http_binary(
         "credential_header": provider.metadata.get("credential_header").and_then(Value::as_str).unwrap_or("Authorization"),
         "credential_prefix": provider.metadata.get("credential_prefix").and_then(Value::as_str).unwrap_or("Bearer "),
         "timeout_seconds": SPEECH_HBSE_TIMEOUT_SECONDS,
-        "max_response_bytes": SPEECH_HBSE_MAX_RESPONSE_BYTES,
+        "max_response_bytes": max_response_bytes,
+        "response_body_base64": response_body_base64,
     });
     let mut stream = UnixStream::connect(&socket_path).map_err(|error| {
         anyhow::anyhow!("HBSE broker unavailable for speech transcription: {error}")
@@ -686,5 +1129,46 @@ mod tests {
             ),
             "hello world"
         );
+    }
+
+    #[test]
+    fn openai_transcription_multipart_body_uses_boundary_without_header_dashes()
+    -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let audio_path = dir.path().join("sample.wav");
+        std::fs::write(&audio_path, b"RIFF-test-audio")?;
+
+        let boundary = "vegvisir-test-boundary";
+        let body = openai_transcription_multipart_body(&audio_path, "whisper-1", boundary)?;
+        let body_text = String::from_utf8_lossy(&body);
+
+        assert!(body_text.starts_with("--vegvisir-test-boundary\r\n"));
+        assert!(body_text.contains("Content-Disposition: form-data; name=\"model\""));
+        assert!(body_text.contains("\r\n\r\nwhisper-1\r\n"));
+        assert!(
+            body_text
+                .contains("Content-Disposition: form-data; name=\"file\"; filename=\"sample.wav\"")
+        );
+        assert!(body_text.contains("Content-Type: audio/wav\r\n\r\n"));
+        assert!(body_text.ends_with("\r\n--vegvisir-test-boundary--\r\n"));
+        assert!(!body_text.contains("----vegvisir-test-boundary"));
+        Ok(())
+    }
+
+    #[test]
+    fn openai_transcription_multipart_body_rejects_boundary_with_leading_dashes()
+    -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let audio_path = dir.path().join("sample.wav");
+        std::fs::write(&audio_path, b"RIFF-test-audio")?;
+
+        let error = openai_transcription_multipart_body(&audio_path, "whisper-1", "--bad-boundary")
+            .expect_err("leading-dash boundaries must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("must not include leading dashes")
+        );
+        Ok(())
     }
 }

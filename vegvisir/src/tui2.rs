@@ -881,6 +881,20 @@ fn contains_thinking_trace(content: &str) -> bool {
 }
 
 fn strip_thinking_trace_sections(content: &str) -> String {
+    // Thinking traces are a presentation-only affordance: after a short grace
+    // period we hide them from the chat viewport, but the assistant message
+    // itself must never become blank. Some providers/harness paths can emit a
+    // message that contains a `**Thinking trace**` heading without a matching
+    // `**Answer**` heading. The old one-pass stripper treated that as "skip
+    // until EOF", making the whole assistant message appear to disappear.
+    // Only strip when there is at least one explicit answer boundary to render.
+    let has_answer_boundary = content
+        .lines()
+        .any(|line| line.trim().eq_ignore_ascii_case("**Answer**"));
+    if !has_answer_boundary {
+        return content.to_string();
+    }
+
     let mut out = Vec::new();
     let mut skipping_trace = false;
     let mut pending_blank = false;
@@ -911,7 +925,12 @@ fn strip_thinking_trace_sections(content: &str) -> String {
         out.push(line.to_string());
     }
 
-    out.join("\n")
+    let stripped = out.join("\n");
+    if stripped.trim().is_empty() {
+        content.to_string()
+    } else {
+        stripped
+    }
 }
 
 fn compact_system_message_line(
@@ -3298,6 +3317,25 @@ mod tests {
         assert!(!expired_rendered.contains("Answer"));
         assert!(expired_rendered.contains("Done."));
         assert!(expired.content.contains("working through it"));
+    }
+
+    #[test]
+    fn ratatui_thinking_trace_without_answer_does_not_disappear() {
+        let message = ChatMessage {
+            role: "assistant".to_string(),
+            content: "**Thinking trace**\n\nI am still useful visible text.".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now()
+                - chrono::Duration::milliseconds(THINKING_TRACE_VISIBLE_MILLIS + 1_000),
+        };
+
+        let rendered = message_lines(&message, 100, "")
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect::<String>();
+
+        assert!(rendered.contains("Thinking trace"));
+        assert!(rendered.contains("I am still useful visible text."));
     }
 
     #[test]

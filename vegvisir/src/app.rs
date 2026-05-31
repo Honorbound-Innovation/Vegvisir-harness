@@ -42,7 +42,7 @@ use crate::{
         ConversationRunner, ProviderRouter, ProviderRunEvent, configured_max_tool_rounds_label,
         direct_provider_auth_allowed, set_runtime_max_tool_rounds,
     },
-    speech::{DEFAULT_PTT_SECONDS, PushToTalkKey},
+    speech::{ActiveSpeechRecording, DEFAULT_PTT_KEY, DEFAULT_PTT_SECONDS, PushToTalkKey},
     subagents::{SubAgentStatus, SubAgentTaskRecord},
     tools::{ToolExecutor, ToolRegistry, build_builtin_registry_with_cms_and_mode},
     types::ToolCall,
@@ -97,6 +97,7 @@ pub struct TuiApplication {
     pub pending_send: Option<JoinHandle<anyhow::Result<SessionState>>>,
     pending_background_jobs: Vec<JoinHandle<anyhow::Result<String>>>,
     pending_speech_jobs: Vec<JoinHandle<anyhow::Result<crate::speech::SpeechTranscriptionResult>>>,
+    active_speech_recording: Option<ActiveSpeechRecording>,
     pub speech_ptt_key: Option<PushToTalkKey>,
     pub speech_ptt_seconds: u64,
     pending_stream: Option<Receiver<StreamEvent>>,
@@ -472,6 +473,7 @@ fn should_show_info_overlay(command: &str, response: &str) -> bool {
             | "/system"
             | "/system-prompt"
             | "/trace"
+            | "/tts"
             | "/status"
             | "/config"
             | "/mcp"
@@ -656,10 +658,12 @@ impl TuiApplication {
             pending_send: None,
             pending_background_jobs: Vec::new(),
             pending_speech_jobs: Vec::new(),
+            active_speech_recording: None,
             speech_ptt_key: defaults
                 .get("speech_ptt_key")
                 .and_then(Value::as_str)
-                .and_then(PushToTalkKey::parse),
+                .map(|value| PushToTalkKey::parse(value))
+                .unwrap_or_else(|| Some(DEFAULT_PTT_KEY.clone())),
             speech_ptt_seconds: defaults
                 .get("speech_ptt_seconds")
                 .and_then(Value::as_u64)
@@ -943,7 +947,7 @@ impl TuiApplication {
         if let Some(key) = &self.speech_ptt_key {
             data.insert("speech_ptt_key".to_string(), json!(key.to_config_string()));
         } else {
-            data.remove("speech_ptt_key");
+            data.insert("speech_ptt_key".to_string(), json!("off"));
         }
         data.insert(
             "speech_ptt_seconds".to_string(),
@@ -1056,7 +1060,7 @@ mod tests {
     }
 
     #[test]
-    fn completed_speech_job_inserts_transcript_into_input() -> anyhow::Result<()> {
+    fn completed_speech_job_submits_transcript() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
         app.pending_speech_jobs.push(std::thread::spawn(|| {
@@ -1080,12 +1084,14 @@ mod tests {
         }
 
         assert!(app.poll_background_jobs());
-        assert_eq!(app.input.buffer, "hello from speech");
+        assert!(app.input.buffer.is_empty());
+        assert!(
+            app.session.messages.iter().any(|message| {
+                message.role == "user" && message.content == "hello from speech"
+            })
+        );
         assert!(app.session.messages.iter().any(|message| {
-            message.role == "system"
-                && message
-                    .content
-                    .contains("transcript inserted into the input buffer")
+            message.role == "system" && message.content.contains("transcript submitted")
         }));
         Ok(())
     }
@@ -1381,6 +1387,43 @@ mod tests {
                 .content
                 .contains("final line visible")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn completed_turn_appends_final_response_when_live_artifacts_are_longer() -> anyhow::Result<()>
+    {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "fix the thing".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        app.session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: "**Code/Diff update from `write_file`**\n\n```diff\n+lots of artifact text\n+that makes the live partial longer\n```\n\nPartial answer".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+
+        let mut completed = app.session.clone();
+        completed.messages.pop();
+        completed.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: "Final answer that must remain visible.\n\nSummary:\n- completed cleanly"
+                .to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+
+        app.merge_live_reasoning_trace(&mut completed);
+
+        let content = &completed.messages.last().unwrap().content;
+        assert!(content.contains("Code/Diff update from `write_file`"));
+        assert!(content.contains("Final answer that must remain visible"));
+        assert!(content.contains("completed cleanly"));
         Ok(())
     }
 

@@ -84,8 +84,12 @@ impl TuiApplication {
             .as_ref()
             .is_some_and(|ptt_key| ptt_key.matches(&key))
         {
-            if let Err(error) = self.start_push_to_talk_transcription() {
-                self.push_system_message(format!("Speech push-to-talk failed: {error}"));
+            match self.toggle_push_to_talk_transcription() {
+                Ok(message) if !message.is_empty() => self.push_system_message(message),
+                Ok(_) => {}
+                Err(error) => {
+                    self.push_system_message(format!("Speech push-to-talk failed: {error}"))
+                }
             }
             self.redraw_requested = true;
             return;

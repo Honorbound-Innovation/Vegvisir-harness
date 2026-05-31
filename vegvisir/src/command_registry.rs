@@ -175,9 +175,15 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
         ),
         cmd(
             "/speech",
-            "transcribe an audio file into the input buffer using a local Whisper-compatible CLI",
-            "/speech transcribe <audio-file>|status",
+            "transcribe audio into the input buffer using OpenAI/HBSE speech-to-text",
+            "/speech status|transcribe <audio-file>|ptt|ptt-key <key>|ptt-seconds <n>",
             &["/stt"],
+        ),
+        cmd(
+            "/tts",
+            "synthesize text to speech using OpenAI/HBSE and play or save MP3 audio",
+            "/tts [--voice <voice>] [--out <path>] [--no-play] <text>",
+            &["/speak"],
         ),
         cmd(
             "/summary",
@@ -395,6 +401,26 @@ mod tests {
         let ka = registry.get("/ka").expect("ka command exists");
         assert!(ka.aliases.contains(&"/persona".to_string()));
         assert!(ka.aliases.contains(&"/soul".to_string()));
+    }
+
+    #[test]
+    fn tts_command_alias_parses_to_canonical_command() {
+        let registry = CommandRegistry::with_defaults();
+        let (command, args) = registry
+            .parse_with_aliases("/speak --voice alloy hello world")
+            .expect("tts alias should parse");
+        assert_eq!(command, "/tts");
+        assert_eq!(
+            args,
+            vec![
+                "--voice".to_string(),
+                "alloy".to_string(),
+                "hello".to_string(),
+                "world".to_string()
+            ]
+        );
+        let tts = registry.get("/tts").expect("tts command exists");
+        assert!(tts.aliases.contains(&"/speak".to_string()));
     }
 
     #[test]

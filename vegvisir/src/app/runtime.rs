@@ -293,6 +293,18 @@ impl TuiApplication {
             let handle = self.pending_speech_jobs.remove(speech_index);
             match handle.join() {
                 Ok(Ok(result)) => {
+                    self.logger.emit(
+                        "speech_ptt_finished",
+                        json!({
+                            "session": self.session.session_id,
+                            "workspace": self.cwd.display().to_string(),
+                            "audio_path": result.audio_path.display().to_string(),
+                            "audio_bytes": result.audio_bytes,
+                            "kept_audio": result.kept_audio,
+                            "recorder": result.recorder,
+                            "transcript_chars": result.transcript.chars().count(),
+                        }),
+                    );
                     let text = result.transcript.trim().to_string();
                     if text.is_empty() {
                         self.push_system_message(format!(
@@ -303,17 +315,37 @@ impl TuiApplication {
                     } else {
                         self.insert_speech_text(&text);
                         self.push_system_message(format!(
-                            "Speech push-to-talk transcript inserted into the input buffer. Review/edit, then press Enter to send. {}",
+                            "Speech push-to-talk transcript submitted. {}",
                             result.summary()
                         ));
+                        self.handle_submit();
                     }
                 }
                 Ok(Err(error)) => {
+                    self.logger.emit(
+                        "speech_ptt_failed",
+                        json!({
+                            "session": self.session.session_id,
+                            "workspace": self.cwd.display().to_string(),
+                            "error": error.to_string(),
+                        }),
+                    );
                     self.push_system_message(format!("Speech push-to-talk failed: {error}"))
                 }
-                Err(_) => self.push_system_message("Speech push-to-talk job panicked."),
+                Err(_) => {
+                    self.logger.emit(
+                        "speech_ptt_panicked",
+                        json!({
+                            "session": self.session.session_id,
+                            "workspace": self.cwd.display().to_string(),
+                        }),
+                    );
+                    self.push_system_message("Speech push-to-talk job panicked.")
+                }
             }
-            self.session.activity.clear();
+            if self.active_speech_recording.is_none() {
+                self.session.activity.clear();
+            }
             changed = true;
         }
 
@@ -668,23 +700,27 @@ Next step: I should retry or continue from the last successful step instead of l
             // session swap. The worker's completed response does not include
             // UI-only artifacts injected from tool observations, so merge them
             // instead of dropping them when the provider turn finishes.
-            if completed_message.content.trim().is_empty()
-                || live_content.len() >= completed_message.content.len()
+            let completed_content = completed_message.content.clone();
+            let completed_trimmed = completed_content.trim();
+            let live_trimmed = live_content.trim();
+            if completed_trimmed.is_empty() {
+                completed_message.content = live_content;
+            } else if live_trimmed.is_empty()
+                || completed_trimmed == live_trimmed
+                || completed_content.len() > live_content.len()
             {
-                if live_content.contains("**Code/Diff update from `")
-                    && !completed_message
-                        .content
-                        .contains("**Code/Diff update from `")
-                    && !completed_message.content.trim().is_empty()
-                {
-                    completed_message.content = format!(
-                        "{}\n\n{}",
-                        live_content.trim_end(),
-                        completed_message.content.trim_start()
-                    );
-                } else {
-                    completed_message.content = live_content;
-                }
+                // Keep the completed worker response. This is the only copy that
+                // is guaranteed to include the provider's final tail.
+            } else if live_content.contains(completed_trimmed) {
+                completed_message.content = live_content;
+            } else if completed_content.contains(live_trimmed) {
+                // The live content is only a prefix/subset of the final answer.
+            } else {
+                completed_message.content = format!(
+                    "{}\n\n{}",
+                    live_content.trim_end(),
+                    completed_content.trim_start()
+                );
             }
         }
     }
