@@ -6337,13 +6337,24 @@ ECM memory: blue lantern"
     let anthropic = vegvisir_rust::provider::test_support::anthropic_messages_payload_for_test(
         &messages, &model,
     );
+    let anthropic_system = anthropic["system"].as_array().unwrap();
     assert!(
-        anthropic["system"]
+        anthropic_system[0]["text"]
             .as_str()
             .unwrap()
             .contains("ECM memory: blue lantern")
     );
+    assert_eq!(
+        anthropic_system[0]["cache_control"],
+        serde_json::json!({"type": "ephemeral"})
+    );
     assert_eq!(anthropic["messages"][0]["role"], "user");
+    assert!(
+        openai
+            .iter()
+            .all(|message| message.get("cache_control").is_none())
+    );
+    assert!(responses.get("cache_control").is_none());
 
     let google =
         vegvisir_rust::provider::test_support::google_generate_content_payload_for_test(&messages);
@@ -6929,7 +6940,8 @@ fn anthropic_provider_streams_messages_with_system_prompt() -> anyhow::Result<()
     let request = server.join().expect("server thread completed")?;
     assert!(request.contains("POST /messages"));
     assert!(request.contains("x-api-key: anthropic-test-key"));
-    assert!(request.contains("\"system\":\"Be terse\""));
+    assert!(request.contains("\"system\":[{\"cache_control\":{\"type\":\"ephemeral\"}"));
+    assert!(request.contains("\"text\":\"Be terse\""));
     assert!(request.contains("\"role\":\"user\""));
     Ok(())
 }

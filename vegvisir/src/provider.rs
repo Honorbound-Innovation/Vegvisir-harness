@@ -1308,8 +1308,18 @@ impl ProviderAdapter for AnthropicProviderAdapter {
         &self,
         messages: &[ChatMessage],
         model: &ModelInfo,
-        _selected_provider: &str,
+        selected_provider: &str,
     ) -> anyhow::Result<String> {
+        self.complete_with_usage(messages, model, selected_provider)
+            .map(|response| response.content)
+    }
+
+    fn complete_with_usage(
+        &self,
+        messages: &[ChatMessage],
+        model: &ModelInfo,
+        _selected_provider: &str,
+    ) -> anyhow::Result<ProviderResponse> {
         let api_key = required_provider_env(&self.config)?;
         let base_url = self
             .config
@@ -1323,7 +1333,7 @@ impl ProviderAdapter for AnthropicProviderAdapter {
             .set("Content-Type", "application/json")
             .set("Accept", "text/event-stream");
         let response = send_provider_json(request, payload, &self.config.name)?;
-        parse_anthropic_sse(&response.into_string()?)
+        parse_anthropic_sse_response(&response.into_string()?)
     }
 
     fn supports_tool_calls(&self, _model: &ModelInfo, _selected_provider: &str) -> bool {
@@ -1388,9 +1398,27 @@ fn anthropic_messages_payload(messages: &[ChatMessage], model: &ModelInfo) -> Va
             .collect::<Vec<_>>(),
     });
     if !system_prompt.is_empty() {
-        payload["system"] = Value::String(system_prompt);
+        payload["system"] = anthropic_cached_text_blocks(&system_prompt);
     }
     payload
+}
+
+fn anthropic_cached_text_blocks(text: &str) -> Value {
+    let text = text.trim();
+    if text.is_empty() {
+        return Value::Array(Vec::new());
+    }
+    Value::Array(vec![json!({
+        "type": "text",
+        "text": text,
+        "cache_control": {"type": "ephemeral"},
+    })])
+}
+
+fn anthropic_apply_cache_control_to_last(items: &mut [Value]) {
+    if let Some(Value::Object(object)) = items.last_mut() {
+        object.insert("cache_control".to_string(), json!({"type": "ephemeral"}));
+    }
 }
 
 fn anthropic_message_content(message: &ChatMessage) -> Value {
@@ -1453,6 +1481,8 @@ fn anthropic_tool_loop(
     if wire_messages.is_empty() {
         wire_messages.push(json!({"role": "user", "content": "Continue."}));
     }
+    let mut anthropic_tools = tools.iter().map(anthropic_tool_schema).collect::<Vec<_>>();
+    anthropic_apply_cache_control_to_last(&mut anthropic_tools);
     let mut observations = Vec::<(String, String)>::new();
     for _ in 0..max_tool_rounds {
         let mut payload = json!({
@@ -1460,11 +1490,11 @@ fn anthropic_tool_loop(
             "max_tokens": 4096,
             "stream": false,
             "messages": wire_messages,
-            "tools": tools.iter().map(anthropic_tool_schema).collect::<Vec<_>>(),
+            "tools": anthropic_tools.clone(),
             "tool_choice": {"type": "auto"},
         });
         if !system_prompt.is_empty() {
-            payload["system"] = Value::String(system_prompt.clone());
+            payload["system"] = anthropic_cached_text_blocks(&system_prompt);
         }
         let response = post(payload)?;
         let content = response
@@ -1533,9 +1563,19 @@ impl ProviderAdapter for HBSEAnthropicProviderAdapter {
         &self,
         messages: &[ChatMessage],
         model: &ModelInfo,
-        _selected_provider: &str,
+        selected_provider: &str,
     ) -> anyhow::Result<String> {
-        self.post_messages_streaming(messages, model)
+        self.complete_with_usage(messages, model, selected_provider)
+            .map(|response| response.content)
+    }
+
+    fn complete_with_usage(
+        &self,
+        messages: &[ChatMessage],
+        model: &ModelInfo,
+        _selected_provider: &str,
+    ) -> anyhow::Result<ProviderResponse> {
+        self.post_messages_streaming_with_usage(messages, model)
     }
 
     fn stream_envelope(
@@ -1608,6 +1648,15 @@ impl HBSEAnthropicProviderAdapter {
         messages: &[ChatMessage],
         model: &ModelInfo,
     ) -> anyhow::Result<String> {
+        self.post_messages_streaming_with_usage(messages, model)
+            .map(|response| response.content)
+    }
+
+    fn post_messages_streaming_with_usage(
+        &self,
+        messages: &[ChatMessage],
+        model: &ModelInfo,
+    ) -> anyhow::Result<ProviderResponse> {
         let base_url = self
             .config
             .base_url
@@ -1645,7 +1694,7 @@ impl HBSEAnthropicProviderAdapter {
                 body.chars().take(400).collect::<String>()
             );
         }
-        parse_anthropic_sse(&body)
+        parse_anthropic_sse_response(&body)
     }
 }
 
@@ -2549,7 +2598,19 @@ fn extract_provider_usage(response: &Value) -> Option<TokenUsage> {
         .get("prompt_tokens")
         .or_else(|| usage.get("input_tokens"))
         .and_then(Value::as_u64)
-        .unwrap_or(0);
+        .unwrap_or(0)
+        .saturating_add(
+            usage
+                .get("cache_creation_input_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        )
+        .saturating_add(
+            usage
+                .get("cache_read_input_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        );
     let output_tokens = usage
         .get("completion_tokens")
         .or_else(|| usage.get("output_tokens"))
@@ -2642,7 +2703,12 @@ fn parse_openai_sse_reader<R: BufRead>(
 }
 
 fn parse_anthropic_sse(text: &str) -> anyhow::Result<String> {
+    parse_anthropic_sse_response(text).map(|response| response.content)
+}
+
+fn parse_anthropic_sse_response(text: &str) -> anyhow::Result<ProviderResponse> {
     let mut output = String::new();
+    let mut usage = TokenUsage::default();
     for line in text.lines().map(str::trim) {
         let Some(data) = line.strip_prefix("data:") else {
             continue;
@@ -2653,6 +2719,19 @@ fn parse_anthropic_sse(text: &str) -> anyhow::Result<String> {
         }
         let value: Value = serde_json::from_str(data)?;
         match value.get("type").and_then(Value::as_str) {
+            Some("message_start") => {
+                if let Some(event_usage) = value
+                    .get("message")
+                    .and_then(|message| message.get("usage"))
+                {
+                    usage = merge_token_usage(usage, anthropic_usage_tokens(event_usage));
+                }
+            }
+            Some("message_delta") => {
+                if let Some(event_usage) = value.get("usage") {
+                    usage = merge_token_usage(usage, anthropic_usage_tokens(event_usage));
+                }
+            }
             Some("content_block_delta") => {
                 if let Some(delta) = value.pointer("/delta/text").and_then(Value::as_str) {
                     output.push_str(delta);
@@ -2668,7 +2747,44 @@ fn parse_anthropic_sse(text: &str) -> anyhow::Result<String> {
             _ => {}
         }
     }
-    Ok(output)
+    Ok(ProviderResponse {
+        content: output,
+        usage: (usage.total() > 0).then_some(usage),
+    })
+}
+
+fn merge_token_usage(left: TokenUsage, right: TokenUsage) -> TokenUsage {
+    TokenUsage {
+        input_tokens: left.input_tokens.saturating_add(right.input_tokens),
+        output_tokens: left.output_tokens.saturating_add(right.output_tokens),
+    }
+}
+
+fn anthropic_usage_tokens(usage: &Value) -> TokenUsage {
+    let input_tokens = usage
+        .get("input_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        .saturating_add(
+            usage
+                .get("cache_creation_input_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        )
+        .saturating_add(
+            usage
+                .get("cache_read_input_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        );
+    let output_tokens = usage
+        .get("output_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    TokenUsage {
+        input_tokens,
+        output_tokens,
+    }
 }
 
 fn parse_google_stream(text: &str) -> anyhow::Result<String> {
@@ -4635,6 +4751,85 @@ mod tests {
         assert!(visible.contains("**Answer**"));
         assert!(visible.ends_with("Final answer."));
         Ok(())
+    }
+
+    #[test]
+    fn anthropic_sse_usage_includes_prompt_cache_tokens() -> anyhow::Result<()> {
+        let body = concat!(
+            r#"data: {"type":"message_start","message":{"usage":{"input_tokens":10,"cache_creation_input_tokens":20,"cache_read_input_tokens":30}}}"#,
+            "
+
+",
+            r#"data: {"type":"content_block_delta","delta":{"text":"cached answer"}}"#,
+            "
+
+",
+            r#"data: {"type":"message_delta","usage":{"output_tokens":7}}"#,
+            "
+
+",
+            "data: [DONE]
+
+"
+        );
+        let response = parse_anthropic_sse_response(body)?;
+
+        assert_eq!(response.content, "cached answer");
+        assert_eq!(
+            response.usage,
+            Some(TokenUsage {
+                input_tokens: 60,
+                output_tokens: 7,
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn anthropic_cache_control_applies_only_to_anthropic_payloads() {
+        let messages = vec![
+            ChatMessage {
+                role: "system".to_string(),
+                content: "Stable Vegvisir system prompt".to_string(),
+                attachments: Vec::new(),
+                created_at: chrono::Utc::now(),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: "Dynamic turn".to_string(),
+                attachments: Vec::new(),
+                created_at: chrono::Utc::now(),
+            },
+        ];
+        let model = ModelInfo {
+            name: "claude-test".to_string(),
+            provider: "anthropic".to_string(),
+            display_name: None,
+            context_window: Some(200000),
+            supports_streaming: true,
+            enabled: true,
+            metadata: Default::default(),
+        };
+
+        let anthropic = anthropic_messages_payload(&messages, &model);
+        assert_eq!(
+            anthropic.pointer("/system/0/cache_control"),
+            Some(&json!({"type": "ephemeral"}))
+        );
+        assert!(
+            anthropic
+                .pointer("/messages/0/content/cache_control")
+                .is_none()
+        );
+
+        let openai = openai_messages(&messages);
+        assert!(
+            openai
+                .iter()
+                .all(|message| message.get("cache_control").is_none())
+        );
+        let responses = responses_payload(&messages, &model);
+        assert!(responses.get("cache_control").is_none());
     }
 
     #[test]
