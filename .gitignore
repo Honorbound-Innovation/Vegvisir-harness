@@ -27,3 +27,9 @@ components/t3code-overlay/
 !components/components.toml
 !components/**/README.md
 !components/**/*.md
+
+# Track root license/notice files and license directory despite broad Markdown ignore.
+!NOTICE
+!THIRD_PARTY_NOTICES.md
+!licenses/
+!licenses/**

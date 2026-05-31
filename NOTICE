@@ -1,0 +1,52 @@
+Vegvisir
+
+Copyright (c) 2026 Honorbound Innovation, LLC
+
+Vegvisir's original source code is licensed under the MIT License. See LICENSE
+and licenses/MIT.txt.
+
+This repository also vendors third-party component systems under components/.
+Those components retain their original licenses and notices. The Vegvisir MIT
+License does not replace, supersede, or relicense those third-party terms.
+
+Included third-party notices:
+
+Ghidra
+------
+The vendored Ghidra source under components/ghidra is licensed under the Apache
+License, Version 2.0, and includes the upstream Ghidra NOTICE text. A copy of
+that notice is provided at licenses/Ghidra-NOTICE.txt and
+licenses/third-party/ghidra/NOTICE.
+
+Ghidra upstream NOTICE excerpt:
+
+Ghidra
+
+This product includes software developed at National Security Agency
+(https://www.nsa.gov)
+
+Portions of this product were created by the U.S. Government and not subject to
+U.S. copyright protections under 17 U.S.C.
+
+The remaining portions are copyright their respective authors and have been
+contributed under the terms of one or more open source licenses, and made
+available to you under the terms of those licenses. (See LICENSE)
+
+GhidraMCP
+---------
+The vendored GhidraMCP source under components/ghidra-mcp is licensed under the
+Apache License, Version 2.0. See licenses/third-party/ghidra-mcp/LICENSE.
+
+Solarium
+--------
+The vendored Solarium source under components/solarium declares the MIT License
+in its package metadata. See licenses/third-party/solarium/MIT.txt.
+
+Ghidra GPL support components
+-----------------------------
+The vendored Ghidra tree includes a components/ghidra/GPL directory containing
+stand-alone support programs and related license texts. These materials retain
+their GPL/LGPL terms. Copies of the license texts are provided under
+licenses/third-party/ghidra-gpl/licenses/.
+
+For a human-readable summary, see THIRD_PARTY_NOTICES.md.
