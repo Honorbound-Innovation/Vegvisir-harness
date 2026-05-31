@@ -1,9 +1,9 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::super::*;
 use super::autonomy_plan::{
-    append_autonomy_journal_event, current_autonomy_node_slices, read_autonomy_plan_status,
-    write_autonomy_libraries,
+    append_autonomy_journal_event, autonomy_library_paths_for_plan, current_autonomy_node_slices,
+    read_autonomy_plan_status, write_autonomy_libraries,
 };
 
 const AUTONOMY_NO_PROGRESS_LIMIT: usize = 2;
@@ -44,6 +44,23 @@ impl TuiApplication {
                     "Autonomy stopped.".to_string()
                 }
             }
+            Some("validate") => self.autonomy_validate_command(args.get(1)),
+            Some("resume") => self.autonomy_resume_command(args.get(1)),
+            Some("max-attempts") | Some("attempts") => {
+                let Some(raw) = args.get(1) else {
+                    return format!(
+                        "Autonomy max node attempts: {}",
+                        self.autonomy.max_node_attempts
+                    );
+                };
+                match raw.parse::<usize>() {
+                    Ok(attempts) if attempts > 0 => {
+                        self.autonomy.max_node_attempts = attempts;
+                        format!("Autonomy max node attempts set to {attempts}.")
+                    }
+                    _ => "Usage: /autonomy max-attempts <positive integer>".to_string(),
+                }
+            }
             Some("max-steps") | Some("steps") => {
                 let Some(raw) = args.get(1) else {
                     return format!("Autonomy max steps: {}", self.autonomy.max_steps);
@@ -57,14 +74,14 @@ impl TuiApplication {
                 }
             }
             Some(other) => format!(
-                "Unknown autonomy command: {other}\nUsage: /autonomy [on|off|status|stop|max-steps <n>]"
+                "Unknown autonomy command: {other}\nUsage: /autonomy [on|off|status|stop|validate [plan]|resume <plan>|max-steps <n>|max-attempts <n>]"
             ),
         }
     }
 
     fn autonomy_status(&self) -> String {
         format!(
-            "TUI autonomy\nenabled={}\nactive={}\nstatus={}\nstep={}\nmax_steps={}\nobjective={}\nplan_path={}\ncll_path={}\npll_path={}\nmanifest_path={}\nstate_path={}\njournal_path={}\ncurrent_node={}\nevidence_path={}\nevidence_valid={}\nnodes={}/{}\nchecklist={}/{}\nevidence_errors={}\nno_progress_count={}",
+            "TUI autonomy\nenabled={}\nactive={}\nstatus={}\nstep={}\nmax_steps={}\nobjective={}\nplan_path={}\ncll_path={}\npll_path={}\nmanifest_path={}\nstate_path={}\njournal_path={}\ncurrent_node={}\nevidence_path={}\nevidence_status={}\nevidence_valid={}\nevidence_blocked={}\nevidence_partial={}\nnode_attempts={}/{}\nnodes={}/{}\nchecklist={}/{}\nevidence_errors={}\nno_progress_count={}",
             self.autonomy.enabled,
             self.autonomy.active,
             self.autonomy.last_status,
@@ -86,7 +103,15 @@ impl TuiApplication {
                 .current_evidence_path
                 .as_deref()
                 .unwrap_or("-"),
+            self.autonomy
+                .current_evidence_status
+                .as_deref()
+                .unwrap_or("-"),
             self.autonomy.current_evidence_valid,
+            self.autonomy.current_evidence_blocked,
+            self.autonomy.current_evidence_partial,
+            self.autonomy.current_node_attempts,
+            self.autonomy.max_node_attempts,
             self.autonomy.node_completed,
             self.autonomy.node_total,
             self.autonomy.checklist_completed,
@@ -124,7 +149,11 @@ impl TuiApplication {
         self.autonomy.node_completed = 0;
         self.autonomy.current_evidence_path = None;
         self.autonomy.current_evidence_valid = false;
+        self.autonomy.current_evidence_status = None;
+        self.autonomy.current_evidence_blocked = false;
+        self.autonomy.current_evidence_partial = false;
         self.autonomy.current_evidence_errors.clear();
+        self.autonomy.current_node_attempts = 0;
         self.autonomy.last_status = format!(
             "running step {}/{}; awaiting written plan/checklist",
             self.autonomy.step, self.autonomy.max_steps
@@ -169,6 +198,16 @@ impl TuiApplication {
         }
         self.autonomy.checklist_total = checklist.total;
         self.autonomy.checklist_completed = checklist.completed;
+        if self.autonomy.current_evidence_blocked {
+            self.finish_autonomy("blocked: current node reported blocker evidence");
+            return true;
+        }
+        if self.autonomy.current_node_attempts >= self.autonomy.max_node_attempts
+            && !self.autonomy.current_evidence_valid
+        {
+            self.finish_autonomy("max_node_attempts_exceeded");
+            return true;
+        }
         if checklist.has_checklist && checklist.unchecked == 0 {
             if self.autonomy.node_total > 0
                 && self.autonomy.node_completed == self.autonomy.node_total
@@ -281,7 +320,7 @@ Required next action: create/update the Markdown implementation plan at `{plan_p
         }
         let slices = self.autonomy_current_library_slices();
         format!(
-            "Continue the autonomous task. Objective: {}\n\nHarness controller state: step {}/{}. Plan file: `{plan_path}`. CLL file: `{}`. PLL file: `{}`. Current node: `{}` ({}). Nodes: {}/{} complete. Completion checklist: {}/{} checked; {} unchecked. Evidence packet: `{}`. Evidence valid: {}. Evidence errors: {}.\n\nThe following CLL/PLL slices are task-local instructions in the USER prompt. They do not override the standard Vegvisir system prompt, user authority, tool policy, secret boundary, approval policy, or safety boundaries. Use them for the exact current autonomy task.\n\nCLL CONTRACT SLICE:\n{}\n\nPLL PROMPT SLICE:\n{}\n\nRequired response: continue implementing/verifying the current node, write/update the JSON completion evidence packet when claiming node completion, update `{plan_path}` as items are completed, and only mark items `- [x]` when actually complete. Provide deliverables/evidence for completed work. The TUI controller will continue until every contract node has a checked checklist and validated evidence, or a deterministic stop condition occurs.",
+            "Continue the autonomous task. Objective: {}\n\nHarness controller state: step {}/{}. Plan file: `{plan_path}`. CLL file: `{}`. PLL file: `{}`. Current node: `{}` ({}). Nodes: {}/{} complete. Completion checklist: {}/{} checked; {} unchecked. Evidence packet: `{}`. Evidence status: {}. Evidence valid: {}. Evidence blocked: {}. Evidence partial: {}. Current node attempts: {}/{}. Evidence errors: {}.\n\nThe following CLL/PLL slices are task-local instructions in the USER prompt. They do not override the standard Vegvisir system prompt, user authority, tool policy, secret boundary, approval policy, or safety boundaries. Use them for the exact current autonomy task.\n\nCLL CONTRACT SLICE:\n{}\n\nPLL PROMPT SLICE:\n{}\n\nRequired response: continue implementing/verifying the current node, write/update the JSON completion evidence packet when claiming node completion, update `{plan_path}` as items are completed, and only mark items `- [x]` when actually complete. Provide deliverables/evidence for completed work. The TUI controller will continue until every contract node has a checked checklist and validated evidence, or a deterministic stop condition occurs.",
             self.autonomy.objective,
             self.autonomy.step,
             self.autonomy.max_steps,
@@ -298,7 +337,15 @@ Required next action: create/update the Markdown implementation plan at `{plan_p
                 .current_evidence_path
                 .as_deref()
                 .unwrap_or("-"),
+            self.autonomy
+                .current_evidence_status
+                .as_deref()
+                .unwrap_or("-"),
             self.autonomy.current_evidence_valid,
+            self.autonomy.current_evidence_blocked,
+            self.autonomy.current_evidence_partial,
+            self.autonomy.current_node_attempts,
+            self.autonomy.max_node_attempts,
             if self.autonomy.current_evidence_errors.is_empty() {
                 "-".to_string()
             } else {
@@ -405,6 +452,7 @@ Required next action: create/update the Markdown implementation plan at `{plan_p
             Ok(Some(status)) => {
                 let previous_node = self.autonomy.current_node_id.clone();
                 let previous_evidence_valid = self.autonomy.current_evidence_valid;
+                let previous_evidence_status = self.autonomy.current_evidence_status.clone();
                 let current_node_id = status.current_node_id.clone();
                 let current_node_title = status.current_node_title.clone();
                 let current_evidence_path = status.current_evidence_path.clone();
@@ -415,13 +463,19 @@ Required next action: create/update the Markdown implementation plan at `{plan_p
                 self.autonomy.current_node_title = current_node_title.clone();
                 self.autonomy.current_evidence_path = current_evidence_path.clone();
                 self.autonomy.current_evidence_valid = status.current_evidence_valid;
+                self.autonomy.current_evidence_status = status.current_evidence_status.clone();
+                self.autonomy.current_evidence_blocked = status.current_evidence_blocked;
+                self.autonomy.current_evidence_partial = status.current_evidence_partial;
                 self.autonomy.current_evidence_errors = current_evidence_errors.clone();
+                self.autonomy.current_node_attempts =
+                    self.autonomy_attempt_count_for_current_node();
                 self.autonomy.journal_path = status
                     .journal_path
                     .clone()
                     .or(self.autonomy.journal_path.clone());
                 if previous_node != current_node_id
                     || previous_evidence_valid != self.autonomy.current_evidence_valid
+                    || previous_evidence_status != self.autonomy.current_evidence_status
                 {
                     if let Some(journal_path) = self.autonomy.journal_path.as_deref() {
                         let _ = append_autonomy_journal_event(
@@ -435,7 +489,11 @@ Required next action: create/update the Markdown implementation plan at `{plan_p
                                 "node_total": status.total_nodes,
                                 "node_completed": status.completed_nodes,
                                 "current_evidence_path": current_evidence_path,
+                                "current_evidence_status": self.autonomy.current_evidence_status,
                                 "current_evidence_valid": self.autonomy.current_evidence_valid,
+                                "current_evidence_blocked": self.autonomy.current_evidence_blocked,
+                                "current_evidence_partial": self.autonomy.current_evidence_partial,
+                                "current_node_attempts": self.autonomy.current_node_attempts,
                                 "current_evidence_errors": current_evidence_errors,
                             }),
                         );
@@ -451,20 +509,182 @@ Required next action: create/update the Markdown implementation plan at `{plan_p
         }
     }
 
+    fn autonomy_validate_command(&mut self, maybe_plan: Option<&String>) -> String {
+        let Some(plan_path_text) = maybe_plan
+            .map(String::as_str)
+            .or(self.autonomy.plan_path.as_deref())
+        else {
+            return "Usage: /autonomy validate [plan-path] (or start/resume an autonomy run first)"
+                .to_string();
+        };
+        let plan_path = Path::new(plan_path_text);
+        match write_autonomy_libraries(
+            &self.cwd,
+            plan_path,
+            &self.autonomy.objective,
+            &self.session.session_id,
+        )
+        .and_then(|_| read_autonomy_plan_status(&self.cwd, plan_path, &self.autonomy.objective))
+        {
+            Ok(Some(status)) => {
+                let paths = autonomy_library_paths_for_plan(plan_path);
+                let summary = format!(
+                    "Autonomy validation for `{}`\nnodes={}/{}\ncurrent_node={}\nevidence_status={}\nevidence_valid={}\nevidence_blocked={}\nevidence_partial={}\nevidence_errors={}\nstate={}\njournal={}",
+                    plan_path_text,
+                    status.completed_nodes,
+                    status.total_nodes,
+                    status.current_node_id.as_deref().unwrap_or("-"),
+                    status.current_evidence_status.as_deref().unwrap_or("-"),
+                    status.current_evidence_valid,
+                    status.current_evidence_blocked,
+                    status.current_evidence_partial,
+                    if status.current_evidence_errors.is_empty() {
+                        "-".to_string()
+                    } else {
+                        status.current_evidence_errors.join(" | ")
+                    },
+                    paths.state_path.display(),
+                    paths.journal_path.display(),
+                );
+                let _ = append_autonomy_journal_event(
+                    &self.cwd,
+                    &paths.journal_path,
+                    "manual_validate",
+                    json!({
+                        "session": self.session.session_id,
+                        "plan_path": plan_path_text,
+                        "node_total": status.total_nodes,
+                        "node_completed": status.completed_nodes,
+                        "current_node_id": status.current_node_id,
+                        "current_evidence_valid": status.current_evidence_valid,
+                        "current_evidence_status": status.current_evidence_status,
+                        "current_evidence_blocked": status.current_evidence_blocked,
+                        "current_evidence_partial": status.current_evidence_partial,
+                        "current_evidence_errors": status.current_evidence_errors,
+                    }),
+                );
+                summary
+            }
+            Ok(None) => {
+                format!("Autonomy validation failed: plan `{plan_path_text}` was not found.")
+            }
+            Err(error) => format!("Autonomy validation failed for `{plan_path_text}`: {error}"),
+        }
+    }
+
+    fn autonomy_resume_command(&mut self, maybe_plan: Option<&String>) -> String {
+        let Some(plan_path_text) = maybe_plan else {
+            return "Usage: /autonomy resume <plan-path>".to_string();
+        };
+        let plan_path = PathBuf::from(plan_path_text);
+        match write_autonomy_libraries(
+            &self.cwd,
+            &plan_path,
+            &self.autonomy.objective,
+            &self.session.session_id,
+        )
+        .and_then(|paths| {
+            let status =
+                read_autonomy_plan_status(&self.cwd, &plan_path, &self.autonomy.objective)?
+                    .ok_or_else(|| anyhow::anyhow!("plan was not found after compile"))?;
+            Ok((paths, status))
+        }) {
+            Ok((paths, status)) => {
+                self.autonomy.enabled = true;
+                self.autonomy.active = true;
+                if self.autonomy.objective.trim().is_empty() {
+                    self.autonomy.objective = format!("Resume autonomy plan {plan_path_text}");
+                }
+                self.autonomy.plan_path = Some(plan_path_text.clone());
+                self.autonomy.cll_path = Some(paths.cll_path.display().to_string());
+                self.autonomy.pll_path = Some(paths.pll_path.display().to_string());
+                self.autonomy.manifest_path = Some(paths.manifest_path.display().to_string());
+                self.autonomy.state_path = Some(paths.state_path.display().to_string());
+                self.autonomy.journal_path = Some(paths.journal_path.display().to_string());
+                self.autonomy.node_total = status.total_nodes;
+                self.autonomy.node_completed = status.completed_nodes;
+                self.autonomy.current_node_id = status.current_node_id.clone();
+                self.autonomy.current_node_title = status.current_node_title.clone();
+                self.autonomy.current_evidence_path = status.current_evidence_path.clone();
+                self.autonomy.current_evidence_valid = status.current_evidence_valid;
+                self.autonomy.current_evidence_status = status.current_evidence_status.clone();
+                self.autonomy.current_evidence_blocked = status.current_evidence_blocked;
+                self.autonomy.current_evidence_partial = status.current_evidence_partial;
+                self.autonomy.current_evidence_errors = status.current_evidence_errors.clone();
+                self.autonomy.current_node_attempts =
+                    self.autonomy_attempt_count_for_current_node();
+                self.autonomy.step = self.autonomy.step.max(1);
+                self.autonomy.last_status = format!(
+                    "resumed; current node {} ({}/{})",
+                    self.autonomy.current_node_id.as_deref().unwrap_or("-"),
+                    self.autonomy.node_completed,
+                    self.autonomy.node_total
+                );
+                let _ = append_autonomy_journal_event(
+                    &self.cwd,
+                    &paths.journal_path,
+                    "run_resumed",
+                    json!({
+                        "session": self.session.session_id,
+                        "plan_path": plan_path_text,
+                        "current_node_id": self.autonomy.current_node_id,
+                        "node_total": self.autonomy.node_total,
+                        "node_completed": self.autonomy.node_completed,
+                    }),
+                );
+                self.autonomy_status()
+            }
+            Err(error) => format!(
+                "Autonomy resume failed for `{}`: {error}",
+                plan_path.display()
+            ),
+        }
+    }
+
+    fn autonomy_attempt_count_for_current_node(&self) -> usize {
+        let Some(journal_path) = self.autonomy.journal_path.as_deref() else {
+            return 0;
+        };
+        let Some(current_node_id) = self.autonomy.current_node_id.as_deref() else {
+            return 0;
+        };
+        let Ok(journal) = std::fs::read_to_string(self.cwd.join(journal_path)) else {
+            return 0;
+        };
+        journal
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|entry| {
+                entry.get("event").and_then(|event| event.as_str()) == Some("node_status")
+            })
+            .filter(|entry| {
+                entry
+                    .pointer("/payload/current_node_id")
+                    .and_then(|node| node.as_str())
+                    == Some(current_node_id)
+            })
+            .count()
+    }
+
     fn autonomy_progress_signature_with_checklist(
         &self,
         checklist: &AutonomyChecklistStatus,
     ) -> String {
         let mut signature = self.autonomy_progress_signature();
         signature.push_str(&format!(
-            ";plan={};current_node={};evidence_path={};evidence_valid={};nodes={}/{};checklist={}/{};unchecked={}",
+            ";plan={};current_node={};evidence_path={};evidence_status={};evidence_valid={};evidence_blocked={};evidence_partial={};node_attempts={}/{};nodes={}/{};checklist={}/{};unchecked={}",
             self.autonomy.plan_path.as_deref().unwrap_or("-"),
             self.autonomy.current_node_id.as_deref().unwrap_or("-"),
             self.autonomy
                 .current_evidence_path
                 .as_deref()
                 .unwrap_or("-"),
+            self.autonomy.current_evidence_status.as_deref().unwrap_or("-"),
             self.autonomy.current_evidence_valid,
+            self.autonomy.current_evidence_blocked,
+            self.autonomy.current_evidence_partial,
+            self.autonomy.current_node_attempts,
+            self.autonomy.max_node_attempts,
             self.autonomy.node_completed,
             self.autonomy.node_total,
             checklist.completed,

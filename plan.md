@@ -507,3 +507,28 @@ Add richer lifecycle and operator controls:
 - `/autonomy validate` to compile/check plan, contract, state, evidence, and adapters without running the model,
 - `/autonomy resume <run-id-or-plan>` using `state.json` and `journal.jsonl`,
 - optional diff-aware `path_changed` validation.
+
+## Implementation progress update: lifecycle, validation commands, and diff-aware `path_changed`
+
+Implemented the next autonomy slice after evidence-gated node completion:
+
+- Added explicit evidence lifecycle visibility:
+  - `complete` / `completed` packets can validate and advance nodes.
+  - `blocked` packets are surfaced as blocker state and stop active autonomy with a blocked reason.
+  - `partial` packets are visible as progress state but do not complete nodes.
+- Added runtime attempt tracking:
+  - `current_node_attempts` are derived from node status journal events.
+  - `max_node_attempts` defaults to 3.
+  - `/autonomy max-attempts <n>` configures the retry budget.
+  - active autonomy stops on `max_node_attempts_exceeded` when the current node still lacks valid completion evidence.
+- Added manual control commands:
+  - `/autonomy validate [plan-path]` recompiles/validates the current or supplied plan and reports node/evidence status.
+  - `/autonomy resume <plan-path>` recompiles the plan, reloads CLL/PLL/state/evidence paths, restores current node status, and marks autonomy active.
+- Made `path_changed:<path>` truly diff-aware:
+  - It now requires the completion packet deliverables to reference the exact path.
+  - It also requires `git status --porcelain=v1 -- <path>` to report a working-tree/index change for that path.
+  - This avoids treating a mere deliverable claim as proof of a changed path.
+- Updated CLL/PLL slices and continuation prompts to explain blocked/partial status, retry/attempt state, and diff-aware `path_changed` requirements.
+- Added tests for:
+  - diff-aware `path_changed` failing before a git diff exists and passing after the path changes,
+  - blocked and partial packets being surfaced without completing the node.

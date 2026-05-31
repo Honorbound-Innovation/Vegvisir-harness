@@ -64,6 +64,9 @@ pub(crate) struct AutonomyPlanStatus {
     pub evidence_dir: Option<String>,
     pub current_evidence_path: Option<String>,
     pub current_evidence_valid: bool,
+    pub current_evidence_status: Option<String>,
+    pub current_evidence_blocked: bool,
+    pub current_evidence_partial: bool,
     pub current_evidence_errors: Vec<String>,
     pub journal_path: Option<String>,
     pub nodes: Vec<AutonomyNodeStatus>,
@@ -80,6 +83,9 @@ pub(crate) struct AutonomyNodeStatus {
     pub checklist_complete: bool,
     pub evidence_path: Option<String>,
     pub evidence_valid: bool,
+    pub evidence_status: Option<String>,
+    pub evidence_blocked: bool,
+    pub evidence_partial: bool,
     pub evidence_errors: Vec<String>,
     pub validation_adapter_results: Vec<AutonomyValidationAdapterResult>,
     pub complete: bool,
@@ -133,6 +139,9 @@ pub(crate) struct AutonomyEvidenceValidation {
     pub node_id: String,
     pub evidence_path: String,
     pub valid: bool,
+    pub status: Option<String>,
+    pub blocked: bool,
+    pub partial: bool,
     pub errors: Vec<String>,
     pub adapter_results: Vec<AutonomyValidationAdapterResult>,
 }
@@ -392,8 +401,17 @@ pub(crate) fn autonomy_plan_status_with_evidence(
     evidence_dir: Option<&Path>,
     cwd: &Path,
 ) -> anyhow::Result<AutonomyPlanStatus> {
-    let provisional =
-        autonomy_plan_status_unchecked(markdown, objective, evidence_dir, None, false, Vec::new());
+    let provisional = autonomy_plan_status_unchecked(
+        markdown,
+        objective,
+        evidence_dir,
+        None,
+        false,
+        None,
+        false,
+        false,
+        Vec::new(),
+    );
     let mut nodes = provisional.nodes;
     if let Some(dir) = evidence_dir {
         for index in 0..nodes.len() {
@@ -404,6 +422,9 @@ pub(crate) fn autonomy_plan_status_with_evidence(
             let validation = validate_node_evidence(cwd, dir, &node_id, &nodes)?;
             nodes[index].evidence_path = Some(validation.evidence_path.clone());
             nodes[index].evidence_valid = validation.valid;
+            nodes[index].evidence_status = validation.status;
+            nodes[index].evidence_blocked = validation.blocked;
+            nodes[index].evidence_partial = validation.partial;
             nodes[index].evidence_errors = validation.errors;
             nodes[index].validation_adapter_results = validation.adapter_results;
             nodes[index].complete = nodes[index].checklist_complete && nodes[index].evidence_valid;
@@ -424,17 +445,34 @@ pub(crate) fn autonomy_plan_status_with_evidence(
         .as_deref()
         .and_then(|node_id| evidence_dir.map(|dir| evidence_packet_path(dir, node_id)))
         .map(|path| path.display().to_string());
-    let (current_evidence_valid, current_evidence_errors) = current_node_id
+    let (
+        current_evidence_valid,
+        current_evidence_status,
+        current_evidence_blocked,
+        current_evidence_partial,
+        current_evidence_errors,
+    ) = current_node_id
         .as_deref()
         .and_then(|node_id| nodes.iter().find(|node| node.id == node_id))
-        .map(|node| (node.evidence_valid, node.evidence_errors.clone()))
-        .unwrap_or((false, Vec::new()));
+        .map(|node| {
+            (
+                node.evidence_valid,
+                node.evidence_status.clone(),
+                node.evidence_blocked,
+                node.evidence_partial,
+                node.evidence_errors.clone(),
+            )
+        })
+        .unwrap_or((false, None, false, false, Vec::new()));
 
     Ok(autonomy_plan_status_from_nodes(
         nodes,
         evidence_dir,
         current_evidence_path,
         current_evidence_valid,
+        current_evidence_status,
+        current_evidence_blocked,
+        current_evidence_partial,
         current_evidence_errors,
     ))
 }
@@ -445,6 +483,9 @@ fn autonomy_plan_status_unchecked(
     evidence_dir: Option<&Path>,
     current_evidence_path: Option<String>,
     current_evidence_valid: bool,
+    current_evidence_status: Option<String>,
+    current_evidence_blocked: bool,
+    current_evidence_partial: bool,
     current_evidence_errors: Vec<String>,
 ) -> AutonomyPlanStatus {
     let plan = parse_autonomy_markdown_plan(markdown, objective);
@@ -466,6 +507,9 @@ fn autonomy_plan_status_unchecked(
                 evidence_path: evidence_dir
                     .map(|dir| evidence_packet_path(dir, &node.id).display().to_string()),
                 evidence_valid: false,
+                evidence_status: None,
+                evidence_blocked: false,
+                evidence_partial: false,
                 evidence_errors: Vec::new(),
                 validation_adapter_results: Vec::new(),
                 complete: false,
@@ -482,6 +526,9 @@ fn autonomy_plan_status_unchecked(
         evidence_dir,
         current_evidence_path,
         current_evidence_valid,
+        current_evidence_status,
+        current_evidence_blocked,
+        current_evidence_partial,
         current_evidence_errors,
     )
 }
@@ -491,6 +538,9 @@ fn autonomy_plan_status_from_nodes(
     evidence_dir: Option<&Path>,
     current_evidence_path: Option<String>,
     current_evidence_valid: bool,
+    current_evidence_status: Option<String>,
+    current_evidence_blocked: bool,
+    current_evidence_partial: bool,
     current_evidence_errors: Vec<String>,
 ) -> AutonomyPlanStatus {
     let executable_total = nodes.iter().filter(|node| node.checklist_total > 0).count();
@@ -516,6 +566,9 @@ fn autonomy_plan_status_from_nodes(
         evidence_dir: evidence_dir.map(|path| path.display().to_string()),
         current_evidence_path,
         current_evidence_valid,
+        current_evidence_status,
+        current_evidence_blocked,
+        current_evidence_partial,
         current_evidence_errors,
         journal_path: None,
         nodes,
@@ -592,6 +645,9 @@ pub(crate) fn validate_node_evidence(
             node_id: node_id.to_string(),
             evidence_path,
             valid: false,
+            status: None,
+            blocked: false,
+            partial: false,
             errors: vec!["current node not found in plan status".to_string()],
             adapter_results: Vec::new(),
         });
@@ -603,6 +659,9 @@ pub(crate) fn validate_node_evidence(
                 node_id: node_id.to_string(),
                 evidence_path,
                 valid: false,
+                status: None,
+                blocked: false,
+                partial: false,
                 errors: vec!["completion evidence packet has not been written yet".to_string()],
                 adapter_results: Vec::new(),
             });
@@ -616,6 +675,9 @@ pub(crate) fn validate_node_evidence(
                 node_id: node_id.to_string(),
                 evidence_path,
                 valid: false,
+                status: None,
+                blocked: false,
+                partial: false,
                 errors: vec![format!(
                     "completion evidence packet is not valid JSON: {error}"
                 )],
@@ -625,6 +687,9 @@ pub(crate) fn validate_node_evidence(
     };
     let mut errors = Vec::new();
     let mut adapter_results = Vec::new();
+    let normalized_status = packet.status.trim().to_ascii_lowercase();
+    let blocked = normalized_status == "blocked";
+    let partial = normalized_status == "partial";
     if packet.node_id != node_id {
         errors.push(format!(
             "packet node_id `{}` does not match current node `{node_id}`",
@@ -632,17 +697,28 @@ pub(crate) fn validate_node_evidence(
         ));
     }
     if !matches!(
-        packet.status.as_str(),
+        normalized_status.as_str(),
         "complete" | "completed" | "blocked" | "partial"
     ) {
         errors.push(
             "packet status must be one of complete, completed, blocked, or partial".to_string(),
         );
     }
-    if !matches!(packet.status.as_str(), "complete" | "completed") {
+    if blocked {
+        if packet.risks_or_blockers.is_empty() {
+            errors.push(
+                "blocked packet must include at least one risks_or_blockers entry".to_string(),
+            );
+        }
+    } else if partial {
+        if packet.actions_taken.is_empty() && packet.risks_or_blockers.is_empty() {
+            errors
+                .push("partial packet must include actions_taken or risks_or_blockers".to_string());
+        }
+    } else if !matches!(normalized_status.as_str(), "complete" | "completed") {
         errors.push("completion evidence packet status is not complete".to_string());
     }
-    if matches!(packet.status.as_str(), "complete" | "completed") {
+    if matches!(normalized_status.as_str(), "complete" | "completed") {
         if packet.actions_taken.is_empty() {
             errors.push("complete packet must include at least one action_taken".to_string());
         }
@@ -674,7 +750,10 @@ pub(crate) fn validate_node_evidence(
     Ok(AutonomyEvidenceValidation {
         node_id: node_id.to_string(),
         evidence_path,
-        valid: errors.is_empty(),
+        valid: errors.is_empty() && matches!(normalized_status.as_str(), "complete" | "completed"),
+        status: Some(normalized_status),
+        blocked,
+        partial,
         errors,
         adapter_results,
     })
@@ -732,7 +811,7 @@ fn evaluate_validation_adapter(
                 },
             })
         }
-        "deliverable_path" | "path_changed" => {
+        "deliverable_path" => {
             let passed = packet.deliverables.iter().any(|item| {
                 item.path
                     .as_deref()
@@ -747,6 +826,50 @@ fn evaluate_validation_adapter(
                     format!("deliverables reference path: {value}")
                 } else {
                     format!("deliverables do not reference required path: {value}")
+                },
+            })
+        }
+        "path_changed" => {
+            let deliverable_referenced = packet.deliverables.iter().any(|item| {
+                item.path
+                    .as_deref()
+                    .map(|path| normalize_path_text(path) == normalize_path_text(value))
+                    .unwrap_or(false)
+            });
+            let path = safe_workspace_relative_path(value);
+            let diff_state = path
+                .as_deref()
+                .map(|relative| git_path_changed(cwd, relative))
+                .unwrap_or_else(|| {
+                    Err("path is absolute, contains NUL, or escapes workspace".to_string())
+                });
+            let (diff_changed, diff_detail) = match diff_state {
+                Ok(changed) => (
+                    changed,
+                    if changed {
+                        format!("git reports path changed: {value}")
+                    } else {
+                        format!("git reports no working-tree/index change for path: {value}")
+                    },
+                ),
+                Err(error) => (
+                    false,
+                    format!("could not determine git diff state for {value}: {error}"),
+                ),
+            };
+            let passed = deliverable_referenced && diff_changed;
+            Some(AutonomyValidationAdapterResult {
+                adapter,
+                requirement: requirement.to_string(),
+                passed,
+                detail: if passed {
+                    format!("deliverables reference path and {diff_detail}")
+                } else if !deliverable_referenced {
+                    format!(
+                        "deliverables do not reference required changed path: {value}; {diff_detail}"
+                    )
+                } else {
+                    diff_detail
                 },
             })
         }
@@ -802,6 +925,28 @@ fn verification_result_passed(value: &str) -> bool {
         value.trim().to_ascii_lowercase().as_str(),
         "pass" | "passed" | "success" | "succeeded" | "ok"
     )
+}
+
+fn git_path_changed(cwd: &Path, relative: &Path) -> Result<bool, String> {
+    let path_text = relative.to_string_lossy().to_string();
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .arg("status")
+        .arg("--porcelain=v1")
+        .arg("--")
+        .arg(&path_text)
+        .output()
+        .map_err(|error| format!("failed to run git status: {error}"))?;
+    if !status.status.success() {
+        let stderr = String::from_utf8_lossy(&status.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("git status exited with {}", status.status)
+        } else {
+            stderr
+        });
+    }
+    Ok(!String::from_utf8_lossy(&status.stdout).trim().is_empty())
 }
 
 pub(crate) fn append_autonomy_journal_event(
@@ -954,7 +1099,7 @@ fn render_current_pll_slice(node: &AutonomyPlanNode, status: &AutonomyPlanStatus
             escape_cll(path)
         ));
     }
-    out.push_str("  required_response: \"Return a concise completion packet with node_id, status, actions_taken, deliverables, success_conditions_satisfied, verification, risks_or_blockers, and next_recommended_action. Also write/update the same packet as JSON at evidence_packet_path when claiming node completion. For command_passes validation requirements, include a verification entry with the exact command and a passed/success result.\";\n");
+    out.push_str("  required_response: \"Return a concise completion packet with node_id, status, actions_taken, deliverables, success_conditions_satisfied, verification, risks_or_blockers, and next_recommended_action. Also write/update the same packet as JSON at evidence_packet_path when claiming node completion. For command_passes validation requirements, include a verification entry with the exact command and a passed/success result. For path_changed validation requirements, include the exact path in deliverables and ensure git status reports that path changed.\";\n");
     out.push_str("}\n");
     out
 }
@@ -1459,6 +1604,150 @@ Validation:
                 .join(".vegvisir/autonomy/run-plan-state.json")
                 .exists()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn path_changed_adapter_requires_git_diff_and_deliverable_reference() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path();
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(workspace)
+            .output()?;
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@example.invalid"])
+            .current_dir(workspace)
+            .output()?;
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(workspace)
+            .output()?;
+        std::fs::create_dir_all(workspace.join(".vegvisir/autonomy"))?;
+        std::fs::create_dir_all(workspace.join("src"))?;
+        std::fs::write(workspace.join("src/lib.rs"), "pub fn before() {}\n")?;
+        std::process::Command::new("git")
+            .args(["add", "src/lib.rs"])
+            .current_dir(workspace)
+            .output()?;
+        std::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(workspace)
+            .output()?;
+
+        let plan_path = Path::new(".vegvisir/autonomy/run-plan.md");
+        std::fs::write(
+            workspace.join(plan_path),
+            "# Plan\n## Phase 1: Diff Validation\nSuccess conditions:\n- Diff mapped\nExpected deliverables:\n- src/lib.rs changed\nValidation:\n- path_changed: src/lib.rs\n- [x] update source\n",
+        )?;
+        let paths = write_autonomy_libraries(workspace, plan_path, "objective", "run")?;
+        let status = read_autonomy_plan_status(workspace, plan_path, "objective")?.unwrap();
+        let packet_path = workspace.join(evidence_packet_path(
+            &paths.evidence_dir,
+            status.current_node_id.as_deref().unwrap(),
+        ));
+        let packet = serde_json::json!({
+            "node_id": status.current_node_id.as_deref().unwrap(),
+            "status": "complete",
+            "actions_taken": ["reported source update"],
+            "deliverables": [{"type": "file", "path": "src/lib.rs", "description": "updated source"}],
+            "success_conditions_satisfied": [{"condition": "Diff mapped", "evidence": "packet present"}],
+            "verification": [{"command": "cargo test autonomy", "result": "passed", "summary": "not executed in this unit test"}],
+            "risks_or_blockers": [],
+            "next_recommended_action": "advance"
+        })
+        .to_string();
+        std::fs::write(&packet_path, &packet)?;
+        let unchanged = read_autonomy_plan_status(workspace, plan_path, "objective")?.unwrap();
+        let unchanged_node = unchanged
+            .nodes
+            .iter()
+            .find(|node| node.checklist_total > 0)
+            .expect("executable node");
+        assert!(!unchanged_node.evidence_valid);
+        assert!(
+            unchanged_node
+                .validation_adapter_results
+                .iter()
+                .any(|result| result.adapter == "path_changed" && !result.passed)
+        );
+
+        std::fs::write(workspace.join("src/lib.rs"), "pub fn after() {}\n")?;
+        let changed = read_autonomy_plan_status(workspace, plan_path, "objective")?.unwrap();
+        let changed_node = changed
+            .nodes
+            .iter()
+            .find(|node| node.checklist_total > 0)
+            .expect("executable node");
+        assert!(
+            changed_node.evidence_valid,
+            "{:?}",
+            changed_node.evidence_errors
+        );
+        assert!(
+            changed_node
+                .validation_adapter_results
+                .iter()
+                .any(|result| result.adapter == "path_changed" && result.passed)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn blocked_and_partial_packets_are_visible_but_not_complete() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path();
+        std::fs::create_dir_all(workspace.join(".vegvisir/autonomy"))?;
+        let plan_path = Path::new(".vegvisir/autonomy/run-plan.md");
+        std::fs::write(
+            workspace.join(plan_path),
+            "# Plan\n## Phase 1: Blocked\n- [x] attempt work\n",
+        )?;
+        let paths = write_autonomy_libraries(workspace, plan_path, "objective", "run")?;
+        let status = read_autonomy_plan_status(workspace, plan_path, "objective")?.unwrap();
+        let packet_path = workspace.join(evidence_packet_path(
+            &paths.evidence_dir,
+            status.current_node_id.as_deref().unwrap(),
+        ));
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "node_id": status.current_node_id.as_deref().unwrap(),
+                "status": "blocked",
+                "actions_taken": ["inspected blocker"],
+                "deliverables": [],
+                "success_conditions_satisfied": [],
+                "verification": [],
+                "risks_or_blockers": ["approval required"],
+                "next_recommended_action": "pause"
+            })
+            .to_string(),
+        )?;
+        let blocked = read_autonomy_plan_status(workspace, plan_path, "objective")?.unwrap();
+        assert_eq!(blocked.current_evidence_status.as_deref(), Some("blocked"));
+        assert!(blocked.current_evidence_blocked);
+        assert!(!blocked.current_evidence_valid);
+        assert_eq!(blocked.completed_nodes, 0);
+
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "node_id": blocked.current_node_id.as_deref().unwrap(),
+                "status": "partial",
+                "actions_taken": ["made partial progress"],
+                "deliverables": [],
+                "success_conditions_satisfied": [],
+                "verification": [],
+                "risks_or_blockers": [],
+                "next_recommended_action": "continue_current_node"
+            })
+            .to_string(),
+        )?;
+        let partial = read_autonomy_plan_status(workspace, plan_path, "objective")?.unwrap();
+        assert_eq!(partial.current_evidence_status.as_deref(), Some("partial"));
+        assert!(partial.current_evidence_partial);
+        assert!(!partial.current_evidence_valid);
+        assert_eq!(partial.completed_nodes, 0);
         Ok(())
     }
 }

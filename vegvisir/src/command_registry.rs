@@ -109,7 +109,7 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
         cmd(
             "/autonomy",
             "control deterministic TUI autonomous run mode",
-            "/autonomy [on|off|status|stop|max-steps <n>]",
+            "/autonomy [on|off|status|stop|validate [plan]|resume <plan>|max-steps <n>|max-attempts <n>]",
             &[],
         ),
         cmd("/history", "show conversation history", "/history", &[]),
