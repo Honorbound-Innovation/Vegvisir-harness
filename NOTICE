@@ -2,12 +2,18 @@ Vegvisir
 
 Copyright (c) 2026 Honorbound Innovation, LLC
 
-Vegvisir's original source code is licensed under the MIT License. See LICENSE
-and licenses/MIT.txt.
+Vegvisir's original source code and first-party component systems are licensed
+under the MIT License. See LICENSE and licenses/MIT.txt.
+
+First-party component systems covered by the Vegvisir MIT License include:
+
+- components/solarium
+- components/ghidra-headless-mcp
 
 This repository also vendors third-party component systems under components/.
-Those components retain their original licenses and notices. The Vegvisir MIT
-License does not replace, supersede, or relicense those third-party terms.
+Those third-party components retain their original licenses and notices. The
+Vegvisir MIT License does not replace, supersede, or relicense those third-party
+terms.
 
 Included third-party notices:
 
@@ -36,11 +42,6 @@ GhidraMCP
 ---------
 The vendored GhidraMCP source under components/ghidra-mcp is licensed under the
 Apache License, Version 2.0. See licenses/third-party/ghidra-mcp/LICENSE.
-
-Solarium
---------
-The vendored Solarium source under components/solarium declares the MIT License
-in its package metadata. See licenses/third-party/solarium/MIT.txt.
 
 Ghidra GPL support components
 -----------------------------

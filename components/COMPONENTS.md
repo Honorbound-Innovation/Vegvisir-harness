@@ -3,15 +3,15 @@
 This directory contains first-class component systems that are packaged with the
 Vegvisir monorepo.
 
-## Vendored binary-intelligence components
+## Binary-intelligence components
 
-The following formerly external projects have been vendored as component source
-copies:
+The following binary-intelligence component source trees are packaged with the
+monorepo:
 
-- `components/solarium` — Solarium browser/tool automation component.
-- `components/ghidra` — Ghidra source tree used by Vegvisir's reverse-engineering tooling.
-- `components/ghidra-mcp` — Ghidra UI MCP bridge/extension component.
-- `components/ghidra-headless-mcp` — Ghidra headless MCP bridge component.
+- `components/solarium` — Solarium browser/tool automation component; first-party Vegvisir-owned component under the Vegvisir MIT License.
+- `components/ghidra` — Ghidra source tree used by Vegvisir's reverse-engineering tooling; third-party Apache-2.0 component with upstream notices preserved.
+- `components/ghidra-mcp` — Ghidra UI MCP bridge/extension component; third-party Apache-2.0 component.
+- `components/ghidra-headless-mcp` — Ghidra headless MCP bridge component; first-party Vegvisir-owned component under the Vegvisir MIT License.
 
 These are source components. Runtime products such as virtual environments,
 `node_modules`, Gradle caches, build directories, generated distributions, and

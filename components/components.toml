@@ -4,6 +4,8 @@
 
 [components.solarium]
 name = "Solarium"
+ownership = "first-party"
+license = "MIT (Vegvisir)"
 kind = "node"
 path = "components/solarium"
 source_snapshot = "/mnt/storage/Vegvisir-Projects/Solarium"
@@ -13,6 +15,8 @@ excluded = [".git", "node_modules", "dist", ".solarium", ".vegvisir"]
 
 [components.ghidra]
 name = "Ghidra"
+ownership = "third-party"
+license = "Apache-2.0"
 kind = "java-gradle-source"
 path = "components/ghidra"
 source_snapshot = "/mnt/storage/Vegvisir-Projects/ghidra"
@@ -22,6 +26,8 @@ excluded = [".git", ".gradle", "build", "**/build", "dependencies"]
 
 [components.ghidra_mcp]
 name = "GhidraMCP"
+ownership = "third-party"
+license = "Apache-2.0"
 kind = "ghidra-extension-python-mcp"
 path = "components/ghidra-mcp"
 source_snapshot = "/mnt/storage/Vegvisir-Projects/GhidraMCP"
@@ -33,6 +39,8 @@ notes = "Vendored from current local source state, including pre-existing local 
 
 [components.ghidra_headless_mcp]
 name = "GhidraHeadlessMCP"
+ownership = "first-party"
+license = "MIT (Vegvisir)"
 kind = "python-mcp"
 path = "components/ghidra-headless-mcp"
 source_snapshot = "/mnt/storage/Vegvisir-Projects/GhidraHeadlessMCP"
