@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Vegvisir Desktop",
+  "version": "0.1.0",
+  "identifier": "com.honorboundinnovation.vegvisir.desktop",
+  "build": {
+    "beforeDevCommand": "npm run check",
+    "beforeBuildCommand": "npm run check",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Vegvisir Desktop",
+        "width": 1440,
+        "height": 960,
+        "minWidth": 1040,
+        "minHeight": 720
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "DeveloperTool",
+    "shortDescription": "Desktop shell for Vegvisir",
+    "longDescription": "A desktop interface for the Vegvisir agentic software development harness."
+  }
+}

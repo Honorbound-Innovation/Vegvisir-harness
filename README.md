@@ -309,6 +309,7 @@ Start with the system docs when you need the real architecture, then use the usa
 - [Documentation index](docs/README.md)
 - [System overview](docs/system-overview.md)
 - [Runtime architecture](docs/runtime-architecture.md)
+- [Desktop app](docs/desktop-app.md)
 - [Skiller system](docs/skiller-system.md)
 - [Solarium system](docs/solarium-system.md)
 - [Vegvisir usage](docs/vegvisir-usage.md)
