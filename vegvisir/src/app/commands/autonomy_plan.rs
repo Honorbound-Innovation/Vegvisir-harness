@@ -75,6 +75,10 @@ pub(crate) struct AutonomyNodeStatus {
     pub title: String,
     pub checklist_total: usize,
     pub checklist_completed: usize,
+    pub checklist_complete: bool,
+    pub evidence_path: Option<String>,
+    pub evidence_valid: bool,
+    pub evidence_errors: Vec<String>,
     pub complete: bool,
     pub success_conditions: Vec<String>,
     pub expected_deliverables: Vec<String>,
@@ -358,22 +362,43 @@ pub(crate) fn autonomy_plan_status_with_evidence(
 ) -> anyhow::Result<AutonomyPlanStatus> {
     let provisional =
         autonomy_plan_status_unchecked(markdown, objective, evidence_dir, None, false, Vec::new());
-    let current_evidence_path = provisional
-        .current_node_id
+    let mut nodes = provisional.nodes;
+    if let Some(dir) = evidence_dir {
+        for index in 0..nodes.len() {
+            if nodes[index].checklist_total == 0 {
+                continue;
+            }
+            let node_id = nodes[index].id.clone();
+            let validation = validate_node_evidence(cwd, dir, &node_id, &nodes)?;
+            nodes[index].evidence_path = Some(validation.evidence_path.clone());
+            nodes[index].evidence_valid = validation.valid;
+            nodes[index].evidence_errors = validation.errors;
+            nodes[index].complete = nodes[index].checklist_complete && nodes[index].evidence_valid;
+        }
+    } else {
+        for node in nodes.iter_mut() {
+            node.complete = node.checklist_complete;
+        }
+    }
+
+    let current_node_id = nodes
+        .iter()
+        .find(|node| node.checklist_total > 0 && !node.complete)
+        .or_else(|| nodes.iter().find(|node| node.checklist_total > 0))
+        .or_else(|| nodes.first())
+        .map(|node| node.id.clone());
+    let current_evidence_path = current_node_id
         .as_deref()
         .and_then(|node_id| evidence_dir.map(|dir| evidence_packet_path(dir, node_id)))
         .map(|path| path.display().to_string());
-    let (current_evidence_valid, current_evidence_errors) =
-        match (provisional.current_node_id.as_deref(), evidence_dir) {
-            (Some(node_id), Some(dir)) => {
-                let validation = validate_node_evidence(cwd, dir, node_id, &provisional.nodes)?;
-                (validation.valid, validation.errors)
-            }
-            _ => (false, Vec::new()),
-        };
-    Ok(autonomy_plan_status_unchecked(
-        markdown,
-        objective,
+    let (current_evidence_valid, current_evidence_errors) = current_node_id
+        .as_deref()
+        .and_then(|node_id| nodes.iter().find(|node| node.id == node_id))
+        .map(|node| (node.evidence_valid, node.evidence_errors.clone()))
+        .unwrap_or((false, Vec::new()));
+
+    Ok(autonomy_plan_status_from_nodes(
+        nodes,
         evidence_dir,
         current_evidence_path,
         current_evidence_valid,
@@ -396,7 +421,7 @@ fn autonomy_plan_status_unchecked(
         .map(|node| {
             let checklist_total = node.checklist.len();
             let checklist_completed = node.checklist.iter().filter(|item| item.checked).count();
-            let complete = checklist_total > 0 && checklist_completed == checklist_total;
+            let checklist_complete = checklist_total > 0 && checklist_completed == checklist_total;
             AutonomyNodeStatus {
                 id: node.id.clone(),
                 parent_id: node.parent_id.clone(),
@@ -404,7 +429,12 @@ fn autonomy_plan_status_unchecked(
                 title: node.title.clone(),
                 checklist_total,
                 checklist_completed,
-                complete,
+                checklist_complete,
+                evidence_path: evidence_dir
+                    .map(|dir| evidence_packet_path(dir, &node.id).display().to_string()),
+                evidence_valid: false,
+                evidence_errors: Vec::new(),
+                complete: false,
                 success_conditions: node.success_conditions.clone(),
                 expected_deliverables: node.expected_deliverables.clone(),
                 implementation_rules: node.implementation_rules.clone(),
@@ -413,11 +443,27 @@ fn autonomy_plan_status_unchecked(
             }
         })
         .collect::<Vec<_>>();
+    autonomy_plan_status_from_nodes(
+        nodes,
+        evidence_dir,
+        current_evidence_path,
+        current_evidence_valid,
+        current_evidence_errors,
+    )
+}
+
+fn autonomy_plan_status_from_nodes(
+    nodes: Vec<AutonomyNodeStatus>,
+    evidence_dir: Option<&Path>,
+    current_evidence_path: Option<String>,
+    current_evidence_valid: bool,
+    current_evidence_errors: Vec<String>,
+) -> AutonomyPlanStatus {
     let executable_total = nodes.iter().filter(|node| node.checklist_total > 0).count();
     let current_node_index = nodes
         .iter()
         .position(|node| node.checklist_total > 0 && !node.complete)
-        .or_else(|| (executable_total == 0).then_some(0));
+        .or_else(|| (executable_total == 0 && !nodes.is_empty()).then_some(0));
     let current_node_id = current_node_index.map(|index| nodes[index].id.clone());
     let current_node_title = current_node_index.map(|index| nodes[index].title.clone());
     AutonomyPlanStatus {
@@ -1077,7 +1123,31 @@ Validation:
             workspace.join(plan_path),
             "# Plan\n## Phase 1: Done\n- [x] completed\n## Phase 2: Current\nSuccess conditions:\n- Current success\nExpected deliverables:\n- Current artifact\n- [ ] implement current\n",
         )?;
-        write_autonomy_libraries(workspace, plan_path, "objective", "run")?;
+        let paths = write_autonomy_libraries(workspace, plan_path, "objective", "run")?;
+        let first_status = read_autonomy_plan_status(workspace, plan_path, "objective")?.unwrap();
+        assert_eq!(first_status.completed_nodes, 0);
+        assert_eq!(
+            first_status.current_node_title.as_deref(),
+            Some("Phase 1: Done")
+        );
+        let done_packet_path = workspace.join(evidence_packet_path(
+            &paths.evidence_dir,
+            first_status.current_node_id.as_deref().unwrap(),
+        ));
+        std::fs::write(
+            done_packet_path,
+            serde_json::json!({
+                "node_id": first_status.current_node_id.as_deref().unwrap(),
+                "status": "complete",
+                "actions_taken": ["completed first node"],
+                "deliverables": [],
+                "success_conditions_satisfied": [],
+                "verification": [],
+                "risks_or_blockers": [],
+                "next_recommended_action": "advance"
+            })
+            .to_string(),
+        )?;
         let Some((status, cll, pll)) =
             current_autonomy_node_slices(workspace, plan_path, "objective")?
         else {

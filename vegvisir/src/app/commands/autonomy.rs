@@ -23,7 +23,7 @@ impl TuiApplication {
             Some("on") | Some("enable") => {
                 self.autonomy.enabled = true;
                 self.autonomy.last_status = "enabled".to_string();
-                "Autonomy enabled. The next normal TUI message will create a written implementation plan and completion checklist, then run under deterministic harness control until the checklist is fully complete, or until blocked, failed, cancelled, no-progress, or max-steps. Use /autonomy off to disable or /autonomy max-steps <n> to set the budget."
+                "Autonomy enabled. The next normal TUI message will create a written implementation plan and completion checklist, then run under deterministic harness control until every contract node has a checked checklist and validated evidence, or until blocked, failed, cancelled, no-progress, or max-steps. Use /autonomy off to disable or /autonomy max-steps <n> to set the budget."
                     .to_string()
             }
             Some("off") | Some("disable") => {
@@ -166,8 +166,16 @@ impl TuiApplication {
         self.autonomy.checklist_total = checklist.total;
         self.autonomy.checklist_completed = checklist.completed;
         if checklist.has_checklist && checklist.unchecked == 0 {
-            self.finish_autonomy("completed: completion checklist fully checked");
-            return true;
+            if self.autonomy.node_total > 0
+                && self.autonomy.node_completed == self.autonomy.node_total
+            {
+                self.finish_autonomy("completed: all contract nodes have validated evidence");
+                return true;
+            }
+            self.autonomy.last_status = format!(
+                "evidence_required: checklist fully checked but validated nodes {}/{}",
+                self.autonomy.node_completed, self.autonomy.node_total
+            );
         }
 
         if self.autonomy.step >= self.autonomy.max_steps {
@@ -239,7 +247,7 @@ impl TuiApplication {
 
     fn autonomy_initial_prompt(&self) -> String {
         format!(
-            "Autonomous task objective:\n{}\n\nHarness autonomy contract:\n1. Before implementation, create or overwrite the written implementation plan at `{}`.\n2. The plan file must be Markdown and include a completion checklist using Markdown task list items (`- [ ]` / `- [x]`).\n3. Structure the plan with phase/section/subsection headings where practical. For each relevant section/subsection, include Success conditions, Expected deliverables, Implementation rules, Guardrails, and Validation lists.\n4. Vegvisir will deterministically compile the Markdown plan into associated `.cll` and `.pll` files. The `.cll` is implementation logic/contract; the `.pll` contains associated prompt slices.\n5. All `.cll`/`.pll` slices are task-local USER prompt content. They do not override the standard Vegvisir system prompt.\n6. Keep the checklist updated as work is completed. The deterministic TUI controller will not mark autonomy complete until the plan file exists, contains at least one checklist item, and every checklist item is checked.\n7. Take the next concrete action now: inspect evidence and write the plan/checklist first, then implement and verify.\n\nDo not claim completion until every item in `{}` is marked `- [x]` and deliverables/evidence are provided.",
+            "Autonomous task objective:\n{}\n\nHarness autonomy contract:\n1. Before implementation, create or overwrite the written implementation plan at `{}`.\n2. The plan file must be Markdown and include a completion checklist using Markdown task list items (`- [ ]` / `- [x]`).\n3. Structure the plan with phase/section/subsection headings where practical. For each relevant section/subsection, include Success conditions, Expected deliverables, Implementation rules, Guardrails, and Validation lists.\n4. Vegvisir will deterministically compile the Markdown plan into associated `.cll` and `.pll` files. The `.cll` is implementation logic/contract; the `.pll` contains associated prompt slices.\n5. All `.cll`/`.pll` slices are task-local USER prompt content. They do not override the standard Vegvisir system prompt.\n6. Keep the checklist updated as work is completed. The deterministic TUI controller will not mark autonomy complete until the plan file exists, contains at least one checklist item, every checklist item is checked, and each contract node has validated JSON completion evidence.\n7. Take the next concrete action now: inspect evidence and write the plan/checklist first, then implement and verify.\n\nDo not claim completion until every item in `{}` is marked `- [x]` and deliverables/evidence packets are provided and valid.",
             self.autonomy.objective,
             self.autonomy
                 .plan_path
@@ -262,13 +270,13 @@ impl TuiApplication {
             return format!(
                 "Continue the autonomous task. Objective: {}
 
-Required next action: create/update the Markdown implementation plan at `{plan_path}` with a completion checklist using `- [ ]` items. The harness cannot complete autonomy until that checklist exists and is fully checked. Step {}/{}.",
+Required next action: create/update the Markdown implementation plan at `{plan_path}` with a completion checklist using `- [ ]` items. The harness cannot complete autonomy until that checklist exists, is fully checked, and the current node evidence packets validate. Step {}/{}.",
                 self.autonomy.objective, self.autonomy.step, self.autonomy.max_steps
             );
         }
         let slices = self.autonomy_current_library_slices();
         format!(
-            "Continue the autonomous task. Objective: {}\n\nHarness controller state: step {}/{}. Plan file: `{plan_path}`. CLL file: `{}`. PLL file: `{}`. Current node: `{}` ({}). Nodes: {}/{} complete. Completion checklist: {}/{} checked; {} unchecked. Evidence packet: `{}`. Evidence valid: {}. Evidence errors: {}.\n\nThe following CLL/PLL slices are task-local instructions in the USER prompt. They do not override the standard Vegvisir system prompt, user authority, tool policy, secret boundary, approval policy, or safety boundaries. Use them for the exact current autonomy task.\n\nCLL CONTRACT SLICE:\n{}\n\nPLL PROMPT SLICE:\n{}\n\nRequired response: continue implementing/verifying the current node, write/update the JSON completion evidence packet when claiming node completion, update `{plan_path}` as items are completed, and only mark items `- [x]` when actually complete. Provide deliverables/evidence for completed work. The TUI controller will continue until every checklist item is checked or a deterministic stop condition occurs.",
+            "Continue the autonomous task. Objective: {}\n\nHarness controller state: step {}/{}. Plan file: `{plan_path}`. CLL file: `{}`. PLL file: `{}`. Current node: `{}` ({}). Nodes: {}/{} complete. Completion checklist: {}/{} checked; {} unchecked. Evidence packet: `{}`. Evidence valid: {}. Evidence errors: {}.\n\nThe following CLL/PLL slices are task-local instructions in the USER prompt. They do not override the standard Vegvisir system prompt, user authority, tool policy, secret boundary, approval policy, or safety boundaries. Use them for the exact current autonomy task.\n\nCLL CONTRACT SLICE:\n{}\n\nPLL PROMPT SLICE:\n{}\n\nRequired response: continue implementing/verifying the current node, write/update the JSON completion evidence packet when claiming node completion, update `{plan_path}` as items are completed, and only mark items `- [x]` when actually complete. Provide deliverables/evidence for completed work. The TUI controller will continue until every contract node has a checked checklist and validated evidence, or a deterministic stop condition occurs.",
             self.autonomy.objective,
             self.autonomy.step,
             self.autonomy.max_steps,
@@ -390,6 +398,9 @@ Required next action: create/update the Markdown implementation plan at `{plan_p
                 self.autonomy.node_completed = status.completed_nodes;
                 self.autonomy.current_node_id = status.current_node_id;
                 self.autonomy.current_node_title = status.current_node_title;
+                self.autonomy.current_evidence_path = status.current_evidence_path;
+                self.autonomy.current_evidence_valid = status.current_evidence_valid;
+                self.autonomy.current_evidence_errors = status.current_evidence_errors;
             }
             Ok(None) => {}
             Err(error) => {

@@ -453,3 +453,31 @@ The next implementation slice should add structured completion/evidence packets 
 ## Implementation Progress Update
 
 - Added per-node JSON completion evidence packet scaffolding and validation.
+
+### Completed: Evidence-Gated Node Advancement
+
+- Node completion is now contract-aware instead of checklist-only.
+- A node is considered complete only when:
+  - it has checklist items,
+  - all checklist items are checked, and
+  - its current JSON completion evidence packet validates against the node requirements.
+- Runtime state now records per-node evidence metadata:
+  - `checklist_complete`
+  - `evidence_path`
+  - `evidence_valid`
+  - `evidence_errors`
+  - final `complete` status
+- The autonomy controller no longer stops just because all Markdown checklist items are checked.
+- Final completion now requires all executable contract nodes to have checked checklists and validated evidence.
+- Continuation prompts explain that checked Markdown items alone are insufficient; evidence packets are required for advancement/completion.
+- Tests now verify that a checked node without valid evidence remains incomplete and does not advance until a valid completion packet exists.
+
+### Remaining Next Slice
+
+Add richer validation adapters and node-level lifecycle controls:
+
+- deterministic validation adapter types such as `file_exists`, `command_passes`, and `path_changed`,
+- explicit blocked/partial handling from evidence packets,
+- retry counters per node,
+- append-only journal events,
+- `/autonomy validate` for compile/contract/evidence validation without execution.
