@@ -45,6 +45,7 @@ impl TuiApplication {
         self.chat_scroll_offset = 0;
         self.redraw_requested = true;
 
+        let profile_context = self.user_profile.compact_prompt_context();
         let mut worker_session = self.session.clone();
         worker_session.messages.pop();
         worker_session.messages.pop();
@@ -112,6 +113,8 @@ impl TuiApplication {
                 &worker_session,
                 &lsl_config,
             )?;
+            let model_content =
+                apply_user_profile_context(profile_context.as_deref(), &model_content);
             let model_content = if autonomous_mode_enabled {
                 apply_autonomous_mode_contract(&model_content)
             } else {
@@ -759,6 +762,16 @@ fn new_spinner_verb_seed(session_id: &str) -> u64 {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     hash ^ now
+}
+
+pub(crate) fn apply_user_profile_context(profile_context: Option<&str>, content: &str) -> String {
+    let Some(profile_context) = profile_context
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return content.to_string();
+    };
+    format!("{profile_context}\n\nUser request:\n{content}")
 }
 
 pub(crate) fn apply_autonomous_mode_contract(content: &str) -> String {

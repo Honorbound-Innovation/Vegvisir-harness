@@ -3222,8 +3222,8 @@ mod tests {
             created_at + chrono::Duration::milliseconds(THINKING_TRACE_VISIBLE_MILLIS)
         );
 
-        app.session.messages[0].created_at =
-            chrono::Utc::now() - chrono::Duration::milliseconds(THINKING_TRACE_VISIBLE_MILLIS + 1_000);
+        app.session.messages[0].created_at = chrono::Utc::now()
+            - chrono::Duration::milliseconds(THINKING_TRACE_VISIBLE_MILLIS + 1_000);
         assert!(next_thinking_trace_expiry_at(&app).is_none());
         Ok(())
     }

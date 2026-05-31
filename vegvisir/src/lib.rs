@@ -21,6 +21,7 @@ pub mod orchestrator;
 pub mod persona;
 pub mod planning;
 pub mod policy;
+pub mod profile;
 pub mod prompts;
 pub mod provider;
 pub mod retrieval;

@@ -37,6 +37,7 @@ use crate::{
         DEFAULT_PERSONA_ID, KA_PROMPT_HEADING, get_persona_with_root, render_persona_prompt_section,
     },
     policy::RuntimePolicy,
+    profile::{UserProfile, UserProfileStore},
     provider::{
         ConversationRunner, ProviderRouter, ProviderRunEvent, configured_max_tool_rounds_label,
         direct_provider_auth_allowed, set_runtime_max_tool_rounds,
@@ -78,6 +79,8 @@ pub struct TuiApplication {
     pub cms: VegvisirCms,
     pub tool_registry: ToolRegistry,
     pub tool_executor: ToolExecutor,
+    pub profile_store: UserProfileStore,
+    pub user_profile: UserProfile,
     pub logger: EventLogger,
     pub input: InputState,
     pub renderer: LayoutRenderer,
@@ -417,6 +420,8 @@ impl TuiApplication {
             cms_config,
             dangerously_bypass_approvals_and_sandbox,
         )?;
+        let profile_store = UserProfileStore::new(&data_root);
+        let user_profile = profile_store.load()?;
         let mcp_servers = load_mcp_servers(&data_root)?;
         let hbse_services =
             HbseServiceRefStore::new(data_root.join("hbse-services.json")).load()?;
@@ -489,6 +494,8 @@ impl TuiApplication {
             cms,
             tool_registry,
             tool_executor,
+            profile_store,
+            user_profile,
             logger,
             input: InputState {
                 history: input_history,
@@ -1688,6 +1695,16 @@ mod tests {
         assert!(wrapped.contains("unattended project-work mode"));
         assert!(wrapped.contains("User task:\nbuild the feature"));
         assert!(wrapped.contains("Stop and request approval"));
+    }
+
+    #[test]
+    fn user_profile_context_wraps_user_task_for_model_turn() {
+        let profile =
+            "[Vegvisir user profile]\n- Address the user as: Malice\n[/Vegvisir user profile]";
+        let wrapped =
+            crate::app::runtime::apply_user_profile_context(Some(profile), "build the feature");
+        assert!(wrapped.contains("Address the user as: Malice"));
+        assert!(wrapped.contains("User request:\nbuild the feature"));
     }
 
     #[test]

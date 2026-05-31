@@ -168,6 +168,12 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
             &["/persona", "/soul"],
         ),
         cmd(
+            "/profile",
+            "show or update the local user profile",
+            "/profile [show|path|init|help|set <field> <value>|add <spoken_languages|coding_languages> <value>|remove <spoken_languages|coding_languages> <value>|clear]",
+            &["/user"],
+        ),
+        cmd(
             "/speech",
             "transcribe an audio file into the input buffer using a local Whisper-compatible CLI",
             "/speech transcribe <audio-file>|status",
@@ -327,6 +333,20 @@ fn split_command(raw: &str) -> (&str, &str) {
 fn command_args(command_name: &str, rest: &str) -> Vec<String> {
     if rest.is_empty() {
         return Vec::new();
+    }
+    if command_name == "/profile" {
+        let mut parts = rest.splitn(3, char::is_whitespace);
+        let first = parts.next().unwrap_or("");
+        if matches!(first, "set" | "add" | "remove") {
+            let field = parts.next().unwrap_or("").trim();
+            let value = parts.next().unwrap_or("").trim();
+            return [first, field, value]
+                .into_iter()
+                .filter(|part| !part.is_empty())
+                .map(str::to_string)
+                .collect();
+        }
+        return rest.split_whitespace().map(str::to_string).collect();
     }
     if command_name == "/system" {
         let mut parts = rest.splitn(2, char::is_whitespace);

@@ -233,6 +233,7 @@ impl TuiApplication {
             "/agent" => self.agent_command(&args)?,
             "/attach" => self.attach_command(&args)?,
             "/ka" => self.persona_command(&args)?,
+            "/profile" => self.profile_command(&args)?,
             "/speech" => self.speech_command(&args)?,
             "/summary" | "/session-summary" => self.summary_command(&args, false)?,
             "/handoff" => self.summary_command(&args, true)?,

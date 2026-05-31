@@ -5,6 +5,7 @@ mod mcp_hbse;
 mod memory;
 mod misc;
 mod persona;
+mod profile;
 mod providers;
 mod sessions;
 mod skills;
