@@ -1493,6 +1493,13 @@ pub fn build_builtin_registry_with_cms_and_mode(
                 Err(error) => return Observation::err(error.to_string(), "InvalidFileScope"),
             };
 
+            if !bypass_sandbox {
+                return Observation::err(
+                    "Subagent spawning is currently limited to Vegvisir YOLO mode (--dangerously-bypass-approvals-and-sandbox). Restart Vegvisir in YOLO mode to delegate child agents.".to_string(),
+                    "SubagentRequiresYolo",
+                );
+            }
+
             let board_path = subagent_data_root.join("subagents.json");
             match active_subagent_count(&board_path) {
                 Ok(active) if active >= MAX_ACTIVE_SUBAGENTS => {
@@ -1539,6 +1546,7 @@ pub fn build_builtin_registry_with_cms_and_mode(
                     provider,
                     model,
                     agent,
+                    bypass_sandbox,
                 );
             });
 
@@ -1623,6 +1631,44 @@ fn resolve_vegvisir_executable(workspace: &Path) -> anyhow::Result<PathBuf> {
     Ok(PathBuf::from("vegvisir"))
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SubagentChildLaunch {
+    goal: String,
+    workspace: PathBuf,
+    max_steps: String,
+    provider: Option<String>,
+    model: Option<String>,
+    agent: Option<String>,
+    bypass_sandbox: bool,
+}
+
+fn subagent_child_argv(launch: SubagentChildLaunch) -> Vec<String> {
+    let mut argv = Vec::<String>::new();
+    argv.push("--json".to_string());
+    if launch.bypass_sandbox {
+        argv.push("--dangerously-bypass-approvals-and-sandbox".to_string());
+    }
+    if let Some(provider) = launch.provider {
+        argv.push("--provider".to_string());
+        argv.push(provider);
+    }
+    if let Some(model) = launch.model {
+        argv.push("--model".to_string());
+        argv.push(model);
+    }
+    argv.push("run".to_string());
+    argv.push(launch.goal);
+    argv.push("--workspace".to_string());
+    argv.push(launch.workspace.display().to_string());
+    argv.push("--max-steps".to_string());
+    argv.push(launch.max_steps);
+    if let Some(agent) = launch.agent {
+        argv.push("--agent".to_string());
+        argv.push(agent);
+    }
+    argv
+}
+
 fn run_spawned_subagent(
     board_path: PathBuf,
     mut record: SubAgentTaskRecord,
@@ -1632,6 +1678,7 @@ fn run_spawned_subagent(
     provider: Option<String>,
     model: Option<String>,
     agent: Option<String>,
+    bypass_sandbox: bool,
 ) {
     record.status = SubAgentStatus::Running;
     record.started_at = Some(Utc::now());
@@ -1639,26 +1686,15 @@ fn run_spawned_subagent(
 
     let result = (|| -> anyhow::Result<String> {
         let executable = resolve_vegvisir_executable(&workspace)?;
-        let mut argv = Vec::<String>::new();
-        argv.push("--json".to_string());
-        if let Some(provider) = provider {
-            argv.push("--provider".to_string());
-            argv.push(provider);
-        }
-        if let Some(model) = model {
-            argv.push("--model".to_string());
-            argv.push(model);
-        }
-        argv.push("run".to_string());
-        argv.push(goal);
-        argv.push("--workspace".to_string());
-        argv.push(workspace.display().to_string());
-        argv.push("--max-steps".to_string());
-        argv.push(max_steps);
-        if let Some(agent) = agent {
-            argv.push("--agent".to_string());
-            argv.push(agent);
-        }
+        let argv = subagent_child_argv(SubagentChildLaunch {
+            goal,
+            workspace: workspace.clone(),
+            max_steps,
+            provider,
+            model,
+            agent,
+            bypass_sandbox,
+        });
         let output = Command::new(&executable)
             .args(&argv)
             .output()
@@ -1989,6 +2025,77 @@ mod skiller_tool_tests {
             optional_nonempty_string(Some(&json!("openai-sso"))),
             Some("openai-sso".to_string())
         );
+    }
+
+    #[test]
+    fn subagent_child_argv_propagates_yolo_flag_only_when_parent_bypasses_sandbox() {
+        let workspace = PathBuf::from("/tmp/workspace");
+        let normal = subagent_child_argv(SubagentChildLaunch {
+            goal: "inspect only".to_string(),
+            workspace: workspace.clone(),
+            max_steps: "2".to_string(),
+            provider: Some("openai-sso".to_string()),
+            model: Some("gpt-5.5".to_string()),
+            agent: None,
+            bypass_sandbox: false,
+        });
+        assert!(
+            !normal
+                .iter()
+                .any(|arg| arg == "--dangerously-bypass-approvals-and-sandbox")
+        );
+
+        let yolo = subagent_child_argv(SubagentChildLaunch {
+            goal: "inspect only".to_string(),
+            workspace,
+            max_steps: "2".to_string(),
+            provider: Some("openai-sso".to_string()),
+            model: Some("gpt-5.5".to_string()),
+            agent: None,
+            bypass_sandbox: true,
+        });
+        assert!(
+            yolo.iter()
+                .any(|arg| arg == "--dangerously-bypass-approvals-and-sandbox")
+        );
+        assert_eq!(yolo[0], "--json");
+        assert_eq!(yolo[1], "--dangerously-bypass-approvals-and-sandbox");
+    }
+
+    #[test]
+    fn spawn_subagent_requires_yolo_mode_for_now() -> anyhow::Result<()> {
+        let workspace = TempDir::new()?;
+        let registry = build_builtin_registry_with_cms_and_mode(
+            workspace.path(),
+            VegvisirCmsConfig::for_workspace(workspace.path()),
+            false,
+        )?;
+        let mut executor = ToolExecutor {
+            registry,
+            guardrails: GuardrailEngine {
+                policy: crate::guardrails::PermissionPolicy {
+                    allow_risky_tools: true,
+                    require_human_approval: false,
+                    ..crate::guardrails::PermissionPolicy::default()
+                },
+                approvals: crate::guardrails::ApprovalLedger::default(),
+            },
+            runtime_policy: RuntimePolicy::default(),
+            logger: EventLogger::new(None),
+        };
+
+        let observation = executor.execute(ToolCall {
+            name: "spawn_subagent".to_string(),
+            args: serde_json::from_value(json!({
+                "goal": "inspect without editing",
+                "file_scope": ["."]
+            }))?,
+        });
+
+        assert!(!observation.ok);
+        assert_eq!(observation.error.as_deref(), Some("SubagentRequiresYolo"));
+        assert!(observation.content.contains("YOLO mode"));
+        Ok(())
     }
 
     #[test]

@@ -8571,7 +8571,7 @@ fn spawn_subagent_enforces_three_active_task_limit() -> anyhow::Result<()> {
         registry: vegvisir_rust::tools::build_builtin_registry_with_cms_and_mode(
             tmp.path(),
             cms_config,
-            false,
+            true,
         )?,
         guardrails: GuardrailEngine {
             policy: PermissionPolicy::default(),
@@ -8634,7 +8634,7 @@ fn spawn_subagent_rejects_overlapping_active_file_scope() -> anyhow::Result<()> 
         registry: vegvisir_rust::tools::build_builtin_registry_with_cms_and_mode(
             tmp.path(),
             cms_config,
-            false,
+            true,
         )?,
         guardrails: GuardrailEngine {
             policy: PermissionPolicy::default(),
