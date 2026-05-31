@@ -206,6 +206,8 @@ impl TuiApplication {
                 "Full redraw requested.".to_string()
             }
             "/cancel" => self.cancel_pending_response(),
+            "/auto" | "/autonomous" => self.autonomous_command(&args),
+            "/autonomy" => self.autonomy_command(&args),
             "/history" => self.history(),
             "/status" => self.session_status_command(&args),
             "/diff" => self.diff_command(&args)?,
@@ -236,7 +238,6 @@ impl TuiApplication {
             "/handoff" => self.summary_command(&args, true)?,
             "/help" => self.help(),
             "/tools" => self.tools_command(&args),
-            "/auto" => self.autonomous_command(&args),
             "/tool-limit" => self.tool_limit_command(&args),
             "/approvals" => self.approvals_command(&args),
             "/skills" => self.skills_command(&args)?,

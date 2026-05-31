@@ -194,10 +194,12 @@ impl TuiApplication {
                 self.poll_stream_events();
                 self.merge_live_tool_messages(&mut session);
                 self.merge_live_reasoning_trace(&mut session);
+                let had_tool_activity = self.completed_session_had_tool_activity(&session);
                 self.session = session;
                 self.pending_stream = None;
                 self.pending_cancel = None;
                 self.pending_steering = None;
+                self.autonomy.last_turn_had_tools = had_tool_activity;
                 self.autosave_session();
             }
             Ok(Err(error)) => {
@@ -214,8 +216,18 @@ impl TuiApplication {
                 if error.to_string() == "Cancelled" {
                     self.pop_last_assistant_response();
                     self.push_system_message("Cancelled in-flight model response.");
+                    if self.autonomy.active {
+                        self.autonomy.active = false;
+                        self.autonomy.enabled = false;
+                        self.autonomy.last_status = "cancelled".to_string();
+                    }
                 } else {
                     self.push_turn_failure_summary(error.to_string());
+                    if self.autonomy.active {
+                        self.autonomy.active = false;
+                        self.autonomy.enabled = false;
+                        self.autonomy.last_status = format!("failed: {error}");
+                    }
                 }
                 self.autosave_session();
             }
@@ -230,12 +242,24 @@ impl TuiApplication {
                 self.push_turn_failure_summary(
                     "provider worker panicked before completing the turn".to_string(),
                 );
+                if self.autonomy.active {
+                    self.autonomy.active = false;
+                    self.autonomy.enabled = false;
+                    self.autonomy.last_status = "failed: provider worker panicked".to_string();
+                }
                 self.autosave_session();
             }
         }
         self.chat_scroll_offset = 0;
         self.redraw_requested = true;
         true
+    }
+
+    fn completed_session_had_tool_activity(&self, completed: &SessionState) -> bool {
+        completed
+            .messages
+            .iter()
+            .any(|message| message.role == "system" && is_live_tool_message(&message.content))
     }
 
     pub fn poll_background_jobs(&mut self) -> bool {
@@ -345,6 +369,9 @@ Steering: {display_content}{attachment_note}"
         let Some(handle) = self.pending_send.take() else {
             return "No in-flight model response to cancel.".to_string();
         };
+        self.autonomy.active = false;
+        self.autonomy.enabled = false;
+        self.autonomy.last_status = "cancelled".to_string();
         if let Some(cancel_token) = &self.pending_cancel {
             cancel_token.store(true, Ordering::SeqCst);
         }

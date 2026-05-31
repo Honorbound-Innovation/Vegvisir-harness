@@ -66,6 +66,10 @@ impl TuiApplication {
             return;
         }
 
+        let should_begin_autonomy = self.autonomy.enabled && !self.autonomy.active;
+        if should_begin_autonomy {
+            content = self.begin_autonomous_run(&content);
+        }
         self.start_background_send(content, attachments);
     }
 

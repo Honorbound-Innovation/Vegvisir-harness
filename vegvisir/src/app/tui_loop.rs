@@ -40,6 +40,7 @@ impl TuiApplication {
             }
             self.poll_stream_events();
             self.poll_pending_send();
+            self.poll_autonomy_controller();
             self.poll_background_jobs();
             if self.pending_editor_action.is_some() {
                 run_pending_editor_action(self, &mut terminal, &mut mouse_capture_applied)?;

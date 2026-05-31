@@ -100,6 +100,18 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
             "/cancel",
             &["/stop"],
         ),
+        cmd(
+            "/auto",
+            "control prompt-contract autonomous working mode",
+            "/auto [status|on|off]",
+            &["/autonomous"],
+        ),
+        cmd(
+            "/autonomy",
+            "control deterministic TUI autonomous run mode",
+            "/autonomy [on|off|status|stop|max-steps <n>]",
+            &[],
+        ),
         cmd("/history", "show conversation history", "/history", &[]),
         cmd(
             "/status",

@@ -118,6 +118,7 @@ pub struct TuiApplication {
     pub chat_rendered_lines: Vec<String>,
     pub drag_anchor: Option<(u16, u16)>,
     pub drag_current: Option<(u16, u16)>,
+    pub autonomy: AutonomyState,
 }
 
 enum StreamEvent {
@@ -185,6 +186,41 @@ pub struct DiffOverlayRenderCache {
 pub struct InfoOverlay {
     pub title: String,
     pub body: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AutonomyState {
+    pub enabled: bool,
+    pub active: bool,
+    pub objective: String,
+    pub max_steps: usize,
+    pub step: usize,
+    pub last_status: String,
+    pub last_signature: Option<String>,
+    pub no_progress_count: usize,
+    pub last_turn_had_tools: bool,
+    pub plan_path: Option<String>,
+    pub checklist_total: usize,
+    pub checklist_completed: usize,
+}
+
+impl Default for AutonomyState {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            active: false,
+            objective: String::new(),
+            max_steps: 12,
+            step: 0,
+            last_status: "off".to_string(),
+            last_signature: None,
+            no_progress_count: 0,
+            last_turn_had_tools: false,
+            plan_path: None,
+            checklist_total: 0,
+            checklist_completed: 0,
+        }
+    }
 }
 
 fn command_matches_palette_query(name: &str, description: &str, raw: &str) -> bool {
@@ -471,6 +507,7 @@ impl TuiApplication {
             chat_rendered_lines: Vec::new(),
             drag_anchor: None,
             drag_current: None,
+            autonomy: AutonomyState::default(),
         };
         app.autoload_workspace_session()?;
         app.rebuild_tooling_for_cms()?;
