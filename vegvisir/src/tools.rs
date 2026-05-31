@@ -1496,6 +1496,10 @@ pub fn build_builtin_registry_with_cms_and_mode(
                 .get("agent")
                 .and_then(Value::as_str)
                 .map(str::to_string);
+            let file_scope = match parse_subagent_file_scope(args.get("file_scope"), &subagent_sandbox) {
+                Ok(scope) => scope,
+                Err(error) => return Observation::err(error.to_string(), "InvalidFileScope"),
+            };
 
             let board_path = subagent_data_root.join("subagents.json");
             match active_subagent_count(&board_path) {
@@ -1510,11 +1514,15 @@ pub fn build_builtin_registry_with_cms_and_mode(
                 Err(error) => return Observation::err(error.to_string(), "SubagentBoardError"),
                 _ => {}
             }
+            if let Err(error) = validate_subagent_file_scope_available(&board_path, &file_scope) {
+                return Observation::err(error.to_string(), "SubagentScopeConflict");
+            }
             let record = SubAgentTaskRecord {
                 id: Uuid::new_v4().to_string(),
                 name: name.clone(),
                 workspace: workspace.clone(),
                 goal: goal.to_string(),
+                file_scope: file_scope.clone(),
                 status: SubAgentStatus::Queued,
                 created_at: Utc::now(),
                 started_at: None,
@@ -1546,6 +1554,7 @@ pub fn build_builtin_registry_with_cms_and_mode(
             data.insert("id".to_string(), json!(record.id));
             data.insert("name".to_string(), json!(record.name));
             data.insert("workspace".to_string(), json!(record.workspace));
+            data.insert("file_scope".to_string(), json!(record.file_scope));
             data.insert("board_path".to_string(), json!(subagent_data_root.join("subagents.json")));
             Observation {
                 ok: true,
@@ -1567,7 +1576,8 @@ pub fn build_builtin_registry_with_cms_and_mode(
                 "max_steps": "integer",
                 "provider": "string",
                 "model": "string",
-                "agent": "string"
+                "agent": "string",
+                "file_scope": "array"
             }
         }),
         false,
@@ -1668,6 +1678,77 @@ fn run_spawned_subagent(
         }
     }
     let _ = upsert_subagent_record(&board_path, record);
+}
+
+fn parse_subagent_file_scope(
+    value: Option<&Value>,
+    sandbox: &WorkspaceSandbox,
+) -> anyhow::Result<Vec<PathBuf>> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let raw_items = match value {
+        Value::String(raw) => raw
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+        Value::Array(items) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+        _ => anyhow::bail!("file_scope must be a string or array of workspace paths"),
+    };
+    let mut scope = Vec::new();
+    for item in raw_items {
+        let path = sandbox.resolve(&item)?;
+        if !scope.contains(&path) {
+            scope.push(path);
+        }
+    }
+    Ok(scope)
+}
+
+fn validate_subagent_file_scope_available(
+    path: &Path,
+    requested: &[PathBuf],
+) -> anyhow::Result<()> {
+    if requested.is_empty() || !path.exists() {
+        return Ok(());
+    }
+    let records = serde_json::from_str::<Vec<SubAgentTaskRecord>>(&std::fs::read_to_string(path)?)?;
+    for record in records.into_iter().filter(|record| {
+        matches!(
+            record.status,
+            SubAgentStatus::Queued | SubAgentStatus::Running
+        )
+    }) {
+        if record.file_scope.is_empty() {
+            continue;
+        }
+        for requested_path in requested {
+            for active_path in &record.file_scope {
+                if scopes_overlap(requested_path, active_path) {
+                    anyhow::bail!(
+                        "subagent file scope overlaps active task {} ({}): requested {} overlaps {}",
+                        record.id,
+                        record.name,
+                        requested_path.display(),
+                        active_path.display()
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn scopes_overlap(left: &Path, right: &Path) -> bool {
+    left == right || left.starts_with(right) || right.starts_with(left)
 }
 
 fn active_subagent_count(path: &Path) -> anyhow::Result<usize> {

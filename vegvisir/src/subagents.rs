@@ -33,6 +33,8 @@ pub struct SubAgentTaskRecord {
     pub name: String,
     pub workspace: PathBuf,
     pub goal: String,
+    #[serde(default)]
+    pub file_scope: Vec<PathBuf>,
     pub status: SubAgentStatus,
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
@@ -49,6 +51,7 @@ impl SubAgentTaskRecord {
             name: name.into(),
             workspace: task.workspace.clone(),
             goal: task.goal.clone(),
+            file_scope: Vec::new(),
             status: SubAgentStatus::Queued,
             created_at: Utc::now(),
             started_at: None,
@@ -306,6 +309,7 @@ impl<M: Model> SubAgentSupervisor<M> {
                 "status": record.status,
                 "workspace": record.workspace,
                 "goal": record.goal,
+                "file_scope": record.file_scope,
             }),
         );
     }

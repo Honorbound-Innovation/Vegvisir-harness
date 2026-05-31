@@ -807,8 +807,8 @@ When to spawn subagents:
 - Do not spawn subagents for trivial single-step tasks where delegation would add overhead.
 
 How to spawn subagents:
-- Give each child a narrow goal, explicit workspace, low `max_steps` by default, and current provider/model when useful. Never exceed three active subagents at once.
-- Prefer read-only/review/test-planning goals unless the user explicitly asks for parallel implementation.
+- Give each child a narrow goal, explicit workspace, low `max_steps` by default, current provider/model when useful, and explicit non-overlapping `file_scope` for any work touching files. Never exceed three active subagents at once.
+- Prefer read-only/review/test-planning goals unless the user explicitly asks for parallel implementation. Parallel implementation must be partitioned by non-overlapping file scopes so agents never edit or reason as owners of the same files at the same time.
 - Continue useful main-thread work while subagents run; do not idle solely because a child is running.
 - Check `/subagents list` or `/subagents show <id>` before final summary when subagents were spawned.
 

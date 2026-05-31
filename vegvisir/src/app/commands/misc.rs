@@ -643,6 +643,8 @@ Boundaries:
 - do not delegate plaintext secrets or credential handling
 - do not delegate destructive actions or ambiguous external side effects
 - keep goals bounded, evidence-oriented, and low-step by default
+- assign explicit non-overlapping file_scope values for file-touching work
+- never let two active subagents own/edit the same files at the same time
 - never more than three active subagents at once
 
 Commands:

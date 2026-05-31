@@ -8487,6 +8487,7 @@ fn application_exposes_subagent_task_board_commands() -> anyhow::Result<()> {
         name: "planner".to_string(),
         workspace: tmp.path().to_path_buf(),
         goal: "Plan the release".to_string(),
+        file_scope: Vec::new(),
         status: vegvisir_rust::subagents::SubAgentStatus::Running,
         created_at: Utc::now(),
         started_at: Some(Utc::now()),
@@ -8544,6 +8545,7 @@ fn spawn_subagent_enforces_three_active_task_limit() -> anyhow::Result<()> {
             name: format!("worker-{index}"),
             workspace: tmp.path().to_path_buf(),
             goal: "bounded review".to_string(),
+            file_scope: Vec::new(),
             status: vegvisir_rust::subagents::SubAgentStatus::Running,
             created_at: Utc::now(),
             started_at: Some(Utc::now()),
@@ -8593,6 +8595,70 @@ fn spawn_subagent_enforces_three_active_task_limit() -> anyhow::Result<()> {
         observation
             .content
             .contains("Maximum active subagents reached (3)")
+    );
+    Ok(())
+}
+
+#[test]
+fn spawn_subagent_rejects_overlapping_active_file_scope() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let home = tmp.path().join("home");
+    fs::create_dir_all(&home)?;
+    let active_records = vec![vegvisir_rust::subagents::SubAgentTaskRecord {
+        id: "task-1".to_string(),
+        name: "app-owner".to_string(),
+        workspace: tmp.path().to_path_buf(),
+        goal: "Work on app runtime".to_string(),
+        file_scope: vec![tmp.path().join("vegvisir/src/app")],
+        status: vegvisir_rust::subagents::SubAgentStatus::Running,
+        created_at: Utc::now(),
+        started_at: Some(Utc::now()),
+        finished_at: None,
+        checkpoint: None,
+        final_answer: None,
+        error: None,
+    }];
+    fs::write(
+        home.join("subagents.json"),
+        serde_json::to_string_pretty(&active_records)?,
+    )?;
+
+    let cms_config = VegvisirCmsConfig {
+        db_path: home.join("cms-v2.sqlite3"),
+        user_id: "test-user".to_string(),
+        project_id: Some("test-project".to_string()),
+        context_mode: cms_v2::ecm::ContextMode::Project,
+        commit_writebacks: true,
+    };
+    let mut executor = ToolExecutor {
+        registry: vegvisir_rust::tools::build_builtin_registry_with_cms_and_mode(
+            tmp.path(),
+            cms_config,
+            false,
+        )?,
+        guardrails: GuardrailEngine {
+            policy: PermissionPolicy::default(),
+            approvals: Default::default(),
+        },
+        runtime_policy: Default::default(),
+        logger: Default::default(),
+    };
+
+    let observation = executor.execute(ToolCall {
+        name: "spawn_subagent".to_string(),
+        args: serde_json::from_value(json!({
+            "goal": "work on app runtime child",
+            "name": "app-conflict",
+            "file_scope": ["vegvisir/src/app/runtime.rs"]
+        }))?,
+    });
+
+    assert!(!observation.ok);
+    assert_eq!(observation.error.as_deref(), Some("SubagentScopeConflict"));
+    assert!(
+        observation
+            .content
+            .contains("file scope overlaps active task")
     );
     Ok(())
 }
