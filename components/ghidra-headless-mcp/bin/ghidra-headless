@@ -1,0 +1,404 @@
+#!/usr/bin/env python3
+import argparse
+import json
+import os
+import pathlib
+import subprocess
+import sys
+import tempfile
+import shlex
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+DEFAULT_GHIDRA = pathlib.Path('/mnt/storage/Vegvisir-Projects/ghidra/Ghidra/RuntimeScripts/Linux/support/analyzeHeadless')
+
+
+def ghidra_headless():
+    path = pathlib.Path(os.environ.get('GHIDRA_HEADLESS', str(DEFAULT_GHIDRA)))
+    if not path.exists():
+        raise SystemExit(json.dumps({
+            'ok': False,
+            'error': f'analyzeHeadless not found: {path}',
+            'hint': 'Set GHIDRA_HEADLESS=/path/to/support/analyzeHeadless'
+        }))
+    return path
+
+
+def run(cmd, timeout=600):
+    proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+    return proc
+
+
+def print_json(obj):
+    print(json.dumps(obj, indent=2, sort_keys=True))
+
+
+def append_transaction_log(args, payload):
+    try:
+        if not isinstance(payload, dict) or not payload.get('ok') or payload.get('dryRun'):
+            return
+        logdir = pathlib.Path(args.project_dir) / '.vegvisir-ghidra'
+        logdir.mkdir(parents=True, exist_ok=True)
+        rec = dict(payload)
+        rec['projectName'] = getattr(args, 'project_name', None)
+        rec['program'] = getattr(args, 'program', None)
+        rec['timestamp'] = __import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat()
+        with (logdir / 'transactions.jsonl').open('a', encoding='utf-8') as f:
+            f.write(json.dumps(rec, sort_keys=True) + '\n')
+        payload['transactionLog'] = str(logdir / 'transactions.jsonl')
+    except Exception as exc:
+        payload['transactionLogWarning'] = str(exc)
+
+
+def script_path():
+    return str(ROOT / 'scripts')
+
+
+def common_project_args(args):
+    return [str(args.project_dir), args.project_name]
+
+
+def status(_args):
+    gh = ghidra_headless()
+    proc = run([str(gh)], timeout=60)
+    print_json({
+        'ok': proc.returncode == 0 or 'Headless Analyzer Usage' in (proc.stdout + proc.stderr),
+        'analyzeHeadless': str(gh),
+        'usage_detected': 'Headless Analyzer Usage' in (proc.stdout + proc.stderr),
+        'java_line': (proc.stdout + proc.stderr).splitlines()[0:3],
+    })
+
+
+def do_import(args):
+    gh = ghidra_headless()
+    binary = pathlib.Path(args.binary).resolve()
+    if not binary.exists():
+        raise SystemExit(json.dumps({'ok': False, 'error': f'binary not found: {binary}'}))
+    args.project_dir.mkdir(parents=True, exist_ok=True)
+    cmd = [str(gh), *common_project_args(args), '-import', str(binary), '-scriptPath', script_path(), '-postScript', 'VegvisirSummary.java']
+    if args.overwrite:
+        cmd.append('-overwrite')
+    if args.no_analysis:
+        cmd.append('-noanalysis')
+    if args.analysis_timeout:
+        cmd += ['-analysisTimeoutPerFile', str(args.analysis_timeout)]
+    proc = run(cmd, timeout=args.timeout)
+    ok = proc.returncode == 0
+    payload = extract_json(proc.stdout) or extract_json(proc.stderr)
+    if payload:
+        payload.setdefault('ok', ok)
+        payload['returncode'] = proc.returncode
+        if proc.stderr.strip():
+            payload['stderr_tail'] = proc.stderr.strip().splitlines()[-20:]
+        print_json(payload)
+    else:
+        print_json({'ok': ok, 'returncode': proc.returncode, 'stdout_tail': proc.stdout.splitlines()[-40:], 'stderr_tail': proc.stderr.splitlines()[-40:]})
+    raise SystemExit(0 if ok else proc.returncode)
+
+
+def query(args, script, script_args):
+    gh = ghidra_headless()
+    args.project_dir.mkdir(parents=True, exist_ok=True)
+    cmd = [str(gh), *common_project_args(args), '-process', args.program, '-readOnly', '-noanalysis', '-scriptPath', script_path(), '-postScript', script, *script_args]
+    proc = run(cmd, timeout=args.timeout)
+    payload = extract_json(proc.stdout) or extract_json(proc.stderr)
+    if payload:
+        payload['returncode'] = proc.returncode
+        if proc.returncode != 0:
+            payload['ok'] = False
+            payload['stderr_tail'] = proc.stderr.splitlines()[-30:]
+        print_json(payload)
+    else:
+        print_json({'ok': False, 'returncode': proc.returncode, 'stdout_tail': proc.stdout.splitlines()[-60:], 'stderr_tail': proc.stderr.splitlines()[-60:]})
+    raise SystemExit(0 if proc.returncode == 0 else proc.returncode)
+
+
+
+def mutate(args, script_args, script='VegvisirMutate.java'):
+    gh = ghidra_headless()
+    args.project_dir.mkdir(parents=True, exist_ok=True)
+    cmd = [str(gh), *common_project_args(args), '-process', args.program, '-noanalysis', '-scriptPath', script_path(), '-postScript', script, *script_args]
+    proc = run(cmd, timeout=args.timeout)
+    payload = extract_json(proc.stdout) or extract_json(proc.stderr)
+    if payload:
+        payload['returncode'] = proc.returncode
+        if proc.returncode != 0:
+            payload['ok'] = False
+            payload['stderr_tail'] = proc.stderr.splitlines()[-30:]
+        append_transaction_log(args, payload)
+        print_json(payload)
+    else:
+        print_json({'ok': False, 'returncode': proc.returncode, 'stdout_tail': proc.stdout.splitlines()[-60:], 'stderr_tail': proc.stderr.splitlines()[-60:]})
+    raise SystemExit(0 if proc.returncode == 0 else proc.returncode)
+
+def extract_json(text):
+    marker = 'VEGVISIR_JSON:'
+    idx = text.rfind(marker)
+    if idx < 0:
+        return None
+    raw = text[idx + len(marker):].strip()
+    # Ghidra may append additional lines after script output. Take a balanced JSON object if possible.
+    start = raw.find('{')
+    if start < 0:
+        return None
+    raw = raw[start:]
+    depth = 0
+    in_str = False
+    esc = False
+    end = None
+    for i, ch in enumerate(raw):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == '\\':
+                esc = True
+            elif ch == '"':
+                in_str = False
+        else:
+            if ch == '"':
+                in_str = True
+            elif ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+    if end is None:
+        return None
+    try:
+        return json.loads(raw[:end])
+    except Exception:
+        return None
+
+
+def add_project_args(p):
+    p.add_argument('--project-dir', type=pathlib.Path, required=True)
+    p.add_argument('--project-name', required=True)
+    p.add_argument('--timeout', type=int, default=600)
+
+
+def main():
+    ap = argparse.ArgumentParser(prog='ghidra-headless')
+    sub = ap.add_subparsers(dest='command', required=True)
+    p = sub.add_parser('status')
+    p.set_defaults(func=status)
+
+    p = sub.add_parser('import')
+    add_project_args(p)
+    p.add_argument('--binary', required=True)
+    p.add_argument('--overwrite', action='store_true')
+    p.add_argument('--no-analysis', action='store_true')
+    p.add_argument('--analysis-timeout', type=int, default=120)
+    p.set_defaults(func=do_import)
+
+    p = sub.add_parser('list-functions')
+    add_project_args(p)
+    p.add_argument('--program', required=True)
+    p.add_argument('--limit', type=int, default=200)
+    p.set_defaults(func=lambda a: query(a, 'VegvisirListFunctions.java', [str(a.limit)]))
+
+    p = sub.add_parser('list-strings')
+    add_project_args(p)
+    p.add_argument('--program', required=True)
+    p.add_argument('--limit', type=int, default=200)
+    p.add_argument('--min-len', type=int, default=4)
+    p.set_defaults(func=lambda a: query(a, 'VegvisirListStrings.java', [str(a.limit), str(a.min_len)]))
+
+
+
+    p = sub.add_parser('list-variables')
+    add_project_args(p)
+    p.add_argument('--program', required=True)
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument('--function')
+    g.add_argument('--address')
+    p.add_argument('--limit', type=int, default=200)
+    p.set_defaults(func=lambda a: query(a, 'VegvisirListVariables.java', [a.function or '', a.address or '', str(a.limit)]))
+
+    p = sub.add_parser('decompile')
+    add_project_args(p)
+    p.add_argument('--program', required=True)
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument('--function')
+    g.add_argument('--address')
+    p.add_argument('--timeout-seconds', type=int, default=30)
+    p.add_argument('--max-chars', type=int, default=20000)
+    p.set_defaults(func=lambda a: query(a, 'VegvisirDecompile.java', [a.function or '', a.address or '', str(a.timeout_seconds), str(a.max_chars)]))
+
+    p = sub.add_parser('list-imports')
+    add_project_args(p)
+    p.add_argument('--program', required=True)
+    p.add_argument('--limit', type=int, default=200)
+    p.set_defaults(func=lambda a: query(a, 'VegvisirListImports.java', [str(a.limit)]))
+
+    p = sub.add_parser('list-exports')
+    add_project_args(p)
+    p.add_argument('--program', required=True)
+    p.add_argument('--limit', type=int, default=200)
+    p.set_defaults(func=lambda a: query(a, 'VegvisirListExports.java', [str(a.limit)]))
+
+    p = sub.add_parser('list-segments')
+    add_project_args(p)
+    p.add_argument('--program', required=True)
+    p.set_defaults(func=lambda a: query(a, 'VegvisirListSegments.java', []))
+
+    p = sub.add_parser('function-info')
+    add_project_args(p)
+    p.add_argument('--program', required=True)
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument('--function')
+    g.add_argument('--address')
+    p.set_defaults(func=lambda a: query(a, 'VegvisirFunctionInfo.java', [a.function or '', a.address or '']))
+
+    p = sub.add_parser('xrefs')
+    add_project_args(p)
+    p.add_argument('--program', required=True)
+    p.add_argument('--address', required=True)
+    p.add_argument('--direction', choices=['to','from'], default='to')
+    p.add_argument('--limit', type=int, default=200)
+    p.set_defaults(func=lambda a: query(a, 'VegvisirXrefs.java', [a.address, a.direction, str(a.limit)]))
+
+    p = sub.add_parser('disassemble')
+    add_project_args(p)
+    p.add_argument('--program', required=True)
+    p.add_argument('--address', required=True)
+    p.add_argument('--limit', type=int, default=80)
+    p.set_defaults(func=lambda a: query(a, 'VegvisirDisassemble.java', [a.address, str(a.limit)]))
+
+    p = sub.add_parser('read-bytes')
+    add_project_args(p)
+    p.add_argument('--program', required=True)
+    p.add_argument('--address', required=True)
+    p.add_argument('--length', type=int, default=64)
+    p.set_defaults(func=lambda a: query(a, 'VegvisirReadBytes.java', [a.address, str(a.length)]))
+
+    p = sub.add_parser('search-symbols')
+    add_project_args(p)
+    p.add_argument('--program', required=True)
+    p.add_argument('--query', required=True)
+    p.add_argument('--limit', type=int, default=100)
+    p.add_argument('--case-sensitive', action='store_true')
+    p.set_defaults(func=lambda a: query(a, 'VegvisirSearchSymbols.java', [a.query, str(a.limit), str(not a.case_sensitive).lower()]))
+
+    p = sub.add_parser('rename-function')
+    add_project_args(p)
+    p.add_argument('--program', required=True)
+    p.add_argument('--address', required=True)
+    p.add_argument('--new-name', required=True)
+    p.add_argument('--dry-run', action='store_true')
+    p.set_defaults(func=lambda a: mutate(a, ['rename-function', a.address, a.new_name] + (['--dry-run'] if a.dry_run else [])))
+
+    p = sub.add_parser('set-comment')
+    add_project_args(p)
+    p.add_argument('--program', required=True)
+    p.add_argument('--address', required=True)
+    p.add_argument('--comment-type', choices=['eol','pre','post','plate','repeatable'], default='eol')
+    p.add_argument('--text', required=True)
+    p.add_argument('--dry-run', action='store_true')
+    p.set_defaults(func=lambda a: mutate(a, ['set-comment', a.address, a.comment_type, a.text] + (['--dry-run'] if a.dry_run else [])))
+
+
+
+    p = sub.add_parser('callgraph')
+    add_project_args(p)
+    p.add_argument('--program', required=True)
+    p.add_argument('--mode', choices=['edges','callers','callees'], default='edges')
+    p.add_argument('--target', default='')
+    p.add_argument('--limit', type=int, default=500)
+    p.set_defaults(func=lambda a: query(a, 'VegvisirCallGraph.java', [a.mode, a.target, str(a.limit)]))
+
+    p = sub.add_parser('string-refs')
+    add_project_args(p)
+    p.add_argument('--program', required=True)
+    p.add_argument('--query', default='')
+    p.add_argument('--limit', type=int, default=200)
+    p.set_defaults(func=lambda a: query(a, 'VegvisirStringRefs.java', [a.query, str(a.limit)]))
+
+    p = sub.add_parser('list-bookmarks')
+    add_project_args(p)
+    p.add_argument('--program', required=True)
+    p.add_argument('--limit', type=int, default=200)
+    p.set_defaults(func=lambda a: query(a, 'VegvisirBookmarks.java', ['list', str(a.limit)]))
+
+    p = sub.add_parser('create-bookmark')
+    add_project_args(p)
+    p.add_argument('--program', required=True)
+    p.add_argument('--address', required=True)
+    p.add_argument('--bookmark-type', default='Vegvisir')
+    p.add_argument('--category', default='Analysis')
+    p.add_argument('--comment', required=True)
+    p.add_argument('--dry-run', action='store_true')
+    p.set_defaults(func=lambda a: mutate(a, ['create-bookmark', a.address, a.bookmark_type, a.category, a.comment] + (['--dry-run'] if a.dry_run else []), script='VegvisirBookmarks.java'))
+
+    p = sub.add_parser('report')
+    add_project_args(p)
+    p.add_argument('--program', required=True)
+    p.add_argument('--limit', type=int, default=100)
+    p.set_defaults(func=lambda a: query(a, 'VegvisirReport.java', [str(a.limit)]))
+
+    p = sub.add_parser('set-function-comment')
+    add_project_args(p)
+    p.add_argument('--program', required=True)
+    p.add_argument('--address', required=True)
+    p.add_argument('--text', required=True)
+    p.add_argument('--dry-run', action='store_true')
+    p.set_defaults(func=lambda a: mutate(a, ['set-function-comment', a.address, a.text] + (['--dry-run'] if a.dry_run else [])))
+
+    p = sub.add_parser('set-function-signature')
+    add_project_args(p)
+    p.add_argument('--program', required=True)
+    p.add_argument('--address', required=True)
+    p.add_argument('--signature', required=True)
+    p.add_argument('--dry-run', action='store_true')
+    p.set_defaults(func=lambda a: mutate(a, ['set-function-signature', a.address, a.signature] + (['--dry-run'] if a.dry_run else [])))
+
+    p = sub.add_parser('rename-variable')
+    add_project_args(p)
+    p.add_argument('--program', required=True)
+    p.add_argument('--function-address', required=True)
+    p.add_argument('--old-name', required=True)
+    p.add_argument('--new-name', required=True)
+    p.add_argument('--dry-run', action='store_true')
+    p.set_defaults(func=lambda a: mutate(a, ['rename-variable', a.function_address, a.old_name, a.new_name] + (['--dry-run'] if a.dry_run else [])))
+
+    p = sub.add_parser('set-variable-type')
+    add_project_args(p)
+    p.add_argument('--program', required=True)
+    p.add_argument('--function-address', required=True)
+    p.add_argument('--variable', required=True)
+    p.add_argument('--type', required=True)
+    p.add_argument('--dry-run', action='store_true')
+    p.set_defaults(func=lambda a: mutate(a, ['set-variable-type', a.function_address, a.variable, a.type] + (['--dry-run'] if a.dry_run else [])))
+
+
+
+    p = sub.add_parser('apply-data-type')
+    add_project_args(p)
+    p.add_argument('--program', required=True)
+    p.add_argument('--address', required=True)
+    p.add_argument('--type', required=True)
+    p.add_argument('--length', type=int, default=-1)
+    p.add_argument('--dry-run', action='store_true')
+    p.set_defaults(func=lambda a: mutate(a, ['apply-data-type', a.address, a.type, str(a.length)] + (['--dry-run'] if a.dry_run else [])))
+
+    p = sub.add_parser('create-struct')
+    add_project_args(p)
+    p.add_argument('--program', required=True)
+    p.add_argument('--name', required=True)
+    p.add_argument('--size', type=int, required=True)
+    p.add_argument('--dry-run', action='store_true')
+    p.set_defaults(func=lambda a: mutate(a, ['create-struct', a.name, str(a.size)] + (['--dry-run'] if a.dry_run else [])))
+
+    p = sub.add_parser('patch-bytes')
+    add_project_args(p)
+    p.add_argument('--program', required=True)
+    p.add_argument('--address', required=True)
+    p.add_argument('--hex', required=True)
+    p.add_argument('--apply', action='store_true', help='actually modify program bytes; default is dry-run')
+    p.set_defaults(func=lambda a: mutate(a, ['patch-bytes', a.address, a.hex] + ([] if a.apply else ['--dry-run'])))
+
+    args = ap.parse_args()
+    args.func(args)
+
+if __name__ == '__main__':
+    main()

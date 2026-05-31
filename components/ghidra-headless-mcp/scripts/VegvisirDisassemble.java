@@ -1,0 +1,9 @@
+//@category Vegvisir
+import ghidra.app.script.GhidraScript;
+import ghidra.program.model.address.Address;
+import ghidra.program.model.listing.*;
+
+public class VegvisirDisassemble extends GhidraScript {
+    private static String q(String s){ if(s==null)return"null"; StringBuilder b=new StringBuilder("\""); for(int i=0;i<s.length();i++){char c=s.charAt(i); switch(c){case '\\':b.append("\\\\");break;case '"':b.append("\\\"");break;case '\n':b.append("\\n");break;case '\r':b.append("\\r");break;case '\t':b.append("\\t");break;default: if(c<0x20)b.append(String.format("\\u%04x",(int)c)); else b.append(c);}} return b.append('"').toString(); }
+    public void run() throws Exception { String[] args=getScriptArgs(); String addrS=args.length>0?args[0]:""; int limit=args.length>1?Integer.parseInt(args[1]):80; Address a=currentProgram.getAddressFactory().getAddress(addrS); if(a==null){println("VEGVISIR_JSON:{\"ok\":false,\"error\":\"invalid address\"}");return;} Listing listing=currentProgram.getListing(); InstructionIterator it=listing.getInstructions(a,true); StringBuilder out=new StringBuilder(); out.append("{\n  \"ok\": true,\n  \"start\": ").append(q(a.toString())).append(",\n  \"instructions\": [\n"); int emitted=0; while(it.hasNext() && emitted<limit){ Instruction ins=it.next(); if(emitted>0)out.append(",\n"); out.append("    {"); out.append("\"address\": ").append(q(ins.getAddress().toString())).append(", "); out.append("\"text\": ").append(q(ins.toString())).append(", "); byte[] bs=ins.getBytes(); StringBuilder hx=new StringBuilder(); for(int bi=0; bi<bs.length; bi++){ if(bi>0)hx.append(' '); hx.append(String.format("%02x", bs[bi] & 0xff)); } out.append("\"bytes\": ").append(q(hx.toString())); out.append("}"); emitted++; } out.append("\n  ],\n  \"emitted\": ").append(emitted).append("\n}"); println("VEGVISIR_JSON:"+out.toString()); }
+}

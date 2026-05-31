@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://solarium.local/schemas/solarium-job.schema.json",
+  "title": "Solarium Job",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["mode"],
+  "properties": {
+    "mode": {
+      "enum": ["browse", "inspect", "plan", "session", "crawl", "audit", "graphql-audit", "loop", "replay"]
+    },
+    "url": { "type": "string", "minLength": 1 },
+    "startUrl": { "type": "string", "minLength": 1 },
+    "actions": { "$ref": "actions.schema.json" },
+    "actionsPath": { "type": "string", "minLength": 1 },
+    "inspectResult": { "type": "object" },
+    "inspectResultPath": { "type": "string", "minLength": 1 },
+    "scope": { "$ref": "scope.schema.json" },
+    "scopePath": { "type": "string", "minLength": 1 },
+    "profilePath": { "type": "string", "minLength": 1 },
+    "storageState": { "type": "string", "minLength": 1 },
+    "saveStorageState": { "type": "string", "minLength": 1 },
+    "downloadsDir": { "type": "string", "minLength": 1 },
+    "output": { "type": "string", "minLength": 1 },
+    "report": { "type": "string", "minLength": 1 },
+    "htmlReport": { "type": "string", "minLength": 1 },
+    "reportIncludeJson": { "type": "boolean" },
+    "events": { "type": "string", "minLength": 1 },
+    "engine": { "enum": ["chromium", "firefox", "webkit"] },
+    "profile": {
+      "oneOf": [
+        { "enum": ["chrome-stable", "firefox-stable", "safari-desktop", "edge-stable", "generic-desktop"] },
+        { "type": "string", "minLength": 1 }
+      ]
+    },
+    "headed": { "type": "boolean" },
+    "trace": { "type": "boolean" },
+    "options": { "type": "object", "additionalProperties": true }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "mode": { "enum": ["browse", "inspect", "audit", "graphql-audit", "loop"] } }, "required": ["mode"] },
+      "then": { "required": ["url"] }
+    },
+    {
+      "if": { "properties": { "mode": { "const": "session" } }, "required": ["mode"] },
+      "then": {
+        "anyOf": [
+          { "required": ["actions"] },
+          { "required": ["actionsPath"] }
+        ]
+      }
+    },
+    {
+      "if": { "properties": { "mode": { "const": "plan" } }, "required": ["mode"] },
+      "then": {
+        "anyOf": [
+          { "required": ["inspectResult"] },
+          { "required": ["inspectResultPath"] }
+        ]
+      }
+    },
+    {
+      "if": { "properties": { "mode": { "const": "crawl" } }, "required": ["mode"] },
+      "then": {
+        "allOf": [
+          {
+            "anyOf": [
+              { "required": ["url"] },
+              { "required": ["startUrl"] }
+            ]
+          },
+          {
+            "anyOf": [
+              { "required": ["scope"] },
+              { "required": ["scopePath"] }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "if": { "properties": { "mode": { "const": "graphql-audit" } }, "required": ["mode"] },
+      "then": {
+        "allOf": [
+          { "required": ["url"] },
+          {
+            "anyOf": [
+              { "required": ["scope"] },
+              { "required": ["scopePath"] }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "if": { "properties": { "mode": { "const": "replay" } }, "required": ["mode"] },
+      "then": {
+        "anyOf": [
+          { "required": ["events"] },
+          { "properties": { "options": { "required": ["events"] } }, "required": ["options"] }
+        ]
+      }
+    }
+  ]
+}

@@ -22,3 +22,8 @@ components/t3code-overlay/
 !plan.md
 !docs/*.md
 !docs/**/*.md
+# Track first-class component metadata/docs despite the broad Markdown ignore.
+!components/COMPONENTS.md
+!components/components.toml
+!components/**/README.md
+!components/**/*.md

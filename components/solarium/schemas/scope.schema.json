@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://solarium.local/schemas/scope.schema.json",
+  "title": "Solarium Scope Policy",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "allowedHosts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/hostPattern" },
+      "minItems": 1
+    },
+    "blockedHosts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/hostPattern" },
+      "minItems": 1
+    },
+    "maxRequestsPerMinute": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "authorizationNote": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "anyOf": [
+    { "required": ["allowedHosts"] },
+    { "required": ["blockedHosts"] }
+  ],
+  "$defs": {
+    "hostPattern": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(\\*\\.)?[A-Za-z0-9.-]+$"
+    }
+  }
+}

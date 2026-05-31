@@ -1,0 +1,10 @@
+//@category Vegvisir
+import ghidra.app.script.GhidraScript;
+import ghidra.program.model.address.*;
+import ghidra.program.model.listing.*;
+
+public class VegvisirBookmarks extends GhidraScript {
+  private static String q(String s){ if(s==null)return"null"; StringBuilder b=new StringBuilder("\""); for(int i=0;i<s.length();i++){char c=s.charAt(i); switch(c){case '\\':b.append("\\\\");break;case '"':b.append("\\\"");break;case '\n':b.append("\\n");break;case '\r':b.append("\\r");break;case '\t':b.append("\\t");break;default: if(c<0x20)b.append(String.format("\\u%04x",(int)c)); else b.append(c);}} return b.append('"').toString(); }
+  public void run() throws Exception { String[] a=getScriptArgs(); String action=a.length>0?a[0]:"list"; boolean dry=false; for(String x:a) if(x.equals("--dry-run")) dry=true; BookmarkManager bm=currentProgram.getBookmarkManager(); if(action.equals("create")){ if(a.length<5){println("VEGVISIR_JSON:{\"ok\":false,\"error\":\"create address type category comment required\"}");return;} Address addr=currentProgram.getAddressFactory().getAddress(a[1]); if(addr==null){println("VEGVISIR_JSON:{\"ok\":false,\"error\":\"invalid address\"}");return;} if(!dry) bm.setBookmark(addr,a[2],a[3],a[4]); println("VEGVISIR_JSON:{\"ok\":true,\"dryRun\":"+dry+",\"action\":\"create-bookmark\",\"address\":"+q(addr.toString())+",\"type\":"+q(a[2])+",\"category\":"+q(a[3])+",\"comment\":"+q(a[4])+"}"); return; }
+    int limit=a.length>1?Integer.parseInt(a[1]):200; StringBuilder out=new StringBuilder("{\n  \"ok\": true,\n  \"bookmarks\": [\n"); int emitted=0,total=0; java.util.Iterator<Bookmark> it=bm.getBookmarksIterator(); while(it.hasNext()){Bookmark b=it.next(); total++; if(emitted>=limit)continue; if(emitted++>0)out.append(",\n"); out.append("    {\"address\": ").append(q(b.getAddress().toString())).append(", \"type\": ").append(q(b.getTypeString())).append(", \"category\": ").append(q(b.getCategory())).append(", \"comment\": ").append(q(b.getComment())).append("}"); } out.append("\n  ],\n  \"emitted\": ").append(emitted).append(",\n  \"total\": ").append(total).append("\n}"); println("VEGVISIR_JSON:"+out); }
+}

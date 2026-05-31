@@ -1,0 +1,457 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://solarium.local/schemas/actions.schema.json",
+  "title": "Solarium Agent Actions",
+  "type": "array",
+  "items": {
+    "$ref": "#/$defs/action"
+  },
+  "$defs": {
+    "action": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/navigateAction"
+        },
+        {
+          "$ref": "#/$defs/clickAction"
+        },
+        {
+          "$ref": "#/$defs/dblclickAction"
+        },
+        {
+          "$ref": "#/$defs/hoverAction"
+        },
+        {
+          "$ref": "#/$defs/typeAction"
+        },
+        {
+          "$ref": "#/$defs/pressAction"
+        },
+        {
+          "$ref": "#/$defs/selectAction"
+        },
+        {
+          "$ref": "#/$defs/checkAction"
+        },
+        {
+          "$ref": "#/$defs/uncheckAction"
+        },
+        {
+          "$ref": "#/$defs/submitAction"
+        },
+        {
+          "$ref": "#/$defs/waitAction"
+        },
+        {
+          "$ref": "#/$defs/waitForSelectorAction"
+        },
+        {
+          "$ref": "#/$defs/waitForUrlAction"
+        },
+        {
+          "$ref": "#/$defs/screenshotAction"
+        },
+        {
+          "$ref": "#/$defs/extractAction"
+        },
+        {
+          "$ref": "#/$defs/uploadAction"
+        },
+        {
+          "$ref": "#/$defs/downloadAction"
+        },
+        {
+          "$ref": "#/$defs/observeAction"
+        }
+      ]
+    },
+    "navigateAction": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "url"
+      ],
+      "properties": {
+        "type": {
+          "const": "navigate"
+        },
+        "url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "waitUntil": {
+          "enum": [
+            "load",
+            "domcontentloaded",
+            "networkidle",
+            "commit"
+          ]
+        },
+        "timeoutMs": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "clickAction": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "selector"
+      ],
+      "properties": {
+        "type": {
+          "const": "click"
+        },
+        "selector": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "typeAction": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "selector",
+        "text"
+      ],
+      "properties": {
+        "type": {
+          "const": "type"
+        },
+        "selector": {
+          "type": "string",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string"
+        }
+      }
+    },
+    "pressAction": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "selector",
+        "key"
+      ],
+      "properties": {
+        "type": {
+          "const": "press"
+        },
+        "selector": {
+          "type": "string",
+          "minLength": 1
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "selectAction": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "selector",
+        "values"
+      ],
+      "properties": {
+        "type": {
+          "const": "select"
+        },
+        "selector": {
+          "type": "string",
+          "minLength": 1
+        },
+        "values": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          ]
+        }
+      }
+    },
+    "checkAction": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "selector"
+      ],
+      "properties": {
+        "type": {
+          "const": "check"
+        },
+        "selector": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "uncheckAction": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "selector"
+      ],
+      "properties": {
+        "type": {
+          "const": "uncheck"
+        },
+        "selector": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "submitAction": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "selector"
+      ],
+      "properties": {
+        "type": {
+          "const": "submit"
+        },
+        "selector": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "waitAction": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "ms"
+      ],
+      "properties": {
+        "type": {
+          "const": "wait"
+        },
+        "ms": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "screenshotAction": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "const": "screenshot"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fullPage": {
+          "type": "boolean"
+        }
+      }
+    },
+    "extractAction": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "const": "extract"
+        },
+        "selector": {
+          "type": "string",
+          "minLength": 1
+        },
+        "format": {
+          "enum": [
+            "text",
+            "html",
+            "markdown"
+          ]
+        }
+      }
+    },
+    "uploadAction": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "selector",
+        "files"
+      ],
+      "properties": {
+        "type": {
+          "const": "upload"
+        },
+        "selector": {
+          "type": "string",
+          "minLength": 1
+        },
+        "files": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          ]
+        }
+      }
+    },
+    "downloadAction": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "selector"
+      ],
+      "properties": {
+        "type": {
+          "const": "download"
+        },
+        "selector": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timeoutMs": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "observeAction": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "const": "observe"
+        }
+      }
+    },
+    "dblclickAction": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "selector"
+      ],
+      "properties": {
+        "type": {
+          "const": "dblclick"
+        },
+        "selector": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "hoverAction": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "selector"
+      ],
+      "properties": {
+        "type": {
+          "const": "hover"
+        },
+        "selector": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "waitForSelectorAction": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "selector"
+      ],
+      "properties": {
+        "type": {
+          "const": "waitForSelector"
+        },
+        "selector": {
+          "type": "string",
+          "minLength": 1
+        },
+        "state": {
+          "enum": [
+            "attached",
+            "detached",
+            "visible",
+            "hidden"
+          ]
+        },
+        "timeoutMs": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "waitForUrlAction": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "url"
+      ],
+      "properties": {
+        "type": {
+          "const": "waitForUrl"
+        },
+        "url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timeoutMs": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+//@category Vegvisir
+import ghidra.app.script.GhidraScript;
+import ghidra.program.model.listing.*;
+import ghidra.program.model.symbol.*;
+import ghidra.program.model.data.*;
+import ghidra.program.model.address.*;
+
+public class VegvisirReport extends GhidraScript {
+  private static String q(String s){ if(s==null)return"null"; StringBuilder b=new StringBuilder("\""); for(int i=0;i<s.length();i++){char c=s.charAt(i); switch(c){case '\\':b.append("\\\\");break;case '"':b.append("\\\"");break;case '\n':b.append("\\n");break;case '\r':b.append("\\r");break;case '\t':b.append("\\t");break;default: if(c<0x20)b.append(String.format("\\u%04x",(int)c)); else b.append(c);}} return b.append('"').toString(); }
+  public void run() throws Exception { String[] a=getScriptArgs(); int limit=a.length>0?Integer.parseInt(a[0]):100; FunctionManager fm=currentProgram.getFunctionManager(); int funcs=0; FunctionIterator fit=fm.getFunctions(true); while(fit.hasNext()){fit.next();funcs++;} int strings=0; DataIterator dit=currentProgram.getListing().getDefinedData(true); while(dit.hasNext()){Data d=dit.next(); if(d.getDataType() instanceof AbstractStringDataType) strings++;} int imports=0,exports=0; SymbolIterator sit=currentProgram.getSymbolTable().getAllSymbols(true); while(sit.hasNext()){Symbol s=sit.next(); if(s.isExternal()) imports++; if(s.isPrimary() && s.getSource()!=SourceType.DEFAULT && !s.isExternal()) exports++;}
+    StringBuilder out=new StringBuilder(); out.append("{\n  \"ok\": true,\n  \"program\": ").append(q(currentProgram.getName())).append(",\n  \"executablePath\": ").append(q(currentProgram.getExecutablePath())).append(",\n  \"language\": ").append(q(currentProgram.getLanguageID().toString())).append(",\n  \"compilerSpec\": ").append(q(currentProgram.getCompilerSpec().getCompilerSpecID().toString())).append(",\n  \"imageBase\": ").append(q(currentProgram.getImageBase().toString())).append(",\n  \"counts\": {\"functions\": ").append(funcs).append(", \"strings\": ").append(strings).append(", \"externalSymbols\": ").append(imports).append(", \"userPrimarySymbols\": ").append(exports).append("},\n  \"entryPoints\": ["); AddressIterator eit=currentProgram.getSymbolTable().getExternalEntryPointIterator(); int e=0; while(eit.hasNext()&&e<limit){ if(e++>0)out.append(", "); out.append(q(eit.next().toString())); } out.append("],\n  \"note\": \"Use list-functions/list-strings/list-imports/callgraph for detailed bounded data.\"\n}"); println("VEGVISIR_JSON:"+out); }
+}

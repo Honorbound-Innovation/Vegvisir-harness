@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://solarium.local/schemas/browser-profile.schema.json",
+  "title": "Solarium Browser Profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name"],
+  "properties": {
+    "name": { "type": "string", "minLength": 1 },
+    "userAgent": { "type": "string" },
+    "viewport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height"],
+      "properties": {
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "locale": { "type": "string" },
+    "timezoneId": { "type": "string" },
+    "extraHTTPHeaders": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "colorScheme": { "enum": ["dark", "light", "no-preference"] },
+    "deviceScaleFactor": { "type": "number", "exclusiveMinimum": 0 },
+    "isMobile": { "type": "boolean" },
+    "hasTouch": { "type": "boolean" },
+    "permissions": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

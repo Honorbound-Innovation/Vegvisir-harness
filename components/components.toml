@@ -1,0 +1,42 @@
+# Vegvisir first-class component manifest.
+# This manifest records source components vendored into the monorepo. Runtime
+# installers should build/materialize executable artifacts under ~/.vegvisir/tools.
+
+[components.solarium]
+name = "Solarium"
+kind = "node"
+path = "components/solarium"
+source_snapshot = "/mnt/storage/Vegvisir-Projects/Solarium"
+install_root = "~/.vegvisir/tools/src/Solarium"
+wrapper = "solarium"
+excluded = [".git", "node_modules", "dist", ".solarium", ".vegvisir"]
+
+[components.ghidra]
+name = "Ghidra"
+kind = "java-gradle-source"
+path = "components/ghidra"
+source_snapshot = "/mnt/storage/Vegvisir-Projects/ghidra"
+runtime_root = "~/.vegvisir/tools/ghidra"
+wrappers = ["ghidra", "analyzeHeadless"]
+excluded = [".git", ".gradle", "build", "**/build", "dependencies"]
+
+[components.ghidra_mcp]
+name = "GhidraMCP"
+kind = "ghidra-extension-python-mcp"
+path = "components/ghidra-mcp"
+source_snapshot = "/mnt/storage/Vegvisir-Projects/GhidraMCP"
+runtime_root = "~/.vegvisir/tools/src/GhidraMCP"
+wrappers = ["ghidra-mcp"]
+mcp_servers = ["ghidra-ui"]
+excluded = [".git", "target", ".venv"]
+notes = "Vendored from current local source state, including pre-existing local source edits."
+
+[components.ghidra_headless_mcp]
+name = "GhidraHeadlessMCP"
+kind = "python-mcp"
+path = "components/ghidra-headless-mcp"
+source_snapshot = "/mnt/storage/Vegvisir-Projects/GhidraHeadlessMCP"
+runtime_root = "~/.vegvisir/tools/src/GhidraHeadlessMCP"
+wrappers = ["ghidra-headless", "ghidra-headless-mcp"]
+mcp_servers = ["ghidra-headless"]
+excluded = []

@@ -1,0 +1,11 @@
+dist/
+node_modules/
+playwright-report/
+test-results/
+.solarium/
+.vegvisir/
+skills/*.bundle.json/
+*.log
+.DS_Store
+.env
+.env.*
