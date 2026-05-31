@@ -7,6 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use anyhow::Context;
 use chrono::Utc;
 use serde_json::{Map, Value, json};
 use skiller::{
@@ -1484,18 +1485,9 @@ pub fn build_builtin_registry_with_cms_and_mode(
                 .unwrap_or(4)
                 .clamp(1, 32)
                 .to_string();
-            let provider = args
-                .get("provider")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            let model = args
-                .get("model")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            let agent = args
-                .get("agent")
-                .and_then(Value::as_str)
-                .map(str::to_string);
+            let provider = optional_nonempty_string(args.get("provider"));
+            let model = optional_nonempty_string(args.get("model"));
+            let agent = optional_nonempty_string(args.get("agent"));
             let file_scope = match parse_subagent_file_scope(args.get("file_scope"), &subagent_sandbox) {
                 Ok(scope) => scope,
                 Err(error) => return Observation::err(error.to_string(), "InvalidFileScope"),
@@ -1586,6 +1578,15 @@ pub fn build_builtin_registry_with_cms_and_mode(
     Ok(registry)
 }
 
+
+fn optional_nonempty_string(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
 fn resolve_vegvisir_executable(workspace: &Path) -> anyhow::Result<PathBuf> {
     if let Some(path) = std::env::var_os("VEGVISIR_BIN").map(PathBuf::from)
         && path.exists()
@@ -1636,25 +1637,36 @@ fn run_spawned_subagent(
 
     let result = (|| -> anyhow::Result<String> {
         let executable = resolve_vegvisir_executable(&workspace)?;
-        let mut command = Command::new(executable);
-        command.arg("--json");
+        let mut argv = Vec::<String>::new();
+        argv.push("--json".to_string());
         if let Some(provider) = provider {
-            command.arg("--provider").arg(provider);
+            argv.push("--provider".to_string());
+            argv.push(provider);
         }
         if let Some(model) = model {
-            command.arg("--model").arg(model);
+            argv.push("--model".to_string());
+            argv.push(model);
         }
-        command
-            .arg("run")
-            .arg(goal)
-            .arg("--workspace")
-            .arg(workspace)
-            .arg("--max-steps")
-            .arg(max_steps);
+        argv.push("run".to_string());
+        argv.push(goal);
+        argv.push("--workspace".to_string());
+        argv.push(workspace.display().to_string());
+        argv.push("--max-steps".to_string());
+        argv.push(max_steps);
         if let Some(agent) = agent {
-            command.arg("--agent").arg(agent);
+            argv.push("--agent".to_string());
+            argv.push(agent);
         }
-        let output = command.output()?;
+        let output = Command::new(&executable)
+            .args(&argv)
+            .output()
+            .with_context(|| {
+                format!(
+                    "spawning subagent command failed: {} {}",
+                    executable.display(),
+                    argv.join(" ")
+                )
+            })?;
         let mut text = String::new();
         text.push_str(&String::from_utf8_lossy(&output.stdout));
         text.push_str(&String::from_utf8_lossy(&output.stderr));
