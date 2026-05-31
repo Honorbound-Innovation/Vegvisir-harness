@@ -1,65 +1,113 @@
-# Vegvisir Agent Harness (RC-1: Usable but still a little rough)
+# Vegvisir Agent Harness
 
-Vegvisir Agent Harness is a secure Rust software development harness for people who want a powerful coding and engineering assistant without handing the harness every secret, every memory, and every permission by default.
+Vegvisir is a local-first agentic software development harness for people who want an AI engineering assistant that can actually work inside a repository without being handed every secret, every permission, and every memory by default.
 
-It brings the main pieces of the system into one repository: the Vegvisir Rust harness, CMS-v2 memory, HBSE secret brokering, USRL contracts, MCP client support, custom agents, skills, approvals, and workspace-aware sessions.
+It is not just a chat window. Vegvisir connects a model provider to an active workspace, scoped tools, durable memory, governed skills, subagents, browser evidence, approvals, verification, and a transcript that records what happened. The point is practical software work: inspect the repo, make the change, run the check, show the diff, preserve the evidence, and keep the operator in control.
 
-The goal is straightforward: make high-capability software development work practical, inspectable, and controlled. Vegvisir can run interactively in a terminal UI, run headlessly on an agent server, switch between projects, use persistent memory, call development tools, and route provider or MCP credentials through HBSE instead of storing plaintext secrets in the harness.
+Vegvisir is designed first for serious engineering workflows: code maintenance, debugging, documentation, migrations, automation, security-aware review, reverse-engineering support, browser-driven evidence capture, and long-running project sessions. It can automate work inside those boundaries, but it is not a generic "do anything on the internet" agent. The harness is intentionally shaped around workspaces, policy, memory scope, tool scope, secret isolation, and verification.
 
-Vegvisir is not a general AI automation assistant in the style of broad task automation systems. It is designed first as a secure software development system: project workspaces, coding workflows, controlled tool access, memory scoped to engineering context, auditable actions, approval gates, and zero-knowledge secret handling. It can support automation inside those development workflows, but it should not be classified as a general-purpose automation agent harness.
+## Screenshots
+
+Vegvisir is built around a terminal workbench that keeps the conversation, tool log, session state, context budget, skills, and command surfaces visible while work is happening.
+
+![Vegvisir verification and Solarium session trace](docs/assets/screenshots/vegvisir-readme-1.jpg)
+
+*Verification output, Solarium notes, tool activity, session state, context usage, and the active input surface in one workspace-bound TUI.*
+
+![Vegvisir command palette and skill routing](docs/assets/screenshots/vegvisir-readme-2.jpg)
+
+*Command palette, persistent agents, approvals, context tools, Skiller routing, and session tool logs during an active project session.*
+
+![Vegvisir long-running agent session](docs/assets/screenshots/vegvisir-readme-3.jpg)
+
+*Long-running agent work with memory, tools, Ghidra/Skiller/CMS references, shell/test evidence, and transcript continuity.*
 
 ## What Is Included
 
 ```text
 Vegvisir-harness/
-├── vegvisir/              # Rust harness, TUI, headless CLI, providers, tools, MCP, approvals
+├── vegvisir/                    # Rust harness: TUI, headless CLI, tools, providers, MCP, approvals, subagents
 ├── components/
-│   ├── cms-v2/            # Continuum Memory System v2 runtime and CLI
-│   ├── HBSE/              # Rust Hardware Bound Secrets Enclave implementation
-│   ├── skiller/           # Rust skill compiler and governed skill bundle tooling
-│   └── usrl/              # USRL parser and contract runtime
-├── docs/                  # System architecture, usage references, and component documentation
-├── scripts/               # Helper scripts
-├── install.sh             # Full-system installer
-├── uninstall.sh           # Full-system uninstaller
-└── LICENSE                # MIT license for included project code
+│   ├── cms-v2/                  # Continuum Memory System v2: durable scoped memory and context prep
+│   ├── HBSE/                    # Hardware Bound Secrets Enclave: brokered secrets and provider auth
+│   ├── skiller/                 # Governed skill compiler, Forge workflow, registry, lifecycle, agent packs
+│   ├── solarium/                # Playwright browser automation and evidence runtime
+│   ├── usrl/                    # USRL parser, validator, and contract runtime
+│   ├── ghidra/                  # Vendored Ghidra source tree for binary-analysis workflows
+│   ├── ghidra-mcp/              # Ghidra UI MCP bridge component
+│   └── ghidra-headless-mcp/     # Headless Ghidra MCP bridge component
+├── docs/                        # Architecture, usage references, and component documentation
+├── scripts/                     # Helper scripts, including HBSE/provider onboarding helpers
+├── install.sh                   # Full-system installer
+├── upgrade.sh                   # Local upgrade helper
+├── uninstall.sh                 # Full-system uninstaller
+└── LICENSE                      # MIT license for included project code
 ```
+
+The Rust workspace currently includes the Vegvisir harness, CMS-v2, HBSE, and Skiller. Solarium and USRL are Node/TypeScript components. The Ghidra components are source/runtime integrations for reverse-engineering workflows.
 
 ## What Vegvisir Does
 
-- Runs as a full TUI or as a headless CLI.
-- Streams provider output into the harness when the provider supports streaming.
-- Supports OpenAI, OpenAI-compatible providers, OpenAI SSO, HBSE-brokered OpenAI-compatible requests, Anthropic, Google, Azure OpenAI, and local/demo providers.
-- Exposes workspace-scoped tools for file IO, command execution, tests, memory recall, MCP calls, and runtime plugins.
-- Keeps risky tools disabled by default. Risky file, command, external, destructive, or privileged actions must be manually enabled for the current session before they can be used.
-- Treats risky-tool enablement and action approval as separate controls. If risky tools are not enabled for the session, the agent cannot run those tools even when the user approves or asks for the action.
-- Uses an approval queue for risky operations when risky tools are enabled, with approve-once, approve-for-session, edit, and deny flows.
-- Includes a startup-only dangerous bypass mode for explicitly trusted high-risk sessions.
-- Uses CMS-v2 as the memory system, with global, user, project, workspace, session, and agent scopes.
-- Uses HBSE for secret and auth isolation so provider and service credentials can stay outside the harness.
-- Uses USRL contracts for tightly bounded workflows and regulated skills.
-- Supports persistent custom agents with their own prompts, modes, memory scopes, tool permissions, skills, USRL bindings, MCP access, provider defaults, and model defaults.
-- Supports workspace/project switching with the right session and memory scope restored.
-- Renders Markdown in the TUI, including code fences and tables.
-- Exposes a JSONL app-server bridge for future external interfaces and desktop shells.
-- Integrates Skiller as a first-class Vegvisir feature for compiling technical sources, repos, API specs, CLI specs, and docs into governed, source-grounded skill bundles, Forge workflows, lifecycle reports, and Agent Builder handoff artifacts.
-- Includes verification, eval, trace, and audit surfaces for production hardening.
+- Runs as a full terminal UI, a bounded headless CLI, a JSONL app-server bridge, or an OpenAI-compatible local server surface.
+- Connects model providers to a real engineering runtime instead of leaving them as detached text generators.
+- Supports configured providers including OpenAI/OpenAI-compatible flows, OpenAI SSO, HBSE-brokered provider access, Anthropic, Google, Azure OpenAI, and local/demo providers.
+- Exposes workspace-scoped tools for file IO, command execution, tests, git/diff inspection, memory recall, MCP calls, Skiller helpers, verification, evals, and runtime plugins.
+- Uses CMS-v2 for durable scoped memory and ECM-style context exposure so relevant project facts can survive sessions without dumping the entire attic into every prompt.
+- Uses HBSE as the secret boundary so provider and service credentials can be brokered through secret references instead of pasted into chat or stored in memory.
+- Supports persistent custom agents with their own prompts, modes, memory scopes, tool permissions, skills, USRL bindings, MCP access, and provider/model defaults.
+- Supports Skiller as a first-class governed skill compiler for turning docs, repos, APIs, CLI help, and technical evidence into source-grounded skill bundles, Forge workflows, lifecycle reports, registry artifacts, and Agent Builder handoffs.
+- Supports Linked Skill Libraries and USRL contracts for routeable workflows, policy-bound behavior, eval hooks, approvals, and reusable skill execution.
+- Supports bounded subagents for reconnaissance, documentation review, test investigation, compatibility checks, security review, and design critique.
+- Integrates Solarium as the first-party browser automation/evidence runtime for screenshots, observations, scoped crawls, audits, GraphQL audit workflows, profiles, auth-session references, replay, and workflow seed generation.
+- Carries Ghidra and Ghidra MCP components for binary-intelligence and reverse-engineering workflows.
+- Includes verification, eval, trace, audit, approval, and tool-inventory surfaces for keeping high-capability sessions inspectable.
+
+## Runtime Model
+
+Vegvisir separates responsibilities deliberately:
+
+```text
+User / operator
+      │
+      ▼
+Vegvisir TUI / CLI / bridge
+      │
+      ├── provider adapters ───────► model generation
+      ├── tool registry ───────────► scoped filesystem, shell, tests, git, MCP, memory, Skiller
+      ├── CMS-v2 ──────────────────► durable memory and retrieval
+      ├── ECM context prep ────────► active-turn context exposure and budgeting
+      ├── HBSE ────────────────────► secret references and brokered credentials
+      ├── skills / LSL / USRL ─────► reusable workflows and policy contracts
+      ├── subagents ───────────────► bounded child-agent work with board records
+      ├── Solarium ────────────────► browser automation and evidence capture
+      └── verification/evals ──────► checks before claims
+```
+
+The default work loop is:
+
+1. **Orient** from the user goal, workspace, git state, files, memory, tools, and constraints.
+2. **Plan** the smallest coherent path and identify risky actions or approvals.
+3. **Execute** with tools, edits, commands, MCP calls, skills, or bounded subagents.
+4. **Verify** with focused tests, builds, render passes, evals, diagnostics, and diff review.
+5. **Report** what changed, what was verified, what failed, and what remains.
+
+The model thinks. Vegvisir gives it hands, memory, rules, a workspace, and an evidence trail. Capable, but not feral.
 
 ## Terminal UI
 
 The default `vegvisir` command opens the native terminal interface. The TUI is built for long-running agent work rather than a raw text stream:
 
-- Provider responses stream into the chat view as they arrive.
+- Provider responses stream into the chat view when the provider supports streaming.
 - Scrolling up pauses follow mode so new output does not steal your place; `End` returns to the live bottom.
-- Native terminal text selection is enabled by default, so model output can be selected and copied with the terminal's normal mouse and context-menu behavior. The default TUI keeps the conversation in one full-width body so normal drag selection does not cross into status or work-log panes.
-- Use `PageUp`, `PageDown`, `Home`, and `End` to move through long chat output without taking over terminal text selection.
+- Native terminal text selection is enabled by default, so output can be selected and copied using the terminal's normal mouse/context-menu behavior.
+- `PageUp`, `PageDown`, `Home`, and `End` navigate long output.
 - `Ctrl+P` opens the command palette, and `/` opens slash command selection from an empty input.
-- Slash command selection supports arrow keys, `PageUp`, `PageDown`, `Home`, `End`, and `Enter` to run the selected command.
-- `Ctrl+F` opens transcript search. Type a query, use `Enter` or `Down` for the next match, `Up` for the previous match, and `Esc` to close search.
-- Approval prompts are shown as an in-session modal. Use `Enter` or `A` to approve once, `S` to allow the matching action for the current session, and `D` to deny. The older `1`, `2`, and `3` shortcuts still work.
-- `Ctrl+C` cancels an in-flight model response first. If no response is running, it exits the TUI.
-- Markdown responses render with structured handling for code fences, tables, lists, diffs, and common source languages.
-- Inspector overlays keep command output readable for inventory-style commands such as `/models`, `/tools`, `/context`, `/system`, `/providers`, `/approvals`, and `/work`.
+- Slash command selection supports arrow keys, paging, `Home`, `End`, and `Enter`.
+- `Ctrl+F` opens transcript search. Use `Enter`/`Down` for the next match, `Up` for the previous match, and `Esc` to close search.
+- Approval prompts are shown in-session. Use `Enter`/`A` to approve once, `S` to approve for the session, and `D` to deny.
+- `Ctrl+C` cancels an in-flight response first. If no response is running, it exits the TUI.
+- Markdown responses render code fences, tables, lists, diffs, and common source languages.
+- Inspector overlays keep command output readable for `/models`, `/tools`, `/context`, `/system`, `/providers`, `/approvals`, `/work`, and related inventory commands.
 
 Useful TUI commands:
 
@@ -77,6 +125,7 @@ Useful TUI commands:
 /work                 show recent activity, tool calls, and command events
 /system               print the active system prompt
 /context              inspect prepared context and memory behavior
+/agent                create, select, and inspect persistent custom agents
 ```
 
 ## Install
@@ -84,7 +133,7 @@ Useful TUI commands:
 Prerequisites:
 
 - Rust toolchain with Cargo.
-- Node.js and npm for the USRL TypeScript package.
+- Node.js and npm for USRL and Solarium.
 - Linux for the full HBSE broker service workflow.
 
 Install the full system:
@@ -105,19 +154,26 @@ Install into a specific prefix:
 ./install.sh --prefix "$HOME/.local"
 ```
 
+Upgrade an existing local install:
+
+```bash
+./upgrade.sh
+```
+
 Uninstall:
 
 ```bash
 ./uninstall.sh
 ```
 
-The installer puts these commands under `$prefix/bin`:
+The installer places these commands under `$prefix/bin` where applicable:
 
 - `vegvisir`
 - `vegvisir-rust`
 - `cms-v2`
 - `hbse`
 - `hbse-broker`
+- `skiller`
 - `usrl`
 
 ## Build And Test From Source
@@ -126,6 +182,12 @@ Build Rust crates:
 
 ```bash
 cargo build --workspace
+```
+
+Check Rust crates:
+
+```bash
+cargo check --workspace
 ```
 
 Run Rust tests:
@@ -138,6 +200,15 @@ Build and test USRL:
 
 ```bash
 cd components/usrl
+npm install
+npm run build
+npm test
+```
+
+Build and test Solarium:
+
+```bash
+cd components/solarium
 npm install
 npm run build
 npm test
@@ -157,32 +228,37 @@ Run headlessly:
 vegvisir --workspace /path/to/project --provider openai-hbse --model gpt-5.5 run "Summarize this repository"
 ```
 
-Run the app-server bridge for an external app or future overlay:
+Run the app-server bridge for an external app or desktop shell:
 
 ```bash
 vegvisir --provider openai-hbse --model gpt-5.5 app-server --workspace /path/to/project
 ```
 
-Use the integrated Skiller component:
+Run the OpenAI-compatible local server surface:
 
 ```bash
-vegvisir skiller -- compile ./docs --out ./dist/docs-skills --name docs-skills --domain kubernetes-operations
-vegvisir skiller -- validate ./dist/docs-skills
-vegvisir skiller -- eval ./dist/docs-skills
-vegvisir skiller -- propose-agents ./dist/docs-skills --out ./dist/agents
-vegvisir skiller -- verify-agent-proposals ./dist/agents
-vegvisir skiller -- build-agent-pack ./dist/docs-skills --agent "Cluster Diagnostic Agent" --out ./dist/cluster-agent --report ./dist/cluster-agent-build-report.yaml
-vegvisir skiller -- verify-agent-pack ./dist/cluster-agent
-vegvisir skiller -- agent-builder-summary --proposals ./dist/agents --pack ./dist/cluster-agent --out ./dist/agent-builder-summary.yaml
-vegvisir skiller -- agent-artifact-index ./dist --out ./dist/agent-artifacts.yaml
+vegvisir open-ai-compat-server --host 127.0.0.1 --port 11434
 ```
 
-Skiller is an integrated Vegvisir feature, not a replacement for Vegvisir runtime systems. It adds governed skill compilation, Forge request/response artifacts, corpus lifecycle reports, registry publication, and Agent Builder handoff packages while Vegvisir continues to own runtime execution, memory, secrets, approvals, traces, evals, and app bridge behavior.
-
-Check the installation:
+Verify the installation/runtime:
 
 ```bash
 vegvisir verify all --workspace /path/to/project
+```
+
+Run evals:
+
+```bash
+vegvisir eval all
+```
+
+Use the integrated Skiller component:
+
+```bash
+vegvisir skiller -- compile ./docs --out ./dist/docs-skills --name docs-skills --domain vegvisir-operations
+vegvisir skiller -- validate ./dist/docs-skills
+vegvisir skiller -- route ./dist/docs-skills "how does HBSE provider auth work"
+vegvisir skiller -- eval ./dist/docs-skills
 ```
 
 Use CMS-v2 directly:
@@ -204,6 +280,27 @@ Use USRL directly:
 ```bash
 usrl validate ./path/to/contract.usrl
 ```
+
+Use Solarium directly:
+
+```bash
+cd components/solarium
+npm run dev -- browse https://example.com --observe --extract-text
+```
+
+## Security Posture
+
+Vegvisir is permissive enough to get work done, but the harness keeps important boundaries explicit:
+
+- Do not paste plaintext credentials into chat.
+- Store durable project facts in CMS-v2, not secrets.
+- Use HBSE-backed secret references for provider, MCP, service, and browser-auth credentials where configured.
+- Keep risky tools disabled unless the session needs them.
+- Treat approval and tool enablement as separate controls.
+- Keep filesystem and command work scoped to the active workspace.
+- Preserve unrelated user work.
+- Use Solarium only for owned, public, or explicitly authorized browser/security work.
+- Run verification before claiming success.
 
 ## Documentation
 
