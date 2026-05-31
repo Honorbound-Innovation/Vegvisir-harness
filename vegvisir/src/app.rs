@@ -200,6 +200,9 @@ pub struct AutonomyState {
     pub no_progress_count: usize,
     pub last_turn_had_tools: bool,
     pub plan_path: Option<String>,
+    pub cll_path: Option<String>,
+    pub pll_path: Option<String>,
+    pub manifest_path: Option<String>,
     pub checklist_total: usize,
     pub checklist_completed: usize,
 }
@@ -217,6 +220,9 @@ impl Default for AutonomyState {
             no_progress_count: 0,
             last_turn_had_tools: false,
             plan_path: None,
+            cll_path: None,
+            pll_path: None,
+            manifest_path: None,
             checklist_total: 0,
             checklist_completed: 0,
         }

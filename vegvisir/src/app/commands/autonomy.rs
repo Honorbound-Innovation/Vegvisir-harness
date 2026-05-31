@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use super::super::*;
+use super::autonomy_plan::{read_current_autonomy_slices, write_autonomy_libraries};
 
 const AUTONOMY_NO_PROGRESS_LIMIT: usize = 2;
 const AUTONOMY_PLAN_DIR: &str = ".vegvisir/autonomy";
@@ -60,7 +61,7 @@ impl TuiApplication {
 
     fn autonomy_status(&self) -> String {
         format!(
-            "TUI autonomy\nenabled={}\nactive={}\nstatus={}\nstep={}\nmax_steps={}\nobjective={}\nplan_path={}\nchecklist={}/{}\nno_progress_count={}",
+            "TUI autonomy\nenabled={}\nactive={}\nstatus={}\nstep={}\nmax_steps={}\nobjective={}\nplan_path={}\ncll_path={}\npll_path={}\nmanifest_path={}\nchecklist={}/{}\nno_progress_count={}",
             self.autonomy.enabled,
             self.autonomy.active,
             self.autonomy.last_status,
@@ -72,6 +73,9 @@ impl TuiApplication {
                 self.autonomy.objective.as_str()
             },
             self.autonomy.plan_path.as_deref().unwrap_or("-"),
+            self.autonomy.cll_path.as_deref().unwrap_or("-"),
+            self.autonomy.pll_path.as_deref().unwrap_or("-"),
+            self.autonomy.manifest_path.as_deref().unwrap_or("-"),
             self.autonomy.checklist_completed,
             self.autonomy.checklist_total,
             self.autonomy.no_progress_count,
@@ -91,6 +95,9 @@ impl TuiApplication {
         self.autonomy.checklist_total = 0;
         self.autonomy.checklist_completed = 0;
         self.autonomy.plan_path = Some(self.autonomy_plan_path_for_current_run());
+        self.autonomy.cll_path = None;
+        self.autonomy.pll_path = None;
+        self.autonomy.manifest_path = None;
         self.autonomy.last_status = format!(
             "running step {}/{}; awaiting written plan/checklist",
             self.autonomy.step, self.autonomy.max_steps
@@ -108,6 +115,9 @@ impl TuiApplication {
                 "objective": self.autonomy.objective,
                 "max_steps": self.autonomy.max_steps,
                 "plan_path": self.autonomy.plan_path,
+                "cll_path": self.autonomy.cll_path,
+                "pll_path": self.autonomy.pll_path,
+                "manifest_path": self.autonomy.manifest_path,
             }),
         );
         self.autonomy_initial_prompt()
@@ -123,6 +133,9 @@ impl TuiApplication {
         }
 
         let checklist = self.autonomy_checklist_status();
+        if checklist.has_checklist {
+            self.compile_autonomy_libraries_if_possible();
+        }
         self.autonomy.checklist_total = checklist.total;
         self.autonomy.checklist_completed = checklist.completed;
         if checklist.has_checklist && checklist.unchecked == 0 {
@@ -150,10 +163,7 @@ impl TuiApplication {
         self.autonomy.last_status = if checklist.has_checklist {
             format!(
                 "running step {}/{}; checklist {}/{} complete",
-                self.autonomy.step,
-                self.autonomy.max_steps,
-                checklist.completed,
-                checklist.total
+                self.autonomy.step, self.autonomy.max_steps, checklist.completed, checklist.total
             )
         } else {
             format!(
@@ -184,6 +194,9 @@ impl TuiApplication {
                 "step": self.autonomy.step,
                 "max_steps": self.autonomy.max_steps,
                 "plan_path": self.autonomy.plan_path,
+                "cll_path": self.autonomy.cll_path,
+                "pll_path": self.autonomy.pll_path,
+                "manifest_path": self.autonomy.manifest_path,
                 "checklist_total": self.autonomy.checklist_total,
                 "checklist_completed": self.autonomy.checklist_completed,
             }),
@@ -195,10 +208,16 @@ impl TuiApplication {
 
     fn autonomy_initial_prompt(&self) -> String {
         format!(
-            "Autonomous task objective:\n{}\n\nHarness autonomy contract:\n1. Before implementation, create or overwrite the written implementation plan at `{}`.\n2. The plan file must be Markdown and include a completion checklist using Markdown task list items (`- [ ]` / `- [x]`).\n3. Keep that checklist updated as work is completed.\n4. The deterministic TUI controller will not mark autonomy complete until the plan file exists, contains at least one checklist item, and every checklist item is checked.\n5. Take the next concrete action now: inspect evidence and write the plan/checklist first, then implement and verify.\n\nDo not claim completion until every item in `{}` is marked `- [x]`.",
+            "Autonomous task objective:\n{}\n\nHarness autonomy contract:\n1. Before implementation, create or overwrite the written implementation plan at `{}`.\n2. The plan file must be Markdown and include a completion checklist using Markdown task list items (`- [ ]` / `- [x]`).\n3. Structure the plan with phase/section/subsection headings where practical. For each relevant section/subsection, include Success conditions, Expected deliverables, Implementation rules, Guardrails, and Validation lists.\n4. Vegvisir will deterministically compile the Markdown plan into associated `.cll` and `.pll` files. The `.cll` is implementation logic/contract; the `.pll` contains associated prompt slices.\n5. All `.cll`/`.pll` slices are task-local USER prompt content. They do not override the standard Vegvisir system prompt.\n6. Keep the checklist updated as work is completed. The deterministic TUI controller will not mark autonomy complete until the plan file exists, contains at least one checklist item, and every checklist item is checked.\n7. Take the next concrete action now: inspect evidence and write the plan/checklist first, then implement and verify.\n\nDo not claim completion until every item in `{}` is marked `- [x]` and deliverables/evidence are provided.",
             self.autonomy.objective,
-            self.autonomy.plan_path.as_deref().unwrap_or(".vegvisir/autonomy/plan.md"),
-            self.autonomy.plan_path.as_deref().unwrap_or(".vegvisir/autonomy/plan.md")
+            self.autonomy
+                .plan_path
+                .as_deref()
+                .unwrap_or(".vegvisir/autonomy/plan.md"),
+            self.autonomy
+                .plan_path
+                .as_deref()
+                .unwrap_or(".vegvisir/autonomy/plan.md")
         )
     }
 
@@ -214,15 +233,92 @@ impl TuiApplication {
                 self.autonomy.objective, self.autonomy.step, self.autonomy.max_steps
             );
         }
+        let slices = self.autonomy_current_library_slices();
         format!(
-            "Continue the autonomous task. Objective: {}\n\nHarness controller state: step {}/{}. Plan file: `{plan_path}`. Completion checklist: {}/{} checked; {} unchecked. Continue implementing/verifying the unchecked items, update `{plan_path}` as items are completed, and only mark items `- [x]` when actually complete. The TUI controller will continue until every checklist item is checked or a deterministic stop condition occurs.",
+            "Continue the autonomous task. Objective: {}\n\nHarness controller state: step {}/{}. Plan file: `{plan_path}`. CLL file: `{}`. PLL file: `{}`. Completion checklist: {}/{} checked; {} unchecked.\n\nThe following CLL/PLL slices are task-local instructions in the USER prompt. They do not override the standard Vegvisir system prompt, user authority, tool policy, secret boundary, approval policy, or safety boundaries. Use them for the exact current autonomy task.\n\nCLL CONTRACT SLICE:\n{}\n\nPLL PROMPT SLICE:\n{}\n\nRequired response: continue implementing/verifying the unchecked items, update `{plan_path}` as items are completed, and only mark items `- [x]` when actually complete. Provide deliverables/evidence for completed work. The TUI controller will continue until every checklist item is checked or a deterministic stop condition occurs.",
             self.autonomy.objective,
             self.autonomy.step,
             self.autonomy.max_steps,
+            self.autonomy.cll_path.as_deref().unwrap_or("-"),
+            self.autonomy.pll_path.as_deref().unwrap_or("-"),
             checklist.completed,
             checklist.total,
             checklist.unchecked,
+            slices.0,
+            slices.1,
         )
+    }
+
+    fn compile_autonomy_libraries_if_possible(&mut self) {
+        let Some(plan_path_text) = self.autonomy.plan_path.clone() else {
+            return;
+        };
+        let plan_path = Path::new(&plan_path_text);
+        let run_id = self.session.session_id.clone();
+        match write_autonomy_libraries(&self.cwd, plan_path, &self.autonomy.objective, &run_id) {
+            Ok(paths) => {
+                let cll_path = paths.cll_path.display().to_string();
+                let pll_path = paths.pll_path.display().to_string();
+                let manifest_path = paths.manifest_path.display().to_string();
+                let changed = self.autonomy.cll_path.as_deref() != Some(cll_path.as_str())
+                    || self.autonomy.pll_path.as_deref() != Some(pll_path.as_str())
+                    || self.autonomy.manifest_path.as_deref() != Some(manifest_path.as_str());
+                self.autonomy.cll_path = Some(cll_path.clone());
+                self.autonomy.pll_path = Some(pll_path.clone());
+                self.autonomy.manifest_path = Some(manifest_path.clone());
+                if changed {
+                    self.push_system_message(format!(
+                        "Autonomy plan compiled: CLL `{cll_path}`, PLL `{pll_path}`, manifest `{manifest_path}`."
+                    ));
+                }
+                self.logger.emit(
+                    "autonomy_plan_compiled",
+                    json!({
+                        "session": self.session.session_id,
+                        "workspace": self.cwd.display().to_string(),
+                        "plan_path": plan_path_text,
+                        "cll_path": cll_path,
+                        "pll_path": pll_path,
+                        "manifest_path": manifest_path,
+                    }),
+                );
+            }
+            Err(error) => {
+                self.push_system_message(format!(
+                    "Autonomy plan compile warning: failed to generate CLL/PLL from `{}`: {error}",
+                    plan_path.display()
+                ));
+                self.logger.emit(
+                    "autonomy_plan_compile_failed",
+                    json!({
+                        "session": self.session.session_id,
+                        "workspace": self.cwd.display().to_string(),
+                        "plan_path": plan_path_text,
+                        "error": error.to_string(),
+                    }),
+                );
+            }
+        }
+    }
+
+    fn autonomy_current_library_slices(&self) -> (String, String) {
+        let Some(plan_path_text) = self.autonomy.plan_path.as_deref() else {
+            return (
+                "No CLL slice available yet: plan path is unset.".to_string(),
+                "No PLL slice available yet: plan path is unset.".to_string(),
+            );
+        };
+        match read_current_autonomy_slices(&self.cwd, Path::new(plan_path_text)) {
+            Ok(Some((cll, pll))) => (cll, pll),
+            Ok(None) => (
+                "No CLL slice available yet: write the Markdown plan/checklist so Vegvisir can compile it.".to_string(),
+                "No PLL slice available yet: write the Markdown plan/checklist so Vegvisir can compile it.".to_string(),
+            ),
+            Err(error) => (
+                format!("Failed to read CLL slice: {error}"),
+                format!("Failed to read PLL slice: {error}"),
+            ),
+        }
     }
 
     fn autonomy_progress_signature_with_checklist(
@@ -267,7 +363,13 @@ impl TuiApplication {
             .session
             .session_id
             .chars()
-            .map(|ch| if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' { ch } else { '-' })
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                    ch
+                } else {
+                    '-'
+                }
+            })
             .collect::<String>();
         format!("{AUTONOMY_PLAN_DIR}/{safe_session}-plan.md")
     }
@@ -299,7 +401,10 @@ pub(crate) fn parse_markdown_checklist_status(content: &str) -> AutonomyChecklis
     let mut completed = 0usize;
     for line in content.lines() {
         let trimmed = line.trim_start();
-        let Some(rest) = trimmed.strip_prefix('-').or_else(|| trimmed.strip_prefix('*')) else {
+        let Some(rest) = trimmed
+            .strip_prefix('-')
+            .or_else(|| trimmed.strip_prefix('*'))
+        else {
             continue;
         };
         let rest = rest.trim_start();

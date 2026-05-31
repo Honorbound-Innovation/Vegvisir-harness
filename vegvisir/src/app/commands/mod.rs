@@ -1,5 +1,6 @@
 mod agents;
 mod autonomy;
+mod autonomy_plan;
 mod mcp_hbse;
 mod memory;
 mod misc;
