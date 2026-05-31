@@ -458,11 +458,17 @@ Steering: {display_content}{attachment_note}"
                     self.session.activity = format!("finished tool {name}");
                     let status = if ok { "finished" } else { "failed" };
                     let mut content = format!("Tool {status}: {name} - {summary}");
-                    if let Some(detail) = detail.filter(|detail| !detail.trim().is_empty()) {
+                    let detail = detail.as_deref().filter(|detail| !detail.trim().is_empty());
+                    if let Some(detail) = detail {
                         content.push_str("\n\n");
-                        content.push_str(&detail);
+                        content.push_str(detail);
                     }
                     self.push_live_tool_message(content);
+                    if ok {
+                        if let Some(detail) = detail {
+                            self.push_assistant_tool_artifact(&name, detail);
+                        }
+                    }
                 }
             }
         }
@@ -544,6 +550,37 @@ Next step: I should retry or continue from the last successful step instead of l
         });
     }
 
+    pub(crate) fn push_assistant_tool_artifact(&mut self, tool_name: &str, detail: &str) {
+        let detail = detail.trim();
+        if detail.is_empty() || !is_chat_visible_tool_artifact(detail) {
+            return;
+        }
+        let artifact = format!("\n\n**Code/Diff update from `{tool_name}`**\n\n{detail}\n");
+        let assistant_index = self
+            .session
+            .messages
+            .iter()
+            .rposition(|message| message.role == "assistant")
+            .unwrap_or_else(|| {
+                self.session.messages.push(ChatMessage {
+                    role: "assistant".to_string(),
+                    content: String::new(),
+                    attachments: Vec::new(),
+                    created_at: chrono::Utc::now(),
+                });
+                self.session.messages.len() - 1
+            });
+        if self.session.messages[assistant_index]
+            .content
+            .contains(&artifact)
+        {
+            return;
+        }
+        self.session.messages[assistant_index]
+            .content
+            .push_str(&artifact);
+    }
+
     pub(crate) fn merge_live_tool_messages(&self, completed: &mut SessionState) {
         let live_messages = self
             .session
@@ -579,10 +616,8 @@ Next step: I should retry or continue from the last successful step instead of l
             .and_then(|last_user_index| {
                 self.session.messages[last_user_index + 1..]
                     .iter()
-                    .find(|message| {
-                        message.role == "assistant"
-                            && message.content.contains("**Thinking trace**")
-                    })
+                    .rev()
+                    .find(|message| message.role == "assistant" && !message.content.is_empty())
             })
             .map(|message| message.content.clone())
         else {
@@ -594,15 +629,28 @@ Next step: I should retry or continue from the last successful step instead of l
             .rev()
             .find(|message| message.role == "assistant")
         {
-            // The streamed live buffer may lag behind the worker's completed
-            // response by a few final deltas when the provider thread finishes.
-            // Do not replace a complete final response with a shorter partial
-            // live buffer; that makes the TUI appear to cut off the end of the
-            // turn until another event forces state forward.
+            // Preserve live assistant-visible artifacts (thinking traces,
+            // code/diff updates emitted after tool completion) across the final
+            // session swap. The worker's completed response does not include
+            // UI-only artifacts injected from tool observations, so merge them
+            // instead of dropping them when the provider turn finishes.
             if completed_message.content.trim().is_empty()
                 || live_content.len() >= completed_message.content.len()
             {
-                completed_message.content = live_content;
+                if live_content.contains("**Code/Diff update from `")
+                    && !completed_message
+                        .content
+                        .contains("**Code/Diff update from `")
+                    && !completed_message.content.trim().is_empty()
+                {
+                    completed_message.content = format!(
+                        "{}\n\n{}",
+                        live_content.trim_end(),
+                        completed_message.content.trim_start()
+                    );
+                } else {
+                    completed_message.content = live_content;
+                }
             }
         }
     }
@@ -664,6 +712,18 @@ Next step: I should retry or continue from the last successful step instead of l
         self.session.activity_tick = self.session.activity_tick.saturating_add(1);
         self.redraw_requested = true;
     }
+}
+
+fn is_chat_visible_tool_artifact(detail: &str) -> bool {
+    let trimmed = detail.trim_start();
+    trimmed.starts_with("```")
+        || trimmed.starts_with("diff --git ")
+        || trimmed.starts_with("--- ")
+        || trimmed.contains("\n@@ ")
+        || trimmed.contains("\n+use ")
+        || trimmed.contains("\nfn ")
+        || trimmed.contains("\nclass ")
+        || trimmed.contains("\ndef ")
 }
 
 fn first_nonempty_line(content: &str) -> &str {

@@ -1252,6 +1252,61 @@ mod tests {
     }
 
     #[test]
+    fn successful_tool_code_detail_is_visible_in_assistant_chat() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        let (tx, rx) = mpsc::channel();
+        app.pending_stream = Some(rx);
+        app.session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: String::new(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+
+        tx.send(StreamEvent::ToolEnd {
+            name: "write_file".to_string(),
+            ok: true,
+            summary: "ok: Wrote src/lib.rs".to_string(),
+            detail: Some(
+                "```diff
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1 +1 @@
+-old
++new
+```"
+                .to_string(),
+            ),
+        })?;
+        app.poll_stream_events();
+
+        let assistant = app
+            .session
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role == "assistant")
+            .expect("assistant message");
+        assert!(
+            assistant
+                .content
+                .contains("Code/Diff update from `write_file`")
+        );
+        assert!(assistant.content.contains("```diff"));
+        assert!(assistant.content.contains("+new"));
+
+        let system = app
+            .session
+            .messages
+            .iter()
+            .find(|message| message.role == "system")
+            .expect("tool log message");
+        assert!(system.content.contains("Tool finished: write_file"));
+        Ok(())
+    }
+
+    #[test]
     fn failed_worker_final_drain_preserves_tool_failure_context() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
