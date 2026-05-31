@@ -1384,6 +1384,36 @@ mod tests {
     }
 
     #[test]
+    fn final_exit_drain_preserves_pending_stream_delta_and_requests_draw() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: String::new(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        let (tx, rx) = mpsc::channel();
+        app.pending_stream = Some(rx);
+        app.redraw_requested = false;
+
+        tx.send(StreamEvent::Delta("final answer before exit".to_string()))?;
+        app.running = false;
+        app.drain_before_terminal_exit();
+
+        assert!(
+            app.session
+                .messages
+                .last()
+                .unwrap()
+                .content
+                .contains("final answer before exit")
+        );
+        assert!(app.should_draw_frame());
+        Ok(())
+    }
+
+    #[test]
     fn activity_pulse_animates_each_streaming_tick() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;

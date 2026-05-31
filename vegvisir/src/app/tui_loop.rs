@@ -80,16 +80,30 @@ impl TuiApplication {
                 self.clear_requested = false;
                 self.redraw_requested = true;
             }
-            if self.redraw_requested
-                || !self.pending_background_jobs.is_empty()
-                || !self.pending_speech_jobs.is_empty()
-            {
+            if self.should_draw_frame() {
                 self.redraw_requested = false;
                 terminal.draw(|frame| crate::tui2::draw(frame, self))?;
             }
         }
+        self.drain_before_terminal_exit();
+        if self.should_draw_frame() {
+            self.redraw_requested = false;
+            terminal.draw(|frame| crate::tui2::draw(frame, self))?;
+        }
         terminal.show_cursor()?;
         Ok(())
+    }
+
+    pub(crate) fn should_draw_frame(&self) -> bool {
+        self.redraw_requested
+            || !self.pending_background_jobs.is_empty()
+            || !self.pending_speech_jobs.is_empty()
+    }
+
+    pub(crate) fn drain_before_terminal_exit(&mut self) {
+        self.poll_stream_events();
+        self.poll_pending_send();
+        self.poll_background_jobs();
     }
 }
 
