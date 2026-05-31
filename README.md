@@ -18,7 +18,7 @@ Vegvisir-harness/
 │   ├── HBSE/              # Rust Hardware Bound Secrets Enclave implementation
 │   ├── skiller/           # Rust skill compiler and governed skill bundle tooling
 │   └── usrl/              # USRL parser and contract runtime
-├── docs/                  # Usage documentation for each included system
+├── docs/                  # System architecture, usage references, and component documentation
 ├── scripts/               # Helper scripts
 ├── install.sh             # Full-system installer
 ├── uninstall.sh           # Full-system uninstaller
@@ -207,13 +207,19 @@ usrl validate ./path/to/contract.usrl
 
 ## Documentation
 
-The usage docs include command trees, explanations, and examples for the included systems.
+Start with the system docs when you need the real architecture, then use the usage references for command-level detail.
 
+- [Documentation index](docs/README.md)
+- [System overview](docs/system-overview.md)
+- [Runtime architecture](docs/runtime-architecture.md)
+- [Skiller system](docs/skiller-system.md)
+- [Solarium system](docs/solarium-system.md)
 - [Vegvisir usage](docs/vegvisir-usage.md)
 - [CMS-v2 usage](docs/cms-v2-usage.md)
 - [HBSE usage](docs/hbse-usage.md)
 - [USRL usage](docs/usrl-usage.md)
 - [USRL language reference](docs/usrl-language-reference.md)
+- [Linked Skill Libraries](docs/lsl-skill-system.md)
 - [App bridge integration](docs/overlay-integration.md)
 - [MCP, tools, approvals, and security](docs/security-and-operations.md)
 - [Development and release workflow](docs/development.md)
