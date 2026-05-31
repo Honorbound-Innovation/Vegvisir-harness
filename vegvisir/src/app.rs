@@ -1191,6 +1191,45 @@ mod tests {
     }
 
     #[test]
+    fn completed_turn_restores_visible_user_message_over_model_context_wrapper()
+    -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "that is perfect, no changes are needed then".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        app.session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: String::new(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+
+        let mut completed = app.session.clone();
+        let completed_user = completed
+            .messages
+            .iter_mut()
+            .find(|message| message.role == "user")
+            .expect("completed user message");
+        completed_user.content = "[Vegvisir user profile]\n- Address the user as: Malice\n[/Vegvisir user profile]\n\nUser request:\nthat is perfect, no changes are needed then".to_string();
+
+        app.restore_latest_visible_user_message(&mut completed);
+
+        let user = completed
+            .messages
+            .iter()
+            .find(|message| message.role == "user")
+            .expect("user message");
+        assert_eq!(user.content, "that is perfect, no changes are needed then");
+        assert!(!user.content.contains("[Vegvisir user profile]"));
+        assert!(!user.content.contains("User request:"));
+        Ok(())
+    }
+
+    #[test]
     fn completed_turn_preserves_live_tool_messages() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;

@@ -197,6 +197,7 @@ impl TuiApplication {
                 self.poll_stream_events();
                 self.merge_live_tool_messages(&mut session);
                 self.merge_live_reasoning_trace(&mut session);
+                self.restore_latest_visible_user_message(&mut session);
                 let had_tool_activity = self.completed_session_had_tool_activity(&session);
                 self.session = session;
                 self.pending_stream = None;
@@ -582,6 +583,35 @@ Next step: I should retry or continue from the last successful step instead of l
         self.session.messages[assistant_index]
             .content
             .push_str(&artifact);
+    }
+
+    pub(crate) fn restore_latest_visible_user_message(&self, completed: &mut SessionState) {
+        let Some(live_user) = self
+            .session
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role == "user")
+            .cloned()
+        else {
+            return;
+        };
+        let Some(completed_user) = completed
+            .messages
+            .iter_mut()
+            .rev()
+            .find(|message| message.role == "user")
+        else {
+            return;
+        };
+
+        // The worker session stores the provider-facing content, which can
+        // include hidden user-context wrappers such as the local profile block
+        // or autonomy contracts. The live TUI session stores the actual text the
+        // user typed. Preserve that visible text in chat/history while still
+        // letting the provider receive the augmented model request.
+        completed_user.content = live_user.content;
+        completed_user.attachments = live_user.attachments;
     }
 
     pub(crate) fn merge_live_tool_messages(&self, completed: &mut SessionState) {
