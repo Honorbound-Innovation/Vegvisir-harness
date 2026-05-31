@@ -50,6 +50,7 @@ pub(crate) struct AutonomyLibraryPaths {
     pub pll_path: PathBuf,
     pub manifest_path: PathBuf,
     pub state_path: PathBuf,
+    pub journal_path: PathBuf,
     pub evidence_dir: PathBuf,
 }
 
@@ -64,6 +65,7 @@ pub(crate) struct AutonomyPlanStatus {
     pub current_evidence_path: Option<String>,
     pub current_evidence_valid: bool,
     pub current_evidence_errors: Vec<String>,
+    pub journal_path: Option<String>,
     pub nodes: Vec<AutonomyNodeStatus>,
 }
 
@@ -79,6 +81,7 @@ pub(crate) struct AutonomyNodeStatus {
     pub evidence_path: Option<String>,
     pub evidence_valid: bool,
     pub evidence_errors: Vec<String>,
+    pub validation_adapter_results: Vec<AutonomyValidationAdapterResult>,
     pub complete: bool,
     pub success_conditions: Vec<String>,
     pub expected_deliverables: Vec<String>,
@@ -131,6 +134,15 @@ pub(crate) struct AutonomyEvidenceValidation {
     pub evidence_path: String,
     pub valid: bool,
     pub errors: Vec<String>,
+    pub adapter_results: Vec<AutonomyValidationAdapterResult>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct AutonomyValidationAdapterResult {
+    pub adapter: String,
+    pub requirement: String,
+    pub passed: bool,
+    pub detail: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -312,6 +324,7 @@ pub(crate) fn autonomy_library_paths_for_plan(plan_path: &Path) -> AutonomyLibra
         pll_path: parent.join(format!("{stem}.pll")),
         manifest_path: parent.join(format!("{stem}-compile-manifest.json")),
         state_path: parent.join(format!("{stem}-state.json")),
+        journal_path: parent.join(format!("{stem}-journal.jsonl")),
         evidence_dir: parent.join(format!("{stem}-evidence")),
     }
 }
@@ -344,12 +357,31 @@ pub(crate) fn write_autonomy_libraries(
     std::fs::write(cwd.join(&paths.pll_path), compiled.pll)?;
     std::fs::write(cwd.join(&paths.manifest_path), compiled.manifest)?;
     std::fs::create_dir_all(cwd.join(&paths.evidence_dir))?;
-    let status =
+    let mut status =
         autonomy_plan_status_with_evidence(&markdown, objective, Some(&paths.evidence_dir), cwd)?;
+    status.journal_path = Some(paths.journal_path.display().to_string());
     write_current_evidence_template(cwd, &paths.evidence_dir, &status)?;
     std::fs::write(
         cwd.join(&paths.state_path),
         serde_json::to_string_pretty(&status)?,
+    )?;
+    append_autonomy_journal_event(
+        cwd,
+        &paths.journal_path,
+        "plan_compiled",
+        serde_json::json!({
+            "run_id": run_id,
+            "plan_path": source_path_text,
+            "cll_path": cll_path_text,
+            "pll_path": pll_path_text,
+            "manifest_path": paths.manifest_path.display().to_string(),
+            "state_path": paths.state_path.display().to_string(),
+            "evidence_dir": paths.evidence_dir.display().to_string(),
+            "node_total": status.total_nodes,
+            "node_completed": status.completed_nodes,
+            "current_node_id": status.current_node_id,
+            "current_evidence_valid": status.current_evidence_valid,
+        }),
     )?;
     Ok(paths)
 }
@@ -373,6 +405,7 @@ pub(crate) fn autonomy_plan_status_with_evidence(
             nodes[index].evidence_path = Some(validation.evidence_path.clone());
             nodes[index].evidence_valid = validation.valid;
             nodes[index].evidence_errors = validation.errors;
+            nodes[index].validation_adapter_results = validation.adapter_results;
             nodes[index].complete = nodes[index].checklist_complete && nodes[index].evidence_valid;
         }
     } else {
@@ -434,6 +467,7 @@ fn autonomy_plan_status_unchecked(
                     .map(|dir| evidence_packet_path(dir, &node.id).display().to_string()),
                 evidence_valid: false,
                 evidence_errors: Vec::new(),
+                validation_adapter_results: Vec::new(),
                 complete: false,
                 success_conditions: node.success_conditions.clone(),
                 expected_deliverables: node.expected_deliverables.clone(),
@@ -483,6 +517,7 @@ fn autonomy_plan_status_from_nodes(
         current_evidence_path,
         current_evidence_valid,
         current_evidence_errors,
+        journal_path: None,
         nodes,
     }
 }
@@ -499,12 +534,10 @@ pub(crate) fn read_autonomy_plan_status(
         Err(error) => return Err(error.into()),
     };
     let paths = autonomy_library_paths_for_plan(plan_path);
-    Ok(Some(autonomy_plan_status_with_evidence(
-        &markdown,
-        objective,
-        Some(&paths.evidence_dir),
-        cwd,
-    )?))
+    let mut status =
+        autonomy_plan_status_with_evidence(&markdown, objective, Some(&paths.evidence_dir), cwd)?;
+    status.journal_path = Some(paths.journal_path.display().to_string());
+    Ok(Some(status))
 }
 
 pub(crate) fn current_autonomy_node_slices(
@@ -560,6 +593,7 @@ pub(crate) fn validate_node_evidence(
             evidence_path,
             valid: false,
             errors: vec!["current node not found in plan status".to_string()],
+            adapter_results: Vec::new(),
         });
     };
     let packet_text = match std::fs::read_to_string(&absolute_path) {
@@ -570,6 +604,7 @@ pub(crate) fn validate_node_evidence(
                 evidence_path,
                 valid: false,
                 errors: vec!["completion evidence packet has not been written yet".to_string()],
+                adapter_results: Vec::new(),
             });
         }
         Err(error) => return Err(error.into()),
@@ -584,10 +619,12 @@ pub(crate) fn validate_node_evidence(
                 errors: vec![format!(
                     "completion evidence packet is not valid JSON: {error}"
                 )],
+                adapter_results: Vec::new(),
             });
         }
     };
     let mut errors = Vec::new();
+    let mut adapter_results = Vec::new();
     if packet.node_id != node_id {
         errors.push(format!(
             "packet node_id `{}` does not match current node `{node_id}`",
@@ -622,13 +659,173 @@ pub(crate) fn validate_node_evidence(
         if !node.validation.is_empty() && packet.verification.is_empty() {
             errors.push("complete packet must include verification evidence".to_string());
         }
+        for requirement in &node.validation {
+            if let Some(result) = evaluate_validation_adapter(cwd, requirement, &packet) {
+                if !result.passed {
+                    errors.push(format!(
+                        "validation adapter `{}` failed for `{}`: {}",
+                        result.adapter, result.requirement, result.detail
+                    ));
+                }
+                adapter_results.push(result);
+            }
+        }
     }
     Ok(AutonomyEvidenceValidation {
         node_id: node_id.to_string(),
         evidence_path,
         valid: errors.is_empty(),
         errors,
+        adapter_results,
     })
+}
+
+fn evaluate_validation_adapter(
+    cwd: &Path,
+    requirement: &str,
+    packet: &AutonomyCompletionPacket,
+) -> Option<AutonomyValidationAdapterResult> {
+    let trimmed = requirement.trim();
+    let (adapter, raw_value) = trimmed.split_once(':')?;
+    let adapter = adapter.trim().to_ascii_lowercase().replace(['-', ' '], "_");
+    let value = raw_value.trim().trim_matches('`').trim();
+    if value.is_empty() {
+        return Some(AutonomyValidationAdapterResult {
+            adapter,
+            requirement: requirement.to_string(),
+            passed: false,
+            detail: "adapter requirement has no value".to_string(),
+        });
+    }
+    match adapter.as_str() {
+        "file_exists" => {
+            let path = safe_workspace_relative_path(value);
+            let passed = path
+                .as_deref()
+                .map(|relative| cwd.join(relative).is_file())
+                .unwrap_or(false);
+            Some(AutonomyValidationAdapterResult {
+                adapter,
+                requirement: requirement.to_string(),
+                passed,
+                detail: if passed {
+                    format!("file exists: {value}")
+                } else {
+                    format!("file does not exist or is outside workspace: {value}")
+                },
+            })
+        }
+        "path_exists" => {
+            let path = safe_workspace_relative_path(value);
+            let passed = path
+                .as_deref()
+                .map(|relative| cwd.join(relative).exists())
+                .unwrap_or(false);
+            Some(AutonomyValidationAdapterResult {
+                adapter,
+                requirement: requirement.to_string(),
+                passed,
+                detail: if passed {
+                    format!("path exists: {value}")
+                } else {
+                    format!("path does not exist or is outside workspace: {value}")
+                },
+            })
+        }
+        "deliverable_path" | "path_changed" => {
+            let passed = packet.deliverables.iter().any(|item| {
+                item.path
+                    .as_deref()
+                    .map(|path| normalize_path_text(path) == normalize_path_text(value))
+                    .unwrap_or(false)
+            });
+            Some(AutonomyValidationAdapterResult {
+                adapter,
+                requirement: requirement.to_string(),
+                passed,
+                detail: if passed {
+                    format!("deliverables reference path: {value}")
+                } else {
+                    format!("deliverables do not reference required path: {value}")
+                },
+            })
+        }
+        "command_passes" | "command_passed" => {
+            let expected = normalize_command(value);
+            let passed = packet.verification.iter().any(|verification| {
+                verification
+                    .command
+                    .as_deref()
+                    .map(|command| normalize_command(command) == expected)
+                    .unwrap_or(false)
+                    && verification_result_passed(&verification.result)
+            });
+            Some(AutonomyValidationAdapterResult {
+                adapter,
+                requirement: requirement.to_string(),
+                passed,
+                detail: if passed {
+                    format!("verification reports command passed: {value}")
+                } else {
+                    format!("verification does not report passing command: {value}")
+                },
+            })
+        }
+        _ => None,
+    }
+}
+
+fn safe_workspace_relative_path(value: &str) -> Option<PathBuf> {
+    let path = Path::new(value);
+    if path.is_absolute() || value.contains('\0') {
+        return None;
+    }
+    if path
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return None;
+    }
+    Some(path.to_path_buf())
+}
+
+fn normalize_path_text(value: &str) -> String {
+    value.trim().trim_start_matches("./").replace('\\', "/")
+}
+
+fn normalize_command(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn verification_result_passed(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "pass" | "passed" | "success" | "succeeded" | "ok"
+    )
+}
+
+pub(crate) fn append_autonomy_journal_event(
+    cwd: &Path,
+    journal_path: &Path,
+    event: &str,
+    payload: serde_json::Value,
+) -> anyhow::Result<()> {
+    let absolute_path = cwd.join(journal_path);
+    if let Some(parent) = absolute_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let entry = serde_json::json!({
+        "ts": Utc::now().to_rfc3339(),
+        "event": event,
+        "payload": payload,
+    });
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(absolute_path)?;
+    use std::io::Write as _;
+    writeln!(file, "{}", serde_json::to_string(&entry)?)?;
+    Ok(())
 }
 
 fn write_current_evidence_template(
@@ -739,7 +936,8 @@ fn render_current_cll_slice(
         ));
     }
     out.push_str("  required_completion_packet: [\"node_id\", \"status\", \"actions_taken\", \"deliverables\", \"success_conditions_satisfied\", \"verification\", \"risks_or_blockers\", \"next_recommended_action\"];\n");
-    out.push_str("  evidence_validation: \"The packet must be valid JSON at evidence_packet_path and must satisfy required deliverables, success condition mappings, and validation summaries before this node can advance.\";\n");
+    out.push_str("  evidence_validation: \"The packet must be valid JSON at evidence_packet_path and must satisfy required deliverables, success condition mappings, validation summaries, and deterministic validation adapters before this node can advance.\";\n");
+    out.push_str("  supported_validation_adapters: [\"file_exists:<path>\", \"path_exists:<path>\", \"deliverable_path:<path>\", \"path_changed:<path>\", \"command_passes:<command>\"];\n");
     out.push_str("}\n");
     out
 }
@@ -756,7 +954,7 @@ fn render_current_pll_slice(node: &AutonomyPlanNode, status: &AutonomyPlanStatus
             escape_cll(path)
         ));
     }
-    out.push_str("  required_response: \"Return a concise completion packet with node_id, status, actions_taken, deliverables, success_conditions_satisfied, verification, risks_or_blockers, and next_recommended_action. Also write/update the same packet as JSON at evidence_packet_path when claiming node completion.\";\n");
+    out.push_str("  required_response: \"Return a concise completion packet with node_id, status, actions_taken, deliverables, success_conditions_satisfied, verification, risks_or_blockers, and next_recommended_action. Also write/update the same packet as JSON at evidence_packet_path when claiming node completion. For command_passes validation requirements, include a verification entry with the exact command and a passed/success result.\";\n");
     out.push_str("}\n");
     out
 }
@@ -1113,6 +1311,100 @@ Validation:
         Ok(())
     }
 
+    #[test]
+    fn validation_adapters_gate_completion_evidence() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path();
+        std::fs::create_dir_all(workspace.join(".vegvisir/autonomy"))?;
+        std::fs::create_dir_all(workspace.join("src"))?;
+        std::fs::write(workspace.join("src/lib.rs"), "pub fn implemented() {}\n")?;
+        let plan_path = Path::new(".vegvisir/autonomy/run-plan.md");
+        std::fs::write(
+            workspace.join(plan_path),
+            "# Plan\n## Phase 1: Adapter Validation\nSuccess conditions:\n- Adapter success mapped\nExpected deliverables:\n- src/lib.rs changed\nValidation:\n- file_exists: src/lib.rs\n- deliverable_path: src/lib.rs\n- command_passes: cargo test autonomy\n- [x] satisfy adapters\n",
+        )?;
+        let paths = write_autonomy_libraries(workspace, plan_path, "objective", "run")?;
+        let status = read_autonomy_plan_status(workspace, plan_path, "objective")?.unwrap();
+        let packet_path = workspace.join(evidence_packet_path(
+            &paths.evidence_dir,
+            status.current_node_id.as_deref().unwrap(),
+        ));
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "node_id": status.current_node_id.as_deref().unwrap(),
+                "status": "complete",
+                "actions_taken": ["implemented adapter validation"],
+                "deliverables": [{"type": "file", "path": "src/lib.rs", "description": "updated source"}],
+                "success_conditions_satisfied": [{"condition": "Adapter success mapped", "evidence": "all adapters reported"}],
+                "verification": [{"command": "cargo test autonomy", "result": "passed", "summary": "focused tests passed"}],
+                "risks_or_blockers": [],
+                "next_recommended_action": "advance"
+            })
+            .to_string(),
+        )?;
+        let status = read_autonomy_plan_status(workspace, plan_path, "objective")?.unwrap();
+        let node = status
+            .nodes
+            .iter()
+            .find(|node| node.checklist_total > 0)
+            .expect("executable node");
+        assert!(node.evidence_valid, "{:?}", node.evidence_errors);
+        assert_eq!(node.validation_adapter_results.len(), 3);
+        assert!(
+            node.validation_adapter_results
+                .iter()
+                .all(|result| result.passed)
+        );
+        assert_eq!(status.completed_nodes, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn validation_adapters_report_failures() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path();
+        std::fs::create_dir_all(workspace.join(".vegvisir/autonomy"))?;
+        let plan_path = Path::new(".vegvisir/autonomy/run-plan.md");
+        std::fs::write(
+            workspace.join(plan_path),
+            "# Plan\n## Phase 1: Adapter Failure\nSuccess conditions:\n- Failure mapped\nExpected deliverables:\n- missing path noted\nValidation:\n- file_exists: src/missing.rs\n- command_passes: cargo test missing\n- [x] satisfy adapters\n",
+        )?;
+        let paths = write_autonomy_libraries(workspace, plan_path, "objective", "run")?;
+        let status = read_autonomy_plan_status(workspace, plan_path, "objective")?.unwrap();
+        let packet_path = workspace.join(evidence_packet_path(
+            &paths.evidence_dir,
+            status.current_node_id.as_deref().unwrap(),
+        ));
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "node_id": status.current_node_id.as_deref().unwrap(),
+                "status": "complete",
+                "actions_taken": ["attempted validation"],
+                "deliverables": [{"type": "file", "path": "src/other.rs", "description": "wrong source"}],
+                "success_conditions_satisfied": [{"condition": "Failure mapped", "evidence": "packet present"}],
+                "verification": [{"command": "cargo test missing", "result": "failed", "summary": "tests failed"}],
+                "risks_or_blockers": ["expected failure for test"],
+                "next_recommended_action": "continue_current_node"
+            })
+            .to_string(),
+        )?;
+        let status = read_autonomy_plan_status(workspace, plan_path, "objective")?.unwrap();
+        let node = status
+            .nodes
+            .iter()
+            .find(|node| node.checklist_total > 0)
+            .expect("executable node");
+        assert!(!node.evidence_valid);
+        assert!(
+            node.evidence_errors
+                .iter()
+                .any(|error| error.contains("validation adapter"))
+        );
+        assert_eq!(status.completed_nodes, 0);
+        Ok(())
+    }
     #[test]
     fn status_selects_first_incomplete_node_and_current_slices() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;

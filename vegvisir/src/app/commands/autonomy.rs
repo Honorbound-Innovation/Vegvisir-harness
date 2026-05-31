@@ -2,7 +2,8 @@ use std::path::Path;
 
 use super::super::*;
 use super::autonomy_plan::{
-    current_autonomy_node_slices, read_autonomy_plan_status, write_autonomy_libraries,
+    append_autonomy_journal_event, current_autonomy_node_slices, read_autonomy_plan_status,
+    write_autonomy_libraries,
 };
 
 const AUTONOMY_NO_PROGRESS_LIMIT: usize = 2;
@@ -63,7 +64,7 @@ impl TuiApplication {
 
     fn autonomy_status(&self) -> String {
         format!(
-            "TUI autonomy\nenabled={}\nactive={}\nstatus={}\nstep={}\nmax_steps={}\nobjective={}\nplan_path={}\ncll_path={}\npll_path={}\nmanifest_path={}\nstate_path={}\ncurrent_node={}\nevidence_path={}\nevidence_valid={}\nnodes={}/{}\nchecklist={}/{}\nevidence_errors={}\nno_progress_count={}",
+            "TUI autonomy\nenabled={}\nactive={}\nstatus={}\nstep={}\nmax_steps={}\nobjective={}\nplan_path={}\ncll_path={}\npll_path={}\nmanifest_path={}\nstate_path={}\njournal_path={}\ncurrent_node={}\nevidence_path={}\nevidence_valid={}\nnodes={}/{}\nchecklist={}/{}\nevidence_errors={}\nno_progress_count={}",
             self.autonomy.enabled,
             self.autonomy.active,
             self.autonomy.last_status,
@@ -79,6 +80,7 @@ impl TuiApplication {
             self.autonomy.pll_path.as_deref().unwrap_or("-"),
             self.autonomy.manifest_path.as_deref().unwrap_or("-"),
             self.autonomy.state_path.as_deref().unwrap_or("-"),
+            self.autonomy.journal_path.as_deref().unwrap_or("-"),
             self.autonomy.current_node_id.as_deref().unwrap_or("-"),
             self.autonomy
                 .current_evidence_path
@@ -115,6 +117,7 @@ impl TuiApplication {
         self.autonomy.pll_path = None;
         self.autonomy.manifest_path = None;
         self.autonomy.state_path = None;
+        self.autonomy.journal_path = None;
         self.autonomy.current_node_id = None;
         self.autonomy.current_node_title = None;
         self.autonomy.node_total = 0;
@@ -143,6 +146,7 @@ impl TuiApplication {
                 "pll_path": self.autonomy.pll_path,
                 "manifest_path": self.autonomy.manifest_path,
                 "state_path": self.autonomy.state_path,
+                "journal_path": self.autonomy.journal_path,
                 "current_node_id": self.autonomy.current_node_id,
             }),
         );
@@ -233,6 +237,7 @@ impl TuiApplication {
                 "pll_path": self.autonomy.pll_path,
                 "manifest_path": self.autonomy.manifest_path,
                 "state_path": self.autonomy.state_path,
+                "journal_path": self.autonomy.journal_path,
                 "current_node_id": self.autonomy.current_node_id,
                 "node_total": self.autonomy.node_total,
                 "node_completed": self.autonomy.node_completed,
@@ -316,14 +321,17 @@ Required next action: create/update the Markdown implementation plan at `{plan_p
                 let pll_path = paths.pll_path.display().to_string();
                 let manifest_path = paths.manifest_path.display().to_string();
                 let state_path = paths.state_path.display().to_string();
+                let journal_path = paths.journal_path.display().to_string();
                 let changed = self.autonomy.cll_path.as_deref() != Some(cll_path.as_str())
                     || self.autonomy.pll_path.as_deref() != Some(pll_path.as_str())
                     || self.autonomy.manifest_path.as_deref() != Some(manifest_path.as_str())
-                    || self.autonomy.state_path.as_deref() != Some(state_path.as_str());
+                    || self.autonomy.state_path.as_deref() != Some(state_path.as_str())
+                    || self.autonomy.journal_path.as_deref() != Some(journal_path.as_str());
                 self.autonomy.cll_path = Some(cll_path.clone());
                 self.autonomy.pll_path = Some(pll_path.clone());
                 self.autonomy.manifest_path = Some(manifest_path.clone());
                 self.autonomy.state_path = Some(state_path.clone());
+                self.autonomy.journal_path = Some(journal_path.clone());
                 if changed {
                     self.push_system_message(format!(
                         "Autonomy plan compiled: CLL `{cll_path}`, PLL `{pll_path}`, manifest `{manifest_path}`, state `{state_path}`."
@@ -339,6 +347,7 @@ Required next action: create/update the Markdown implementation plan at `{plan_p
                         "pll_path": pll_path,
                         "manifest_path": manifest_path,
                         "state_path": state_path,
+                        "journal_path": journal_path,
                     }),
                 );
             }
@@ -394,13 +403,44 @@ Required next action: create/update the Markdown implementation plan at `{plan_p
             &self.autonomy.objective,
         ) {
             Ok(Some(status)) => {
+                let previous_node = self.autonomy.current_node_id.clone();
+                let previous_evidence_valid = self.autonomy.current_evidence_valid;
+                let current_node_id = status.current_node_id.clone();
+                let current_node_title = status.current_node_title.clone();
+                let current_evidence_path = status.current_evidence_path.clone();
+                let current_evidence_errors = status.current_evidence_errors.clone();
                 self.autonomy.node_total = status.total_nodes;
                 self.autonomy.node_completed = status.completed_nodes;
-                self.autonomy.current_node_id = status.current_node_id;
-                self.autonomy.current_node_title = status.current_node_title;
-                self.autonomy.current_evidence_path = status.current_evidence_path;
+                self.autonomy.current_node_id = current_node_id.clone();
+                self.autonomy.current_node_title = current_node_title.clone();
+                self.autonomy.current_evidence_path = current_evidence_path.clone();
                 self.autonomy.current_evidence_valid = status.current_evidence_valid;
-                self.autonomy.current_evidence_errors = status.current_evidence_errors;
+                self.autonomy.current_evidence_errors = current_evidence_errors.clone();
+                self.autonomy.journal_path = status
+                    .journal_path
+                    .clone()
+                    .or(self.autonomy.journal_path.clone());
+                if previous_node != current_node_id
+                    || previous_evidence_valid != self.autonomy.current_evidence_valid
+                {
+                    if let Some(journal_path) = self.autonomy.journal_path.as_deref() {
+                        let _ = append_autonomy_journal_event(
+                            &self.cwd,
+                            Path::new(journal_path),
+                            "node_status",
+                            json!({
+                                "session": self.session.session_id,
+                                "current_node_id": current_node_id,
+                                "current_node_title": current_node_title,
+                                "node_total": status.total_nodes,
+                                "node_completed": status.completed_nodes,
+                                "current_evidence_path": current_evidence_path,
+                                "current_evidence_valid": self.autonomy.current_evidence_valid,
+                                "current_evidence_errors": current_evidence_errors,
+                            }),
+                        );
+                    }
+                }
             }
             Ok(None) => {}
             Err(error) => {

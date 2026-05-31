@@ -481,3 +481,29 @@ Add richer validation adapters and node-level lifecycle controls:
 - retry counters per node,
 - append-only journal events,
 - `/autonomy validate` for compile/contract/evidence validation without execution.
+
+### Completed: Validation Adapters and Audit Journal Groundwork
+
+- Added deterministic validation adapter support for CLL `Validation:` requirements:
+  - `file_exists: <path>` checks that a workspace-relative file exists.
+  - `path_exists: <path>` checks that a workspace-relative path exists.
+  - `deliverable_path: <path>` checks that the completion packet deliverables reference the required path.
+  - `path_changed: <path>` currently aliases deliverable path evidence and can later become diff-aware.
+  - `command_passes: <command>` checks that the completion packet verification list reports the exact command with a passed/success result.
+- Unknown validation lines remain non-executed semantic requirements and still require verification evidence for completed packets.
+- Evidence validation now records adapter results in node status/state output.
+- Added `<plan-stem>-journal.jsonl` as append-only audit groundwork.
+- Library compilation appends `plan_compiled` journal events.
+- Runtime node-status transitions append `node_status` journal events when the current node or evidence validity changes.
+- `/autonomy status` now exposes the journal path.
+- Tests cover both passing and failing validation adapter behavior.
+
+### Remaining Next Slice
+
+Add richer lifecycle and operator controls:
+
+- explicit `blocked` and `partial` node handling from evidence packets,
+- retry counters / attempt limits per node,
+- `/autonomy validate` to compile/check plan, contract, state, evidence, and adapters without running the model,
+- `/autonomy resume <run-id-or-plan>` using `state.json` and `journal.jsonl`,
+- optional diff-aware `path_changed` validation.
