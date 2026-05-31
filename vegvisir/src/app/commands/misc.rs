@@ -565,11 +565,18 @@ impl TuiApplication {
                     .iter()
                     .map(|record| {
                         format!(
-                            "{}  name={} status={:?} workspace={} goal={}",
+                            "{}  name={} status={:?} workspace={} scope={} budget={} goal={}",
                             record.id,
                             record.name,
                             record.status,
                             record.workspace.display(),
+                            record
+                                .file_scope
+                                .iter()
+                                .map(|path| path.display().to_string())
+                                .collect::<Vec<_>>()
+                                .join(","),
+                            serde_json::to_string(&record.work_budget).unwrap_or_default(),
                             record.goal
                         )
                     })
@@ -643,6 +650,8 @@ Boundaries:
 - do not delegate plaintext secrets or credential handling
 - do not delegate destructive actions or ambiguous external side effects
 - keep goals bounded, evidence-oriented, and low-step by default
+- assign a work_budget for reconnaissance/bug-hunting tasks: max steps, max tool calls, max read bytes, max output bytes, allowed tools, and notes
+- use budget notes like "avoid huge raw reads; prefer targeted search/listing; report if more budget is needed"
 - assign explicit non-overlapping file_scope values for file-touching work
 - never let two active subagents own/edit the same files at the same time
 - never more than three active subagents at once

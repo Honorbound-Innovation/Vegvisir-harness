@@ -24,7 +24,7 @@ use crate::{
     observability::EventLogger,
     policy::RuntimePolicy,
     sandbox::WorkspaceSandbox,
-    subagents::{SubAgentStatus, SubAgentTaskRecord},
+    subagents::{SubAgentStatus, SubAgentTaskRecord, SubAgentWorkBudget},
     types::{Observation, ToolCall},
 };
 
@@ -1488,6 +1488,7 @@ pub fn build_builtin_registry_with_cms_and_mode(
             let provider = optional_nonempty_string(args.get("provider"));
             let model = optional_nonempty_string(args.get("model"));
             let agent = optional_nonempty_string(args.get("agent"));
+            let work_budget = parse_subagent_work_budget(args.get("work_budget"), args.get("max_steps"));
             let file_scope = match parse_subagent_file_scope(args.get("file_scope"), &subagent_sandbox) {
                 Ok(scope) => scope,
                 Err(error) => return Observation::err(error.to_string(), "InvalidFileScope"),
@@ -1522,6 +1523,7 @@ pub fn build_builtin_registry_with_cms_and_mode(
                 workspace: workspace.clone(),
                 goal: goal.to_string(),
                 file_scope: file_scope.clone(),
+                work_budget: work_budget.clone(),
                 status: SubAgentStatus::Queued,
                 created_at: Utc::now(),
                 started_at: None,
@@ -1535,7 +1537,7 @@ pub fn build_builtin_registry_with_cms_and_mode(
             }
 
             let child_record = record.clone();
-            let child_goal = goal.to_string();
+            let child_goal = apply_subagent_work_budget_to_goal(goal, &work_budget);
             thread::spawn(move || {
                 run_spawned_subagent(
                     board_path,
@@ -1547,6 +1549,7 @@ pub fn build_builtin_registry_with_cms_and_mode(
                     model,
                     agent,
                     bypass_sandbox,
+                    work_budget,
                 );
             });
 
@@ -1555,6 +1558,7 @@ pub fn build_builtin_registry_with_cms_and_mode(
             data.insert("name".to_string(), json!(record.name));
             data.insert("workspace".to_string(), json!(record.workspace));
             data.insert("file_scope".to_string(), json!(record.file_scope));
+            data.insert("work_budget".to_string(), json!(record.work_budget));
             data.insert("board_path".to_string(), json!(subagent_data_root.join("subagents.json")));
             Observation {
                 ok: true,
@@ -1577,13 +1581,86 @@ pub fn build_builtin_registry_with_cms_and_mode(
                 "provider": "string",
                 "model": "string",
                 "agent": "string",
-                "file_scope": "array"
+                "file_scope": "array",
+                "work_budget": "object"
             }
         }),
         false,
     ))?;
 
     Ok(registry)
+}
+
+fn parse_subagent_work_budget(
+    value: Option<&Value>,
+    max_steps_value: Option<&Value>,
+) -> SubAgentWorkBudget {
+    let mut budget = SubAgentWorkBudget {
+        max_steps: max_steps_value.and_then(Value::as_u64),
+        max_tool_calls: Some(8),
+        max_read_bytes: Some(64 * 1024),
+        max_output_bytes: Some(16 * 1024),
+        allowed_tools: vec!["list_files".to_string(), "read_file".to_string()],
+        notes: "Prefer targeted search/listing and small file excerpts. Do not read huge files in full; ask for a larger budget if needed.".to_string(),
+    };
+    let Some(Value::Object(object)) = value else {
+        return budget;
+    };
+    if let Some(value) = object.get("max_steps").and_then(Value::as_u64) {
+        budget.max_steps = Some(value);
+    }
+    if let Some(value) = object.get("max_tool_calls").and_then(Value::as_u64) {
+        budget.max_tool_calls = Some(value);
+    }
+    if let Some(value) = object.get("max_read_bytes").and_then(Value::as_u64) {
+        budget.max_read_bytes = Some(value);
+    }
+    if let Some(value) = object.get("max_output_bytes").and_then(Value::as_u64) {
+        budget.max_output_bytes = Some(value);
+    }
+    if let Some(items) = object.get("allowed_tools").and_then(Value::as_array) {
+        budget.allowed_tools = items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(str::to_string)
+            .collect();
+    }
+    if let Some(notes) = object.get("notes").and_then(Value::as_str) {
+        budget.notes = notes.trim().to_string();
+    }
+    budget
+}
+
+fn apply_subagent_work_budget_to_goal(goal: &str, budget: &SubAgentWorkBudget) -> String {
+    let mut lines = Vec::new();
+    lines.push("[Vegvisir subagent work budget]".to_string());
+    lines.push("This is a hard task-local budget envelope. Stay inside it and report if more budget is needed.".to_string());
+    if let Some(value) = budget.max_steps {
+        lines.push(format!("- max_steps: {value}"));
+    }
+    if let Some(value) = budget.max_tool_calls {
+        lines.push(format!("- max_tool_calls: {value}"));
+    }
+    if let Some(value) = budget.max_read_bytes {
+        lines.push(format!("- max_read_bytes_per_file: {value}"));
+    }
+    if let Some(value) = budget.max_output_bytes {
+        lines.push(format!("- max_final_output_bytes: {value}"));
+    }
+    if !budget.allowed_tools.is_empty() {
+        lines.push(format!(
+            "- allowed_tools: {}",
+            budget.allowed_tools.join(", ")
+        ));
+    }
+    if !budget.notes.trim().is_empty() {
+        lines.push(format!("- notes: {}", budget.notes.trim()));
+    }
+    lines.push("- If the task cannot be completed within this budget, stop with a concise blocked/needs-more-budget report.".to_string());
+    lines.push("[/Vegvisir subagent work budget]".to_string());
+    format!("{}\n\nSubagent task:\n{}", lines.join("\n"), goal.trim())
 }
 
 fn optional_nonempty_string(value: Option<&Value>) -> Option<String> {
@@ -1640,6 +1717,28 @@ struct SubagentChildLaunch {
     model: Option<String>,
     agent: Option<String>,
     bypass_sandbox: bool,
+    work_budget: SubAgentWorkBudget,
+}
+
+fn subagent_child_env(launch: &SubagentChildLaunch) -> Vec<(String, String)> {
+    let mut env = Vec::new();
+    if let Some(limit) = launch
+        .work_budget
+        .max_tool_calls
+        .or(launch.work_budget.max_steps)
+    {
+        env.push((
+            "VEGVISIR_MAX_TOOL_ROUNDS".to_string(),
+            limit.max(1).to_string(),
+        ));
+    }
+    if let Some(limit) = launch.work_budget.max_output_bytes {
+        env.push((
+            "VEGVISIR_SUBAGENT_MAX_OUTPUT_BYTES".to_string(),
+            limit.max(1024).to_string(),
+        ));
+    }
+    env
 }
 
 fn subagent_child_argv(launch: SubagentChildLaunch) -> Vec<String> {
@@ -1679,6 +1778,7 @@ fn run_spawned_subagent(
     model: Option<String>,
     agent: Option<String>,
     bypass_sandbox: bool,
+    work_budget: SubAgentWorkBudget,
 ) {
     record.status = SubAgentStatus::Running;
     record.started_at = Some(Utc::now());
@@ -1686,7 +1786,7 @@ fn run_spawned_subagent(
 
     let result = (|| -> anyhow::Result<String> {
         let executable = resolve_vegvisir_executable(&workspace)?;
-        let argv = subagent_child_argv(SubagentChildLaunch {
+        let launch = SubagentChildLaunch {
             goal,
             workspace: workspace.clone(),
             max_steps,
@@ -1694,9 +1794,13 @@ fn run_spawned_subagent(
             model,
             agent,
             bypass_sandbox,
-        });
+            work_budget,
+        };
+        let env = subagent_child_env(&launch);
+        let argv = subagent_child_argv(launch);
         let output = Command::new(&executable)
             .args(&argv)
+            .envs(env.iter().map(|(key, value)| (key, value)))
             .output()
             .with_context(|| {
                 format!(
@@ -2016,6 +2120,40 @@ mod skiller_tool_tests {
     }
 
     #[test]
+    fn subagent_work_budget_wraps_child_goal() {
+        let budget = SubAgentWorkBudget {
+            max_steps: Some(6),
+            max_tool_calls: Some(9),
+            max_read_bytes: Some(1234),
+            max_output_bytes: Some(5678),
+            allowed_tools: vec!["list_files".to_string(), "read_file".to_string()],
+            notes: "avoid giant reads".to_string(),
+        };
+
+        let wrapped = apply_subagent_work_budget_to_goal("inspect renderer", &budget);
+
+        assert!(wrapped.contains("[Vegvisir subagent work budget]"));
+        assert!(wrapped.contains("max_steps: 6"));
+        assert!(wrapped.contains("max_tool_calls: 9"));
+        assert!(wrapped.contains("max_read_bytes_per_file: 1234"));
+        assert!(wrapped.contains("allowed_tools: list_files, read_file"));
+        assert!(wrapped.contains("avoid giant reads"));
+        assert!(wrapped.contains("Subagent task:\ninspect renderer"));
+    }
+
+    #[test]
+    fn subagent_default_work_budget_is_bounded_for_review() {
+        let budget = parse_subagent_work_budget(None, Some(&json!(5)));
+
+        assert_eq!(budget.max_steps, Some(5));
+        assert_eq!(budget.max_tool_calls, Some(8));
+        assert_eq!(budget.max_read_bytes, Some(64 * 1024));
+        assert_eq!(budget.max_output_bytes, Some(16 * 1024));
+        assert!(budget.allowed_tools.contains(&"list_files".to_string()));
+        assert!(budget.notes.contains("targeted"));
+    }
+
+    #[test]
     fn optional_subagent_cli_values_ignore_placeholders() {
         assert_eq!(optional_nonempty_string(Some(&json!(""))), None);
         assert_eq!(optional_nonempty_string(Some(&json!("default"))), None);
@@ -2025,6 +2163,33 @@ mod skiller_tool_tests {
             optional_nonempty_string(Some(&json!("openai-sso"))),
             Some("openai-sso".to_string())
         );
+    }
+
+    #[test]
+    fn subagent_child_env_applies_work_budget_tool_rounds() {
+        let env = subagent_child_env(&SubagentChildLaunch {
+            goal: "inspect".to_string(),
+            workspace: PathBuf::from("/tmp/workspace"),
+            max_steps: "5".to_string(),
+            provider: None,
+            model: None,
+            agent: None,
+            bypass_sandbox: true,
+            work_budget: SubAgentWorkBudget {
+                max_steps: Some(5),
+                max_tool_calls: Some(7),
+                max_read_bytes: None,
+                max_output_bytes: Some(8192),
+                allowed_tools: Vec::new(),
+                notes: String::new(),
+            },
+        });
+
+        assert!(env.contains(&("VEGVISIR_MAX_TOOL_ROUNDS".to_string(), "7".to_string())));
+        assert!(env.contains(&(
+            "VEGVISIR_SUBAGENT_MAX_OUTPUT_BYTES".to_string(),
+            "8192".to_string()
+        )));
     }
 
     #[test]
@@ -2038,6 +2203,7 @@ mod skiller_tool_tests {
             model: Some("gpt-5.5".to_string()),
             agent: None,
             bypass_sandbox: false,
+            work_budget: SubAgentWorkBudget::default(),
         });
         assert!(
             !normal
@@ -2053,6 +2219,7 @@ mod skiller_tool_tests {
             model: Some("gpt-5.5".to_string()),
             agent: None,
             bypass_sandbox: true,
+            work_budget: SubAgentWorkBudget::default(),
         });
         assert!(
             yolo.iter()

@@ -27,6 +27,33 @@ pub enum SubAgentStatus {
     Cancelled,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubAgentWorkBudget {
+    #[serde(default)]
+    pub max_steps: Option<u64>,
+    #[serde(default)]
+    pub max_tool_calls: Option<u64>,
+    #[serde(default)]
+    pub max_read_bytes: Option<u64>,
+    #[serde(default)]
+    pub max_output_bytes: Option<u64>,
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
+    #[serde(default)]
+    pub notes: String,
+}
+
+impl SubAgentWorkBudget {
+    pub fn is_empty(&self) -> bool {
+        self.max_steps.is_none()
+            && self.max_tool_calls.is_none()
+            && self.max_read_bytes.is_none()
+            && self.max_output_bytes.is_none()
+            && self.allowed_tools.is_empty()
+            && self.notes.trim().is_empty()
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SubAgentTaskRecord {
     pub id: String,
@@ -35,6 +62,8 @@ pub struct SubAgentTaskRecord {
     pub goal: String,
     #[serde(default)]
     pub file_scope: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "SubAgentWorkBudget::is_empty")]
+    pub work_budget: SubAgentWorkBudget,
     pub status: SubAgentStatus,
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
@@ -52,6 +81,7 @@ impl SubAgentTaskRecord {
             workspace: task.workspace.clone(),
             goal: task.goal.clone(),
             file_scope: Vec::new(),
+            work_budget: SubAgentWorkBudget::default(),
             status: SubAgentStatus::Queued,
             created_at: Utc::now(),
             started_at: None,
