@@ -349,10 +349,46 @@ impl TuiApplication {
             changed = true;
         }
 
+        if self.poll_subagent_transcript_updates() {
+            changed = true;
+        }
+
         if changed {
             self.autosave_session();
             self.chat_scroll_offset = 0;
             self.redraw_requested = true;
+        }
+        changed
+    }
+
+    pub(crate) fn seed_observed_subagent_transcript_signatures(&mut self) {
+        let Ok(records) = self.load_subagent_records() else {
+            return;
+        };
+        self.observed_subagent_transcript_signatures = records
+            .into_iter()
+            .map(|record| (record.id.clone(), subagent_transcript_signature(&record)))
+            .collect();
+    }
+
+    pub(crate) fn poll_subagent_transcript_updates(&mut self) -> bool {
+        let Ok(records) = self.load_subagent_records() else {
+            return false;
+        };
+        let mut changed = false;
+        for record in records {
+            let signature = subagent_transcript_signature(&record);
+            if self
+                .observed_subagent_transcript_signatures
+                .get(&record.id)
+                .is_some_and(|existing| existing == &signature)
+            {
+                continue;
+            }
+            self.observed_subagent_transcript_signatures
+                .insert(record.id.clone(), signature);
+            self.push_system_message(format_subagent_transcript_update(&record));
+            changed = true;
         }
         changed
     }
@@ -782,6 +818,58 @@ Next step: I should retry or continue from the last successful step instead of l
         self.session.activity_tick = self.session.activity_tick.saturating_add(1);
         self.redraw_requested = true;
     }
+}
+
+fn subagent_transcript_signature(record: &SubAgentTaskRecord) -> String {
+    format!(
+        "{:?}|started={:?}|finished={:?}|checkpoint={:?}|final_len={}|error={}",
+        record.status,
+        record.started_at,
+        record.finished_at,
+        record.checkpoint,
+        record.final_answer.as_deref().map(str::len).unwrap_or(0),
+        record.error.as_deref().unwrap_or("")
+    )
+}
+
+fn format_subagent_transcript_update(record: &SubAgentTaskRecord) -> String {
+    let scope = if record.file_scope.is_empty() {
+        "<unspecified>".to_string()
+    } else {
+        record
+            .file_scope
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut message = format!(
+        "Subagent transcript update: {status:?}\n\n- id: {id}\n- name: {name}\n- workspace: {workspace}\n- file_scope: {scope}\n- goal: {goal}",
+        status = record.status,
+        id = record.id,
+        name = record.name,
+        workspace = record.workspace.display(),
+        goal = record.goal.trim(),
+    );
+    if !record.work_budget.is_empty() {
+        message.push_str("\n- work_budget: ");
+        message.push_str(&serde_json::to_string(&record.work_budget).unwrap_or_default());
+    }
+    if let Some(checkpoint) = &record.checkpoint {
+        message.push_str("\n- checkpoint: ");
+        message.push_str(&checkpoint.display().to_string());
+    }
+    if let Some(error) = &record.error {
+        message.push_str("\n\nSubagent error:\n```text\n");
+        message.push_str(error.trim());
+        message.push_str("\n```");
+    }
+    if let Some(final_answer) = &record.final_answer {
+        message.push_str("\n\nSubagent captured output / trace:\n```text\n");
+        message.push_str(final_answer.trim());
+        message.push_str("\n```");
+    }
+    message
 }
 
 fn is_chat_visible_tool_artifact(detail: &str) -> bool {

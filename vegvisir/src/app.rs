@@ -125,6 +125,7 @@ pub struct TuiApplication {
     pub drag_anchor: Option<(u16, u16)>,
     pub drag_current: Option<(u16, u16)>,
     pub autonomy: AutonomyState,
+    pub observed_subagent_transcript_signatures: BTreeMap<String, String>,
 }
 
 enum StreamEvent {
@@ -694,8 +695,10 @@ impl TuiApplication {
             drag_anchor: None,
             drag_current: None,
             autonomy: AutonomyState::default(),
+            observed_subagent_transcript_signatures: BTreeMap::new(),
         };
         app.autoload_workspace_session()?;
+        app.seed_observed_subagent_transcript_signatures();
         app.rebuild_tooling_for_cms()?;
         let provider = app.session.current_provider.clone();
         let _ = app.refresh_provider_models(&provider);
@@ -1732,6 +1735,55 @@ mod tests {
         assert!(app.chat_scroll_offset < first_offset);
         app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(!app.search_open);
+        Ok(())
+    }
+
+    #[test]
+    fn subagent_board_updates_are_appended_to_transcript() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace)?;
+        let data_root = tmp.path().join("home");
+        let mut app = TuiApplication::with_data_root(&workspace, &data_root)?;
+        let record = crate::subagents::SubAgentTaskRecord {
+            id: "subagent-1".to_string(),
+            name: "reviewer".to_string(),
+            workspace: workspace.clone(),
+            goal: "inspect transcript logging".to_string(),
+            file_scope: vec![workspace.join("vegvisir/src")],
+            work_budget: crate::subagents::SubAgentWorkBudget {
+                max_steps: Some(2),
+                max_tool_calls: Some(3),
+                max_read_bytes: Some(4096),
+                max_output_bytes: Some(2048),
+                allowed_tools: vec!["read_file".to_string()],
+                notes: "small excerpts only".to_string(),
+            },
+            status: crate::subagents::SubAgentStatus::Completed,
+            created_at: chrono::Utc::now(),
+            started_at: Some(chrono::Utc::now()),
+            finished_at: Some(chrono::Utc::now()),
+            checkpoint: None,
+            final_answer: Some("child trace and final answer".to_string()),
+            error: None,
+        };
+        std::fs::write(
+            app.subagent_board_path(),
+            serde_json::to_string_pretty(&vec![record])?,
+        )?;
+
+        assert!(app.poll_background_jobs());
+        let transcript = app
+            .session
+            .messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(transcript.contains("Subagent transcript update: Completed"));
+        assert!(transcript.contains("subagent-1"));
+        assert!(transcript.contains("inspect transcript logging"));
+        assert!(transcript.contains("child trace and final answer"));
         Ok(())
     }
 
