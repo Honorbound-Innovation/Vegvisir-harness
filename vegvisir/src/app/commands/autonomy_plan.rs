@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub(crate) const AUTONOMY_COMPILER_VERSION: &str = "autonomy-cll-pll-compiler-v1";
@@ -50,6 +50,7 @@ pub(crate) struct AutonomyLibraryPaths {
     pub pll_path: PathBuf,
     pub manifest_path: PathBuf,
     pub state_path: PathBuf,
+    pub evidence_dir: PathBuf,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -59,6 +60,10 @@ pub(crate) struct AutonomyPlanStatus {
     pub current_node_id: Option<String>,
     pub current_node_title: Option<String>,
     pub current_node_index: Option<usize>,
+    pub evidence_dir: Option<String>,
+    pub current_evidence_path: Option<String>,
+    pub current_evidence_valid: bool,
+    pub current_evidence_errors: Vec<String>,
     pub nodes: Vec<AutonomyNodeStatus>,
 }
 
@@ -76,6 +81,52 @@ pub(crate) struct AutonomyNodeStatus {
     pub implementation_rules: Vec<String>,
     pub guardrails: Vec<String>,
     pub validation: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct AutonomyCompletionPacket {
+    pub node_id: String,
+    pub status: String,
+    #[serde(default)]
+    pub actions_taken: Vec<String>,
+    #[serde(default)]
+    pub deliverables: Vec<AutonomyEvidenceItem>,
+    #[serde(default)]
+    pub success_conditions_satisfied: Vec<AutonomyConditionEvidence>,
+    #[serde(default)]
+    pub verification: Vec<AutonomyVerificationEvidence>,
+    #[serde(default)]
+    pub risks_or_blockers: Vec<String>,
+    pub next_recommended_action: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct AutonomyEvidenceItem {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub path: Option<String>,
+    pub description: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct AutonomyConditionEvidence {
+    pub condition: String,
+    pub evidence: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct AutonomyVerificationEvidence {
+    pub command: Option<String>,
+    pub result: String,
+    pub summary: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct AutonomyEvidenceValidation {
+    pub node_id: String,
+    pub evidence_path: String,
+    pub valid: bool,
+    pub errors: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -257,6 +308,7 @@ pub(crate) fn autonomy_library_paths_for_plan(plan_path: &Path) -> AutonomyLibra
         pll_path: parent.join(format!("{stem}.pll")),
         manifest_path: parent.join(format!("{stem}-compile-manifest.json")),
         state_path: parent.join(format!("{stem}-state.json")),
+        evidence_dir: parent.join(format!("{stem}-evidence")),
     }
 }
 
@@ -287,7 +339,10 @@ pub(crate) fn write_autonomy_libraries(
     std::fs::write(cwd.join(&paths.cll_path), compiled.cll)?;
     std::fs::write(cwd.join(&paths.pll_path), compiled.pll)?;
     std::fs::write(cwd.join(&paths.manifest_path), compiled.manifest)?;
-    let status = autonomy_plan_status(&markdown, objective);
+    std::fs::create_dir_all(cwd.join(&paths.evidence_dir))?;
+    let status =
+        autonomy_plan_status_with_evidence(&markdown, objective, Some(&paths.evidence_dir), cwd)?;
+    write_current_evidence_template(cwd, &paths.evidence_dir, &status)?;
     std::fs::write(
         cwd.join(&paths.state_path),
         serde_json::to_string_pretty(&status)?,
@@ -295,7 +350,45 @@ pub(crate) fn write_autonomy_libraries(
     Ok(paths)
 }
 
-pub(crate) fn autonomy_plan_status(markdown: &str, objective: &str) -> AutonomyPlanStatus {
+pub(crate) fn autonomy_plan_status_with_evidence(
+    markdown: &str,
+    objective: &str,
+    evidence_dir: Option<&Path>,
+    cwd: &Path,
+) -> anyhow::Result<AutonomyPlanStatus> {
+    let provisional =
+        autonomy_plan_status_unchecked(markdown, objective, evidence_dir, None, false, Vec::new());
+    let current_evidence_path = provisional
+        .current_node_id
+        .as_deref()
+        .and_then(|node_id| evidence_dir.map(|dir| evidence_packet_path(dir, node_id)))
+        .map(|path| path.display().to_string());
+    let (current_evidence_valid, current_evidence_errors) =
+        match (provisional.current_node_id.as_deref(), evidence_dir) {
+            (Some(node_id), Some(dir)) => {
+                let validation = validate_node_evidence(cwd, dir, node_id, &provisional.nodes)?;
+                (validation.valid, validation.errors)
+            }
+            _ => (false, Vec::new()),
+        };
+    Ok(autonomy_plan_status_unchecked(
+        markdown,
+        objective,
+        evidence_dir,
+        current_evidence_path,
+        current_evidence_valid,
+        current_evidence_errors,
+    ))
+}
+
+fn autonomy_plan_status_unchecked(
+    markdown: &str,
+    objective: &str,
+    evidence_dir: Option<&Path>,
+    current_evidence_path: Option<String>,
+    current_evidence_valid: bool,
+    current_evidence_errors: Vec<String>,
+) -> AutonomyPlanStatus {
     let plan = parse_autonomy_markdown_plan(markdown, objective);
     let nodes = plan
         .nodes
@@ -340,6 +433,10 @@ pub(crate) fn autonomy_plan_status(markdown: &str, objective: &str) -> AutonomyP
         current_node_id,
         current_node_title,
         current_node_index,
+        evidence_dir: evidence_dir.map(|path| path.display().to_string()),
+        current_evidence_path,
+        current_evidence_valid,
+        current_evidence_errors,
         nodes,
     }
 }
@@ -355,7 +452,13 @@ pub(crate) fn read_autonomy_plan_status(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
-    Ok(Some(autonomy_plan_status(&markdown, objective)))
+    let paths = autonomy_library_paths_for_plan(plan_path);
+    Ok(Some(autonomy_plan_status_with_evidence(
+        &markdown,
+        objective,
+        Some(&paths.evidence_dir),
+        cwd,
+    )?))
 }
 
 pub(crate) fn current_autonomy_node_slices(
@@ -369,7 +472,9 @@ pub(crate) fn current_autonomy_node_slices(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
-    let status = autonomy_plan_status(&markdown, objective);
+    let paths = autonomy_library_paths_for_plan(plan_path);
+    let status =
+        autonomy_plan_status_with_evidence(&markdown, objective, Some(&paths.evidence_dir), cwd)?;
     let Some(node_id) = status.current_node_id.clone() else {
         return Ok(Some((
             status,
@@ -385,11 +490,128 @@ pub(crate) fn current_autonomy_node_slices(
             format!("Current PLL node `{node_id}` was not found in the plan."),
         )));
     };
-    Ok(Some((
-        status,
-        render_current_cll_slice(&plan, node),
-        render_current_pll_slice(node),
-    )))
+    let cll = render_current_cll_slice(&plan, node, &status);
+    let pll = render_current_pll_slice(node, &status);
+    Ok(Some((status, cll, pll)))
+}
+
+pub(crate) fn evidence_packet_path(evidence_dir: &Path, node_id: &str) -> PathBuf {
+    evidence_dir.join(format!("{node_id}.completion.json"))
+}
+
+pub(crate) fn validate_node_evidence(
+    cwd: &Path,
+    evidence_dir: &Path,
+    node_id: &str,
+    nodes: &[AutonomyNodeStatus],
+) -> anyhow::Result<AutonomyEvidenceValidation> {
+    let relative_path = evidence_packet_path(evidence_dir, node_id);
+    let evidence_path = relative_path.display().to_string();
+    let absolute_path = cwd.join(&relative_path);
+    let Some(node) = nodes.iter().find(|node| node.id == node_id) else {
+        return Ok(AutonomyEvidenceValidation {
+            node_id: node_id.to_string(),
+            evidence_path,
+            valid: false,
+            errors: vec!["current node not found in plan status".to_string()],
+        });
+    };
+    let packet_text = match std::fs::read_to_string(&absolute_path) {
+        Ok(packet_text) => packet_text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(AutonomyEvidenceValidation {
+                node_id: node_id.to_string(),
+                evidence_path,
+                valid: false,
+                errors: vec!["completion evidence packet has not been written yet".to_string()],
+            });
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let packet = match serde_json::from_str::<AutonomyCompletionPacket>(&packet_text) {
+        Ok(packet) => packet,
+        Err(error) => {
+            return Ok(AutonomyEvidenceValidation {
+                node_id: node_id.to_string(),
+                evidence_path,
+                valid: false,
+                errors: vec![format!(
+                    "completion evidence packet is not valid JSON: {error}"
+                )],
+            });
+        }
+    };
+    let mut errors = Vec::new();
+    if packet.node_id != node_id {
+        errors.push(format!(
+            "packet node_id `{}` does not match current node `{node_id}`",
+            packet.node_id
+        ));
+    }
+    if !matches!(
+        packet.status.as_str(),
+        "complete" | "completed" | "blocked" | "partial"
+    ) {
+        errors.push(
+            "packet status must be one of complete, completed, blocked, or partial".to_string(),
+        );
+    }
+    if !matches!(packet.status.as_str(), "complete" | "completed") {
+        errors.push("completion evidence packet status is not complete".to_string());
+    }
+    if matches!(packet.status.as_str(), "complete" | "completed") {
+        if packet.actions_taken.is_empty() {
+            errors.push("complete packet must include at least one action_taken".to_string());
+        }
+        if !node.expected_deliverables.is_empty() && packet.deliverables.is_empty() {
+            errors.push("complete packet must include deliverables evidence".to_string());
+        }
+        if packet.success_conditions_satisfied.len() < node.success_conditions.len() {
+            errors.push(format!(
+                "complete packet maps {}/{} success conditions",
+                packet.success_conditions_satisfied.len(),
+                node.success_conditions.len()
+            ));
+        }
+        if !node.validation.is_empty() && packet.verification.is_empty() {
+            errors.push("complete packet must include verification evidence".to_string());
+        }
+    }
+    Ok(AutonomyEvidenceValidation {
+        node_id: node_id.to_string(),
+        evidence_path,
+        valid: errors.is_empty(),
+        errors,
+    })
+}
+
+fn write_current_evidence_template(
+    cwd: &Path,
+    evidence_dir: &Path,
+    status: &AutonomyPlanStatus,
+) -> anyhow::Result<()> {
+    let Some(node_id) = status.current_node_id.as_deref() else {
+        return Ok(());
+    };
+    let path = cwd.join(evidence_packet_path(evidence_dir, node_id));
+    if path.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let template = AutonomyCompletionPacket {
+        node_id: node_id.to_string(),
+        status: "partial".to_string(),
+        actions_taken: Vec::new(),
+        deliverables: Vec::new(),
+        success_conditions_satisfied: Vec::new(),
+        verification: Vec::new(),
+        risks_or_blockers: Vec::new(),
+        next_recommended_action: Some("continue_current_node".to_string()),
+    };
+    std::fs::write(path, serde_json::to_string_pretty(&template)?)?;
+    Ok(())
 }
 
 fn render_cll(
@@ -443,7 +665,11 @@ fn render_cll(
     out
 }
 
-fn render_current_cll_slice(plan: &AutonomyPlanDocument, node: &AutonomyPlanNode) -> String {
+fn render_current_cll_slice(
+    plan: &AutonomyPlanDocument,
+    node: &AutonomyPlanNode,
+    status: &AutonomyPlanStatus,
+) -> String {
     let mut out = String::new();
     out.push_str("contract_slice Autonomy.CurrentImplementationNode {\n");
     out.push_str(&format!(
@@ -460,18 +686,31 @@ fn render_current_cll_slice(plan: &AutonomyPlanDocument, node: &AutonomyPlanNode
     out.push_str("  current_node {\n");
     out.push_str(&render_cll_node(node));
     out.push_str("  }\n");
+    if let Some(path) = &status.current_evidence_path {
+        out.push_str(&format!(
+            "  evidence_packet_path: \"{}\";\n",
+            escape_cll(path)
+        ));
+    }
     out.push_str("  required_completion_packet: [\"node_id\", \"status\", \"actions_taken\", \"deliverables\", \"success_conditions_satisfied\", \"verification\", \"risks_or_blockers\", \"next_recommended_action\"];\n");
+    out.push_str("  evidence_validation: \"The packet must be valid JSON at evidence_packet_path and must satisfy required deliverables, success condition mappings, and validation summaries before this node can advance.\";\n");
     out.push_str("}\n");
     out
 }
 
-fn render_current_pll_slice(node: &AutonomyPlanNode) -> String {
+fn render_current_pll_slice(node: &AutonomyPlanNode, status: &AutonomyPlanStatus) -> String {
     let mut out = String::new();
     out.push_str("prompt_slice Autonomy.CurrentImplementationNodePrompt {\n");
     out.push_str(&format!("  node_id: \"{}\";\n", escape_cll(&node.id)));
     out.push_str(&format!("  title: \"{}\";\n", escape_cll(&node.title)));
     out.push_str("  instructions: \"Work only on the current node unless context/dependency inspection is necessary. Complete this node by satisfying its CLL implementation rules, guardrails, success conditions, expected deliverables, and validation requirements. Update the Markdown checklist for this node only after real completion. If blocked, report a structured blocker instead of guessing.\";\n");
-    out.push_str("  required_response: \"Return a concise completion packet with node_id, status, actions_taken, deliverables, success_conditions_satisfied, verification, risks_or_blockers, and next_recommended_action.\";\n");
+    if let Some(path) = &status.current_evidence_path {
+        out.push_str(&format!(
+            "  evidence_packet_path: \"{}\";\n",
+            escape_cll(path)
+        ));
+    }
+    out.push_str("  required_response: \"Return a concise completion packet with node_id, status, actions_taken, deliverables, success_conditions_satisfied, verification, risks_or_blockers, and next_recommended_action. Also write/update the same packet as JSON at evidence_packet_path when claiming node completion.\";\n");
     out.push_str("}\n");
     out
 }
@@ -776,6 +1015,55 @@ Expected deliverables:
         assert!(compiled.cll.contains("expected_deliverables"));
         assert!(compiled.pll.contains("prompt_slice"));
         assert!(compiled.manifest.contains(AUTONOMY_COMPILER_VERSION));
+        Ok(())
+    }
+
+    #[test]
+    fn validates_current_node_completion_evidence() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path();
+        std::fs::create_dir_all(workspace.join(".vegvisir/autonomy"))?;
+        let plan_path = Path::new(".vegvisir/autonomy/run-plan.md");
+        std::fs::write(
+            workspace.join(plan_path),
+            "# Plan
+## Phase 1: Evidence
+Success conditions:
+- Condition mapped
+Expected deliverables:
+- Artifact produced
+Validation:
+- cargo test autonomy
+- [ ] produce evidence
+",
+        )?;
+        let paths = write_autonomy_libraries(workspace, plan_path, "objective", "run")?;
+        let status = read_autonomy_plan_status(workspace, plan_path, "objective")?.unwrap();
+        assert!(!status.current_evidence_valid);
+        let packet_path = workspace.join(evidence_packet_path(
+            &paths.evidence_dir,
+            status.current_node_id.as_deref().unwrap(),
+        ));
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "node_id": status.current_node_id.as_deref().unwrap(),
+                "status": "complete",
+                "actions_taken": ["implemented evidence scaffold"],
+                "deliverables": [{"type": "file", "path": "vegvisir/src/app/commands/autonomy_plan.rs", "description": "evidence validation"}],
+                "success_conditions_satisfied": [{"condition": "Condition mapped", "evidence": "test packet maps it"}],
+                "verification": [{"command": "cargo test autonomy", "result": "passed", "summary": "focused tests passed"}],
+                "risks_or_blockers": [],
+                "next_recommended_action": "advance"
+            })
+            .to_string(),
+        )?;
+        let status = read_autonomy_plan_status(workspace, plan_path, "objective")?.unwrap();
+        assert!(
+            status.current_evidence_valid,
+            "{:?}",
+            status.current_evidence_errors
+        );
         Ok(())
     }
 

@@ -448,3 +448,8 @@ The first implementation should be conservative:
 ### Remaining Next Slice
 
 The next implementation slice should add structured completion/evidence packets and deterministic validation adapters so the controller can advance based on evidence files, not just Markdown checklist state.
+
+
+## Implementation Progress Update
+
+- Added per-node JSON completion evidence packet scaffolding and validation.

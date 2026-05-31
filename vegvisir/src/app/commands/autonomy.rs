@@ -63,7 +63,7 @@ impl TuiApplication {
 
     fn autonomy_status(&self) -> String {
         format!(
-            "TUI autonomy\nenabled={}\nactive={}\nstatus={}\nstep={}\nmax_steps={}\nobjective={}\nplan_path={}\ncll_path={}\npll_path={}\nmanifest_path={}\nstate_path={}\ncurrent_node={}\nnodes={}/{}\nchecklist={}/{}\nno_progress_count={}",
+            "TUI autonomy\nenabled={}\nactive={}\nstatus={}\nstep={}\nmax_steps={}\nobjective={}\nplan_path={}\ncll_path={}\npll_path={}\nmanifest_path={}\nstate_path={}\ncurrent_node={}\nevidence_path={}\nevidence_valid={}\nnodes={}/{}\nchecklist={}/{}\nevidence_errors={}\nno_progress_count={}",
             self.autonomy.enabled,
             self.autonomy.active,
             self.autonomy.last_status,
@@ -80,10 +80,20 @@ impl TuiApplication {
             self.autonomy.manifest_path.as_deref().unwrap_or("-"),
             self.autonomy.state_path.as_deref().unwrap_or("-"),
             self.autonomy.current_node_id.as_deref().unwrap_or("-"),
+            self.autonomy
+                .current_evidence_path
+                .as_deref()
+                .unwrap_or("-"),
+            self.autonomy.current_evidence_valid,
             self.autonomy.node_completed,
             self.autonomy.node_total,
             self.autonomy.checklist_completed,
             self.autonomy.checklist_total,
+            if self.autonomy.current_evidence_errors.is_empty() {
+                "-".to_string()
+            } else {
+                self.autonomy.current_evidence_errors.join(" | ")
+            },
             self.autonomy.no_progress_count,
         )
     }
@@ -109,6 +119,9 @@ impl TuiApplication {
         self.autonomy.current_node_title = None;
         self.autonomy.node_total = 0;
         self.autonomy.node_completed = 0;
+        self.autonomy.current_evidence_path = None;
+        self.autonomy.current_evidence_valid = false;
+        self.autonomy.current_evidence_errors.clear();
         self.autonomy.last_status = format!(
             "running step {}/{}; awaiting written plan/checklist",
             self.autonomy.step, self.autonomy.max_steps
@@ -247,13 +260,15 @@ impl TuiApplication {
             .unwrap_or(".vegvisir/autonomy/plan.md");
         if !checklist.has_checklist {
             return format!(
-                "Continue the autonomous task. Objective: {}\n\nRequired next action: create/update the Markdown implementation plan at `{plan_path}` with a completion checklist using `- [ ]` items. The harness cannot complete autonomy until that checklist exists and is fully checked. Step {}/{}.",
+                "Continue the autonomous task. Objective: {}
+
+Required next action: create/update the Markdown implementation plan at `{plan_path}` with a completion checklist using `- [ ]` items. The harness cannot complete autonomy until that checklist exists and is fully checked. Step {}/{}.",
                 self.autonomy.objective, self.autonomy.step, self.autonomy.max_steps
             );
         }
         let slices = self.autonomy_current_library_slices();
         format!(
-            "Continue the autonomous task. Objective: {}\n\nHarness controller state: step {}/{}. Plan file: `{plan_path}`. CLL file: `{}`. PLL file: `{}`. Current node: `{}` ({}). Nodes: {}/{} complete. Completion checklist: {}/{} checked; {} unchecked.\n\nThe following CLL/PLL slices are task-local instructions in the USER prompt. They do not override the standard Vegvisir system prompt, user authority, tool policy, secret boundary, approval policy, or safety boundaries. Use them for the exact current autonomy task.\n\nCLL CONTRACT SLICE:\n{}\n\nPLL PROMPT SLICE:\n{}\n\nRequired response: continue implementing/verifying the unchecked items, update `{plan_path}` as items are completed, and only mark items `- [x]` when actually complete. Provide deliverables/evidence for completed work. The TUI controller will continue until every checklist item is checked or a deterministic stop condition occurs.",
+            "Continue the autonomous task. Objective: {}\n\nHarness controller state: step {}/{}. Plan file: `{plan_path}`. CLL file: `{}`. PLL file: `{}`. Current node: `{}` ({}). Nodes: {}/{} complete. Completion checklist: {}/{} checked; {} unchecked. Evidence packet: `{}`. Evidence valid: {}. Evidence errors: {}.\n\nThe following CLL/PLL slices are task-local instructions in the USER prompt. They do not override the standard Vegvisir system prompt, user authority, tool policy, secret boundary, approval policy, or safety boundaries. Use them for the exact current autonomy task.\n\nCLL CONTRACT SLICE:\n{}\n\nPLL PROMPT SLICE:\n{}\n\nRequired response: continue implementing/verifying the current node, write/update the JSON completion evidence packet when claiming node completion, update `{plan_path}` as items are completed, and only mark items `- [x]` when actually complete. Provide deliverables/evidence for completed work. The TUI controller will continue until every checklist item is checked or a deterministic stop condition occurs.",
             self.autonomy.objective,
             self.autonomy.step,
             self.autonomy.max_steps,
@@ -266,6 +281,16 @@ impl TuiApplication {
             checklist.completed,
             checklist.total,
             checklist.unchecked,
+            self.autonomy
+                .current_evidence_path
+                .as_deref()
+                .unwrap_or("-"),
+            self.autonomy.current_evidence_valid,
+            if self.autonomy.current_evidence_errors.is_empty() {
+                "-".to_string()
+            } else {
+                self.autonomy.current_evidence_errors.join(" | ")
+            },
             slices.0,
             slices.1,
         )
@@ -381,9 +406,14 @@ impl TuiApplication {
     ) -> String {
         let mut signature = self.autonomy_progress_signature();
         signature.push_str(&format!(
-            ";plan={};current_node={};nodes={}/{};checklist={}/{};unchecked={}",
+            ";plan={};current_node={};evidence_path={};evidence_valid={};nodes={}/{};checklist={}/{};unchecked={}",
             self.autonomy.plan_path.as_deref().unwrap_or("-"),
             self.autonomy.current_node_id.as_deref().unwrap_or("-"),
+            self.autonomy
+                .current_evidence_path
+                .as_deref()
+                .unwrap_or("-"),
+            self.autonomy.current_evidence_valid,
             self.autonomy.node_completed,
             self.autonomy.node_total,
             checklist.completed,

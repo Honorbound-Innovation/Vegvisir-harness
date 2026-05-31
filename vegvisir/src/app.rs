@@ -208,6 +208,9 @@ pub struct AutonomyState {
     pub current_node_title: Option<String>,
     pub node_total: usize,
     pub node_completed: usize,
+    pub current_evidence_path: Option<String>,
+    pub current_evidence_valid: bool,
+    pub current_evidence_errors: Vec<String>,
     pub checklist_total: usize,
     pub checklist_completed: usize,
 }
@@ -233,6 +236,9 @@ impl Default for AutonomyState {
             current_node_title: None,
             node_total: 0,
             node_completed: 0,
+            current_evidence_path: None,
+            current_evidence_valid: false,
+            current_evidence_errors: Vec::new(),
             checklist_total: 0,
             checklist_completed: 0,
         }
