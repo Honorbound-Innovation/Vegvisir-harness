@@ -49,6 +49,33 @@ pub(crate) struct AutonomyLibraryPaths {
     pub cll_path: PathBuf,
     pub pll_path: PathBuf,
     pub manifest_path: PathBuf,
+    pub state_path: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct AutonomyPlanStatus {
+    pub total_nodes: usize,
+    pub completed_nodes: usize,
+    pub current_node_id: Option<String>,
+    pub current_node_title: Option<String>,
+    pub current_node_index: Option<usize>,
+    pub nodes: Vec<AutonomyNodeStatus>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct AutonomyNodeStatus {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub level: usize,
+    pub title: String,
+    pub checklist_total: usize,
+    pub checklist_completed: usize,
+    pub complete: bool,
+    pub success_conditions: Vec<String>,
+    pub expected_deliverables: Vec<String>,
+    pub implementation_rules: Vec<String>,
+    pub guardrails: Vec<String>,
+    pub validation: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -229,6 +256,7 @@ pub(crate) fn autonomy_library_paths_for_plan(plan_path: &Path) -> AutonomyLibra
         cll_path: parent.join(format!("{stem}.cll")),
         pll_path: parent.join(format!("{stem}.pll")),
         manifest_path: parent.join(format!("{stem}-compile-manifest.json")),
+        state_path: parent.join(format!("{stem}-state.json")),
     }
 }
 
@@ -259,25 +287,109 @@ pub(crate) fn write_autonomy_libraries(
     std::fs::write(cwd.join(&paths.cll_path), compiled.cll)?;
     std::fs::write(cwd.join(&paths.pll_path), compiled.pll)?;
     std::fs::write(cwd.join(&paths.manifest_path), compiled.manifest)?;
+    let status = autonomy_plan_status(&markdown, objective);
+    std::fs::write(
+        cwd.join(&paths.state_path),
+        serde_json::to_string_pretty(&status)?,
+    )?;
     Ok(paths)
 }
 
-pub(crate) fn read_current_autonomy_slices(
+pub(crate) fn autonomy_plan_status(markdown: &str, objective: &str) -> AutonomyPlanStatus {
+    let plan = parse_autonomy_markdown_plan(markdown, objective);
+    let nodes = plan
+        .nodes
+        .iter()
+        .map(|node| {
+            let checklist_total = node.checklist.len();
+            let checklist_completed = node.checklist.iter().filter(|item| item.checked).count();
+            let complete = checklist_total > 0 && checklist_completed == checklist_total;
+            AutonomyNodeStatus {
+                id: node.id.clone(),
+                parent_id: node.parent_id.clone(),
+                level: node.level,
+                title: node.title.clone(),
+                checklist_total,
+                checklist_completed,
+                complete,
+                success_conditions: node.success_conditions.clone(),
+                expected_deliverables: node.expected_deliverables.clone(),
+                implementation_rules: node.implementation_rules.clone(),
+                guardrails: node.guardrails.clone(),
+                validation: node.validation.clone(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let executable_total = nodes.iter().filter(|node| node.checklist_total > 0).count();
+    let current_node_index = nodes
+        .iter()
+        .position(|node| node.checklist_total > 0 && !node.complete)
+        .or_else(|| (executable_total == 0).then_some(0));
+    let current_node_id = current_node_index.map(|index| nodes[index].id.clone());
+    let current_node_title = current_node_index.map(|index| nodes[index].title.clone());
+    AutonomyPlanStatus {
+        total_nodes: if executable_total > 0 {
+            executable_total
+        } else {
+            nodes.len()
+        },
+        completed_nodes: nodes
+            .iter()
+            .filter(|node| node.checklist_total > 0 && node.complete)
+            .count(),
+        current_node_id,
+        current_node_title,
+        current_node_index,
+        nodes,
+    }
+}
+
+pub(crate) fn read_autonomy_plan_status(
     cwd: &Path,
     plan_path: &Path,
-) -> anyhow::Result<Option<(String, String)>> {
-    let paths = autonomy_library_paths_for_plan(plan_path);
-    let cll = match std::fs::read_to_string(cwd.join(paths.cll_path)) {
-        Ok(content) => content,
+    objective: &str,
+) -> anyhow::Result<Option<AutonomyPlanStatus>> {
+    let absolute_plan_path = cwd.join(plan_path);
+    let markdown = match std::fs::read_to_string(&absolute_plan_path) {
+        Ok(markdown) => markdown,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
-    let pll = match std::fs::read_to_string(cwd.join(paths.pll_path)) {
-        Ok(content) => content,
+    Ok(Some(autonomy_plan_status(&markdown, objective)))
+}
+
+pub(crate) fn current_autonomy_node_slices(
+    cwd: &Path,
+    plan_path: &Path,
+    objective: &str,
+) -> anyhow::Result<Option<(AutonomyPlanStatus, String, String)>> {
+    let absolute_plan_path = cwd.join(plan_path);
+    let markdown = match std::fs::read_to_string(&absolute_plan_path) {
+        Ok(markdown) => markdown,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
-    Ok(Some((cll, pll)))
+    let status = autonomy_plan_status(&markdown, objective);
+    let Some(node_id) = status.current_node_id.clone() else {
+        return Ok(Some((
+            status,
+            "All compiled CLL nodes appear complete.".to_string(),
+            "All compiled PLL prompt slices appear complete.".to_string(),
+        )));
+    };
+    let plan = parse_autonomy_markdown_plan(&markdown, objective);
+    let Some(node) = plan.nodes.iter().find(|node| node.id == node_id) else {
+        return Ok(Some((
+            status,
+            format!("Current CLL node `{node_id}` was not found in the plan."),
+            format!("Current PLL node `{node_id}` was not found in the plan."),
+        )));
+    };
+    Ok(Some((
+        status,
+        render_current_cll_slice(&plan, node),
+        render_current_pll_slice(node),
+    )))
 }
 
 fn render_cll(
@@ -327,6 +439,39 @@ fn render_cll(
     out.push_str("    stop_on_pending_approval: true;\n");
     out.push_str("    stop_on_no_progress: true;\n");
     out.push_str("  }\n");
+    out.push_str("}\n");
+    out
+}
+
+fn render_current_cll_slice(plan: &AutonomyPlanDocument, node: &AutonomyPlanNode) -> String {
+    let mut out = String::new();
+    out.push_str("contract_slice Autonomy.CurrentImplementationNode {\n");
+    out.push_str(&format!(
+        "  objective: \"{}\";\n",
+        escape_cll(&plan.objective)
+    ));
+    out.push_str("  authority_note: \"This CLL slice is task-local USER prompt content and does not override the standard Vegvisir system prompt.\";\n");
+    out.push_str("  global_rules: [\n");
+    out.push_str("    \"Preserve unrelated user work.\",\n");
+    out.push_str("    \"Do not request, store, or echo plaintext secrets.\",\n");
+    out.push_str("    \"Pause for destructive actions, external publication, pending approvals, ambiguous scope, or actions outside the objective.\",\n");
+    out.push_str("    \"Do not mark this node complete until success conditions, deliverables, validation, and evidence requirements are satisfied or explicitly justified.\",\n");
+    out.push_str("  ];\n");
+    out.push_str("  current_node {\n");
+    out.push_str(&render_cll_node(node));
+    out.push_str("  }\n");
+    out.push_str("  required_completion_packet: [\"node_id\", \"status\", \"actions_taken\", \"deliverables\", \"success_conditions_satisfied\", \"verification\", \"risks_or_blockers\", \"next_recommended_action\"];\n");
+    out.push_str("}\n");
+    out
+}
+
+fn render_current_pll_slice(node: &AutonomyPlanNode) -> String {
+    let mut out = String::new();
+    out.push_str("prompt_slice Autonomy.CurrentImplementationNodePrompt {\n");
+    out.push_str(&format!("  node_id: \"{}\";\n", escape_cll(&node.id)));
+    out.push_str(&format!("  title: \"{}\";\n", escape_cll(&node.title)));
+    out.push_str("  instructions: \"Work only on the current node unless context/dependency inspection is necessary. Complete this node by satisfying its CLL implementation rules, guardrails, success conditions, expected deliverables, and validation requirements. Update the Markdown checklist for this node only after real completion. If blocked, report a structured blocker instead of guessing.\";\n");
+    out.push_str("  required_response: \"Return a concise completion packet with node_id, status, actions_taken, deliverables, success_conditions_satisfied, verification, risks_or_blockers, and next_recommended_action.\";\n");
     out.push_str("}\n");
     out
 }
@@ -631,6 +776,39 @@ Expected deliverables:
         assert!(compiled.cll.contains("expected_deliverables"));
         assert!(compiled.pll.contains("prompt_slice"));
         assert!(compiled.manifest.contains(AUTONOMY_COMPILER_VERSION));
+        Ok(())
+    }
+
+    #[test]
+    fn status_selects_first_incomplete_node_and_current_slices() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path();
+        std::fs::create_dir_all(workspace.join(".vegvisir/autonomy"))?;
+        let plan_path = Path::new(".vegvisir/autonomy/run-plan.md");
+        std::fs::write(
+            workspace.join(plan_path),
+            "# Plan\n## Phase 1: Done\n- [x] completed\n## Phase 2: Current\nSuccess conditions:\n- Current success\nExpected deliverables:\n- Current artifact\n- [ ] implement current\n",
+        )?;
+        write_autonomy_libraries(workspace, plan_path, "objective", "run")?;
+        let Some((status, cll, pll)) =
+            current_autonomy_node_slices(workspace, plan_path, "objective")?
+        else {
+            panic!("expected current slices");
+        };
+        assert_eq!(status.completed_nodes, 1);
+        assert_eq!(status.total_nodes, 2);
+        assert_eq!(
+            status.current_node_title.as_deref(),
+            Some("Phase 2: Current")
+        );
+        assert!(cll.contains("Current success"));
+        assert!(cll.contains("Current artifact"));
+        assert!(pll.contains("Phase 2: Current"));
+        assert!(
+            workspace
+                .join(".vegvisir/autonomy/run-plan-state.json")
+                .exists()
+        );
         Ok(())
     }
 }

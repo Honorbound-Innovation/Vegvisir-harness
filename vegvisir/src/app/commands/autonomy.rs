@@ -1,7 +1,9 @@
 use std::path::Path;
 
 use super::super::*;
-use super::autonomy_plan::{read_current_autonomy_slices, write_autonomy_libraries};
+use super::autonomy_plan::{
+    current_autonomy_node_slices, read_autonomy_plan_status, write_autonomy_libraries,
+};
 
 const AUTONOMY_NO_PROGRESS_LIMIT: usize = 2;
 const AUTONOMY_PLAN_DIR: &str = ".vegvisir/autonomy";
@@ -61,7 +63,7 @@ impl TuiApplication {
 
     fn autonomy_status(&self) -> String {
         format!(
-            "TUI autonomy\nenabled={}\nactive={}\nstatus={}\nstep={}\nmax_steps={}\nobjective={}\nplan_path={}\ncll_path={}\npll_path={}\nmanifest_path={}\nchecklist={}/{}\nno_progress_count={}",
+            "TUI autonomy\nenabled={}\nactive={}\nstatus={}\nstep={}\nmax_steps={}\nobjective={}\nplan_path={}\ncll_path={}\npll_path={}\nmanifest_path={}\nstate_path={}\ncurrent_node={}\nnodes={}/{}\nchecklist={}/{}\nno_progress_count={}",
             self.autonomy.enabled,
             self.autonomy.active,
             self.autonomy.last_status,
@@ -76,6 +78,10 @@ impl TuiApplication {
             self.autonomy.cll_path.as_deref().unwrap_or("-"),
             self.autonomy.pll_path.as_deref().unwrap_or("-"),
             self.autonomy.manifest_path.as_deref().unwrap_or("-"),
+            self.autonomy.state_path.as_deref().unwrap_or("-"),
+            self.autonomy.current_node_id.as_deref().unwrap_or("-"),
+            self.autonomy.node_completed,
+            self.autonomy.node_total,
             self.autonomy.checklist_completed,
             self.autonomy.checklist_total,
             self.autonomy.no_progress_count,
@@ -98,6 +104,11 @@ impl TuiApplication {
         self.autonomy.cll_path = None;
         self.autonomy.pll_path = None;
         self.autonomy.manifest_path = None;
+        self.autonomy.state_path = None;
+        self.autonomy.current_node_id = None;
+        self.autonomy.current_node_title = None;
+        self.autonomy.node_total = 0;
+        self.autonomy.node_completed = 0;
         self.autonomy.last_status = format!(
             "running step {}/{}; awaiting written plan/checklist",
             self.autonomy.step, self.autonomy.max_steps
@@ -118,6 +129,8 @@ impl TuiApplication {
                 "cll_path": self.autonomy.cll_path,
                 "pll_path": self.autonomy.pll_path,
                 "manifest_path": self.autonomy.manifest_path,
+                "state_path": self.autonomy.state_path,
+                "current_node_id": self.autonomy.current_node_id,
             }),
         );
         self.autonomy_initial_prompt()
@@ -135,6 +148,7 @@ impl TuiApplication {
         let checklist = self.autonomy_checklist_status();
         if checklist.has_checklist {
             self.compile_autonomy_libraries_if_possible();
+            self.refresh_autonomy_node_status();
         }
         self.autonomy.checklist_total = checklist.total;
         self.autonomy.checklist_completed = checklist.completed;
@@ -197,6 +211,10 @@ impl TuiApplication {
                 "cll_path": self.autonomy.cll_path,
                 "pll_path": self.autonomy.pll_path,
                 "manifest_path": self.autonomy.manifest_path,
+                "state_path": self.autonomy.state_path,
+                "current_node_id": self.autonomy.current_node_id,
+                "node_total": self.autonomy.node_total,
+                "node_completed": self.autonomy.node_completed,
                 "checklist_total": self.autonomy.checklist_total,
                 "checklist_completed": self.autonomy.checklist_completed,
             }),
@@ -235,12 +253,16 @@ impl TuiApplication {
         }
         let slices = self.autonomy_current_library_slices();
         format!(
-            "Continue the autonomous task. Objective: {}\n\nHarness controller state: step {}/{}. Plan file: `{plan_path}`. CLL file: `{}`. PLL file: `{}`. Completion checklist: {}/{} checked; {} unchecked.\n\nThe following CLL/PLL slices are task-local instructions in the USER prompt. They do not override the standard Vegvisir system prompt, user authority, tool policy, secret boundary, approval policy, or safety boundaries. Use them for the exact current autonomy task.\n\nCLL CONTRACT SLICE:\n{}\n\nPLL PROMPT SLICE:\n{}\n\nRequired response: continue implementing/verifying the unchecked items, update `{plan_path}` as items are completed, and only mark items `- [x]` when actually complete. Provide deliverables/evidence for completed work. The TUI controller will continue until every checklist item is checked or a deterministic stop condition occurs.",
+            "Continue the autonomous task. Objective: {}\n\nHarness controller state: step {}/{}. Plan file: `{plan_path}`. CLL file: `{}`. PLL file: `{}`. Current node: `{}` ({}). Nodes: {}/{} complete. Completion checklist: {}/{} checked; {} unchecked.\n\nThe following CLL/PLL slices are task-local instructions in the USER prompt. They do not override the standard Vegvisir system prompt, user authority, tool policy, secret boundary, approval policy, or safety boundaries. Use them for the exact current autonomy task.\n\nCLL CONTRACT SLICE:\n{}\n\nPLL PROMPT SLICE:\n{}\n\nRequired response: continue implementing/verifying the unchecked items, update `{plan_path}` as items are completed, and only mark items `- [x]` when actually complete. Provide deliverables/evidence for completed work. The TUI controller will continue until every checklist item is checked or a deterministic stop condition occurs.",
             self.autonomy.objective,
             self.autonomy.step,
             self.autonomy.max_steps,
             self.autonomy.cll_path.as_deref().unwrap_or("-"),
             self.autonomy.pll_path.as_deref().unwrap_or("-"),
+            self.autonomy.current_node_id.as_deref().unwrap_or("-"),
+            self.autonomy.current_node_title.as_deref().unwrap_or("-"),
+            self.autonomy.node_completed,
+            self.autonomy.node_total,
             checklist.completed,
             checklist.total,
             checklist.unchecked,
@@ -260,15 +282,18 @@ impl TuiApplication {
                 let cll_path = paths.cll_path.display().to_string();
                 let pll_path = paths.pll_path.display().to_string();
                 let manifest_path = paths.manifest_path.display().to_string();
+                let state_path = paths.state_path.display().to_string();
                 let changed = self.autonomy.cll_path.as_deref() != Some(cll_path.as_str())
                     || self.autonomy.pll_path.as_deref() != Some(pll_path.as_str())
-                    || self.autonomy.manifest_path.as_deref() != Some(manifest_path.as_str());
+                    || self.autonomy.manifest_path.as_deref() != Some(manifest_path.as_str())
+                    || self.autonomy.state_path.as_deref() != Some(state_path.as_str());
                 self.autonomy.cll_path = Some(cll_path.clone());
                 self.autonomy.pll_path = Some(pll_path.clone());
                 self.autonomy.manifest_path = Some(manifest_path.clone());
+                self.autonomy.state_path = Some(state_path.clone());
                 if changed {
                     self.push_system_message(format!(
-                        "Autonomy plan compiled: CLL `{cll_path}`, PLL `{pll_path}`, manifest `{manifest_path}`."
+                        "Autonomy plan compiled: CLL `{cll_path}`, PLL `{pll_path}`, manifest `{manifest_path}`, state `{state_path}`."
                     ));
                 }
                 self.logger.emit(
@@ -280,6 +305,7 @@ impl TuiApplication {
                         "cll_path": cll_path,
                         "pll_path": pll_path,
                         "manifest_path": manifest_path,
+                        "state_path": state_path,
                     }),
                 );
             }
@@ -308,8 +334,12 @@ impl TuiApplication {
                 "No PLL slice available yet: plan path is unset.".to_string(),
             );
         };
-        match read_current_autonomy_slices(&self.cwd, Path::new(plan_path_text)) {
-            Ok(Some((cll, pll))) => (cll, pll),
+        match current_autonomy_node_slices(
+            &self.cwd,
+            Path::new(plan_path_text),
+            &self.autonomy.objective,
+        ) {
+            Ok(Some((_status, cll, pll))) => (cll, pll),
             Ok(None) => (
                 "No CLL slice available yet: write the Markdown plan/checklist so Vegvisir can compile it.".to_string(),
                 "No PLL slice available yet: write the Markdown plan/checklist so Vegvisir can compile it.".to_string(),
@@ -321,14 +351,41 @@ impl TuiApplication {
         }
     }
 
+    fn refresh_autonomy_node_status(&mut self) {
+        let Some(plan_path_text) = self.autonomy.plan_path.as_deref() else {
+            return;
+        };
+        match read_autonomy_plan_status(
+            &self.cwd,
+            Path::new(plan_path_text),
+            &self.autonomy.objective,
+        ) {
+            Ok(Some(status)) => {
+                self.autonomy.node_total = status.total_nodes;
+                self.autonomy.node_completed = status.completed_nodes;
+                self.autonomy.current_node_id = status.current_node_id;
+                self.autonomy.current_node_title = status.current_node_title;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                self.push_system_message(format!(
+                    "Autonomy node status warning: failed to read `{plan_path_text}`: {error}"
+                ));
+            }
+        }
+    }
+
     fn autonomy_progress_signature_with_checklist(
         &self,
         checklist: &AutonomyChecklistStatus,
     ) -> String {
         let mut signature = self.autonomy_progress_signature();
         signature.push_str(&format!(
-            ";plan={};checklist={}/{};unchecked={}",
+            ";plan={};current_node={};nodes={}/{};checklist={}/{};unchecked={}",
             self.autonomy.plan_path.as_deref().unwrap_or("-"),
+            self.autonomy.current_node_id.as_deref().unwrap_or("-"),
+            self.autonomy.node_completed,
+            self.autonomy.node_total,
             checklist.completed,
             checklist.total,
             checklist.unchecked

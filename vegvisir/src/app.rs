@@ -203,6 +203,11 @@ pub struct AutonomyState {
     pub cll_path: Option<String>,
     pub pll_path: Option<String>,
     pub manifest_path: Option<String>,
+    pub state_path: Option<String>,
+    pub current_node_id: Option<String>,
+    pub current_node_title: Option<String>,
+    pub node_total: usize,
+    pub node_completed: usize,
     pub checklist_total: usize,
     pub checklist_completed: usize,
 }
@@ -223,6 +228,11 @@ impl Default for AutonomyState {
             cll_path: None,
             pll_path: None,
             manifest_path: None,
+            state_path: None,
+            current_node_id: None,
+            current_node_title: None,
+            node_total: 0,
+            node_completed: 0,
             checklist_total: 0,
             checklist_completed: 0,
         }

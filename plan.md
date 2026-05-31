@@ -420,3 +420,31 @@ The first implementation should be conservative:
 4. Include current task-local CLL/PLL content in the user prompt.
 5. Preserve the standard system prompt.
 6. Continue using the Markdown checklist as the initial completion gate until contract-aware advancement is implemented.
+
+## Implementation Progress
+
+### Completed: Initial Compiler and Integration
+
+- Root `plan.md` records the contract-driven autonomy design.
+- Markdown implementation plans compile into adjacent `.cll`, `.pll`, and compile manifest files.
+- The autonomy controller keeps the standard Vegvisir system prompt unchanged.
+- Generated CLL/PLL content is injected as task-local USER prompt content.
+- Parser/compiler tests cover heading hierarchy, semantic lists, and library generation.
+
+### Completed: Current-Node State and Sliced Prompts
+
+- Compiled runs now also write a runtime status file next to the plan:
+  - `<plan-stem>-state.json`
+- Runtime `AutonomyState` tracks:
+  - state path
+  - current node ID
+  - current node title
+  - completed node count
+  - total executable node count
+- The controller selects the first incomplete executable node from the Markdown-derived plan status.
+- Continuation prompts now include only the current node's CLL contract slice and PLL prompt slice instead of the whole generated library.
+- Progress signatures include current-node and node-completion state, improving no-progress detection.
+
+### Remaining Next Slice
+
+The next implementation slice should add structured completion/evidence packets and deterministic validation adapters so the controller can advance based on evidence files, not just Markdown checklist state.
