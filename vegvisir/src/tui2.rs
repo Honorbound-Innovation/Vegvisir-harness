@@ -841,6 +841,22 @@ fn message_lines(message: &ChatMessage, width: usize, search_query: &str) -> Vec
     out
 }
 
+pub fn next_thinking_trace_expiry_at(
+    app: &TuiApplication,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    let now = chrono::Utc::now();
+    app.session
+        .messages
+        .iter()
+        .filter(|message| message.role == "assistant" && contains_thinking_trace(&message.content))
+        .filter_map(|message| {
+            let expires_at =
+                message.created_at + chrono::Duration::seconds(THINKING_TRACE_VISIBLE_SECONDS);
+            (expires_at > now).then_some(expires_at)
+        })
+        .min()
+}
+
 fn visible_chat_message_content(message: &ChatMessage) -> String {
     if message.role != "assistant" || !contains_thinking_trace(&message.content) {
         return message.content.clone();
@@ -3183,6 +3199,33 @@ mod tests {
         assert!(!expired_rendered.contains("Answer"));
         assert!(expired_rendered.contains("Done."));
         assert!(expired.content.contains("working through it"));
+    }
+
+    #[test]
+    fn ratatui_reports_next_thinking_trace_expiry_for_redraw() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app =
+            crate::app::TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        let created_at = chrono::Utc::now();
+        app.session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: "**Thinking trace**\n\nstill visible\n\n**Answer**\n\nDone.".to_string(),
+            attachments: Vec::new(),
+            created_at,
+        });
+
+        let expires_at = next_thinking_trace_expiry_at(&app)
+            .expect("fresh thinking trace should schedule a redraw expiry");
+        assert!(expires_at > chrono::Utc::now());
+        assert_eq!(
+            expires_at,
+            created_at + chrono::Duration::seconds(THINKING_TRACE_VISIBLE_SECONDS)
+        );
+
+        app.session.messages[0].created_at =
+            chrono::Utc::now() - chrono::Duration::seconds(THINKING_TRACE_VISIBLE_SECONDS + 1);
+        assert!(next_thinking_trace_expiry_at(&app).is_none());
+        Ok(())
     }
 
     #[test]

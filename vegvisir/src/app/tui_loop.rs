@@ -24,7 +24,18 @@ impl TuiApplication {
         let mut mouse_capture_applied = true;
         let mut last_activity_pulse = Instant::now();
         while self.running {
-            if event::poll(Duration::from_millis(50))? {
+            let thinking_trace_expiry = crate::tui2::next_thinking_trace_expiry_at(self);
+            let poll_timeout = thinking_trace_expiry
+                .and_then(|expires_at| {
+                    expires_at
+                        .signed_duration_since(chrono::Utc::now())
+                        .to_std()
+                        .ok()
+                })
+                .map(|until_expiry| until_expiry.min(Duration::from_millis(50)))
+                .unwrap_or_else(|| Duration::from_millis(50));
+
+            if event::poll(poll_timeout)? {
                 match event::read()? {
                     Event::Key(key) => self.handle_key_event(key),
                     Event::Mouse(mouse) => self.handle_mouse_event(mouse),
@@ -37,6 +48,9 @@ impl TuiApplication {
                     }
                     _ => {}
                 }
+            }
+            if thinking_trace_expiry.is_some_and(|expires_at| expires_at <= chrono::Utc::now()) {
+                self.redraw_requested = true;
             }
             self.poll_stream_events();
             self.poll_pending_send();
