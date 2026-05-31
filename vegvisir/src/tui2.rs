@@ -10,7 +10,10 @@ use std::sync::OnceLock;
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
-    app::{DiffOverlay, DiffOverlayRenderCache, DiffRenderer, InfoOverlay, TuiApplication},
+    app::{
+        DiffOverlay, DiffOverlayRenderCache, DiffRenderer, InfoOverlay, ProfileOverlay,
+        TuiApplication,
+    },
     core::{Attachment, ChatMessage},
     guardrails::ApprovalRequest,
     ui::input::InputState,
@@ -98,6 +101,9 @@ pub fn draw(f: &mut Frame<'_>, app: &mut TuiApplication) {
     }
     if app.search_open {
         draw_search_overlay(f, app, search_rect(area));
+    }
+    if let Some(profile) = app.profile_overlay.as_ref() {
+        draw_profile_overlay(f, profile, centered_rect(104, 28, area));
     }
     if !pending_approvals.is_empty() {
         draw_approval_modal(
@@ -2500,6 +2506,98 @@ fn info_overlay_lines(info: &InfoOverlay, width: usize) -> Vec<Line<'static>> {
         )));
     }
     lines
+}
+
+fn draw_profile_overlay(f: &mut Frame<'_>, overlay: &ProfileOverlay, area: Rect) {
+    f.render_widget(Clear, area);
+    let content_width = area.width.saturating_sub(4) as usize;
+    let mut lines = Vec::new();
+    lines.push(Line::from(vec![
+        Span::styled(
+            "User profile enrollment",
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  /profile set", Style::default().fg(DIM)),
+    ]));
+    lines.push(Line::from(Span::styled(
+        truncate(&overlay.status, content_width),
+        Style::default().fg(AMBER),
+    )));
+    lines.push(Line::from(""));
+
+    let label_width = overlay
+        .fields
+        .iter()
+        .map(|field| field.label.width())
+        .max()
+        .unwrap_or(14)
+        .min(24);
+    let value_width = content_width.saturating_sub(label_width + 6).max(12);
+    let visible_capacity = area.height.saturating_sub(8) as usize;
+    let selected = overlay.selected.min(overlay.fields.len().saturating_sub(1));
+    let start = selected.saturating_sub(visible_capacity.saturating_sub(1));
+    let end = (start + visible_capacity).min(overlay.fields.len());
+
+    for (index, field) in overlay.fields.iter().enumerate().take(end).skip(start) {
+        let selected_row = index == selected;
+        let marker = if selected_row { "▶" } else { " " };
+        let marker_style = if selected_row {
+            Style::default().fg(GREEN).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(DIM)
+        };
+        let label_style = if selected_row {
+            Style::default().fg(FG).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(CYAN)
+        };
+        let value_style = if selected_row {
+            Style::default().fg(GREEN)
+        } else if field.value.trim().is_empty() {
+            Style::default().fg(DIM)
+        } else {
+            Style::default().fg(FG)
+        };
+        let value = if field.value.trim().is_empty() {
+            "<blank>".to_string()
+        } else {
+            truncate(&field.value, value_width)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{marker} "), marker_style),
+            Span::styled(format!("{:<label_width$} ", field.label), label_style),
+            Span::styled(value, value_style),
+        ]));
+        if selected_row {
+            lines.push(Line::from(vec![
+                Span::styled("  ", Style::default().fg(DIM)),
+                Span::styled(
+                    truncate(&field.hint, content_width.saturating_sub(2)),
+                    Style::default().fg(DIM),
+                ),
+            ]));
+        }
+    }
+
+    if overlay.fields.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No profile fields available.",
+            Style::default().fg(DIM),
+        )));
+    }
+
+    let paragraph = Paragraph::new(lines)
+        .style(Style::default().fg(FG).bg(PANEL))
+        .block(
+            Block::default()
+                .title(" profile form ")
+                .title_bottom(" Enter save   Esc cancel   Tab/↓ next   Shift+Tab/↑ previous   Del clear field ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(CYAN))
+                .padding(Padding::horizontal(1)),
+        )
+        .wrap(Wrap { trim: false });
+    f.render_widget(paragraph, area);
 }
 
 fn draw_search_overlay(f: &mut Frame<'_>, app: &TuiApplication, area: Rect) {

@@ -94,6 +94,10 @@ impl TuiApplication {
             let suggestions = self.build_suggestions();
             self.input.update_suggestions(suggestions);
         }
+        if self.handle_profile_overlay_key(key) {
+            self.redraw_requested = true;
+            return;
+        }
         if self.handle_search_key(key) {
             self.redraw_requested = true;
             return;
@@ -287,6 +291,74 @@ impl TuiApplication {
         let suggestions = self.build_suggestions();
         self.input.update_suggestions(suggestions);
         self.redraw_requested = true;
+    }
+
+    pub(crate) fn handle_profile_overlay_key(&mut self, key: KeyEvent) -> bool {
+        let Some(overlay) = self.profile_overlay.as_mut() else {
+            return false;
+        };
+        match key.code {
+            KeyCode::Esc => {
+                self.cancel_profile_overlay();
+                true
+            }
+            KeyCode::Enter => {
+                match self.save_profile_overlay() {
+                    Ok(message) => self.push_system_message(message),
+                    Err(error) => {
+                        if let Some(overlay) = self.profile_overlay.as_mut() {
+                            overlay.status = format!("Could not save profile: {error}");
+                        } else {
+                            self.push_system_message(format!("Could not save profile: {error}"));
+                        }
+                    }
+                }
+                self.autosave_session();
+                true
+            }
+            KeyCode::Tab | KeyCode::Down => {
+                if !overlay.fields.is_empty() {
+                    overlay.selected = (overlay.selected + 1) % overlay.fields.len();
+                }
+                true
+            }
+            KeyCode::BackTab | KeyCode::Up => {
+                if !overlay.fields.is_empty() {
+                    overlay.selected = overlay
+                        .selected
+                        .checked_sub(1)
+                        .unwrap_or_else(|| overlay.fields.len().saturating_sub(1));
+                }
+                true
+            }
+            KeyCode::Backspace => {
+                if let Some(field) = overlay.fields.get_mut(overlay.selected) {
+                    field.value.pop();
+                }
+                true
+            }
+            KeyCode::Delete => {
+                if let Some(field) = overlay.fields.get_mut(overlay.selected) {
+                    field.value.clear();
+                }
+                true
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(field) = overlay.fields.get_mut(overlay.selected) {
+                    field.value.clear();
+                }
+                true
+            }
+            KeyCode::Char(ch)
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+            {
+                if let Some(field) = overlay.fields.get_mut(overlay.selected) {
+                    field.value.push(ch);
+                }
+                true
+            }
+            _ => true,
+        }
     }
 
     pub(crate) fn open_command_palette(&mut self) {

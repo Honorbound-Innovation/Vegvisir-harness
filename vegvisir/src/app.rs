@@ -108,6 +108,7 @@ pub struct TuiApplication {
     pub diff_scroll_offset: usize,
     pub info_overlay: Option<InfoOverlay>,
     pub info_scroll_offset: usize,
+    pub profile_overlay: Option<ProfileOverlay>,
     pub approval_selected_index: usize,
     pub search_open: bool,
     pub search_query: String,
@@ -192,6 +193,21 @@ pub struct InfoOverlay {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProfileOverlay {
+    pub fields: Vec<ProfileOverlayField>,
+    pub selected: usize,
+    pub status: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProfileOverlayField {
+    pub key: String,
+    pub label: String,
+    pub value: String,
+    pub hint: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AutonomyState {
     pub enabled: bool,
     pub active: bool,
@@ -258,6 +274,129 @@ impl Default for AutonomyState {
             checklist_completed: 0,
         }
     }
+}
+
+impl ProfileOverlay {
+    pub fn from_profile(profile: &UserProfile) -> Self {
+        let fields = vec![
+            ProfileOverlayField::new(
+                "name",
+                "Display name",
+                &profile.identity.display_name,
+                "Your name as shown in profile summaries",
+            ),
+            ProfileOverlayField::new(
+                "address_as",
+                "Address as",
+                &profile.identity.address_as,
+                "Name Vegvisir should use when speaking to you",
+            ),
+            ProfileOverlayField::new(
+                "pronouns",
+                "Pronouns",
+                &profile.identity.pronouns,
+                "Optional pronouns, e.g. they/them, she/her, he/him",
+            ),
+            ProfileOverlayField::new(
+                "spoken_language",
+                "Spoken language",
+                &profile.communication.spoken_language,
+                "Default human language, e.g. en, es, fr",
+            ),
+            ProfileOverlayField::new(
+                "response_language",
+                "Response language",
+                &profile.communication.response_language,
+                "Language Vegvisir should answer in; blank uses spoken language",
+            ),
+            ProfileOverlayField::new(
+                "tone",
+                "Tone/style",
+                &profile.communication.tone,
+                "Communication style, e.g. direct, technical, concise",
+            ),
+            ProfileOverlayField::new(
+                "verbosity",
+                "Verbosity",
+                &profile.communication.verbosity,
+                "short, medium, detailed, etc.",
+            ),
+            ProfileOverlayField::new(
+                "coding_languages",
+                "Coding languages",
+                &profile.coding.coding_languages.join(", "),
+                "Comma-separated preferred coding languages",
+            ),
+            ProfileOverlayField::new(
+                "spoken_languages",
+                "Other spoken langs",
+                &profile.coding.spoken_languages.join(", "),
+                "Comma-separated additional spoken languages",
+            ),
+            ProfileOverlayField::new(
+                "comment_language",
+                "Code comments",
+                &profile.coding.comment_language,
+                "Preferred language for code comments",
+            ),
+            ProfileOverlayField::new(
+                "code_style",
+                "Code style",
+                &profile.coding.code_style,
+                "Style preference; blank means match repository style",
+            ),
+            ProfileOverlayField::new(
+                "test_preference",
+                "Test preference",
+                &profile.coding.test_preference,
+                "How Vegvisir should verify changes",
+            ),
+            ProfileOverlayField::new(
+                "use_name_in_chat",
+                "Use name in chat",
+                bool_text(profile.communication.use_name_in_chat),
+                "true/false",
+            ),
+            ProfileOverlayField::new(
+                "show_code_and_diffs_in_chat",
+                "Show code/diffs",
+                bool_text(profile.workflow.show_code_and_diffs_in_chat),
+                "true/false",
+            ),
+            ProfileOverlayField::new(
+                "commit_and_push_when_clean",
+                "Commit/push clean",
+                bool_text(profile.workflow.commit_and_push_when_clean),
+                "true/false",
+            ),
+            ProfileOverlayField::new(
+                "prefer_direct_implementation",
+                "Direct implementation",
+                bool_text(profile.workflow.prefer_direct_implementation),
+                "true/false",
+            ),
+        ];
+        Self {
+            fields,
+            selected: 0,
+            status: "Fill out your local profile. Enter saves, Esc cancels.".to_string(),
+        }
+    }
+}
+
+impl ProfileOverlayField {
+    fn new(key: &str, label: &str, value: &str, hint: &str) -> Self {
+        Self {
+            key: key.to_string(),
+            label: label.to_string(),
+            value: value.to_string(),
+            hint: hint.to_string(),
+        }
+    }
+}
+
+fn bool_text(value: bool) -> &'static str {
+    if value { "true" } else { "false" }
 }
 
 fn command_matches_palette_query(name: &str, description: &str, raw: &str) -> bool {
@@ -535,6 +674,7 @@ impl TuiApplication {
             diff_scroll_offset: 0,
             info_overlay: None,
             info_scroll_offset: 0,
+            profile_overlay: None,
             approval_selected_index: 0,
             search_open: false,
             search_query: String::new(),
