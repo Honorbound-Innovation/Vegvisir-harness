@@ -1578,12 +1578,14 @@ pub fn build_builtin_registry_with_cms_and_mode(
     Ok(registry)
 }
 
-
 fn optional_nonempty_string(value: Option<&Value>) -> Option<String> {
     value
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|value| !value.is_empty())
+        .filter(|value| {
+            let normalized = value.to_ascii_lowercase();
+            !value.is_empty() && !matches!(normalized.as_str(), "default" | "none" | "null")
+        })
         .map(str::to_string)
 }
 
@@ -1976,6 +1978,19 @@ mod skiller_tool_tests {
 
         Ok(())
     }
+
+    #[test]
+    fn optional_subagent_cli_values_ignore_placeholders() {
+        assert_eq!(optional_nonempty_string(Some(&json!(""))), None);
+        assert_eq!(optional_nonempty_string(Some(&json!("default"))), None);
+        assert_eq!(optional_nonempty_string(Some(&json!("none"))), None);
+        assert_eq!(optional_nonempty_string(Some(&json!("null"))), None);
+        assert_eq!(
+            optional_nonempty_string(Some(&json!("openai-sso"))),
+            Some("openai-sso".to_string())
+        );
+    }
+
     #[test]
     fn skiller_tools_build_and_apply_vegvisir_forge_envelope() -> anyhow::Result<()> {
         let workspace = TempDir::new()?;
