@@ -321,10 +321,16 @@ fn brokered_http_request(
         .unwrap_or("GET")
         .to_ascii_uppercase();
     let parsed = parse_http_url(url)?;
-    let body = request
-        .get("body")
-        .and_then(Value::as_str)
-        .map(str::as_bytes);
+    let body_storage;
+    let body = if let Some(encoded) = request.get("body_base64").and_then(Value::as_str) {
+        body_storage = base64_decode(encoded)?;
+        Some(body_storage.as_slice())
+    } else {
+        request
+            .get("body")
+            .and_then(Value::as_str)
+            .map(str::as_bytes)
+    };
     let body_len = body.map_or(0, |value| value.len()) as u64;
     let consumer = request
         .get("consumer")
@@ -956,6 +962,13 @@ fn secret_representations(secret: &[u8]) -> Vec<String> {
         .into_iter()
         .filter(|value| !value.is_empty())
         .collect()
+}
+
+fn base64_decode(value: &str) -> Result<Vec<u8>, BrokerError> {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(value)
+        .map_err(|err| BrokerError::Http(format!("invalid base64 request body: {err}")))
 }
 
 fn base64_encode(value: &[u8]) -> String {

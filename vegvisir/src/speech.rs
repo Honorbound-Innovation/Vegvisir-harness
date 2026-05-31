@@ -1,13 +1,23 @@
 use std::{
+    io::{BufRead, BufReader, Write},
+    os::unix::net::UnixStream,
     path::{Path, PathBuf},
     process::{Command, Output},
     time::{Duration, Instant},
 };
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use serde_json::{Value, json};
+
+use crate::core::ProviderConfig;
 
 pub const DEFAULT_PTT_SECONDS: u64 = 8;
+pub const OPENAI_HBSE_SPEECH_PROVIDER: &str = "openai-hbse";
+pub const OPENAI_HBSE_SPEECH_MODEL: &str = "gpt-realtime-whisper";
 const SPEECH_TIMEOUT: Duration = Duration::from_secs(180);
+const SPEECH_HBSE_TIMEOUT_SECONDS: u64 = 180;
+const SPEECH_HBSE_MAX_RESPONSE_BYTES: u64 = 2 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct SpeechTranscriptionResult {
@@ -146,7 +156,10 @@ fn recorder_backends() -> Vec<RecorderBackend> {
 }
 
 pub fn speech_backend_status() -> String {
-    let stt = speech_backends()
+    let stt = format!(
+        "- provider: {OPENAI_HBSE_SPEECH_PROVIDER} model: {OPENAI_HBSE_SPEECH_MODEL} (OpenAI transcription via HBSE): configured"
+    );
+    let local_fallbacks = speech_backends()
         .into_iter()
         .map(|backend| {
             let status = if executable_in_path(backend.command) {
@@ -170,7 +183,19 @@ pub fn speech_backend_status() -> String {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    format!("Speech-to-text backends:\n{stt}\n\nPush-to-talk recorders:\n{recorders}")
+    format!(
+        "Speech-to-text backends:\n{stt}\n\nLocal fallback/diagnostic backends:\n{local_fallbacks}\n\nPush-to-talk recorders:\n{recorders}"
+    )
+}
+
+pub fn transcribe_audio_file_with_provider(
+    path: &Path,
+    provider: &ProviderConfig,
+) -> anyhow::Result<String> {
+    if provider.name == OPENAI_HBSE_SPEECH_PROVIDER || provider.kind == "hbse_openai_compatible" {
+        return transcribe_audio_file_openai_hbse(path, provider);
+    }
+    transcribe_audio_file(path)
 }
 
 pub fn transcribe_audio_file(path: &Path) -> anyhow::Result<String> {
@@ -233,6 +258,56 @@ pub fn record_and_transcribe(seconds: u64) -> anyhow::Result<SpeechTranscription
             Ok(SpeechTranscriptionResult {
                 transcript,
                 recorder,
+                audio_path,
+                audio_bytes,
+                kept_audio,
+            })
+        }
+        Err(error) => Err(anyhow::anyhow!(
+            "speech transcription failed after recording {audio_bytes} bytes with {recorder}; kept audio at {} for inspection: {error}",
+            audio_path.display()
+        )),
+    }
+}
+
+pub fn record_and_transcribe_with_provider(
+    seconds: u64,
+    provider: &ProviderConfig,
+) -> anyhow::Result<SpeechTranscriptionResult> {
+    let seconds = seconds.clamp(1, 30);
+    let audio_path = std::env::temp_dir().join(format!(
+        "vegvisir-ptt-{}-{}.wav",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    let recorder = match record_audio_clip(&audio_path, seconds) {
+        Ok(recorder) => recorder,
+        Err(error) => {
+            let _ = std::fs::remove_file(&audio_path);
+            return Err(error);
+        }
+    };
+    let audio_bytes = std::fs::metadata(&audio_path)
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+    if audio_bytes < 1024 {
+        anyhow::bail!(
+            "push-to-talk recorder {recorder} produced an unexpectedly small audio file ({audio_bytes} bytes) at {}",
+            audio_path.display()
+        );
+    }
+    match transcribe_audio_file_with_provider(&audio_path, provider) {
+        Ok(transcript) => {
+            let transcript = transcript.trim().to_string();
+            let kept_audio = transcript.is_empty();
+            if !kept_audio {
+                let _ = std::fs::remove_file(&audio_path);
+            }
+            Ok(SpeechTranscriptionResult {
+                transcript,
+                recorder: format!(
+                    "{recorder}; STT {OPENAI_HBSE_SPEECH_PROVIDER}/{OPENAI_HBSE_SPEECH_MODEL}"
+                ),
                 audio_path,
                 audio_bytes,
                 kept_audio,
@@ -338,6 +413,184 @@ fn run_whisper_cli(command: &str, path: &Path) -> anyhow::Result<String> {
     }
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     Ok(strip_whisper_noise(&stdout))
+}
+
+fn transcribe_audio_file_openai_hbse(
+    path: &Path,
+    provider: &ProviderConfig,
+) -> anyhow::Result<String> {
+    let boundary = format!(
+        "----vegvisir-speech-{}-{}",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    );
+    let body = openai_transcription_multipart_body(path, OPENAI_HBSE_SPEECH_MODEL, &boundary)?;
+    let base_url = provider
+        .base_url
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("provider {} has no base_url", provider.name))?;
+    let response = hbse_provider_http_binary(
+        provider,
+        &format!("{}/audio/transcriptions", base_url.trim_end_matches('/')),
+        &format!("multipart/form-data; boundary={boundary}"),
+        body,
+    )?;
+    let status = response
+        .get("status_code")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let body = response
+        .get("body")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    if status >= 400 {
+        anyhow::bail!(
+            "{} speech transcription failed through HBSE: {} {}",
+            provider.name,
+            status,
+            body.chars().take(600).collect::<String>()
+        );
+    }
+    let value: Value = serde_json::from_str(&body).unwrap_or_else(|_| json!({"text": body}));
+    value
+        .get("text")
+        .and_then(Value::as_str)
+        .map(strip_whisper_noise)
+        .filter(|text| !text.trim().is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "{} speech response did not include transcript text",
+                provider.name
+            )
+        })
+}
+
+fn openai_transcription_multipart_body(
+    path: &Path,
+    model: &str,
+    boundary: &str,
+) -> anyhow::Result<Vec<u8>> {
+    let filename = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("audio.wav");
+    let audio = std::fs::read(path)?;
+    let mut body = Vec::new();
+    write_multipart_text(&mut body, boundary, "model", model)?;
+    write_multipart_text(&mut body, boundary, "response_format", "json")?;
+    write!(
+        body,
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{}\"\r\nContent-Type: {}\r\n\r\n",
+        sanitize_multipart_filename(filename),
+        audio_mime_type(path)
+    )?;
+    body.extend_from_slice(&audio);
+    write!(body, "\r\n--{boundary}--\r\n")?;
+    Ok(body)
+}
+
+fn write_multipart_text(
+    body: &mut Vec<u8>,
+    boundary: &str,
+    name: &str,
+    value: &str,
+) -> anyhow::Result<()> {
+    write!(
+        body,
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+    )?;
+    Ok(())
+}
+
+fn sanitize_multipart_filename(value: &str) -> String {
+    value.replace(['\r', '\n', '"'], "_")
+}
+
+fn audio_mime_type(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "mp3" => "audio/mpeg",
+        "m4a" => "audio/mp4",
+        "ogg" => "audio/ogg",
+        "flac" => "audio/flac",
+        "webm" => "audio/webm",
+        _ => "audio/wav",
+    }
+}
+
+fn hbse_provider_http_binary(
+    provider: &ProviderConfig,
+    url: &str,
+    content_type: &str,
+    body: Vec<u8>,
+) -> anyhow::Result<Value> {
+    let socket_path = crate::provider::hbse_default_or_configured_socket(provider);
+    let secret_ref = provider
+        .metadata
+        .get("hbse_secret_ref")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| std::env::var("HBSE_PROVIDER_SECRET_REF").ok())
+        .ok_or_else(|| anyhow::anyhow!("Set HBSE_PROVIDER_SECRET_REF or provider metadata hbse_secret_ref to use HBSE-routed speech transcription."))?;
+    let consumer = provider
+        .metadata
+        .get("hbse_consumer")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("vegvisir.provider.{}", provider.name));
+    let purpose = provider
+        .metadata
+        .get("hbse_speech_purpose")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            provider
+                .metadata
+                .get("hbse_purpose")
+                .and_then(Value::as_str)
+        })
+        .unwrap_or("model.speech.transcription");
+    let payload = json!({
+        "command": "provider_http",
+        "secret_ref": secret_ref,
+        "consumer": consumer,
+        "purpose": purpose,
+        "method": "POST",
+        "url": url,
+        "headers": {
+            "Content-Type": content_type,
+            "Accept": "application/json"
+        },
+        "body_base64": STANDARD.encode(body),
+        "credential_header": provider.metadata.get("credential_header").and_then(Value::as_str).unwrap_or("Authorization"),
+        "credential_prefix": provider.metadata.get("credential_prefix").and_then(Value::as_str).unwrap_or("Bearer "),
+        "timeout_seconds": SPEECH_HBSE_TIMEOUT_SECONDS,
+        "max_response_bytes": SPEECH_HBSE_MAX_RESPONSE_BYTES,
+    });
+    let mut stream = UnixStream::connect(&socket_path).map_err(|error| {
+        anyhow::anyhow!("HBSE broker unavailable for speech transcription: {error}")
+    })?;
+    stream.write_all(serde_json::to_string(&payload)?.as_bytes())?;
+    stream.write_all(b"\n")?;
+    let mut line = String::new();
+    BufReader::new(stream).read_line(&mut line)?;
+    let response: Value = serde_json::from_str(&line)?;
+    if !response.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+        let message = response
+            .get("error")
+            .and_then(|error| error.get("message"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| response.get("error").map(Value::to_string))
+            .unwrap_or_else(|| "unknown HBSE broker error".to_string());
+        anyhow::bail!("HBSE broker denied speech transcription request: {message}");
+    }
+    Ok(response)
 }
 
 fn find_first_txt_file(dir: &Path) -> Option<PathBuf> {

@@ -1,11 +1,14 @@
 use crate::{
     app::TuiApplication,
     speech::{
-        PushToTalkKey, record_and_transcribe, speech_backend_status, strip_whisper_noise,
-        transcribe_audio_file,
+        OPENAI_HBSE_SPEECH_PROVIDER, PushToTalkKey, record_and_transcribe_with_provider,
+        speech_backend_status, strip_whisper_noise, transcribe_audio_file_with_provider,
     },
 };
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 impl TuiApplication {
     pub(crate) fn speech_command(&mut self, args: &[String]) -> anyhow::Result<String> {
@@ -97,7 +100,8 @@ impl TuiApplication {
     }
 
     fn transcribe_audio_into_input(&mut self, audio_path: &Path) -> anyhow::Result<String> {
-        match transcribe_audio_file(audio_path) {
+        let provider = self.speech_provider_config()?;
+        match transcribe_audio_file_with_provider(audio_path, provider) {
             Ok(text) => {
                 let text = text.trim().to_string();
                 if text.is_empty() {
@@ -108,7 +112,7 @@ impl TuiApplication {
                 }
                 self.insert_speech_text(&text);
                 Ok(format!(
-                    "Transcribed {} into the input buffer using local speech-to-text. Review/edit, then press Enter to send.",
+                    "Transcribed {} into the input buffer using openai-hbse/gpt-realtime-whisper. Review/edit, then press Enter to send.",
                     audio_path.display()
                 ))
             }
@@ -118,6 +122,14 @@ impl TuiApplication {
                 speech_install_help()
             )),
         }
+    }
+
+    fn speech_provider_config(&self) -> anyhow::Result<&crate::core::ProviderConfig> {
+        self.provider_registry
+            .get(OPENAI_HBSE_SPEECH_PROVIDER)
+            .ok_or_else(|| {
+                anyhow::anyhow!("speech provider {OPENAI_HBSE_SPEECH_PROVIDER} is not configured")
+            })
     }
 
     pub(crate) fn insert_speech_text(&mut self, text: &str) {
@@ -138,13 +150,48 @@ impl TuiApplication {
             self.push_system_message("Speech transcription is already running.");
             return Ok(());
         }
+        self.session.activity = "unlocking HBSE broker for speech transcription".to_string();
+        self.redraw_requested = true;
+        ensure_hbse_broker_unlocked_for_speech()?;
+
         let seconds = self.speech_ptt_seconds;
+        let provider = self.speech_provider_config()?.clone();
         self.session.activity = format!("recording speech for {seconds}s");
-        self.pending_speech_jobs
-            .push(std::thread::spawn(move || record_and_transcribe(seconds)));
+        self.pending_speech_jobs.push(std::thread::spawn(move || {
+            record_and_transcribe_with_provider(seconds, &provider)
+        }));
         self.redraw_requested = true;
         Ok(())
     }
+}
+
+fn ensure_hbse_broker_unlocked_for_speech() -> anyhow::Result<()> {
+    let output = Command::new("hbse")
+        .args(["broker", "unlock"])
+        .output()
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "failed to run `hbse broker unlock` before speech transcription: {error}"
+            )
+        })?;
+    validate_hbse_broker_unlock_output(output.status.success(), &output.stdout, &output.stderr)
+}
+
+fn validate_hbse_broker_unlock_output(
+    success: bool,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> anyhow::Result<()> {
+    if success {
+        return Ok(());
+    }
+    let mut detail = String::new();
+    detail.push_str(&String::from_utf8_lossy(stdout));
+    detail.push_str(&String::from_utf8_lossy(stderr));
+    anyhow::bail!(
+        "`hbse broker unlock` failed before speech transcription: {}",
+        detail.trim().chars().take(600).collect::<String>()
+    )
 }
 
 fn speech_usage() -> String {
@@ -155,7 +202,7 @@ fn speech_usage() -> String {
 }
 
 fn speech_install_help() -> &'static str {
-    "Do not run `cargo install whisper`: the crates.io `whisper` package is an old unrelated database crate and does not provide speech-to-text.\n\nInstall one of these real Whisper STT backends instead:\n  - OpenAI Whisper Python CLI: `pipx install openai-whisper` or `python3 -m pip install --user openai-whisper`\n  - whisper.cpp: build/install whisper.cpp so `whisper-cli` is on PATH\n\nFor push-to-talk recording, install `ffmpeg` with PulseAudio support or `arecord`."
+    "Speech-to-text uses OpenAI via HBSE (`openai-hbse` provider, `gpt-realtime-whisper` model). Before push-to-talk recording, Vegvisir runs `hbse broker unlock` so the broker can authorize the transcription request without exposing plaintext credentials.\n\nFor push-to-talk recording, install `ffmpeg` with PulseAudio support or `arecord`. Local Whisper CLI tools are retained only as diagnostic/fallback code paths, not the primary STT backend."
 }
 
 fn resolve_speech_audio_path(cwd: &Path, value: &str) -> anyhow::Result<PathBuf> {
@@ -184,6 +231,19 @@ mod tests {
         let app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
         assert_eq!(app.speech_ptt_key, None);
         Ok(())
+    }
+
+    #[test]
+    fn hbse_unlock_output_accepts_success() {
+        assert!(validate_hbse_broker_unlock_output(true, b"already unlocked", b"").is_ok());
+    }
+
+    #[test]
+    fn hbse_unlock_output_reports_failure_detail() {
+        let err = validate_hbse_broker_unlock_output(false, b"", b"broker locked or unavailable")
+            .expect_err("unlock failure should be reported");
+        assert!(err.to_string().contains("hbse broker unlock"));
+        assert!(err.to_string().contains("broker locked or unavailable"));
     }
 
     #[test]

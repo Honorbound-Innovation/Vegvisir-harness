@@ -63,6 +63,7 @@ mod workspace_state;
 
 use lsl_runtime::{compiled_lsl_selected_from_trace, prepare_lsl_augmented_content};
 pub use tui_loop::{run_tui, run_tui_with_dangerous_bypass};
+pub(crate) use util::is_turn_failure_summary;
 pub use util::workspace_project_id;
 use util::*;
 
@@ -1582,6 +1583,23 @@ mod tests {
                     .content
                     .contains("Turn failed before the model produced a normal final summary")
         }));
+
+        app.push_turn_failure_summary("simulated provider abort again".to_string());
+        let latest_failure_summary = app
+            .session
+            .messages
+            .iter()
+            .rev()
+            .find(|message| {
+                message.role == "system"
+                    && message.content.contains("simulated provider abort again")
+            })
+            .expect("latest failure summary");
+        assert!(
+            !latest_failure_summary
+                .content
+                .contains("- Turn failed before the model produced a normal final summary")
+        );
         Ok(())
     }
 

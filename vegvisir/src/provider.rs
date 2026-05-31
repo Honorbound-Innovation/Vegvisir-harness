@@ -4071,12 +4071,81 @@ pub enum ProviderRunEvent {
 }
 
 fn session_conversation_messages(session: &SessionState) -> Vec<ChatMessage> {
-    session
+    let messages = session
         .messages
         .iter()
         .filter(|message| message.role != "system")
         .cloned()
-        .collect()
+        .collect::<Vec<_>>();
+    fit_conversation_messages_to_budget(messages, provider_history_char_budget(session))
+}
+
+fn provider_history_char_budget(session: &SessionState) -> usize {
+    let approximate_chars = session.context_limit.saturating_mul(2) as usize;
+    approximate_chars.clamp(32_000, 240_000)
+}
+
+fn fit_conversation_messages_to_budget(
+    messages: Vec<ChatMessage>,
+    budget_chars: usize,
+) -> Vec<ChatMessage> {
+    let total_chars = messages
+        .iter()
+        .map(|message| message.content.chars().count())
+        .sum::<usize>();
+    if total_chars <= budget_chars {
+        return messages;
+    }
+
+    let mut kept = Vec::new();
+    let mut used_chars = 0usize;
+    for message in messages.iter().rev() {
+        let message_chars = message.content.chars().count();
+        if !kept.is_empty() && used_chars.saturating_add(message_chars) > budget_chars {
+            break;
+        }
+        if message_chars > budget_chars {
+            kept.push(truncate_conversation_message(message, budget_chars));
+            break;
+        }
+        kept.push(message.clone());
+        used_chars = used_chars.saturating_add(message_chars);
+    }
+    kept.reverse();
+
+    let omitted = messages.len().saturating_sub(kept.len());
+    if omitted > 0 {
+        kept.insert(
+            0,
+            ChatMessage {
+                role: "system".to_string(),
+                content: format!(
+                    "Earlier conversation history was omitted from this provider request because it exceeded the model context budget. Omitted messages: {omitted}."
+                ),
+                attachments: Vec::new(),
+                created_at: chrono::Utc::now(),
+            },
+        );
+    }
+    kept
+}
+
+fn truncate_conversation_message(message: &ChatMessage, budget_chars: usize) -> ChatMessage {
+    let marker =
+        "\n\n[Message truncated by Vegvisir before provider send to fit the model context budget.]";
+    let available = budget_chars.saturating_sub(marker.chars().count()).max(256);
+    let mut truncated = message.clone();
+    truncated.content = message
+        .content
+        .chars()
+        .rev()
+        .take(available)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<String>();
+    truncated.content.insert_str(0, marker);
+    truncated
 }
 
 fn approval_required_observation(observation: &Observation) -> bool {
@@ -4850,6 +4919,61 @@ mod tests {
                 .pointer("/reasoning/summary")
                 .and_then(Value::as_str),
             Some("auto")
+        );
+    }
+
+    #[test]
+    fn session_conversation_messages_uses_recent_bounded_suffix() {
+        let mut session = SessionState::new("/tmp/workspace", Vec::new(), Vec::new());
+        session.context_limit = 20_000;
+        session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "old request".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: "x".repeat(60_000),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        session.messages.push(ChatMessage {
+            role: "system".to_string(),
+            content: "Tool finished: read_file - ok: ".to_string() + &"y".repeat(60_000),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "latest request".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+
+        let provider_messages = session_conversation_messages(&session);
+        let total_chars = provider_messages
+            .iter()
+            .map(|message| message.content.chars().count())
+            .sum::<usize>();
+
+        assert!(total_chars <= provider_history_char_budget(&session) + 256);
+        assert!(provider_messages.first().is_some_and(|message| {
+            message.role == "system"
+                && message
+                    .content
+                    .contains("Earlier conversation history was omitted")
+        }));
+        assert!(
+            provider_messages
+                .iter()
+                .all(|message| !message.content.starts_with("Tool finished: read_file"))
+        );
+        assert_eq!(
+            provider_messages
+                .last()
+                .map(|message| message.content.as_str()),
+            Some("latest request")
         );
     }
 }

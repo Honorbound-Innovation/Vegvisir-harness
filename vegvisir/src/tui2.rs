@@ -12,7 +12,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::{
     app::{
         DiffOverlay, DiffOverlayRenderCache, DiffRenderer, InfoOverlay, ProfileOverlay,
-        TuiApplication,
+        TuiApplication, is_turn_failure_summary,
     },
     core::{Attachment, ChatMessage},
     guardrails::ApprovalRequest,
@@ -1024,6 +1024,7 @@ fn classify_system_message(content: &str) -> SystemMessageKind {
         || lower.starts_with("tool error:")
         || lower.starts_with("error:")
         || lower.starts_with("command failed:")
+        || is_turn_failure_summary(trimmed)
         || lower.starts_with("turn ended after an error")
         || lower.starts_with("i hit an error before")
     {
@@ -3969,6 +3970,12 @@ four",
         );
         assert_eq!(
             classify_system_message("Tool finished: run_command - error: command failed"),
+            SystemMessageKind::Error
+        );
+        assert_eq!(
+            classify_system_message(
+                "Turn failed before the model produced a normal final summary."
+            ),
             SystemMessageKind::Error
         );
         assert_eq!(

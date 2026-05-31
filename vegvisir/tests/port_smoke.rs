@@ -7053,8 +7053,10 @@ fn hbse_anthropic_provider_routes_messages_through_broker_socket() -> anyhow::Re
     assert_eq!(request["url"], "https://api.anthropic.example/v1/messages");
     assert_eq!(request["headers"]["anthropic-version"], "2023-06-01");
     let body = request["body"].as_str().unwrap();
-    assert!(body.contains("\"system\":\"Be exact\""));
-    assert!(body.contains("\"model\":\"claude-test\""));
+    let body_json: Value = serde_json::from_str(body)?;
+    assert_eq!(body_json["model"], "claude-test");
+    assert_eq!(body_json["system"][0]["type"], "text");
+    assert_eq!(body_json["system"][0]["text"], "Be exact");
     Ok(())
 }
 
