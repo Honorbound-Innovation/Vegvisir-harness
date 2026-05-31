@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "identifier": "com.honorboundinnovation.vegvisir.desktop",
   "build": {
-    "beforeDevCommand": "npm run check",
-    "beforeBuildCommand": "npm run check",
+    "beforeDevCommand": "npm run web:dev",
+    "beforeBuildCommand": "npm run check && npm run web:build",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../dist"
   },
@@ -28,6 +28,14 @@
     "targets": "all",
     "category": "DeveloperTool",
     "shortDescription": "Desktop shell for Vegvisir",
-    "longDescription": "A desktop interface for the Vegvisir agentic software development harness."
+    "longDescription": "A desktop interface for the Vegvisir agentic software development harness.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/256x256.png",
+      "icons/512x512.png",
+      "icons/icon.png"
+    ]
   }
 }

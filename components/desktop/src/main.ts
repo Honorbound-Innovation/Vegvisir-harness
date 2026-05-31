@@ -31,10 +31,11 @@ type StartBridgeRequest = {
   dangerousBypass?: boolean;
 };
 
-const app = document.querySelector<HTMLDivElement>('#app');
-if (!app) {
+const appElement = document.querySelector<HTMLDivElement>('#app');
+if (!appElement) {
   throw new Error('missing #app root');
 }
+const app = appElement;
 
 const state = {
   requestCounter: 0,
