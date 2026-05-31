@@ -26,7 +26,7 @@ const RED: Color = Color::Rgb(230, 86, 86);
 const BORDER: Color = Color::Rgb(62, 66, 76);
 const PANEL: Color = Color::Rgb(16, 17, 20);
 const ACTIVITY_LABEL_WIDTH: usize = 18;
-const THINKING_TRACE_VISIBLE_SECONDS: i64 = 3;
+const THINKING_TRACE_VISIBLE_MILLIS: i64 = 1_500;
 
 const FALLBACK_SPINNER_VERBS: &[&str] = &[
     "Architecting",
@@ -851,7 +851,7 @@ pub fn next_thinking_trace_expiry_at(
         .filter(|message| message.role == "assistant" && contains_thinking_trace(&message.content))
         .filter_map(|message| {
             let expires_at =
-                message.created_at + chrono::Duration::seconds(THINKING_TRACE_VISIBLE_SECONDS);
+                message.created_at + chrono::Duration::milliseconds(THINKING_TRACE_VISIBLE_MILLIS);
             (expires_at > now).then_some(expires_at)
         })
         .min()
@@ -862,7 +862,7 @@ fn visible_chat_message_content(message: &ChatMessage) -> String {
         return message.content.clone();
     }
     let age = chrono::Utc::now().signed_duration_since(message.created_at);
-    if age.num_seconds() < THINKING_TRACE_VISIBLE_SECONDS {
+    if age.num_milliseconds() < THINKING_TRACE_VISIBLE_MILLIS {
         return message.content.clone();
     }
     strip_thinking_trace_sections(&message.content)
@@ -3188,7 +3188,7 @@ mod tests {
             content: fresh.content.clone(),
             attachments: Vec::new(),
             created_at: chrono::Utc::now()
-                - chrono::Duration::seconds(THINKING_TRACE_VISIBLE_SECONDS + 1),
+                - chrono::Duration::milliseconds(THINKING_TRACE_VISIBLE_MILLIS + 1_000),
         };
         let expired_rendered = message_lines(&expired, 100, "")
             .iter()
@@ -3219,11 +3219,11 @@ mod tests {
         assert!(expires_at > chrono::Utc::now());
         assert_eq!(
             expires_at,
-            created_at + chrono::Duration::seconds(THINKING_TRACE_VISIBLE_SECONDS)
+            created_at + chrono::Duration::milliseconds(THINKING_TRACE_VISIBLE_MILLIS)
         );
 
         app.session.messages[0].created_at =
-            chrono::Utc::now() - chrono::Duration::seconds(THINKING_TRACE_VISIBLE_SECONDS + 1);
+            chrono::Utc::now() - chrono::Duration::milliseconds(THINKING_TRACE_VISIBLE_MILLIS + 1_000);
         assert!(next_thinking_trace_expiry_at(&app).is_none());
         Ok(())
     }
@@ -3252,7 +3252,7 @@ mod tests {
             .join("\n"),
             attachments: Vec::new(),
             created_at: chrono::Utc::now()
-                - chrono::Duration::seconds(THINKING_TRACE_VISIBLE_SECONDS + 1),
+                - chrono::Duration::milliseconds(THINKING_TRACE_VISIBLE_MILLIS + 1_000),
         };
 
         let rendered = message_lines(&message, 100, "")
