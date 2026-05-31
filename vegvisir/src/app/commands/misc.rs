@@ -555,6 +555,7 @@ impl TuiApplication {
 
     pub(crate) fn subagents_command(&mut self, args: &[String]) -> anyhow::Result<String> {
         match args.first().map(String::as_str) {
+            Some("policy") | Some("help") => Ok(Self::subagent_policy_help()),
             None | Some("list") | Some("tasks") => {
                 let records = self.load_subagent_records()?;
                 if records.is_empty() {
@@ -621,6 +622,35 @@ impl TuiApplication {
             }
             Some(other) => Ok(format!("Unknown /subagents command: {other}")),
         }
+    }
+
+    fn subagent_policy_help() -> String {
+        r#"Subagent delegation policy
+
+Vegvisir exposes `spawn_subagent` as a normal bounded delegation tool. The model receives hidden task-local orchestration guidance encouraging subagents for complex, multi-part, evidence-seeking work.
+
+Good subagent tasks:
+- codebase reconnaissance
+- focused test investigation
+- documentation review
+- compatibility checks
+- security review
+- design critique
+- migration impact analysis
+
+Boundaries:
+- do not spawn for trivial single-step tasks
+- do not delegate plaintext secrets or credential handling
+- do not delegate destructive actions or ambiguous external side effects
+- keep goals bounded, evidence-oriented, and low-step by default
+- never more than three active subagents at once
+
+Commands:
+/subagents list
+/subagents show <id-or-name>
+/subagents cancel <id-or-name>
+/subagents policy"#
+        .to_string()
     }
 
     pub(crate) fn subagent_board_path(&self) -> PathBuf {

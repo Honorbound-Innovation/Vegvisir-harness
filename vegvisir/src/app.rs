@@ -1887,6 +1887,67 @@ mod tests {
     }
 
     #[test]
+    fn subagent_delegation_context_wraps_user_task_for_model_turn() {
+        let wrapped = crate::app::runtime::apply_subagent_delegation_context(
+            "inspect provider and renderer behavior",
+        );
+        assert!(wrapped.contains("Vegvisir subagent delegation policy"));
+        assert!(wrapped.contains("proactively delegate"));
+        assert!(wrapped.contains("spawn_subagent"));
+        assert!(wrapped.contains("Do not spawn subagents for trivial"));
+        assert!(wrapped.contains("User request:\ninspect provider and renderer behavior"));
+    }
+
+    #[test]
+    fn spawn_subagent_tool_is_available_without_risky_mode() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        let tool = app.tool_registry.get("spawn_subagent")?;
+
+        assert!(!tool.risky);
+        assert!(tool.description.contains("Delegate a bounded task"));
+        Ok(())
+    }
+
+    #[test]
+    fn agent_prompt_is_addendum_to_default_harness_prompt() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        let mut profile = crate::core::AgentProfile::new(
+            "reviewer",
+            "Reviewer",
+            "You are a focused review specialist.",
+        )?;
+        profile.mode = "review".to_string();
+
+        app.apply_agent_profile(&profile)?;
+
+        assert!(app.session.system_prompt.contains("Vegvisir"));
+        assert!(
+            app.session
+                .system_prompt
+                .contains("# Active agent addendum")
+        );
+        assert!(
+            app.session
+                .system_prompt
+                .contains("focused review specialist")
+        );
+        assert!(
+            app.session
+                .system_prompt
+                .find("Vegvisir")
+                .unwrap_or(usize::MAX)
+                < app
+                    .session
+                    .system_prompt
+                    .find("# Active agent addendum")
+                    .unwrap_or(0)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn ctrl_c_cancels_in_flight_response_before_quitting() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;

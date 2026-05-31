@@ -30,6 +30,7 @@ use crate::{
 const LIST_FILES_DEFAULT_LIMIT: usize = 500;
 const LIST_FILES_MAX_LIMIT: usize = 2_000;
 const CHATGPT_ARCHIVE_EXCERPT_CHARS: usize = 1_800;
+const MAX_ACTIVE_SUBAGENTS: usize = 3;
 
 fn parse_skiller_forge_pass(value: Option<&str>) -> anyhow::Result<ForgePassType> {
     let raw = value.unwrap_or("skill_expansion").trim();
@@ -1497,6 +1498,18 @@ pub fn build_builtin_registry_with_cms_and_mode(
                 .map(str::to_string);
 
             let board_path = subagent_data_root.join("subagents.json");
+            match active_subagent_count(&board_path) {
+                Ok(active) if active >= MAX_ACTIVE_SUBAGENTS => {
+                    return Observation::err(
+                        format!(
+                            "Maximum active subagents reached ({MAX_ACTIVE_SUBAGENTS}). Wait for a running task to finish or cancel one with /subagents cancel <id>."
+                        ),
+                        "SubagentLimit",
+                    );
+                }
+                Err(error) => return Observation::err(error.to_string(), "SubagentBoardError"),
+                _ => {}
+            }
             let record = SubAgentTaskRecord {
                 id: Uuid::new_v4().to_string(),
                 name: name.clone(),
@@ -1557,10 +1570,44 @@ pub fn build_builtin_registry_with_cms_and_mode(
                 "agent": "string"
             }
         }),
-        true,
+        false,
     ))?;
 
     Ok(registry)
+}
+
+fn resolve_vegvisir_executable(workspace: &Path) -> anyhow::Result<PathBuf> {
+    if let Some(path) = std::env::var_os("VEGVISIR_BIN").map(PathBuf::from)
+        && path.exists()
+    {
+        return Ok(path);
+    }
+
+    if let Ok(current) = std::env::current_exe() {
+        if current.exists() {
+            return Ok(current);
+        }
+        if let Some(parent) = current.parent() {
+            for candidate in [parent.join("vegvisir"), parent.join("vegvisir-rust")] {
+                if candidate.exists() {
+                    return Ok(candidate);
+                }
+            }
+        }
+    }
+
+    for candidate in [
+        workspace.join("target/debug/vegvisir"),
+        workspace.join("vegvisir/target/debug/vegvisir"),
+        workspace.join("target/release/vegvisir"),
+        workspace.join("vegvisir/target/release/vegvisir"),
+    ] {
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    Ok(PathBuf::from("vegvisir"))
 }
 
 fn run_spawned_subagent(
@@ -1578,7 +1625,7 @@ fn run_spawned_subagent(
     let _ = upsert_subagent_record(&board_path, record.clone());
 
     let result = (|| -> anyhow::Result<String> {
-        let executable = std::env::current_exe()?;
+        let executable = resolve_vegvisir_executable(&workspace)?;
         let mut command = Command::new(executable);
         command.arg("--json");
         if let Some(provider) = provider {
@@ -1621,6 +1668,22 @@ fn run_spawned_subagent(
         }
     }
     let _ = upsert_subagent_record(&board_path, record);
+}
+
+fn active_subagent_count(path: &Path) -> anyhow::Result<usize> {
+    if !path.exists() {
+        return Ok(0);
+    }
+    let records = serde_json::from_str::<Vec<SubAgentTaskRecord>>(&std::fs::read_to_string(path)?)?;
+    Ok(records
+        .into_iter()
+        .filter(|record| {
+            matches!(
+                record.status,
+                SubAgentStatus::Queued | SubAgentStatus::Running
+            )
+        })
+        .count())
 }
 
 fn upsert_subagent_record(path: &Path, record: SubAgentTaskRecord) -> anyhow::Result<()> {

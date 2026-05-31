@@ -289,7 +289,7 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
         cmd(
             "/subagents",
             "inspect durable subagent task records",
-            "/subagents [list|show <id-or-name>|cancel <id-or-name>]",
+            "/subagents [list|show <id-or-name>|cancel <id-or-name>|policy]",
             &["/workers"],
         ),
         cmd(

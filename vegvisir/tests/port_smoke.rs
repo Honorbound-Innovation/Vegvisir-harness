@@ -39,8 +39,10 @@ use vegvisir_rust::{
     },
     retrieval::{InMemoryRetriever, RetrievalDocument},
     sandbox::WorkspaceSandbox,
-    tools::{Tool, ToolRegistry, build_builtin_registry, build_builtin_registry_with_cms},
-    types::{AgentDecision, Message, Observation, Role},
+    tools::{
+        Tool, ToolExecutor, ToolRegistry, build_builtin_registry, build_builtin_registry_with_cms,
+    },
+    types::{AgentDecision, Message, Observation, Role, ToolCall},
     ui::layout::visible_width,
 };
 
@@ -8519,7 +8521,7 @@ fn builtin_registry_exposes_spawn_subagent_tool() -> anyhow::Result<()> {
     let registry = build_builtin_registry(tmp.path())?;
     let tool = registry.get("spawn_subagent")?;
 
-    assert!(tool.risky);
+    assert!(!tool.risky);
     assert!(tool.description.contains("background Vegvisir child agent"));
     assert!(
         tool.schema["required"]
@@ -8527,6 +8529,70 @@ fn builtin_registry_exposes_spawn_subagent_tool() -> anyhow::Result<()> {
             .unwrap()
             .iter()
             .any(|value| value == "goal")
+    );
+    Ok(())
+}
+
+#[test]
+fn spawn_subagent_enforces_three_active_task_limit() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let home = tmp.path().join("home");
+    fs::create_dir_all(&home)?;
+    let active_records = (0..3)
+        .map(|index| vegvisir_rust::subagents::SubAgentTaskRecord {
+            id: format!("task-{index}"),
+            name: format!("worker-{index}"),
+            workspace: tmp.path().to_path_buf(),
+            goal: "bounded review".to_string(),
+            status: vegvisir_rust::subagents::SubAgentStatus::Running,
+            created_at: Utc::now(),
+            started_at: Some(Utc::now()),
+            finished_at: None,
+            checkpoint: None,
+            final_answer: None,
+            error: None,
+        })
+        .collect::<Vec<_>>();
+    fs::write(
+        home.join("subagents.json"),
+        serde_json::to_string_pretty(&active_records)?,
+    )?;
+
+    let cms_config = VegvisirCmsConfig {
+        db_path: home.join("cms-v2.sqlite3"),
+        user_id: "test-user".to_string(),
+        project_id: Some("test-project".to_string()),
+        context_mode: cms_v2::ecm::ContextMode::Project,
+        commit_writebacks: true,
+    };
+    let mut executor = ToolExecutor {
+        registry: vegvisir_rust::tools::build_builtin_registry_with_cms_and_mode(
+            tmp.path(),
+            cms_config,
+            false,
+        )?,
+        guardrails: GuardrailEngine {
+            policy: PermissionPolicy::default(),
+            approvals: Default::default(),
+        },
+        runtime_policy: Default::default(),
+        logger: Default::default(),
+    };
+
+    let observation = executor.execute(ToolCall {
+        name: "spawn_subagent".to_string(),
+        args: serde_json::from_value(json!({
+            "goal": "another bounded review",
+            "name": "worker-overflow"
+        }))?,
+    });
+
+    assert!(!observation.ok);
+    assert_eq!(observation.error.as_deref(), Some("SubagentLimit"));
+    assert!(
+        observation
+            .content
+            .contains("Maximum active subagents reached (3)")
     );
     Ok(())
 }

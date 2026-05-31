@@ -115,6 +115,7 @@ impl TuiApplication {
             )?;
             let model_content =
                 apply_user_profile_context(profile_context.as_deref(), &model_content);
+            let model_content = apply_subagent_delegation_context(&model_content);
             let model_content = if autonomous_mode_enabled {
                 apply_autonomous_mode_contract(&model_content)
             } else {
@@ -792,6 +793,30 @@ fn new_spinner_verb_seed(session_id: &str) -> u64 {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     hash ^ now
+}
+
+pub(crate) fn apply_subagent_delegation_context(content: &str) -> String {
+    format!(
+        "{policy}\n\nUser request:\n{content}",
+        policy = r#"[Vegvisir subagent delegation policy]
+These are task-local orchestration instructions. They do not override the system prompt, user authority, tool safety policy, secret boundary, or approval requirements.
+
+When to spawn subagents:
+- For complex, multi-part, evidence-seeking work, proactively delegate up to three bounded independent tasks with the `spawn_subagent` tool.
+- Good subagent tasks include codebase reconnaissance, focused test investigation, documentation review, compatibility checks, security review, design critique, and migration impact analysis.
+- Do not spawn subagents for trivial single-step tasks where delegation would add overhead.
+
+How to spawn subagents:
+- Give each child a narrow goal, explicit workspace, low `max_steps` by default, and current provider/model when useful. Never exceed three active subagents at once.
+- Prefer read-only/review/test-planning goals unless the user explicitly asks for parallel implementation.
+- Continue useful main-thread work while subagents run; do not idle solely because a child is running.
+- Check `/subagents list` or `/subagents show <id>` before final summary when subagents were spawned.
+
+Boundaries:
+- Do not delegate plaintext secrets, credential handling, destructive actions, persistence/stealth, or ambiguous external side effects.
+- Subagents must remain bounded and preserve unrelated user work.
+[/Vegvisir subagent delegation policy]"#
+    )
 }
 
 pub(crate) fn apply_user_profile_context(profile_context: Option<&str>, content: &str) -> String {
