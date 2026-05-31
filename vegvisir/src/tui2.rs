@@ -962,7 +962,7 @@ fn classify_system_message(content: &str) -> SystemMessageKind {
     SystemMessageKind::Note
 }
 
-fn render_markdown(text: &str, width: usize, base_style: Style) -> Vec<Line<'static>> {
+fn render_markdown_only(text: &str, width: usize, base_style: Style) -> Vec<Line<'static>> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
     let parser = Parser::new_ext(text, options);
@@ -1120,6 +1120,397 @@ fn render_markdown(text: &str, width: usize, base_style: Style) -> Vec<Line<'sta
         out.push(Line::from(""));
     }
     out
+}
+
+fn render_markdown(text: &str, width: usize, base_style: Style) -> Vec<Line<'static>> {
+    render_chat_content(text, width, base_style)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChatContentSegmentKind {
+    Markdown,
+    Code,
+    Diff,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ChatContentSegment {
+    kind: ChatContentSegmentKind,
+    language: String,
+    content: String,
+}
+
+fn render_chat_content(text: &str, width: usize, base_style: Style) -> Vec<Line<'static>> {
+    let segments = segment_chat_content(text);
+    if segments.is_empty() {
+        return vec![Line::from("")];
+    }
+
+    let mut out = Vec::new();
+    for (index, segment) in segments.iter().enumerate() {
+        if index > 0 && !out.last().is_some_and(is_blank_line) {
+            out.push(Line::from(""));
+        }
+        match segment.kind {
+            ChatContentSegmentKind::Markdown => {
+                out.extend(render_markdown_only(&segment.content, width, base_style));
+            }
+            ChatContentSegmentKind::Code | ChatContentSegmentKind::Diff => {
+                render_code_block(&mut out, &segment.language, &segment.content, width);
+            }
+        }
+    }
+    while out.last().is_some_and(is_blank_line) {
+        out.pop();
+    }
+    if out.is_empty() {
+        out.push(Line::from(""));
+    }
+    out
+}
+
+fn is_blank_line(line: &Line<'static>) -> bool {
+    line.spans.is_empty()
+        || line
+            .spans
+            .iter()
+            .all(|span| span.content.as_ref().trim().is_empty())
+}
+
+fn segment_chat_content(text: &str) -> Vec<ChatContentSegment> {
+    let mut segments = Vec::new();
+    let mut markdown = Vec::<String>::new();
+    let mut code = Vec::<String>::new();
+    let mut code_kind = ChatContentSegmentKind::Code;
+    let mut code_language = String::from("text");
+    let mut in_fence = false;
+    let mut raw_diff_mode = false;
+
+    let flush_markdown = |segments: &mut Vec<ChatContentSegment>, markdown: &mut Vec<String>| {
+        if markdown.iter().any(|line| !line.trim().is_empty()) {
+            segments.push(ChatContentSegment {
+                kind: ChatContentSegmentKind::Markdown,
+                language: String::new(),
+                content: markdown.join("\n"),
+            });
+        }
+        markdown.clear();
+    };
+    let flush_code = |segments: &mut Vec<ChatContentSegment>,
+                      code: &mut Vec<String>,
+                      kind: ChatContentSegmentKind,
+                      language: &str| {
+        if code.iter().any(|line| !line.trim().is_empty()) {
+            segments.push(ChatContentSegment {
+                kind,
+                language: language.to_string(),
+                content: trim_blank_edge_lines(code).join("\n"),
+            });
+        }
+        code.clear();
+    };
+
+    let mut pending_code = Vec::<String>::new();
+    let mut pending_language = String::from("text");
+
+    let flush_pending_code_as_markdown = |markdown: &mut Vec<String>, pending: &mut Vec<String>| {
+        markdown.append(pending);
+    };
+    let flush_pending_code_as_code = |segments: &mut Vec<ChatContentSegment>,
+                                      markdown: &mut Vec<String>,
+                                      pending: &mut Vec<String>,
+                                      language: &str| {
+        flush_markdown(segments, markdown);
+        if pending.iter().any(|line| !line.trim().is_empty()) {
+            segments.push(ChatContentSegment {
+                kind: ChatContentSegmentKind::Code,
+                language: language.to_string(),
+                content: trim_blank_edge_lines(pending).join("\n"),
+            });
+        }
+        pending.clear();
+    };
+
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            // Existing fenced blocks are valid Markdown. Keep them in the
+            // Markdown segment so pulldown-cmark preserves the declared language.
+            if !pending_code.is_empty() {
+                if pending_code_should_render_as_code(&pending_code) {
+                    flush_pending_code_as_code(
+                        &mut segments,
+                        &mut markdown,
+                        &mut pending_code,
+                        &pending_language,
+                    );
+                } else {
+                    flush_pending_code_as_markdown(&mut markdown, &mut pending_code);
+                }
+            }
+            markdown.push(line.to_string());
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            markdown.push(line.to_string());
+            continue;
+        }
+
+        if raw_diff_mode {
+            if line.trim().is_empty() {
+                flush_code(&mut segments, &mut code, code_kind, &code_language);
+                raw_diff_mode = false;
+                markdown.push(line.to_string());
+            } else {
+                code.push(line.to_string());
+            }
+            continue;
+        }
+
+        if is_raw_diff_start(line) {
+            if !pending_code.is_empty() {
+                if pending_code_should_render_as_code(&pending_code) {
+                    flush_pending_code_as_code(
+                        &mut segments,
+                        &mut markdown,
+                        &mut pending_code,
+                        &pending_language,
+                    );
+                } else {
+                    flush_pending_code_as_markdown(&mut markdown, &mut pending_code);
+                }
+            }
+            flush_markdown(&mut segments, &mut markdown);
+            raw_diff_mode = true;
+            code_kind = ChatContentSegmentKind::Diff;
+            code_language = String::from("diff");
+            code.push(line.to_string());
+            continue;
+        }
+
+        if is_unfenced_code_line(line) {
+            if pending_code.is_empty() {
+                pending_language = detect_code_language(line);
+            } else if pending_language == "text" {
+                pending_language = detect_code_language(line);
+            }
+            pending_code.push(line.to_string());
+            continue;
+        }
+
+        if !pending_code.is_empty() {
+            if line.trim().is_empty() {
+                pending_code.push(line.to_string());
+                continue;
+            }
+            if pending_code_should_render_as_code(&pending_code) {
+                flush_pending_code_as_code(
+                    &mut segments,
+                    &mut markdown,
+                    &mut pending_code,
+                    &pending_language,
+                );
+            } else {
+                flush_pending_code_as_markdown(&mut markdown, &mut pending_code);
+            }
+        }
+        markdown.push(line.to_string());
+    }
+
+    if raw_diff_mode {
+        flush_code(&mut segments, &mut code, code_kind, &code_language);
+    }
+    if !pending_code.is_empty() {
+        if pending_code_should_render_as_code(&pending_code) {
+            flush_pending_code_as_code(
+                &mut segments,
+                &mut markdown,
+                &mut pending_code,
+                &pending_language,
+            );
+        } else {
+            flush_pending_code_as_markdown(&mut markdown, &mut pending_code);
+        }
+    }
+    flush_markdown(&mut segments, &mut markdown);
+    segments
+}
+
+fn trim_blank_edge_lines(lines: &[String]) -> Vec<String> {
+    let start = lines
+        .iter()
+        .position(|line| !line.trim().is_empty())
+        .unwrap_or(lines.len());
+    let end = lines
+        .iter()
+        .rposition(|line| !line.trim().is_empty())
+        .map(|index| index + 1)
+        .unwrap_or(start);
+    lines[start..end].to_vec()
+}
+
+fn pending_code_should_render_as_code(lines: &[String]) -> bool {
+    let significant = lines
+        .iter()
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>();
+    if significant.len() >= 2 {
+        return true;
+    }
+    significant
+        .first()
+        .is_some_and(|line| is_strong_single_line_code(line))
+}
+
+fn is_raw_diff_start(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with("diff --git ")
+        || trimmed.starts_with("@@ ")
+        || trimmed.starts_with("--- ")
+        || trimmed.starts_with("+++ ")
+        || trimmed.starts_with("index ")
+}
+
+fn is_unfenced_code_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if line.starts_with("    ") || line.starts_with('\t') {
+        return true;
+    }
+    if trimmed.starts_with("//")
+        || trimmed.starts_with("/*")
+        || trimmed.starts_with("*/")
+        || trimmed.starts_with('#') && !trimmed.starts_with("# ")
+    {
+        return true;
+    }
+    if trimmed.starts_with('{') || trimmed.starts_with('}') || trimmed.starts_with(']') {
+        return true;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let code_prefixes = [
+        "fn ",
+        "pub ",
+        "use ",
+        "impl ",
+        "struct ",
+        "enum ",
+        "trait ",
+        "let ",
+        "const ",
+        "static ",
+        "mod ",
+        "type ",
+        "async ",
+        "await ",
+        "match ",
+        "return ",
+        "class ",
+        "def ",
+        "import ",
+        "from ",
+        "function ",
+        "export ",
+        "interface ",
+        "package ",
+        "public ",
+        "private ",
+        "protected ",
+        "namespace ",
+        "using ",
+        "#include",
+        "if (",
+        "for (",
+        "while (",
+        "switch (",
+        "select ",
+        "insert ",
+        "update ",
+        "delete ",
+        "create ",
+        "alter ",
+        "drop ",
+        "contract ",
+        "prompt ",
+    ];
+    if code_prefixes.iter().any(|prefix| lower.starts_with(prefix)) {
+        return true;
+    }
+    let has_code_punctuation = trimmed.ends_with(';')
+        || trimmed.ends_with('{')
+        || trimmed.ends_with('}')
+        || trimmed.contains("=>")
+        || trimmed.contains("::")
+        || trimmed.contains(" := ")
+        || trimmed.contains(" = ")
+        || trimmed.contains(" == ")
+        || trimmed.contains(" != ")
+        || trimmed.contains(" && ")
+        || trimmed.contains(" || ");
+    has_code_punctuation && !looks_like_plain_sentence(trimmed)
+}
+
+fn is_strong_single_line_code(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with("diff --git ")
+        || trimmed.starts_with("@@ ")
+        || trimmed.ends_with(';')
+        || trimmed.ends_with('{')
+        || trimmed.ends_with('}')
+        || trimmed.contains("=>")
+        || trimmed.contains("::")
+        || trimmed.contains(" := ")
+        || trimmed.starts_with("fn ")
+        || trimmed.starts_with("def ")
+        || trimmed.starts_with("class ")
+        || trimmed.starts_with("function ")
+}
+
+fn looks_like_plain_sentence(trimmed: &str) -> bool {
+    trimmed.contains(' ')
+        && trimmed.ends_with('.')
+        && !trimmed.contains(';')
+        && !trimmed.contains('{')
+        && !trimmed.contains('}')
+}
+
+fn detect_code_language(line: &str) -> String {
+    let trimmed = line.trim_start();
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("fn ")
+        || lower.starts_with("pub ")
+        || lower.starts_with("impl ")
+        || lower.starts_with("struct ")
+        || lower.starts_with("enum ")
+        || lower.starts_with("use ")
+        || lower.starts_with("let ")
+    {
+        "rust".to_string()
+    } else if lower.starts_with("def ")
+        || lower.starts_with("from ")
+        || lower.starts_with("import ")
+    {
+        "python".to_string()
+    } else if lower.starts_with("function ")
+        || lower.starts_with("const ")
+        || lower.starts_with("export ")
+        || lower.starts_with("interface ")
+    {
+        "typescript".to_string()
+    } else if lower.starts_with("select ")
+        || lower.starts_with("insert ")
+        || lower.starts_with("update ")
+        || lower.starts_with("delete ")
+    {
+        "sql".to_string()
+    } else if lower.starts_with("contract ") || lower.starts_with("prompt ") {
+        "usrl".to_string()
+    } else {
+        "text".to_string()
+    }
 }
 
 #[derive(Default)]
@@ -2619,6 +3010,92 @@ mod tests {
 
         assert_eq!(fn_span.style.fg, Some(CYAN));
         assert_eq!(string_span.style.fg, Some(GREEN));
+    }
+
+    #[test]
+    fn ratatui_chat_renderer_preserves_unfenced_assistant_code() {
+        let content = [
+            "Here is the implementation:",
+            "",
+            "pub struct RenderedCode {",
+            "    pub path: String,",
+            "}",
+            "",
+            "And it should remain visible in chat.",
+        ]
+        .join("\n");
+
+        let lines = render_markdown(&content, 80, Style::default().fg(FG));
+        let rendered = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect::<String>();
+
+        assert!(rendered.contains("Here is the implementation"));
+        assert!(rendered.contains("rust"));
+        assert!(rendered.contains("pub struct RenderedCode"));
+        assert!(rendered.contains("pub path: String"));
+        assert!(rendered.contains("And it should remain visible"));
+    }
+
+    #[test]
+    fn ratatui_chat_renderer_preserves_raw_unfenced_diffs() {
+        let content = [
+            "Patch preview:",
+            "diff --git a/src/lib.rs b/src/lib.rs",
+            "--- a/src/lib.rs",
+            "+++ b/src/lib.rs",
+            "@@ -1,2 +1,2 @@",
+            "-old();",
+            "+new();",
+        ]
+        .join("\n");
+
+        let lines = render_markdown(&content, 80, Style::default().fg(FG));
+        let rendered = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect::<String>();
+
+        assert!(rendered.contains("Patch preview"));
+        assert!(rendered.contains("diff"));
+        assert!(rendered.contains("diff --git a/src/lib.rs b/src/lib.rs"));
+        assert!(rendered.contains("-old();"));
+        assert!(rendered.contains("+new();"));
+    }
+
+    #[test]
+    fn ratatui_chat_transcript_keeps_assistant_code_but_excludes_tool_log() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app =
+            crate::app::TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: "Generated code:\nfn visible_in_chat() {}".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        app.session.messages.push(ChatMessage {
+            role: "system".to_string(),
+            content: "Tool finished: run_command - ok: cargo check passed".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+
+        let chat = chat_lines(&app, 100)
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect::<String>();
+        let tool_log = tool_log_lines(&app, 100, 5)
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect::<String>();
+
+        assert!(chat.contains("Generated code"));
+        assert!(chat.contains("fn visible_in_chat()"));
+        assert!(!chat.contains("Tool finished: run_command"));
+        assert!(tool_log.contains("Tool finished: run_command"));
+        Ok(())
     }
 
     #[test]
