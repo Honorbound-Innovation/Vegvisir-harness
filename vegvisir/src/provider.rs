@@ -76,7 +76,7 @@ fn max_tool_rounds() -> usize {
     get_env("VEGVISIR_MAX_TOOL_ROUNDS")
         .and_then(|value| value.trim().parse::<usize>().ok())
         .filter(|value| *value > 0)
-        .unwrap_or(usize::MAX)
+        .unwrap_or(12)
 }
 
 pub fn configured_max_tool_rounds() -> Option<usize> {
@@ -91,7 +91,7 @@ pub fn configured_max_tool_rounds() -> Option<usize> {
 pub fn configured_max_tool_rounds_label() -> String {
     configured_max_tool_rounds()
         .map(|rounds| rounds.to_string())
-        .unwrap_or_else(|| "unlimited".to_string())
+        .unwrap_or_else(|| "12".to_string())
 }
 
 pub fn set_runtime_max_tool_rounds(limit: Option<usize>) -> Option<usize> {
@@ -4791,6 +4791,21 @@ pub mod test_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_tool_round_limit_is_bounded() {
+        RUNTIME_MAX_TOOL_ROUNDS.store(0, Ordering::Relaxed);
+        assert_eq!(configured_max_tool_rounds(), Some(12));
+        assert_eq!(configured_max_tool_rounds_label(), "12");
+    }
+
+    #[test]
+    fn runtime_tool_round_limit_override_still_applies() {
+        let previous = RUNTIME_MAX_TOOL_ROUNDS.swap(0, Ordering::Relaxed);
+        assert_eq!(set_runtime_max_tool_rounds(Some(3)), Some(3));
+        assert_eq!(configured_max_tool_rounds(), Some(3));
+        RUNTIME_MAX_TOOL_ROUNDS.store(previous, Ordering::Relaxed);
+    }
 
     #[test]
     fn completed_tool_observation_marks_tool_errors_failed() {

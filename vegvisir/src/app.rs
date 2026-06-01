@@ -128,6 +128,7 @@ pub struct TuiApplication {
     pub drag_current: Option<(u16, u16)>,
     pub autonomy: AutonomyState,
     pub observed_subagent_transcript_signatures: BTreeMap<String, String>,
+    pub last_subagent_board_poll: Option<std::time::Instant>,
 }
 
 enum StreamEvent {
@@ -700,6 +701,7 @@ impl TuiApplication {
             drag_current: None,
             autonomy: AutonomyState::default(),
             observed_subagent_transcript_signatures: BTreeMap::new(),
+            last_subagent_board_poll: None,
         };
         app.autoload_workspace_session()?;
         app.seed_observed_subagent_transcript_signatures();
@@ -1469,6 +1471,7 @@ mod tests {
         let tmp = tempfile::tempdir()?;
         let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
         app.session.status = "streaming".to_string();
+        app.session.activity = "thinking".to_string();
         app.redraw_requested = false;
 
         app.pulse_activity();
@@ -1739,6 +1742,39 @@ mod tests {
         assert!(app.chat_scroll_offset < first_offset);
         app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(!app.search_open);
+        Ok(())
+    }
+
+    #[test]
+    fn subagent_board_poll_is_throttled_when_nothing_changed() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace)?;
+        let data_root = tmp.path().join("home");
+        let mut app = TuiApplication::with_data_root(&workspace, &data_root)?;
+        app.observed_subagent_transcript_signatures
+            .insert("existing".to_string(), "signature".to_string());
+
+        assert!(!app.poll_subagent_transcript_updates());
+        let first_poll = app.last_subagent_board_poll;
+        assert!(first_poll.is_some());
+        assert!(!app.poll_subagent_transcript_updates());
+        assert_eq!(app.last_subagent_board_poll, first_poll);
+        Ok(())
+    }
+
+    #[test]
+    fn idle_streaming_pulse_does_not_force_redraw_without_activity_text() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.session.status = "streaming".to_string();
+        app.session.activity.clear();
+        app.redraw_requested = false;
+
+        app.pulse_activity();
+
+        assert_eq!(app.session.activity_tick, 1);
+        assert!(!app.redraw_requested);
         Ok(())
     }
 

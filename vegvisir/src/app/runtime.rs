@@ -5,6 +5,7 @@ use std::{
         mpsc,
     },
     thread,
+    time::{Duration, Instant},
 };
 
 use serde_json::json;
@@ -372,6 +373,20 @@ impl TuiApplication {
     }
 
     pub(crate) fn poll_subagent_transcript_updates(&mut self) -> bool {
+        if self.observed_subagent_transcript_signatures.is_empty()
+            && !self.subagent_board_path().exists()
+        {
+            return false;
+        }
+        let now = Instant::now();
+        if self
+            .last_subagent_board_poll
+            .is_some_and(|last_poll| now.duration_since(last_poll) < Duration::from_millis(500))
+        {
+            return false;
+        }
+        self.last_subagent_board_poll = Some(now);
+
         let Ok(records) = self.load_subagent_records() else {
             return false;
         };
@@ -816,7 +831,9 @@ Next step: I should retry or continue from the last successful step instead of l
             return;
         }
         self.session.activity_tick = self.session.activity_tick.saturating_add(1);
-        self.redraw_requested = true;
+        if !self.session.activity.trim().is_empty() {
+            self.redraw_requested = true;
+        }
     }
 }
 

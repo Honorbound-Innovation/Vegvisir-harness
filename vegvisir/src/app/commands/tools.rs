@@ -243,14 +243,14 @@ impl TuiApplication {
         match args.first().map(String::as_str) {
             None | Some("show") | Some("status") => format!(
                 "Max tool-call rounds per turn: {}
-Default: unlimited
-Usage: /tool-limit <rounds>|unlimited",
+Default: 12 (set VEGVISIR_MAX_TOOL_ROUNDS or /tool-limit to override)
+Usage: /tool-limit <rounds>|default",
                 configured_max_tool_rounds_label(),
             ),
             Some("default") | Some("reset") | Some("clear") | Some("unlimited") | Some("none") => {
                 let effective = set_runtime_max_tool_rounds(None)
                     .map(|rounds| rounds.to_string())
-                    .unwrap_or_else(|| "unlimited".to_string());
+                    .unwrap_or_else(|| "12".to_string());
                 format!("Max tool-call rounds reset to {effective}.")
             }
             Some(raw) => match raw.parse::<usize>() {
@@ -261,7 +261,7 @@ Usage: /tool-limit <rounds>|unlimited",
                         "Max tool-call rounds per turn set to {effective} for this running session."
                     )
                 }
-                Err(_) => "Usage: /tool-limit <rounds>|unlimited".to_string(),
+                Err(_) => "Usage: /tool-limit <rounds>|default".to_string(),
             },
         }
     }
