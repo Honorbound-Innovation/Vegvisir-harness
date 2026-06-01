@@ -2927,10 +2927,20 @@ fn parse_response_sse_text_reader<R: BufRead>(
     if output.is_empty() && !body_lines.is_empty() {
         let value: Value = serde_json::from_str(&body_lines.join("\n"))?;
         if let Some(text) = extract_response_text(&value) {
-            output.push_str(&text);
-            on_delta(&text);
+            emit_response_output_delta(
+                &text,
+                &mut output,
+                on_delta,
+                emitted_reasoning_trace,
+                &mut emitted_answer_header,
+            );
         }
     }
+    close_reasoning_trace_if_unanswered(
+        on_delta,
+        emitted_reasoning_trace,
+        emitted_answer_header,
+    );
     if output.is_empty() {
         anyhow::bail!("openai-sso response stream did not contain assistant text.");
     }
@@ -3061,8 +3071,13 @@ fn parse_response_sse_value_reader<R: BufRead>(
             && let Some(text) = extract_response_text(&response)
             && !text.is_empty()
         {
-            on_delta(&text);
-            output_text = text;
+            emit_response_output_delta(
+                &text,
+                &mut output_text,
+                on_delta,
+                emitted_reasoning_trace,
+                &mut emitted_answer_header,
+            );
         }
         if !output_text.is_empty() && response.get("output_text").is_none() {
             response["output_text"] = Value::String(output_text);
@@ -3077,11 +3092,21 @@ fn parse_response_sse_value_reader<R: BufRead>(
         }
     }
     if !output.is_empty() || !output_text.is_empty() {
+        close_reasoning_trace_if_unanswered(
+            on_delta,
+            emitted_reasoning_trace,
+            emitted_answer_header,
+        );
         return Ok(json!({
             "output": output,
             "output_text": output_text,
         }));
     }
+    close_reasoning_trace_if_unanswered(
+        on_delta,
+        emitted_reasoning_trace,
+        emitted_answer_header,
+    );
     if !body_lines.is_empty() {
         return Ok(serde_json::from_str(&body_lines.join("\n"))?);
     }
@@ -3150,7 +3175,7 @@ fn emit_reasoning_trace_delta(
         return;
     }
     if !*emitted_reasoning_trace {
-        on_delta("\n\n**Thinking trace**\n\n");
+        on_delta("\n\n**Thinking trace**\n\n```text\n");
         *emitted_reasoning_trace = true;
     }
     on_delta(delta);
@@ -3167,11 +3192,21 @@ fn emit_response_output_delta(
         return;
     }
     if emitted_reasoning_trace && !*emitted_answer_header {
-        on_delta("\n\n**Answer**\n\n");
+        on_delta("\n```\n\n**Answer**\n\n");
         *emitted_answer_header = true;
     }
     output.push_str(delta);
     on_delta(delta);
+}
+
+fn close_reasoning_trace_if_unanswered(
+    on_delta: &mut dyn FnMut(&str),
+    emitted_reasoning_trace: bool,
+    emitted_answer_header: bool,
+) {
+    if emitted_reasoning_trace && !emitted_answer_header {
+        on_delta("\n```\n");
+    }
 }
 
 fn response_event_text(value: &Value) -> anyhow::Result<Option<String>> {
@@ -4863,8 +4898,8 @@ mod tests {
             Some("Final answer.")
         );
         assert!(visible.contains("**Thinking trace**"));
-        assert!(visible.contains("Checking context."));
-        assert!(visible.contains("**Answer**"));
+        assert!(visible.contains("```text\nChecking context."));
+        assert!(visible.contains("\n```\n\n**Answer**"));
         assert!(visible.ends_with("Final answer."));
         Ok(())
     }
