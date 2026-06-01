@@ -29,6 +29,7 @@ type StartBridgeRequest = {
   agent?: string;
   vegvisirBinary?: string;
   dangerousBypass?: boolean;
+  autoStart?: boolean;
 };
 
 const appElement = document.querySelector<HTMLDivElement>('#app');
@@ -40,6 +41,8 @@ const app = appElement;
 const state = {
   requestCounter: 0,
   bridgeRunning: false,
+  bridgePid: null as number | null,
+  autoStartAttempted: false,
   session: null as any,
   events: [] as BridgeEvent[],
   messages: [] as Message[],
@@ -60,20 +63,20 @@ const state = {
 
 function loadSettings(): StartBridgeRequest {
   const raw = localStorage.getItem('vegvisir.desktop.settings');
-  if (!raw) {
-    return {
-      vegvisirBinary: 'vegvisir',
-      workspace: '',
-      provider: '',
-      model: '',
-      agent: '',
-      dangerousBypass: false,
-    };
-  }
+  const defaults: StartBridgeRequest = {
+    vegvisirBinary: 'vegvisir',
+    workspace: '',
+    provider: '',
+    model: '',
+    agent: '',
+    dangerousBypass: false,
+    autoStart: true,
+  };
+  if (!raw) return defaults;
   try {
-    return JSON.parse(raw);
+    return { ...defaults, ...JSON.parse(raw) };
   } catch {
-    return { vegvisirBinary: 'vegvisir' };
+    return defaults;
   }
 }
 
@@ -97,11 +100,15 @@ async function startBridge(): Promise<void> {
   try {
     const status = await invoke<{ running: boolean; pid?: number }>('bridge_start', { request: compactSettings() });
     state.bridgeRunning = status.running;
+    state.bridgePid = status.pid ?? null;
     render();
     await send('initialize', {}, 'initialize');
     await refreshEverything();
   } catch (error) {
+    state.bridgeRunning = false;
+    state.bridgePid = null;
     state.error = String(error);
+    state.activePanel = 'settings';
     render();
   }
 }
@@ -109,6 +116,7 @@ async function startBridge(): Promise<void> {
 function compactSettings(): StartBridgeRequest {
   const result: StartBridgeRequest = {};
   for (const [key, value] of Object.entries(state.settings)) {
+    if (key === 'autoStart') continue;
     if (typeof value === 'string' && value.trim() !== '') {
       (result as any)[key] = value.trim();
     } else if (typeof value === 'boolean') {
@@ -121,11 +129,24 @@ function compactSettings(): StartBridgeRequest {
 async function stopBridge(): Promise<void> {
   await invoke('bridge_stop');
   state.bridgeRunning = false;
+  state.bridgePid = null;
   state.session = null;
   state.events = [];
   state.messages = [];
   state.pendingAssistant = '';
   render();
+}
+
+async function refreshStatus(): Promise<void> {
+  try {
+    const status = await invoke<{ running: boolean; pid?: number }>('bridge_status');
+    state.bridgeRunning = status.running;
+    state.bridgePid = status.pid ?? null;
+  } catch (error) {
+    state.bridgeRunning = false;
+    state.bridgePid = null;
+    state.error = String(error);
+  }
 }
 
 async function refreshEverything(): Promise<void> {
@@ -143,10 +164,13 @@ async function refreshEverything(): Promise<void> {
 }
 
 async function pollBridge(): Promise<void> {
-  if (!state.bridgeRunning) return;
+  if (!state.bridgeRunning) {
+    await refreshStatus();
+    if (state.autoStartAttempted) render();
+    return;
+  }
   try {
     const lines = await invoke<string[]>('bridge_poll');
-    if (!lines.length) return;
     for (const line of lines) {
       try {
         handleEvent(JSON.parse(line));
@@ -154,7 +178,10 @@ async function pollBridge(): Promise<void> {
         handleEvent({ type: 'bridge.raw', payload: { line } });
       }
     }
-    render();
+    await refreshStatus();
+    if (lines.length) {
+      render();
+    }
   } catch (error) {
     state.error = String(error);
     render();
@@ -168,6 +195,18 @@ function handleEvent(event: BridgeEvent): void {
   }
 
   switch (event.type) {
+    case 'desktop.bridge.spawned':
+      break;
+    case 'desktop.bridge.exited':
+      state.bridgeRunning = false;
+      state.bridgePid = null;
+      state.error = `Bridge exited: ${event.payload?.status ?? 'unknown status'}`;
+      break;
+    case 'desktop.bridge.error':
+      state.bridgeRunning = false;
+      state.bridgePid = null;
+      state.error = event.payload?.message ?? 'bridge error';
+      break;
     case 'server.ready':
     case 'session.status':
     case 'session.started':
@@ -298,9 +337,9 @@ function render(): void {
       <main class="main">
         <header class="topbar">
           <div>${sessionSummary()}</div>
-          <div class="status ${state.bridgeRunning ? 'ok' : ''}">${state.bridgeRunning ? 'bridge online' : 'bridge offline'}</div>
+          <div class="status ${state.bridgeRunning ? 'ok' : ''}">${state.bridgeRunning ? `bridge online${state.bridgePid ? ` · pid ${state.bridgePid}` : ''}` : 'bridge offline'}</div>
         </header>
-        ${state.error ? `<div class="error">${escapeHtml(state.error)}</div>` : ''}
+        ${state.error ? `<div class="error"><strong>Bridge problem:</strong><pre>${escapeHtml(state.error)}</pre></div>` : ''}
         <section class="content">${renderPanel()}</section>
       </main>
     </div>
@@ -346,7 +385,7 @@ function renderChat(): string {
   return `
     <div class="chat-layout">
       <div class="messages">
-        ${messages.map(renderMessage).join('') || '<p class="muted">Start the bridge, then send a task. The desktop app talks to the same Vegvisir runtime as the TUI.</p>'}
+        ${messages.map(renderMessage).join('') || '<p class="muted">The desktop app auto-starts the bridge. If it cannot find the Vegvisir binary, open Settings and set an absolute path.</p>'}
       </div>
       <div class="composer">
         <textarea id="turn-input" placeholder="Ask Vegvisir to inspect, build, fix, document, verify..." ${state.bridgeRunning ? '' : 'disabled'}></textarea>
@@ -405,7 +444,9 @@ function renderSettings(): string {
       ${field('provider', 'Provider', state.settings.provider ?? '')}
       ${field('model', 'Model', state.settings.model ?? '')}
       ${field('agent', 'Agent', state.settings.agent ?? '')}
+      <label class="check"><input type="checkbox" name="autoStart" ${state.settings.autoStart === false ? '' : 'checked'} /> Auto-start bridge when the desktop app opens</label>
       <label class="check"><input type="checkbox" name="dangerousBypass" ${state.settings.dangerousBypass ? 'checked' : ''} /> Dangerous bypass at startup</label>
+      <p class="muted">Packaged AppImages may not inherit your shell PATH. If bridge start fails, set the Vegvisir binary to an absolute path such as <code>/home/malice/.local/bin/vegvisir</code>.</p>
       <p class="muted">Desktop does not bypass Vegvisir. It spawns <code>vegvisir app-server</code> and uses the bridge so providers, HBSE, CMS, tools, approvals, and policy remain owned by the harness.</p>
       <button class="primary" type="submit">Save settings</button>
     </form>
@@ -440,6 +481,7 @@ function bindEvents(): void {
       provider: String(form.get('provider') ?? ''),
       model: String(form.get('model') ?? ''),
       agent: String(form.get('agent') ?? ''),
+      autoStart: form.get('autoStart') === 'on',
       dangerousBypass: form.get('dangerousBypass') === 'on',
     };
     saveSettings();
@@ -456,5 +498,16 @@ function escapeHtml(value: string): string {
     .replaceAll("'", '&#039;');
 }
 
-render();
+async function bootstrap(): Promise<void> {
+  render();
+  await refreshStatus();
+  if (!state.bridgeRunning && state.settings.autoStart !== false) {
+    state.autoStartAttempted = true;
+    await startBridge();
+  } else {
+    render();
+  }
+}
+
+void bootstrap();
 setInterval(() => void pollBridge(), 350);

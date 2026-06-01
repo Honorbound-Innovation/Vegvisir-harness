@@ -64,9 +64,11 @@ The Tauri backend exposes commands to the frontend:
 
 - `bridge_start` — spawn `vegvisir app-server --workspace <path>` with optional provider/model/agent and startup dangerous-bypass flag.
 - `bridge_send` — send one JSON request to the app-server stdin.
-- `bridge_poll` — collect stdout/stderr JSONL events from the app-server.
-- `bridge_status` — report whether the bridge process is running.
+- `bridge_poll` — collect stdout/stderr JSONL events from the app-server and report fast bridge exits.
+- `bridge_status` — report whether the bridge process is still running and clear dead child state.
 - `bridge_stop` — request shutdown and terminate the bridge process.
+
+The frontend auto-starts the bridge on launch by default. Users can disable auto-start in Settings.
 
 The frontend then uses the bridge methods documented in [overlay integration](overlay-integration.md), including:
 
@@ -169,7 +171,24 @@ npm run dev
 npm run build
 ```
 
-The desktop app expects a `vegvisir` binary on `PATH` by default. The settings panel can point to a different binary during development.
+The desktop app auto-starts the bridge on launch and expects a `vegvisir` binary by default. Packaged GUI apps do not always inherit the interactive shell `PATH`, so the Tauri backend searches:
+
+- the configured binary path;
+- the inherited `PATH`;
+- `$HOME/.local/bin/vegvisir`;
+- `$HOME/bin/vegvisir`;
+- `/usr/local/bin/vegvisir`;
+- `/usr/bin/vegvisir`;
+- `/bin/vegvisir`;
+- directories near the desktop executable.
+
+If the AppImage opens but cannot start the bridge, open **Settings** and set **Vegvisir binary** to an absolute path, for example:
+
+```text
+/home/malice/.local/bin/vegvisir
+```
+
+Bridge startup failures are shown in the UI instead of silently disappearing.
 
 ## Verification
 
