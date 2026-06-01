@@ -431,13 +431,15 @@ function renderChat(): string {
   const messages = [...state.messages];
   if (state.pendingAssistant) messages.push({ role: 'assistant', content: state.pendingAssistant });
   return `
-    <div class="grid h-full grid-rows-[minmax(0,1fr)_auto] overflow-hidden">
-      <div class="vv-scrollbar min-h-0 overflow-auto px-5 py-5">
-        <div class="mx-auto max-w-4xl space-y-5 pb-5">
+    <div class="flex h-full min-h-0 flex-col overflow-hidden">
+      <div id="chat-scroll-surface" class="vv-scrollbar min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-5 py-5">
+        <div class="mx-auto max-w-4xl space-y-5 pb-4">
           ${messages.length ? messages.map(renderMessage).join('') : renderEmptyTranscript()}
         </div>
       </div>
-      ${renderComposer()}
+      <div id="chat-composer-surface" class="shrink-0 border-t border-vv-line bg-vv-bg2/70 px-5 py-3 backdrop-blur-xl">
+        ${renderComposer()}
+      </div>
     </div>
   `;
 }
@@ -454,17 +456,17 @@ function renderEmptyTranscript(): string {
 
 function renderComposer(): string {
   return `
-    <div class="mx-auto mb-5 w-full max-w-4xl px-5">
-      <div class="rounded-[1.25rem] border border-vv-line2 bg-vv-panel/86 p-3 shadow-[0_24px_80px_rgba(0,0,0,0.36)] backdrop-blur-xl">
-        <textarea id="turn-input" class="vv-focus vv-scrollbar h-20 w-full resize-none rounded-xl border border-transparent bg-transparent px-2.5 py-1.5 text-[0.92rem] leading-6 text-vv-text placeholder:text-vv-dim" placeholder="Ask Vegvisir anything, @tag files/folders, or use /command" ${state.bridgeRunning ? '' : 'disabled'}></textarea>
-        <div class="mt-2 flex items-center justify-between gap-2 border-t border-vv-line pt-2">
-          <div class="flex min-w-0 items-center gap-1.5 text-xs text-vv-muted">
+    <div class="mx-auto w-full max-w-4xl">
+      <div class="rounded-[1.15rem] border border-vv-line2 bg-vv-panel/90 p-2.5 shadow-[0_18px_56px_rgba(0,0,0,0.30)]">
+        <textarea id="turn-input" class="vv-focus vv-scrollbar max-h-28 min-h-16 w-full resize-y rounded-xl border border-transparent bg-transparent px-2.5 py-1.5 text-[0.92rem] leading-6 text-vv-text placeholder:text-vv-dim" placeholder="Ask Vegvisir anything, @tag files/folders, or use /command" ${state.bridgeRunning ? '' : 'disabled'}></textarea>
+        <div class="mt-1.5 flex items-center justify-between gap-2 border-t border-vv-line pt-2">
+          <div class="flex min-w-0 flex-wrap items-center gap-1.5 text-xs text-vv-muted">
             <span class="vv-pill">${escapeHtml(state.settings.model || 'model default')}</span>
             <span class="vv-pill">${state.busy ? 'High activity' : 'Ready'}</span>
             <span class="vv-pill">Chat</span>
             <span class="vv-pill">${state.settings.dangerousBypass ? 'Bypass startup' : 'Policy gated'}</span>
           </div>
-          <button id="send-turn" class="vv-focus grid h-10 w-10 place-items-center rounded-full ${state.busy ? 'bg-vv-red' : 'bg-vv-pink'} text-xl font-black text-white shadow-[0_0_34px_rgba(255,46,126,0.32)]" ${state.bridgeRunning && !state.busy ? '' : 'disabled'}>${state.busy ? '■' : '➤'}</button>
+          <button id="send-turn" class="vv-focus grid h-9 w-9 shrink-0 place-items-center rounded-full ${state.busy ? 'bg-vv-red' : 'bg-vv-pink'} text-lg font-black text-white shadow-[0_0_28px_rgba(255,46,126,0.28)]" ${state.bridgeRunning && !state.busy ? '' : 'disabled'}>${state.busy ? '■' : '➤'}</button>
         </div>
       </div>
       <div class="mt-2 flex gap-2">
