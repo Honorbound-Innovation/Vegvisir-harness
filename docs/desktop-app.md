@@ -48,15 +48,31 @@ components/desktop/
 ├── tsconfig.json                # TypeScript config
 ├── vite.config.ts               # Vite dev server config
 ├── index.html                   # frontend entry
+├── postcss.config.js            # Tailwind/PostCSS pipeline
+├── tailwind.config.js           # Vegvisir desktop theme tokens
 ├── src/
 │   ├── main.ts                  # desktop UI and bridge client
-│   └── styles.css               # desktop styling
+│   └── styles.css               # Tailwind entrypoint and shared component classes
 └── src-tauri/
     ├── Cargo.toml               # Tauri backend crate
     ├── build.rs
     ├── tauri.conf.json
     └── src/main.rs              # spawns and controls `vegvisir app-server`
 ```
+
+
+## Layout Direction
+
+The current visual pass uses TailwindCSS and a T3Code-inspired workbench layout provided by the user as a reference. The intent is not to clone that app, but to apply the same useful structure to Vegvisir:
+
+- left project/module rail for sessions and feature panels;
+- top title/action bar for current task, bridge state, and high-value actions;
+- central transcript/workbench with low-noise message cards;
+- translucent tool/event cards for operational evidence;
+- large bottom composer plus slash-command row;
+- compact footer rail for local/workspace/status hints.
+
+The compass/stave design direction should remain practical: rails, panels, focus glow, and telemetry density are good; decorative radial controls that hurt transcript, diff, or log reading are not.
 
 ## Runtime Behavior
 

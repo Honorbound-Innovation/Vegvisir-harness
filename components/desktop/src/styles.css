@@ -1,67 +1,103 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 :root {
   color-scheme: dark;
-  --bg: #070b12;
-  --panel: #0d1422;
-  --panel-2: #111a2d;
-  --ink: #f7f1e8;
-  --muted: #9ca8ba;
-  --line: rgba(247, 241, 232, 0.14);
-  --cyan: #67d3ff;
-  --cyan-2: #38bdf8;
-  --danger: #ff6b6b;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #0b0f19;
 }
 
-* { box-sizing: border-box; }
-body { margin: 0; min-height: 100vh; color: var(--ink); background: var(--bg); }
-button, input, textarea { font: inherit; }
-button { cursor: pointer; }
-button:disabled, textarea:disabled, input:disabled { cursor: not-allowed; opacity: 0.6; }
+* {
+  box-sizing: border-box;
+}
 
-.shell { display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: 100vh; }
-.sidebar { display: flex; flex-direction: column; gap: 18px; padding: 22px; border-right: 1px solid var(--line); background: rgba(13, 20, 34, 0.9); }
-.brand { display: flex; align-items: center; gap: 12px; }
-.brand small { display: block; color: var(--muted); }
-.brand-mark { display: grid; place-items: center; width: 40px; height: 40px; border: 1px solid var(--cyan); color: var(--cyan); font-weight: 900; }
-nav { display: grid; gap: 8px; }
-.nav, .primary, button { border: 1px solid var(--line); color: var(--ink); background: rgba(255,255,255,0.04); padding: 10px 12px; text-align: left; }
-.nav.active, .primary { border-color: transparent; color: #06111f; background: linear-gradient(135deg, var(--cyan), var(--cyan-2)); font-weight: 800; }
-.main { min-width: 0; display: grid; grid-template-rows: auto auto 1fr; }
-.topbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 16px 22px; border-bottom: 1px solid var(--line); background: rgba(7, 11, 18, 0.82); }
-.summary { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; color: var(--muted); }
-.summary strong { color: var(--ink); }
-.status { color: var(--muted); }
-.status.ok { color: #63e6a5; }
-.error { margin: 14px 22px 0; padding: 12px 14px; border: 1px solid rgba(255,107,107,0.45); color: #ffd3d3; background: rgba(255,107,107,0.1); }
-.content { min-height: 0; padding: 22px; overflow: auto; }
-.chat-layout { display: grid; grid-template-rows: minmax(300px, 1fr) auto auto; gap: 14px; min-height: calc(100vh - 120px); }
-.messages { display: grid; align-content: start; gap: 14px; overflow: auto; padding-right: 4px; }
-.message { border: 1px solid var(--line); background: rgba(255,255,255,0.035); }
-.message header { padding: 10px 12px; color: var(--cyan); border-bottom: 1px solid var(--line); font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.78rem; }
-.message pre, .panel-pre, .event pre, .card pre { margin: 0; padding: 14px; white-space: pre-wrap; overflow-wrap: anywhere; color: #dce8f7; line-height: 1.55; }
-.composer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; }
-.composer textarea { min-height: 92px; resize: vertical; padding: 14px; color: var(--ink); background: #050911; border: 1px solid var(--line); }
-.command-row, .split { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; }
-.command-row input, .settings input { width: 100%; padding: 11px 12px; color: var(--ink); background: #050911; border: 1px solid var(--line); }
-.muted { color: var(--muted); }
-.event-list, .cards, .settings { display: grid; gap: 14px; }
-.event, .card { border: 1px solid var(--line); background: rgba(255,255,255,0.035); padding: 16px; }
-.event strong { color: var(--cyan); }
-.card h3 { margin: 0 0 8px; }
-.card p { color: var(--muted); }
-.card.danger { border-color: rgba(255,107,107,0.45); }
-.actions { display: flex; flex-wrap: wrap; gap: 10px; }
-.panel-pre { border: 1px solid var(--line); background: rgba(255,255,255,0.035); min-height: 320px; }
-.split { align-items: start; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.settings { max-width: 780px; }
-.settings label { display: grid; gap: 8px; }
-.settings span { color: var(--muted); }
-.check { display: flex !important; grid-template-columns: auto 1fr; align-items: center; gap: 10px !important; color: var(--muted); }
-code { color: var(--cyan); }
+html,
+body,
+#app {
+  margin: 0;
+  min-height: 100vh;
+  overflow: hidden;
+  color: #eceff4;
+  background: #0b0f19;
+}
 
-@media (max-width: 900px) {
-  .shell { grid-template-columns: 1fr; }
-  .sidebar { border-right: 0; border-bottom: 1px solid var(--line); }
-  nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .composer, .command-row, .split { grid-template-columns: 1fr; }
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled,
+textarea:disabled,
+input:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+@layer components {
+  .vv-scrollbar {
+    scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+    scrollbar-width: thin;
+  }
+
+  .vv-scrollbar::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  .vv-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .vv-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.18);
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background-clip: content-box;
+  }
+
+  .vv-focus {
+    @apply focus:outline-none focus:ring-2 focus:ring-vv-cyan/45 focus:ring-offset-0;
+  }
+
+  .vv-rail-button {
+    @apply vv-focus flex w-full items-center gap-3 rounded-2xl border border-transparent px-3 py-2.5 text-left text-sm text-vv-muted transition hover:border-vv-line2 hover:bg-white/[0.045] hover:text-vv-text;
+  }
+
+  .vv-rail-button-active {
+    @apply border-vv-line2 bg-white/[0.07] text-vv-text shadow-glow;
+  }
+
+  .vv-panel {
+    @apply rounded-[1.35rem] border border-vv-line bg-vv-panel/70 backdrop-blur-xl;
+  }
+
+  .vv-soft-panel {
+    @apply rounded-[1.35rem] border border-vv-line bg-white/[0.035] backdrop-blur-xl;
+  }
+
+  .vv-pill {
+    @apply inline-flex items-center gap-2 rounded-full border border-vv-line bg-white/[0.045] px-3 py-1.5 text-xs text-vv-muted;
+  }
+
+  .vv-action {
+    @apply vv-focus inline-flex items-center justify-center gap-2 rounded-xl border border-vv-line bg-white/[0.055] px-3.5 py-2 text-sm font-semibold text-vv-text transition hover:border-vv-line2 hover:bg-white/[0.09];
+  }
+
+  .vv-action-primary {
+    @apply border-white/10 bg-vv-text text-vv-bg hover:bg-white;
+  }
+
+  .vv-action-danger {
+    @apply border-vv-red/40 bg-vv-red/10 text-red-100 hover:border-vv-red/70 hover:bg-vv-red/20;
+  }
+
+  .vv-code {
+    @apply font-mono text-[0.83rem] leading-6 text-slate-200;
+  }
 }
