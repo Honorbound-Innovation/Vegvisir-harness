@@ -318,9 +318,9 @@ async function approve(id: string, method: string): Promise<void> {
 
 function render(): void {
   app.innerHTML = `
-    <div class="grid h-screen grid-cols-[25.75rem_minmax(0,1fr)] overflow-hidden bg-vv-bg bg-vv-radial text-vv-text selection:bg-vv-cyan/25 max-[980px]:grid-cols-1">
+    <div class="grid h-screen grid-cols-[18rem_minmax(0,1fr)] overflow-hidden bg-vv-bg bg-vv-radial text-vv-text selection:bg-vv-cyan/25 max-[980px]:grid-cols-1">
       ${renderLeftRail()}
-      <main class="grid min-w-0 grid-rows-[5.25rem_minmax(0,1fr)_2.15rem] border-l border-vv-line bg-vv-bg2/74 max-[980px]:border-l-0">
+      <main class="grid min-w-0 grid-rows-[3.75rem_minmax(0,1fr)_1.75rem] border-l border-vv-line bg-vv-bg2/74 max-[980px]:border-l-0">
         ${renderTopBar()}
         <section class="min-h-0 overflow-hidden bg-vv-grid [background-size:42px_42px]">
           ${state.error ? renderError() : ''}
@@ -335,22 +335,22 @@ function render(): void {
 
 function renderLeftRail(): string {
   return `
-    <aside class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] bg-vv-rail/95 px-5 py-5 shadow-[inset_-1px_0_0_rgba(255,255,255,0.06)] max-[980px]:hidden">
+    <aside class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] bg-vv-rail/95 px-3.5 py-3.5 shadow-[inset_-1px_0_0_rgba(255,255,255,0.06)] max-[980px]:hidden">
       <div>
-        <div class="mb-8 flex items-center gap-3">
-          <div class="flex gap-2"><span class="h-3 w-3 rounded-full bg-vv-red"></span><span class="h-3 w-3 rounded-full bg-vv-amber"></span><span class="h-3 w-3 rounded-full bg-vv-green"></span></div>
-          <div class="ml-5 text-xl font-black tracking-tight">Vegvisir <span class="text-vv-muted">Desktop</span></div>
-          <span class="rounded-full border border-vv-line px-2 py-0.5 text-[0.62rem] font-bold uppercase tracking-[0.24em] text-vv-muted">alpha</span>
+        <div class="mb-4 flex items-center gap-2.5">
+          <div class="grid h-8 w-8 place-items-center rounded-xl border border-vv-line bg-white/[0.045] text-sm font-black text-vv-cyan">V</div>
+          <div class="text-base font-black tracking-tight">Vegvisir <span class="text-vv-muted">Desktop</span></div>
+          <span class="rounded-full border border-vv-line px-1.5 py-0.5 text-[0.56rem] font-bold uppercase tracking-[0.24em] text-vv-muted">alpha</span>
         </div>
-        <div class="mb-4 flex items-center justify-between text-sm">
-          <div class="flex items-center gap-2 font-bold"><span class="grid h-6 w-6 place-items-center rounded-lg bg-white text-vv-bg text-xs">V</span>${escapeHtml(projectName())}</div>
+        <div class="mb-3 flex items-center justify-between text-xs">
+          <div class="flex items-center gap-2 font-bold"><span class="grid h-5 w-5 place-items-center rounded-md bg-white text-vv-bg text-[0.65rem]">V</span>${escapeHtml(projectName())}</div>
           <span class="text-vv-muted">⌄</span>
         </div>
       </div>
-      <div class="vv-scrollbar min-h-0 space-y-1 overflow-auto pr-1">
+      <div class="vv-scrollbar min-h-0 space-y-0.5 overflow-auto pr-1">
         ${panels.map(renderPanelButton).join('')}
       </div>
-      <div class="space-y-3 pt-5">
+      <div class="space-y-2 pt-2">
         <button id="start-stop" class="vv-action w-full ${state.bridgeRunning ? '' : 'vv-action-primary'}">${state.bridgeRunning ? 'Stop bridge' : 'Start bridge'}</button>
         <button class="vv-action w-full border-dashed text-vv-muted" data-panel="settings">+ Configure workspace</button>
       </div>
@@ -363,7 +363,7 @@ function renderPanelButton(panel: { id: PanelId; label: string; icon: string; hi
   const active = state.activePanel === panel.id ? 'vv-rail-button-active' : '';
   return `
     <button class="vv-rail-button ${active}" data-panel="${panel.id}">
-      <span class="grid h-7 w-7 shrink-0 place-items-center rounded-xl border border-vv-line bg-white/[0.035] text-vv-cyan">${panel.icon}</span>
+      <span class="grid h-6 w-6 shrink-0 place-items-center rounded-lg border border-vv-line bg-white/[0.035] text-vv-cyan">${panel.icon}</span>
       <span class="min-w-0"><span class="block font-semibold text-current">${escapeHtml(panel.label)}</span><span class="block truncate text-xs text-vv-dim">${escapeHtml(panel.hint)}</span></span>
       ${badge}
     </button>
@@ -372,19 +372,19 @@ function renderPanelButton(panel: { id: PanelId; label: string; icon: string; hi
 
 function renderTopBar(): string {
   return `
-    <header class="flex min-w-0 items-center justify-between gap-4 border-b border-vv-line bg-black/20 px-8 backdrop-blur-xl">
+    <header class="flex min-w-0 items-center justify-between gap-3 border-b border-vv-line bg-black/20 px-5 backdrop-blur-xl">
       <div class="min-w-0">
         <div class="flex items-center gap-3">
-          <h1 class="truncate text-[1.42rem] font-black tracking-tight">${escapeHtml(activeTitle())}</h1>
-          <span class="rounded-lg border border-vv-line bg-white/[0.045] px-2.5 py-1 font-mono text-xs text-vv-muted">${escapeHtml(projectName())}</span>
+          <h1 class="truncate text-[1.04rem] font-black tracking-tight">${escapeHtml(activeTitle())}</h1>
+          <span class="rounded-md border border-vv-line bg-white/[0.045] px-2 py-0.5 font-mono text-[0.7rem] text-vv-muted">${escapeHtml(projectName())}</span>
         </div>
-        <div class="mt-1 flex min-w-0 items-center gap-3 text-xs text-vv-muted">
+        <div class="mt-0.5 flex min-w-0 items-center gap-2 text-[0.7rem] text-vv-muted">
           <span>${escapeHtml(state.settings.provider || state.session?.provider || 'default provider')}</span>
           <span>•</span><span>${escapeHtml(state.settings.model || state.session?.model || 'default model')}</span>
           <span>•</span><span>${state.events.length} events</span>
         </div>
       </div>
-      <div class="flex shrink-0 items-center gap-2">
+      <div class="flex shrink-0 items-center gap-1.5">
         <button class="vv-action" id="refresh-all">Refresh</button>
         <button class="vv-action" data-panel="approvals">Approvals</button>
         <button class="vv-action vv-action-primary" data-panel="diff">Open diff</button>
@@ -396,7 +396,7 @@ function renderTopBar(): string {
 
 function renderFooterRail(): string {
   return `
-    <footer class="flex items-center justify-between border-t border-vv-line bg-black/20 px-8 font-mono text-[0.72rem] text-vv-muted">
+    <footer class="flex items-center justify-between border-t border-vv-line bg-black/20 px-5 font-mono text-[0.66rem] text-vv-muted">
       <span>${state.bridgeRunning ? 'Local bridge active' : 'Local bridge offline'}</span>
       <span>${escapeHtml(state.settings.workspace || 'workspace defaults to home/current dir')}</span>
       <span>${state.busy ? 'working' : 'ready'} · main</span>
@@ -405,12 +405,12 @@ function renderFooterRail(): string {
 }
 
 function renderError(): string {
-  return `<div class="mx-auto mt-5 max-w-5xl rounded-2xl border border-vv-red/45 bg-vv-red/10 p-4 text-red-100 shadow-danger"><strong>Bridge problem</strong><pre class="vv-code mt-2 whitespace-pre-wrap">${escapeHtml(state.error)}</pre></div>`;
+  return `<div class="mx-auto mt-3 max-w-5xl rounded-xl border border-vv-red/45 bg-vv-red/10 p-3 text-red-100 shadow-danger"><strong>Bridge problem</strong><pre class="vv-code mt-2 whitespace-pre-wrap">${escapeHtml(state.error)}</pre></div>`;
 }
 
 function renderPanel(): string {
   if (state.activePanel === 'chat') return renderChat();
-  return `<div class="vv-scrollbar h-full overflow-auto px-8 py-6"><div class="mx-auto max-w-6xl">${renderNonChatPanel()}</div></div>`;
+  return `<div class="vv-scrollbar h-full overflow-auto px-4 py-3"><div class="mx-auto max-w-5xl">${renderNonChatPanel()}</div></div>`;
 }
 
 function renderNonChatPanel(): string {
@@ -432,8 +432,8 @@ function renderChat(): string {
   if (state.pendingAssistant) messages.push({ role: 'assistant', content: state.pendingAssistant });
   return `
     <div class="grid h-full grid-rows-[minmax(0,1fr)_auto] overflow-hidden">
-      <div class="vv-scrollbar min-h-0 overflow-auto px-8 py-8">
-        <div class="mx-auto max-w-5xl space-y-8 pb-6">
+      <div class="vv-scrollbar min-h-0 overflow-auto px-5 py-5">
+        <div class="mx-auto max-w-4xl space-y-5 pb-5">
           ${messages.length ? messages.map(renderMessage).join('') : renderEmptyTranscript()}
         </div>
       </div>
@@ -444,31 +444,31 @@ function renderChat(): string {
 
 function renderEmptyTranscript(): string {
   return `
-    <div class="pt-12 text-center text-vv-muted">
-      <div class="mx-auto mb-5 grid h-16 w-16 place-items-center rounded-3xl border border-vv-line bg-white/[0.035] text-3xl text-vv-cyan shadow-glow">V</div>
-      <h2 class="text-2xl font-black text-vv-text">Vegvisir bridge workbench</h2>
-      <p class="mx-auto mt-3 max-w-2xl leading-7">The desktop app auto-starts the same harness bridge used by the TUI. Ask it to inspect, patch, test, document, route skills, or run slash commands. Same beast. Better glass box.</p>
+    <div class="pt-8 text-center text-vv-muted">
+      <div class="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-3xl border border-vv-line bg-white/[0.035] text-2xl text-vv-cyan shadow-glow">V</div>
+      <h2 class="text-xl font-black text-vv-text">Vegvisir bridge workbench</h2>
+      <p class="mx-auto mt-2 max-w-2xl text-sm leading-6">The desktop app auto-starts the same harness bridge used by the TUI. Ask it to inspect, patch, test, document, route skills, or run slash commands. Same beast. Better glass box.</p>
     </div>
   `;
 }
 
 function renderComposer(): string {
   return `
-    <div class="mx-auto mb-8 w-full max-w-5xl px-8">
-      <div class="rounded-[1.55rem] border border-vv-line2 bg-vv-panel/86 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.36)] backdrop-blur-xl">
-        <textarea id="turn-input" class="vv-focus vv-scrollbar h-24 w-full resize-none rounded-2xl border border-transparent bg-transparent px-3 py-2 text-[1rem] leading-7 text-vv-text placeholder:text-vv-dim" placeholder="Ask Vegvisir anything, @tag files/folders, or use /command" ${state.bridgeRunning ? '' : 'disabled'}></textarea>
-        <div class="mt-3 flex items-center justify-between gap-3 border-t border-vv-line pt-3">
-          <div class="flex min-w-0 items-center gap-2 text-sm text-vv-muted">
+    <div class="mx-auto mb-5 w-full max-w-4xl px-5">
+      <div class="rounded-[1.25rem] border border-vv-line2 bg-vv-panel/86 p-3 shadow-[0_24px_80px_rgba(0,0,0,0.36)] backdrop-blur-xl">
+        <textarea id="turn-input" class="vv-focus vv-scrollbar h-20 w-full resize-none rounded-xl border border-transparent bg-transparent px-2.5 py-1.5 text-[0.92rem] leading-6 text-vv-text placeholder:text-vv-dim" placeholder="Ask Vegvisir anything, @tag files/folders, or use /command" ${state.bridgeRunning ? '' : 'disabled'}></textarea>
+        <div class="mt-2 flex items-center justify-between gap-2 border-t border-vv-line pt-2">
+          <div class="flex min-w-0 items-center gap-1.5 text-xs text-vv-muted">
             <span class="vv-pill">${escapeHtml(state.settings.model || 'model default')}</span>
             <span class="vv-pill">${state.busy ? 'High activity' : 'Ready'}</span>
             <span class="vv-pill">Chat</span>
             <span class="vv-pill">${state.settings.dangerousBypass ? 'Bypass startup' : 'Policy gated'}</span>
           </div>
-          <button id="send-turn" class="vv-focus grid h-12 w-12 place-items-center rounded-full ${state.busy ? 'bg-vv-red' : 'bg-vv-pink'} text-xl font-black text-white shadow-[0_0_34px_rgba(255,46,126,0.32)]" ${state.bridgeRunning && !state.busy ? '' : 'disabled'}>${state.busy ? '■' : '➤'}</button>
+          <button id="send-turn" class="vv-focus grid h-10 w-10 place-items-center rounded-full ${state.busy ? 'bg-vv-red' : 'bg-vv-pink'} text-xl font-black text-white shadow-[0_0_34px_rgba(255,46,126,0.32)]" ${state.bridgeRunning && !state.busy ? '' : 'disabled'}>${state.busy ? '■' : '➤'}</button>
         </div>
       </div>
-      <div class="mt-3 flex gap-3">
-        <input id="command-input" class="vv-focus min-w-0 flex-1 rounded-2xl border border-vv-line bg-black/20 px-4 py-3 text-sm text-vv-text placeholder:text-vv-dim" placeholder="Run slash command, e.g. /tools or /diff" ${state.bridgeRunning ? '' : 'disabled'} />
+      <div class="mt-2 flex gap-2">
+        <input id="command-input" class="vv-focus min-w-0 flex-1 rounded-xl border border-vv-line bg-black/20 px-3 py-2 text-xs text-vv-text placeholder:text-vv-dim" placeholder="Run slash command, e.g. /tools or /diff" ${state.bridgeRunning ? '' : 'disabled'} />
         <button id="run-command" class="vv-action" ${state.bridgeRunning ? '' : 'disabled'}>Run command</button>
       </div>
     </div>
@@ -482,29 +482,29 @@ function renderMessage(message: Message): string {
   const cardClass = isUser ? 'ml-auto max-w-3xl bg-white/[0.07]' : isTool ? 'max-w-4xl border-vv-line bg-black/18 opacity-75' : 'max-w-4xl bg-white/[0.035]';
   return `
     <article class="vv-soft-panel ${cardClass}">
-      <header class="flex items-center gap-3 border-b border-vv-line px-5 py-3 text-xs uppercase tracking-[0.22em] text-vv-muted"><span class="h-2 w-2 rounded-full ${isUser ? 'bg-vv-green' : 'bg-vv-cyan'}"></span>${escapeHtml(role)}</header>
-      <pre class="vv-code whitespace-pre-wrap break-words px-5 py-4">${escapeHtml(message.content ?? message.text ?? '')}</pre>
+      <header class="flex items-center gap-3 border-b border-vv-line px-4 py-2 text-[0.68rem] uppercase tracking-[0.22em] text-vv-muted"><span class="h-2 w-2 rounded-full ${isUser ? 'bg-vv-green' : 'bg-vv-cyan'}"></span>${escapeHtml(role)}</header>
+      <pre class="vv-code whitespace-pre-wrap break-words px-4 py-3">${escapeHtml(message.content ?? message.text ?? '')}</pre>
     </article>
   `;
 }
 
 function renderWork(): string {
-  return `<div class="space-y-4">${state.events.slice().reverse().map((event) => `
-    <article class="vv-soft-panel p-4 opacity-80">
-      <div class="mb-2 flex items-center gap-2 font-mono text-xs uppercase tracking-[0.2em] text-vv-muted"><span class="h-2 w-2 rounded-full bg-vv-cyan"></span>${escapeHtml(event.type)}</div>
-      <pre class="vv-code whitespace-pre-wrap break-words rounded-2xl bg-black/18 p-4">${escapeHtml(JSON.stringify(event.payload ?? {}, null, 2))}</pre>
+  return `<div class="space-y-3">${state.events.slice().reverse().map((event) => `
+    <article class="vv-soft-panel p-3 opacity-80">
+      <div class="mb-2 flex items-center gap-2 font-mono text-[0.68rem] uppercase tracking-[0.2em] text-vv-muted"><span class="h-2 w-2 rounded-full bg-vv-cyan"></span>${escapeHtml(event.type)}</div>
+      <pre class="vv-code whitespace-pre-wrap break-words rounded-xl bg-black/18 p-3">${escapeHtml(JSON.stringify(event.payload ?? {}, null, 2))}</pre>
     </article>
   `).join('') || '<p class="text-vv-muted">No bridge events yet.</p>'}</div>`;
 }
 
 function renderApprovals(): string {
-  if (!state.approvals.length) return '<div class="vv-panel p-8 text-vv-muted">No pending approvals. The beast is behaving.</div>';
+  if (!state.approvals.length) return '<div class="vv-panel p-4 text-sm text-vv-muted">No pending approvals. The beast is behaving.</div>';
   return `<div class="grid gap-4">${state.approvals.map((approval) => `
-    <article class="rounded-[1.35rem] border border-vv-red/45 bg-vv-red/10 p-5 shadow-danger">
-      <h3 class="text-lg font-black text-red-100">${escapeHtml(approval.tool_name ?? approval.toolName ?? 'approval')}</h3>
+    <article class="rounded-[1.05rem] border border-vv-red/45 bg-vv-red/10 p-4 shadow-danger">
+      <h3 class="text-base font-black text-red-100">${escapeHtml(approval.tool_name ?? approval.toolName ?? 'approval')}</h3>
       <p class="mt-2 text-sm text-red-100/75">${escapeHtml(approval.reason ?? approval.risk_label ?? 'Risky action requires approval.')}</p>
-      <pre class="vv-code mt-4 whitespace-pre-wrap rounded-2xl bg-black/20 p-4">${escapeHtml(JSON.stringify(approval.args ?? {}, null, 2))}</pre>
-      <div class="mt-4 flex flex-wrap gap-2">
+      <pre class="vv-code mt-3 whitespace-pre-wrap rounded-xl bg-black/20 p-3">${escapeHtml(JSON.stringify(approval.args ?? {}, null, 2))}</pre>
+      <div class="mt-3 flex flex-wrap gap-2">
         <button class="vv-action" data-approval="${escapeHtml(approval.id)}" data-method="approvals.approveOnce">Approve once</button>
         <button class="vv-action" data-approval="${escapeHtml(approval.id)}" data-method="approvals.approveSession">Approve session</button>
         <button class="vv-action vv-action-danger" data-approval="${escapeHtml(approval.id)}" data-method="approvals.deny">Deny</button>
@@ -513,22 +513,22 @@ function renderApprovals(): string {
 }
 
 function renderTools(): string {
-  return `<div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">${state.tools.map((tool) => `
-    <article class="vv-panel p-5"><div class="mb-3 flex items-center justify-between gap-3"><h3 class="font-black">${escapeHtml(tool.name)}</h3><small class="vv-pill ${tool.risky ? 'text-vv-amber' : 'text-vv-green'}">${tool.risky ? 'risky' : 'standard'}</small></div><p class="text-sm leading-6 text-vv-muted">${escapeHtml(tool.description ?? '')}</p></article>
+  return `<div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">${state.tools.map((tool) => `
+    <article class="vv-panel p-4"><div class="mb-2 flex items-center justify-between gap-2"><h3 class="font-black">${escapeHtml(tool.name)}</h3><small class="vv-pill ${tool.risky ? 'text-vv-amber' : 'text-vv-green'}">${tool.risky ? 'risky' : 'standard'}</small></div><p class="text-xs leading-5 text-vv-muted">${escapeHtml(tool.description ?? '')}</p></article>
   `).join('') || '<p class="text-vv-muted">Tool inventory not loaded.</p>'}</div>`;
 }
 
 function renderProviders(): string {
-  return `<div class="grid gap-5 lg:grid-cols-2"><section><h2 class="mb-3 text-lg font-black">Providers</h2>${renderPre(JSON.stringify(state.providers, null, 2))}</section><section><h2 class="mb-3 text-lg font-black">Models</h2>${renderPre(JSON.stringify(state.models, null, 2))}<h2 class="mb-3 mt-5 text-lg font-black">Agents</h2>${renderPre(JSON.stringify(state.agents, null, 2))}</section></div>`;
+  return `<div class="grid gap-4 lg:grid-cols-2"><section><h2 class="mb-3 text-base font-black">Providers</h2>${renderPre(JSON.stringify(state.providers, null, 2))}</section><section><h2 class="mb-3 text-base font-black">Models</h2>${renderPre(JSON.stringify(state.models, null, 2))}<h2 class="mb-3 mt-5 text-base font-black">Agents</h2>${renderPre(JSON.stringify(state.agents, null, 2))}</section></div>`;
 }
 
 function renderSystem(): string {
-  return `<div><button id="refresh-system" class="vv-action mb-4">Refresh system prompt</button>${renderPre(state.systemPrompt || 'No system prompt loaded.')}</div>`;
+  return `<div><button id="refresh-system" class="vv-action mb-3">Refresh system prompt</button>${renderPre(state.systemPrompt || 'No system prompt loaded.')}</div>`;
 }
 
 function renderSettings(): string {
   return `
-    <form class="vv-panel grid max-w-3xl gap-4 p-6" id="settings-form">
+    <form class="vv-panel grid max-w-3xl gap-3 p-4" id="settings-form">
       ${field('vegvisirBinary', 'Vegvisir binary', state.settings.vegvisirBinary ?? 'vegvisir')}
       ${field('workspace', 'Workspace', state.settings.workspace ?? '')}
       ${field('provider', 'Provider', state.settings.provider ?? '')}
@@ -536,19 +536,19 @@ function renderSettings(): string {
       ${field('agent', 'Agent', state.settings.agent ?? '')}
       <label class="flex items-center gap-3 text-sm text-vv-muted"><input type="checkbox" name="autoStart" ${state.settings.autoStart === false ? '' : 'checked'} /> Auto-start bridge when the desktop app opens</label>
       <label class="flex items-center gap-3 text-sm text-vv-muted"><input type="checkbox" name="dangerousBypass" ${state.settings.dangerousBypass ? 'checked' : ''} /> Dangerous bypass at startup</label>
-      <p class="text-sm leading-6 text-vv-muted">Packaged AppImages may not inherit your shell PATH. If bridge start fails, set the Vegvisir binary to an absolute path such as <code class="text-vv-cyan">/home/malice/.local/bin/vegvisir</code>.</p>
-      <p class="text-sm leading-6 text-vv-muted">Desktop does not bypass Vegvisir. It spawns <code class="text-vv-cyan">vegvisir app-server</code> so providers, HBSE, CMS, tools, approvals, and policy remain owned by the harness.</p>
+      <p class="text-xs leading-5 text-vv-muted">Packaged AppImages may not inherit your shell PATH. If bridge start fails, set the Vegvisir binary to an absolute path such as <code class="text-vv-cyan">/home/malice/.local/bin/vegvisir</code>.</p>
+      <p class="text-xs leading-5 text-vv-muted">Desktop does not bypass Vegvisir. It spawns <code class="text-vv-cyan">vegvisir app-server</code> so providers, HBSE, CMS, tools, approvals, and policy remain owned by the harness.</p>
       <button class="vv-action vv-action-primary w-fit" type="submit">Save settings</button>
     </form>
   `;
 }
 
 function field(name: string, label: string, value: string): string {
-  return `<label class="grid gap-2"><span class="text-sm text-vv-muted">${escapeHtml(label)}</span><input class="vv-focus rounded-2xl border border-vv-line bg-black/20 px-4 py-3 text-vv-text" name="${name}" value="${escapeHtml(value)}" /></label>`;
+  return `<label class="grid gap-1.5"><span class="text-xs text-vv-muted">${escapeHtml(label)}</span><input class="vv-focus rounded-xl border border-vv-line bg-black/20 px-3 py-2 text-sm text-vv-text" name="${name}" value="${escapeHtml(value)}" /></label>`;
 }
 
 function renderPre(value: string): string {
-  return `<pre class="vv-code vv-panel vv-scrollbar max-h-[70vh] overflow-auto whitespace-pre-wrap break-words p-5">${escapeHtml(value)}</pre>`;
+  return `<pre class="vv-code vv-panel vv-scrollbar max-h-[72vh] overflow-auto whitespace-pre-wrap break-words p-4">${escapeHtml(value)}</pre>`;
 }
 
 function activeTitle(): string {

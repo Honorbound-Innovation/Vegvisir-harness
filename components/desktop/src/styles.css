@@ -66,7 +66,7 @@ input:disabled {
   }
 
   .vv-rail-button {
-    @apply vv-focus flex w-full items-center gap-3 rounded-2xl border border-transparent px-3 py-2.5 text-left text-sm text-vv-muted transition hover:border-vv-line2 hover:bg-white/[0.045] hover:text-vv-text;
+    @apply vv-focus flex w-full items-center gap-2 rounded-xl border border-transparent px-2.5 py-1.5 text-left text-xs text-vv-muted transition hover:border-vv-line2 hover:bg-white/[0.045] hover:text-vv-text;
   }
 
   .vv-rail-button-active {
@@ -74,19 +74,19 @@ input:disabled {
   }
 
   .vv-panel {
-    @apply rounded-[1.35rem] border border-vv-line bg-vv-panel/70 backdrop-blur-xl;
+    @apply rounded-[1.05rem] border border-vv-line bg-vv-panel/70 backdrop-blur-xl;
   }
 
   .vv-soft-panel {
-    @apply rounded-[1.35rem] border border-vv-line bg-white/[0.035] backdrop-blur-xl;
+    @apply rounded-[1.05rem] border border-vv-line bg-white/[0.035] backdrop-blur-xl;
   }
 
   .vv-pill {
-    @apply inline-flex items-center gap-2 rounded-full border border-vv-line bg-white/[0.045] px-3 py-1.5 text-xs text-vv-muted;
+    @apply inline-flex items-center gap-1.5 rounded-full border border-vv-line bg-white/[0.045] px-2 py-1 text-[0.68rem] text-vv-muted;
   }
 
   .vv-action {
-    @apply vv-focus inline-flex items-center justify-center gap-2 rounded-xl border border-vv-line bg-white/[0.055] px-3.5 py-2 text-sm font-semibold text-vv-text transition hover:border-vv-line2 hover:bg-white/[0.09];
+    @apply vv-focus inline-flex items-center justify-center gap-1.5 rounded-lg border border-vv-line bg-white/[0.055] px-2.5 py-1.5 text-xs font-semibold text-vv-text transition hover:border-vv-line2 hover:bg-white/[0.09];
   }
 
   .vv-action-primary {
@@ -98,6 +98,6 @@ input:disabled {
   }
 
   .vv-code {
-    @apply font-mono text-[0.83rem] leading-6 text-slate-200;
+    @apply font-mono text-[0.78rem] leading-5 text-slate-200;
   }
 }
