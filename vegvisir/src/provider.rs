@@ -2072,7 +2072,9 @@ impl ProviderAdapter for OpenAISsoProfileAdapter {
         payload["stream"] = Value::Bool(true);
         payload["tool_choice"] = Value::String("auto".to_string());
         payload["tools"] = Value::Array(tools.iter().map(responses_tool_schema).collect());
-        for _ in 0..max_tool_rounds() {
+        let max_tool_rounds = max_tool_rounds();
+        let mut observations = Vec::<(String, String)>::new();
+        for _ in 0..max_tool_rounds {
             let response = self.post_response_stream_json(payload.clone(), on_delta)?;
             let tool_calls = response_function_calls(&response);
             if tool_calls.is_empty() {
@@ -2099,7 +2101,9 @@ impl ProviderAdapter for OpenAISsoProfileAdapter {
                         &call.name,
                         &execute_tool(&call.name, call.args),
                     );
-                    truncate_model_observation(&result)
+                    let result = truncate_model_observation(&result);
+                    observations.push((call.name.clone(), result.clone()));
+                    result
                 } else {
                     deferred_tool_observation(&call.name)
                 };
@@ -2110,10 +2114,9 @@ impl ProviderAdapter for OpenAISsoProfileAdapter {
                 }));
             }
         }
-        anyhow::bail!(
-            "model exceeded Vegvisir tool-call round limit ({}).",
-            max_tool_rounds()
-        )
+        let result = tool_round_limit_result(&observations, max_tool_rounds)?;
+        on_delta(&result);
+        Ok(result)
     }
 }
 
@@ -3983,8 +3986,12 @@ fn tool_round_limit_result(
     observations: &[(String, String)],
     max_tool_rounds: usize,
 ) -> anyhow::Result<String> {
-    if !observations.is_empty() {
-        let summary = observations
+    let summary = if observations.is_empty() {
+        format!(
+            "No completed tool observation was recorded before the {max_tool_rounds}-round limit."
+        )
+    } else {
+        observations
             .iter()
             .rev()
             .take(3)
@@ -3993,12 +4000,11 @@ fn tool_round_limit_result(
             .rev()
             .map(|(name, content)| format!("[{name}]\n{content}"))
             .collect::<Vec<_>>()
-            .join("\n\n");
-        return Ok(format!(
-            "Tool-call round limit reached before the model produced a final answer. Latest tool observations:\n\n{summary}\n\nRecovery guidance: do not repeat the same failed tool call unless the previous observation shows a clear corrected input. Summarize the failure, switch strategy, or ask the user only if blocked."
-        ));
-    }
-    anyhow::bail!("model exceeded Vegvisir tool-call round limit ({max_tool_rounds}).")
+            .join("\n\n")
+    };
+    Ok(format!(
+        "Tool-call round limit reached before the model produced a final answer. Latest tool observations:\n\n{summary}\n\nRecovery guidance: do not repeat the same failed tool call unless the previous observation shows a clear corrected input. Summarize the failure, switch strategy, or ask the user only if blocked."
+    ))
 }
 
 fn parse_tool_arguments(value: Option<&Value>) -> Map<String, Value> {
@@ -4791,16 +4797,22 @@ pub mod test_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static TOOL_ROUND_LIMIT_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn default_tool_round_limit_is_bounded() {
-        RUNTIME_MAX_TOOL_ROUNDS.store(0, Ordering::Relaxed);
+        let _guard = TOOL_ROUND_LIMIT_TEST_LOCK.lock().unwrap();
+        let previous = RUNTIME_MAX_TOOL_ROUNDS.swap(0, Ordering::Relaxed);
         assert_eq!(configured_max_tool_rounds(), Some(12));
         assert_eq!(configured_max_tool_rounds_label(), "12");
+        RUNTIME_MAX_TOOL_ROUNDS.store(previous, Ordering::Relaxed);
     }
 
     #[test]
     fn runtime_tool_round_limit_override_still_applies() {
+        let _guard = TOOL_ROUND_LIMIT_TEST_LOCK.lock().unwrap();
         let previous = RUNTIME_MAX_TOOL_ROUNDS.swap(0, Ordering::Relaxed);
         assert_eq!(set_runtime_max_tool_rounds(Some(3)), Some(3));
         assert_eq!(configured_max_tool_rounds(), Some(3));
@@ -4824,6 +4836,15 @@ mod tests {
         assert!(result.contains("Tool-call round limit reached"));
         assert!(result.contains("Recovery guidance"));
         assert!(result.contains("do not repeat the same failed tool call"));
+    }
+
+    #[test]
+    fn tool_round_limit_without_observations_is_recoverable() {
+        let result = tool_round_limit_result(&[], 12)
+            .expect("tool loop limit should not fail the whole turn");
+        assert!(result.contains("Tool-call round limit reached"));
+        assert!(result.contains("No completed tool observation was recorded"));
+        assert!(result.contains("12-round limit"));
     }
 
     #[test]
