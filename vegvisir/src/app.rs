@@ -34,9 +34,7 @@ use crate::{
     model_discovery::discover_provider_models,
     observability::EventLogger,
     parallelism::ParallelismConfig,
-    persona::{
-        DEFAULT_PERSONA_ID, KA_PROMPT_HEADING, get_persona_with_root, render_persona_prompt_section,
-    },
+    persona::{KA_PROMPT_HEADING, get_persona_with_root, render_persona_prompt_section},
     policy::RuntimePolicy,
     profile::{UserProfile, UserProfileStore},
     provider::{
@@ -595,7 +593,6 @@ impl TuiApplication {
         };
         let mut session = SessionState::new(&cwd, tools, skills);
         session.system_prompt = default_system_prompt();
-        session.active_persona_id = Some(DEFAULT_PERSONA_ID.to_string());
         if let Some(provider) = defaults.get("current_provider").and_then(Value::as_str) {
             session.current_provider = provider.to_string();
         }
@@ -610,11 +607,13 @@ impl TuiApplication {
         {
             session.active_persona_id = Some(persona.to_string());
         }
-        session.system_prompt = apply_persona_to_system_prompt(
-            &session.system_prompt,
-            session.active_persona_id.as_deref(),
-            &data_root,
-        );
+        if session.active_persona_id.is_some() {
+            session.system_prompt = apply_persona_to_system_prompt(
+                &session.system_prompt,
+                session.active_persona_id.as_deref(),
+                &data_root,
+            );
+        }
         let mut provider_registry = ProviderRegistry::default_catalog()?;
         set_openai_sso_auth_root(&mut provider_registry, &data_root);
         let models = ModelRegistry::default_catalog()?;
@@ -952,6 +951,8 @@ impl TuiApplication {
         );
         if let Some(persona) = &self.session.active_persona_id {
             data.insert("active_persona_id".to_string(), json!(persona));
+        } else {
+            data.remove("active_persona_id");
         }
         if let Some(key) = &self.speech_ptt_key {
             data.insert("speech_ptt_key".to_string(), json!(key.to_config_string()));
@@ -2093,7 +2094,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_prompt_is_addendum_to_default_harness_prompt() -> anyhow::Result<()> {
+    fn agent_prompt_uses_active_profile_without_harness_prompt() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
         let mut profile = crate::core::AgentProfile::new(
@@ -2105,27 +2106,9 @@ mod tests {
 
         app.apply_agent_profile(&profile)?;
 
-        assert!(app.session.system_prompt.contains("Vegvisir"));
-        assert!(
-            app.session
-                .system_prompt
-                .contains("# Active agent addendum")
-        );
-        assert!(
-            app.session
-                .system_prompt
-                .contains("focused review specialist")
-        );
-        assert!(
-            app.session
-                .system_prompt
-                .find("Vegvisir")
-                .unwrap_or(usize::MAX)
-                < app
-                    .session
-                    .system_prompt
-                    .find("# Active agent addendum")
-                    .unwrap_or(0)
+        assert_eq!(
+            app.session.system_prompt,
+            "You are a focused review specialist."
         );
         Ok(())
     }

@@ -839,32 +839,11 @@ impl TuiApplication {
     }
 
     fn effective_agent_system_prompt(&self, profile: &AgentProfile) -> String {
-        let harness_prompt = self
-            .config
-            .load()
-            .ok()
-            .and_then(|defaults| {
-                defaults
-                    .get("system_prompt")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            })
-            .unwrap_or_else(default_system_prompt);
-        let harness_prompt = crate::app::strip_persona_from_system_prompt(&harness_prompt);
         let agent_prompt = crate::app::strip_persona_from_system_prompt(&profile.system_prompt);
-        let mut sections = vec![
-            harness_prompt.trim().to_string(),
-            format!(
-                "# Active agent addendum\nAgent: {} ({}, mode={})\n\n{}",
-                profile.id,
-                profile.display_name,
-                profile.mode,
-                agent_prompt.trim()
-            ),
-        ]
-        .into_iter()
-        .filter(|section| !section.trim().is_empty())
-        .collect::<Vec<_>>();
+        let mut sections = vec![agent_prompt.trim().to_string()]
+            .into_iter()
+            .filter(|section| !section.trim().is_empty())
+            .collect::<Vec<_>>();
         let skill_sections = profile
             .enabled_skills
             .iter()

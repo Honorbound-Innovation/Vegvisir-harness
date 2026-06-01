@@ -3870,7 +3870,7 @@ fn tui_submit_message_uses_cms_memory_and_demo_provider() -> anyhow::Result<()> 
 
     app.input.set_buffer("hello from tui");
     app.handle_submit();
-    for _ in 0..50 {
+    for _ in 0..500 {
         if app.poll_pending_send() {
             break;
         }

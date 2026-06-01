@@ -1,10 +1,12 @@
 use std::{
     collections::BTreeMap,
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
+    os::fd::AsRawFd,
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use serde_json::{Map, Value, json};
@@ -18,6 +20,9 @@ use crate::{
 
 type StdioMcpSessionPool = Arc<Mutex<BTreeMap<String, StdioMcpSession>>>;
 type HttpMcpSessionPool = Arc<Mutex<BTreeMap<String, String>>>;
+
+const MCP_STDIO_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(3);
+const MCP_STDIO_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
 struct McpRuntimeState {
@@ -197,12 +202,15 @@ fn request_pooled_stdio_once(
         .lock()
         .map_err(|_| anyhow::anyhow!("MCP stdio session pool lock poisoned"))?;
     if !sessions.contains_key(&key) {
-        sessions.insert(key.clone(), StdioMcpSession::start(server)?);
+        sessions.insert(
+            key.clone(),
+            StdioMcpSession::start(server, MCP_STDIO_REQUEST_TIMEOUT)?,
+        );
     }
     let session = sessions
         .get_mut(&key)
         .ok_or_else(|| anyhow::anyhow!("MCP stdio session {} unavailable", server.id))?;
-    session.request(id, payload)
+    session.request(id, payload, MCP_STDIO_REQUEST_TIMEOUT)
 }
 
 fn stdio_session_key(server: &McpServerConfig) -> String {
@@ -210,7 +218,7 @@ fn stdio_session_key(server: &McpServerConfig) -> String {
 }
 
 fn discover_stdio_tools(server: &McpServerConfig) -> anyhow::Result<Vec<McpToolConfig>> {
-    let mut session = StdioMcpSession::start(server)?;
+    let mut session = StdioMcpSession::start(server, MCP_STDIO_DISCOVERY_TIMEOUT)?;
     let response = session.request(
         2,
         json!({
@@ -219,6 +227,7 @@ fn discover_stdio_tools(server: &McpServerConfig) -> anyhow::Result<Vec<McpToolC
             "method": "tools/list",
             "params": {}
         }),
+        MCP_STDIO_DISCOVERY_TIMEOUT,
     )?;
     session.shutdown();
     if let Some(error) = response.get("error") {
@@ -430,7 +439,7 @@ struct StdioMcpSession {
 }
 
 impl StdioMcpSession {
-    fn start(server: &McpServerConfig) -> anyhow::Result<Self> {
+    fn start(server: &McpServerConfig, timeout: Duration) -> anyhow::Result<Self> {
         let command = server
             .command
             .as_deref()
@@ -475,6 +484,7 @@ impl StdioMcpSession {
                     "clientInfo": {"name": "vegvisir-rust", "version": env!("CARGO_PKG_VERSION")}
                 }
             }),
+            timeout,
         )?;
         if let Some(error) = initialize.get("error") {
             session.shutdown();
@@ -487,9 +497,9 @@ impl StdioMcpSession {
         Ok(session)
     }
 
-    fn request(&mut self, id: u64, payload: Value) -> anyhow::Result<Value> {
+    fn request(&mut self, id: u64, payload: Value, timeout: Duration) -> anyhow::Result<Value> {
         write_mcp_message(&mut self.stdin, &payload)?;
-        read_mcp_response(&mut self.stdout, id)
+        read_mcp_response(&mut self.stdout, id, timeout)
     }
 
     fn shutdown(&mut self) {
@@ -512,19 +522,27 @@ fn write_mcp_message(writer: &mut impl Write, payload: &Value) -> anyhow::Result
     Ok(())
 }
 
-fn read_mcp_response(reader: &mut impl BufRead, id: u64) -> anyhow::Result<Value> {
+fn read_mcp_response(
+    reader: &mut BufReader<std::process::ChildStdout>,
+    id: u64,
+    timeout: Duration,
+) -> anyhow::Result<Value> {
     loop {
-        let message = read_mcp_message(reader)?;
+        let message = read_mcp_message(reader, timeout)?;
         if message.get("id").and_then(Value::as_u64) == Some(id) {
             return Ok(message);
         }
     }
 }
 
-fn read_mcp_message(reader: &mut impl BufRead) -> anyhow::Result<Value> {
+fn read_mcp_message(
+    reader: &mut BufReader<std::process::ChildStdout>,
+    timeout: Duration,
+) -> anyhow::Result<Value> {
     let mut content_length = None;
     loop {
         let mut line = String::new();
+        wait_for_stdio_readable(reader, timeout)?;
         if reader.read_line(&mut line)? == 0 {
             anyhow::bail!("MCP server closed stdout before sending a complete message");
         }
@@ -541,8 +559,58 @@ fn read_mcp_message(reader: &mut impl BufRead) -> anyhow::Result<Value> {
     let length =
         content_length.ok_or_else(|| anyhow::anyhow!("MCP message missing Content-Length"))?;
     let mut body = vec![0u8; length];
-    reader.read_exact(&mut body)?;
+    read_exact_with_timeout(reader, &mut body, timeout)?;
     Ok(serde_json::from_slice(&body)?)
+}
+
+fn read_exact_with_timeout(
+    reader: &mut BufReader<std::process::ChildStdout>,
+    mut body: &mut [u8],
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    while !body.is_empty() {
+        wait_for_stdio_readable(reader, timeout)?;
+        let read = reader.read(body)?;
+        if read == 0 {
+            anyhow::bail!("MCP server closed stdout before sending a complete message");
+        }
+        body = &mut body[read..];
+    }
+    Ok(())
+}
+
+fn wait_for_stdio_readable(
+    reader: &BufReader<std::process::ChildStdout>,
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    if !reader.buffer().is_empty() {
+        return Ok(());
+    }
+    let mut fd = libc::pollfd {
+        fd: reader.get_ref().as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    loop {
+        let result =
+            unsafe { libc::poll(&mut fd, 1, timeout.as_millis().min(i32::MAX as u128) as i32) };
+        if result > 0 {
+            if fd.revents & libc::POLLIN != 0 {
+                return Ok(());
+            }
+            if fd.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
+                anyhow::bail!("MCP server stdout closed during request");
+            }
+        } else if result == 0 {
+            anyhow::bail!("MCP stdio request timed out after {}s", timeout.as_secs());
+        } else {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error.into());
+        }
+    }
 }
 
 fn mcp_result_text(result: &Value) -> String {
