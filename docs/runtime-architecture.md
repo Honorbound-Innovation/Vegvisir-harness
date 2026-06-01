@@ -17,6 +17,7 @@ vegvisir/src/main.rs                 CLI entrypoint and top-level subcommands
 vegvisir/src/app.rs                  TUI application shell
 vegvisir/src/app/runtime.rs          TUI runtime/event integration
 vegvisir/src/orchestrator.rs         Agent harness execution loop
+vegvisir/src/parallelism.rs          Hardware-aware bounded worker configuration/helpers
 vegvisir/src/model.rs                Model trait and scripted/local model support
 vegvisir/src/provider.rs             Provider abstraction and provider selection
 vegvisir/src/openai_sso.rs           OpenAI SSO integration support
@@ -73,6 +74,22 @@ The orchestrator is the part that turns a user goal into a bounded run. At a hig
 - a checkpoint/final-answer result
 
 The model does not directly mutate the world. It produces messages and tool-call requests; the harness decides whether a tool exists, whether it is allowed, whether approval is required, and how outputs are returned.
+
+## Hardware-Aware Parallelism
+
+Vegvisir Core exposes a central bounded parallelism configuration in `vegvisir/src/parallelism.rs`. The goal is to let local CPU-heavy features use the available machine without hard-coding one hardware profile or spawning unbounded threads.
+
+Detection uses `std::thread::available_parallelism()` and defaults to reserving one core for the OS/UI when more than one core is available. The effective worker count is surfaced in `/session-status` and in the app-server `session.status` payload.
+
+Environment overrides:
+
+```bash
+VEGVISIR_MAX_WORKERS=12        # explicit worker ceiling
+VEGVISIR_MAX_WORKERS=auto      # hardware-aware default
+VEGVISIR_RESERVED_CORES=2      # reserve cores from the auto calculation
+```
+
+The helper `run_parallel_ordered` is intended for deterministic local work where inputs can be processed concurrently but output order must remain stable. SQLite writes, session mutation, approvals, provider calls, and dependent tool-call chains should still remain serialized unless a feature adds explicit safe batching.
 
 ## TUI Runtime
 

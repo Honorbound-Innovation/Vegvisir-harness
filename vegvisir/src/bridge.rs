@@ -1067,6 +1067,12 @@ fn snapshot(app: &TuiApplication) -> Value {
         "dangerously_bypass_approvals_and_sandbox": app.dangerously_bypass_approvals_and_sandbox,
         "tools_enabled": app.tool_registry.list().len(),
         "pending_approvals": app.tool_executor.guardrails.approvals.pending_len(),
+        "parallelism": {
+            "available_parallelism": app.parallelism.available_parallelism,
+            "reserved_cores": app.parallelism.reserved_cores,
+            "max_workers": app.parallelism.max_workers,
+            "source": app.parallelism.source_label(),
+        },
     })
 }
 

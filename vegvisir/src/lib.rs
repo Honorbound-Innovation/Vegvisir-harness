@@ -18,6 +18,7 @@ pub mod model_discovery;
 pub mod observability;
 pub mod openai_sso;
 pub mod orchestrator;
+pub mod parallelism;
 pub mod persona;
 pub mod planning;
 pub mod policy;

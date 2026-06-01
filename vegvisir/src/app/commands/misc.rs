@@ -117,6 +117,11 @@ impl TuiApplication {
              autonomous_mode: {}\n\
              risky_tools: {}\n\
              dangerous_bypass: {}\n\n\
+             Hardware / parallelism\n\
+             available_parallelism: {}\n\
+             reserved_cores: {}\n\
+             max_workers: {}\n\
+             worker_source: {}\n\n\
              Token telemetry\n\
              source: {}\n\
              input_tokens: {}\n\
@@ -164,6 +169,10 @@ impl TuiApplication {
             } else {
                 "disabled"
             },
+            self.parallelism.available_parallelism,
+            self.parallelism.reserved_cores,
+            self.parallelism.max_workers,
+            self.parallelism.source_label(),
             token_source,
             self.session.input_tokens_used,
             self.session.output_tokens_used,

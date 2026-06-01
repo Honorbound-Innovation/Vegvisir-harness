@@ -33,6 +33,7 @@ use crate::{
     memory::{VegvisirCms, VegvisirCmsConfig, default_vegvisir_data_root},
     model_discovery::discover_provider_models,
     observability::EventLogger,
+    parallelism::ParallelismConfig,
     persona::{
         DEFAULT_PERSONA_ID, KA_PROMPT_HEADING, get_persona_with_root, render_persona_prompt_section,
     },
@@ -83,6 +84,7 @@ pub struct TuiApplication {
     pub profile_store: UserProfileStore,
     pub user_profile: UserProfile,
     pub logger: EventLogger,
+    pub parallelism: ParallelismConfig,
     pub input: InputState,
     pub renderer: LayoutRenderer,
     pub chat_scroll_offset: usize,
@@ -569,6 +571,7 @@ impl TuiApplication {
         let hbse_services =
             HbseServiceRefStore::new(data_root.join("hbse-services.json")).load()?;
         let logger = EventLogger::new(Some(data_root.join("traces").join("tui.jsonl")));
+        let parallelism = ParallelismConfig::detect();
         let mut approvals =
             crate::guardrails::ApprovalLedger::new_persisted(data_root.join("approvals.json"))
                 .unwrap_or_default();
@@ -640,6 +643,7 @@ impl TuiApplication {
             profile_store,
             user_profile,
             logger,
+            parallelism,
             input: InputState {
                 history: input_history,
                 ..InputState::default()

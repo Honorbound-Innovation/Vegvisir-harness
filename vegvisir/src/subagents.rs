@@ -10,6 +10,7 @@ use crate::{
     model::Model,
     observability::EventLogger,
     orchestrator::{AgentHarness, AgentResult, AgentTask},
+    parallelism::ParallelismConfig,
     tools::ToolRegistry,
 };
 use chrono::{DateTime, Utc};
@@ -108,7 +109,7 @@ impl<M: Model> SubAgentSupervisor<M> {
         Self {
             model,
             tools,
-            max_children: 4,
+            max_children: ParallelismConfig::detect().constrained_workers(4),
             children: BTreeMap::new(),
             board: BTreeMap::new(),
             board_path: None,
