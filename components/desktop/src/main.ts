@@ -320,9 +320,9 @@ function render(): void {
   app.innerHTML = `
     <div class="grid h-screen grid-cols-[18rem_minmax(0,1fr)] overflow-hidden bg-vv-bg bg-vv-radial text-vv-text selection:bg-vv-cyan/25 max-[980px]:grid-cols-1">
       ${renderLeftRail()}
-      <main class="grid min-w-0 grid-rows-[3.75rem_minmax(0,1fr)_1.75rem] border-l border-vv-line bg-vv-bg2/74 max-[980px]:border-l-0">
+      <main class="grid min-h-0 min-w-0 grid-rows-[3.75rem_minmax(0,1fr)_1.75rem] overflow-hidden border-l border-vv-line bg-vv-bg2/74 max-[980px]:border-l-0">
         ${renderTopBar()}
-        <section class="min-h-0 overflow-hidden bg-vv-grid [background-size:42px_42px]">
+        <section class="flex min-h-0 flex-col overflow-hidden bg-vv-grid [background-size:42px_42px]">
           ${state.error ? renderError() : ''}
           ${renderPanel()}
         </section>
@@ -409,8 +409,8 @@ function renderError(): string {
 }
 
 function renderPanel(): string {
-  if (state.activePanel === 'chat') return renderChat();
-  return `<div class="vv-scrollbar h-full overflow-auto px-4 py-3"><div class="mx-auto max-w-5xl">${renderNonChatPanel()}</div></div>`;
+  if (state.activePanel === 'chat') return `<div class="min-h-0 flex-1 overflow-hidden">${renderChat()}</div>`;
+  return `<div class="vv-scrollbar min-h-0 flex-1 overflow-auto px-4 py-3"><div class="mx-auto max-w-5xl">${renderNonChatPanel()}</div></div>`;
 }
 
 function renderNonChatPanel(): string {
@@ -431,13 +431,13 @@ function renderChat(): string {
   const messages = [...state.messages];
   if (state.pendingAssistant) messages.push({ role: 'assistant', content: state.pendingAssistant });
   return `
-    <div class="flex h-full min-h-0 flex-col overflow-hidden">
-      <div id="chat-scroll-surface" class="vv-scrollbar min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-5 py-5">
+    <div class="grid h-full max-h-full min-h-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden">
+      <div id="chat-scroll-surface" class="vv-scrollbar min-h-0 overflow-y-auto overflow-x-hidden px-5 py-5">
         <div class="mx-auto max-w-4xl space-y-5 pb-4">
           ${messages.length ? messages.map(renderMessage).join('') : renderEmptyTranscript()}
         </div>
       </div>
-      <div id="chat-composer-surface" class="shrink-0 border-t border-vv-line bg-vv-bg2/70 px-5 py-3 backdrop-blur-xl">
+      <div id="chat-composer-surface" class="max-h-[13rem] min-h-0 overflow-hidden border-t border-vv-line bg-vv-bg2/70 px-5 py-3 backdrop-blur-xl">
         ${renderComposer()}
       </div>
     </div>
@@ -458,9 +458,9 @@ function renderComposer(): string {
   return `
     <div class="mx-auto w-full max-w-4xl">
       <div class="rounded-[1.15rem] border border-vv-line2 bg-vv-panel/90 p-2.5 shadow-[0_18px_56px_rgba(0,0,0,0.30)]">
-        <textarea id="turn-input" class="vv-focus vv-scrollbar max-h-28 min-h-16 w-full resize-y rounded-xl border border-transparent bg-transparent px-2.5 py-1.5 text-[0.92rem] leading-6 text-vv-text placeholder:text-vv-dim" placeholder="Ask Vegvisir anything, @tag files/folders, or use /command" ${state.bridgeRunning ? '' : 'disabled'}></textarea>
+        <textarea id="turn-input" class="vv-focus vv-scrollbar h-16 max-h-16 min-h-16 w-full resize-none rounded-xl border border-transparent bg-transparent px-2.5 py-1.5 text-[0.92rem] leading-6 text-vv-text placeholder:text-vv-dim" placeholder="Ask Vegvisir anything, @tag files/folders, or use /command" ${state.bridgeRunning ? '' : 'disabled'}></textarea>
         <div class="mt-1.5 flex items-center justify-between gap-2 border-t border-vv-line pt-2">
-          <div class="flex min-w-0 flex-wrap items-center gap-1.5 text-xs text-vv-muted">
+          <div class="flex min-w-0 items-center gap-1.5 overflow-hidden text-xs text-vv-muted">
             <span class="vv-pill">${escapeHtml(state.settings.model || 'model default')}</span>
             <span class="vv-pill">${state.busy ? 'High activity' : 'Ready'}</span>
             <span class="vv-pill">Chat</span>
