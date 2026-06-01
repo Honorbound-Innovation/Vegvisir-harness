@@ -220,7 +220,7 @@ Important TUI commands include:
 /skills invoke <subskill-id> [json-input]
 ```
 
-Compiled artifacts live under `.vegvisir/compiled` in the workspace.
+Compiled artifacts live under `.vegvisir/compiled` in the workspace. LSL source discovery is sorted deterministically, and source hashing/compilation uses the Core `run_parallel_ordered` helper so large skill libraries can fan out across the configured worker budget without changing final registry order.
 
 ## Subagent Runtime
 

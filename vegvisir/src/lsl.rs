@@ -4,6 +4,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::parallelism::{ParallelismConfig, run_parallel_ordered};
+
 use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -1174,30 +1176,18 @@ pub fn compile_lsl_roots(
     roots: &[PathBuf],
     compiled_root: &Path,
 ) -> anyhow::Result<CompiledLslRegistry> {
+    let paths = collect_lsl_file_paths(roots)?;
+    let workers = ParallelismConfig::detect().constrained_workers(paths.len());
+    let compiled_files = run_parallel_ordered(paths, workers, |path| compile_lsl_file(&path));
+
     let mut libraries = Vec::new();
     let mut hashes = BTreeMap::new();
-    for root in roots {
-        if !root.exists() {
-            continue;
-        }
-        collect_lsl_files(root, &mut |path| {
-            let source = fs::read_to_string(path)
-                .with_context(|| format!("failed to read LSL file {}", path.display()))?;
-            let library = parse_lsl(&source)
-                .with_context(|| format!("failed to compile LSL file {}", path.display()))?;
-            hashes.insert(
-                library.id.clone(),
-                LslHashes {
-                    source_path: path.display().to_string(),
-                    source_hash: library.source_hash.clone().unwrap_or_default(),
-                    canonical_hash: library.canonical_hash.clone().unwrap_or_default(),
-                    semantic_hash: library.semantic_hash.clone().unwrap_or_default(),
-                },
-            );
-            libraries.push(library);
-            Ok(())
-        })?;
+    for compiled_file in compiled_files {
+        let (library, library_hashes) = compiled_file?;
+        hashes.insert(library.id.clone(), library_hashes);
+        libraries.push(library);
     }
+
     let compiled = CompiledLslRegistry {
         registry: LslRegistry::from_libraries(libraries),
         hashes,
@@ -3150,37 +3140,73 @@ fn collect_lsl_files(
     root: &Path,
     visit: &mut impl FnMut(&Path) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
-        let path = entry.path();
+    let mut entries = fs::read_dir(root)?
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    entries.sort();
+
+    for path in entries {
         if path.is_dir() {
             collect_lsl_files(&path, visit)?;
             continue;
         }
-        if path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .map(|extension| extension.eq_ignore_ascii_case("lsl"))
-            .unwrap_or(false)
-        {
+        if is_lsl_file(&path) {
             visit(&path)?;
         }
     }
     Ok(())
 }
 
-fn collect_lsl_source_hashes(roots: &[PathBuf]) -> anyhow::Result<BTreeMap<String, String>> {
-    let mut hashes = BTreeMap::new();
+fn collect_lsl_file_paths(roots: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
     for root in roots {
         if !root.exists() {
             continue;
         }
         collect_lsl_files(root, &mut |path| {
-            let source = fs::read(path)
-                .with_context(|| format!("failed to read LSL source {}", path.display()))?;
-            hashes.insert(path.display().to_string(), sha256_hex(&source));
+            paths.push(path.to_path_buf());
             Ok(())
         })?;
+    }
+    Ok(paths)
+}
+
+fn compile_lsl_file(path: &Path) -> anyhow::Result<(LinkedSkillLibrary, LslHashes)> {
+    let source = fs::read_to_string(path)
+        .with_context(|| format!("failed to read LSL file {}", path.display()))?;
+    let library = parse_lsl(&source)
+        .with_context(|| format!("failed to compile LSL file {}", path.display()))?;
+    let hashes = LslHashes {
+        source_path: path.display().to_string(),
+        source_hash: library.source_hash.clone().unwrap_or_default(),
+        canonical_hash: library.canonical_hash.clone().unwrap_or_default(),
+        semantic_hash: library.semantic_hash.clone().unwrap_or_default(),
+    };
+    Ok((library, hashes))
+}
+
+fn is_lsl_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.eq_ignore_ascii_case("lsl"))
+        .unwrap_or(false)
+}
+
+fn collect_lsl_source_hashes(roots: &[PathBuf]) -> anyhow::Result<BTreeMap<String, String>> {
+    let paths = collect_lsl_file_paths(roots)?;
+    let workers = ParallelismConfig::detect().constrained_workers(paths.len());
+    let source_hashes = run_parallel_ordered(paths, workers, |path| {
+        let source = fs::read(&path)
+            .with_context(|| format!("failed to read LSL source {}", path.display()))?;
+        Ok::<_, anyhow::Error>((path.display().to_string(), sha256_hex(&source)))
+    });
+
+    let mut hashes = BTreeMap::new();
+    for source_hash in source_hashes {
+        let (path, hash) = source_hash?;
+        hashes.insert(path, hash);
     }
     Ok(hashes)
 }
@@ -3485,6 +3511,26 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("duplicate subskill id"));
+    }
+
+    #[test]
+    fn lsl_file_collection_is_deterministically_sorted() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let skills = tmp.path().join("skills");
+        let nested = skills.join("nested");
+        std::fs::create_dir_all(&nested)?;
+        std::fs::write(skills.join("zeta.lsl"), "library zeta {}")?;
+        std::fs::write(skills.join("alpha.txt"), "not an lsl file")?;
+        std::fs::write(nested.join("alpha.lsl"), "library alpha {}")?;
+
+        let paths = super::collect_lsl_file_paths(&[skills])?;
+        let rendered = paths
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(rendered, vec!["alpha.lsl", "zeta.lsl"]);
+        Ok(())
     }
 
     #[test]
