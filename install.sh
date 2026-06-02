@@ -212,6 +212,7 @@ require_file "$repo_root/vegvisir/Cargo.toml"
 require_file "$repo_root/components/cms-v2/Cargo.toml"
 require_file "$repo_root/components/HBSE/Cargo.toml"
 require_file "$repo_root/components/usrl/package.json"
+require_file "$repo_root/components/solarium/package.json"
 require_file "$repo_root/components/binary-intelligence-workbench/pyproject.toml"
 
 if [[ "$install_system_deps" -eq 1 ]]; then
@@ -303,6 +304,28 @@ exec python3 -m biw.cli "\$@"
 EOF
 chmod 0755 "$bin_dir/biw"
 
+solarium_share_dir="$share_dir/solarium"
+rm -rf "$solarium_share_dir"
+mkdir -p "$solarium_share_dir"
+tar -C "$repo_root/components/solarium" \
+  --exclude='.git' \
+  --exclude='node_modules' \
+  --exclude='dist' \
+  --exclude='.solarium' \
+  --exclude='.vegvisir' \
+  -cf - . | tar -C "$solarium_share_dir" -xf -
+if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+  echo "node and npm are required for Solarium. Install nodejs/npm or rerun with --install-system-deps." >&2
+  exit 1
+fi
+npm --prefix "$solarium_share_dir" ci
+npm --prefix "$solarium_share_dir" run build
+cat >"$bin_dir/solarium" <<EOF
+#!/usr/bin/env bash
+exec node "$solarium_share_dir/dist/cli/index.js" "\$@"
+EOF
+chmod 0755 "$bin_dir/solarium"
+
 if [[ "$install_usrl" -eq 1 ]]; then
   if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
     echo "node and npm are required for USRL. Install nodejs/npm or rerun with --no-usrl." >&2
@@ -372,6 +395,7 @@ EOF
 if [[ "$install_cms_cli" -eq 1 ]]; then
   echo "  $bin_dir/cms-v2"
 fi
+echo "  $bin_dir/solarium"
 if [[ "$install_hbse" -eq 1 ]]; then
   echo "  $bin_dir/hbse"
   echo "  $bin_dir/hbse-broker"

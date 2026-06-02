@@ -150,6 +150,7 @@ cms_dir="$bundle_root/third_party/CMS-v2"
 hbse_rust_dir="$bundle_root/third_party/HBSE/rust"
 usrl_dir="$bundle_root/third_party/USRL"
 biw_dir="$app_dir/components/binary-intelligence-workbench"
+solarium_dir="$app_dir/components/solarium"
 bin_dir="$prefix/bin"
 etc_dir="$prefix/etc/vegvisir"
 share_dir="$prefix/share/vegvisir"
@@ -172,6 +173,10 @@ if [[ "$install_usrl" -eq 1 && ! -f "$usrl_dir/package.json" ]]; then
 fi
 if [[ ! -f "$biw_dir/pyproject.toml" ]]; then
   echo "missing bundled Binary Intelligence Workbench source at $biw_dir" >&2
+  exit 1
+fi
+if [[ ! -f "$solarium_dir/package.json" ]]; then
+  echo "missing bundled Solarium source at $solarium_dir" >&2
   exit 1
 fi
 
@@ -284,6 +289,28 @@ fi
 exec python3 -m biw.cli "\$@"
 EOF
 chmod 0755 "$bin_dir/biw"
+
+solarium_share_dir="$share_dir/solarium"
+rm -rf "$solarium_share_dir"
+mkdir -p "$solarium_share_dir"
+tar -C "$solarium_dir" \
+  --exclude='.git' \
+  --exclude='node_modules' \
+  --exclude='dist' \
+  --exclude='.solarium' \
+  --exclude='.vegvisir' \
+  -cf - . | tar -C "$solarium_share_dir" -xf -
+if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+  echo "node and npm are required for Solarium. Install nodejs/npm or rerun with --install-system-deps." >&2
+  exit 1
+fi
+npm --prefix "$solarium_share_dir" ci
+npm --prefix "$solarium_share_dir" run build
+cat >"$bin_dir/solarium" <<EOF
+#!/usr/bin/env bash
+exec node "$solarium_share_dir/dist/cli/index.js" "\$@"
+EOF
+chmod 0755 "$bin_dir/solarium"
 
 if [[ "$install_usrl" -eq 1 ]]; then
   if ! command -v node >/dev/null 2>&1; then
@@ -418,6 +445,7 @@ EOF
 if [[ "$install_cms_cli" -eq 1 ]]; then
   echo "  $bin_dir/cms-v2"
 fi
+echo "  $bin_dir/solarium"
 if [[ "$install_hbse" -eq 1 ]]; then
   echo "  $bin_dir/hbse"
   echo "  $bin_dir/hbse-broker"

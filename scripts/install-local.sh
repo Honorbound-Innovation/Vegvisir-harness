@@ -33,5 +33,27 @@ exec python3 -m biw.cli "\$@"
 EOF
 chmod 0755 "$HOME/.local/bin/biw"
 
-echo "Installed vegvisir, hbse, hbse-broker, and biw into $HOME/.local/bin"
+solarium_share_dir="$HOME/.local/share/vegvisir/solarium"
+rm -rf "$solarium_share_dir"
+mkdir -p "$solarium_share_dir"
+tar -C components/solarium \
+  --exclude='.git' \
+  --exclude='node_modules' \
+  --exclude='dist' \
+  --exclude='.solarium' \
+  --exclude='.vegvisir' \
+  -cf - . | tar -C "$solarium_share_dir" -xf -
+if command -v npm >/dev/null 2>&1; then
+  npm --prefix "$solarium_share_dir" ci
+  npm --prefix "$solarium_share_dir" run build
+  cat >"$HOME/.local/bin/solarium" <<EOF
+#!/usr/bin/env bash
+exec node "$solarium_share_dir/dist/cli/index.js" "\$@"
+EOF
+  chmod 0755 "$HOME/.local/bin/solarium"
+else
+  echo "Skipping Solarium install because npm is not available." >&2
+fi
+
+echo "Installed vegvisir, hbse, hbse-broker, biw, and solarium into $HOME/.local/bin"
 

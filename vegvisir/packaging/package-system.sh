@@ -157,6 +157,7 @@ CMS-v2 source: third_party/CMS-v2
 HBSE Rust source: third_party/HBSE/rust
 USRL source: third_party/USRL
 Binary Intelligence Workbench source: app/components/binary-intelligence-workbench
+Solarium source: app/components/solarium
 Cargo vendor: $([[ "$vendor" -eq 1 ]] && echo vendor || echo not included)
 Installer: install.sh
 Uninstaller: uninstall.sh
