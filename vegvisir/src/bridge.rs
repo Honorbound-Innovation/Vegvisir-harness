@@ -519,6 +519,7 @@ fn handle_request(
                     },
                 )?,
                 Err(error) => {
+                    let message = error.to_string();
                     let pending = pending_approvals(app);
                     if !pending.is_empty() {
                         if app
@@ -550,7 +551,8 @@ fn handle_request(
                             kind: "turn.failed",
                             id: request.id,
                             payload: json!({
-                                "error": error.to_string(),
+                                "error": message.clone(),
+                                "message": message,
                                 "session": snapshot(app),
                             }),
                         },

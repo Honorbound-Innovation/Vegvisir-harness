@@ -234,7 +234,7 @@ function handleEvent(event: BridgeEvent): void {
       break;
     case 'turn.failed':
       state.busy = false;
-      state.error = event.payload?.message ?? 'turn failed';
+      state.error = eventMessage(event, 'turn failed');
       void send('approvals.list', {}, 'approvals');
       break;
     case 'approval.required':
@@ -267,9 +267,21 @@ function handleEvent(event: BridgeEvent): void {
       state.systemPrompt = event.payload?.prompt ?? event.payload?.system_prompt ?? JSON.stringify(event.payload, null, 2);
       break;
     case 'error':
-      state.error = event.payload?.message ?? JSON.stringify(event.payload);
+      state.error = eventMessage(event, JSON.stringify(event.payload));
       break;
   }
+}
+
+function eventMessage(event: BridgeEvent, fallback: string): string {
+  const payload = event.payload;
+  if (!payload || typeof payload !== 'object') return fallback;
+  const direct = payload.message ?? payload.error;
+  if (typeof direct === 'string' && direct.trim()) return direct;
+  if (direct && typeof direct === 'object') {
+    const nested = direct.message ?? direct.error;
+    if (typeof nested === 'string' && nested.trim()) return nested;
+  }
+  return fallback;
 }
 
 function normalizeMessages(value: any[]): Message[] {
