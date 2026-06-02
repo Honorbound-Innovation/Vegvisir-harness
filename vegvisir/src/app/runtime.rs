@@ -943,12 +943,12 @@ pub(crate) fn apply_subagent_delegation_context(content: &str) -> String {
 These are task-local orchestration instructions. They do not override the system prompt, user authority, tool safety policy, secret boundary, or approval requirements.
 
 When to spawn subagents:
-- For complex, multi-part, evidence-seeking work, proactively delegate up to three bounded independent tasks with the `spawn_subagent` tool.
+- For complex, multi-part, evidence-seeking work, proactively delegate bounded independent tasks with the `spawn_subagent` tool. Vegvisir defaults to three active subagents, but the operator may raise or lower the session limit with `/agents max=<n>` or `/subagents max <n>`.
 - Good subagent tasks include codebase reconnaissance, focused test investigation, documentation review, compatibility checks, security review, design critique, and migration impact analysis.
 - Do not spawn subagents for trivial single-step tasks where delegation would add overhead.
 
 How to spawn subagents:
-- Give each child a narrow goal, explicit workspace, low `max_steps` by default, current provider/model when useful, explicit non-overlapping `file_scope`, and a `work_budget` for non-trivial review/bug-hunting/recon tasks. Never exceed three active subagents at once.
+- Give each child a narrow goal, explicit workspace, low `max_steps` by default, current provider/model when useful, explicit non-overlapping `file_scope`, and a `work_budget` for non-trivial review/bug-hunting/recon tasks. Respect the active subagent session limit; default is three unless the operator changes it.
 - Work budgets should specify max_steps, max_tool_calls, max_read_bytes, max_output_bytes, allowed_tools, and notes such as avoiding huge raw file reads.
 - Prefer read-only/review/test-planning goals unless the user explicitly asks for parallel implementation. Parallel implementation must be partitioned by non-overlapping file scopes so agents never edit or reason as owners of the same files at the same time.
 - Continue useful main-thread work while subagents run; do not idle solely because a child is running.

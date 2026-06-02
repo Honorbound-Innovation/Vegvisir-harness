@@ -72,6 +72,9 @@ impl TuiApplication {
     }
 
     pub(crate) fn agent_command(&mut self, args: &[String]) -> anyhow::Result<String> {
+        if let Some(response) = self.try_subagent_limit_command(args)? {
+            return Ok(response);
+        }
         match args.first().map(String::as_str) {
             None | Some("list") => {
                 let (profiles, warnings) = self.agents.list_lossy()?;

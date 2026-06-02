@@ -62,7 +62,7 @@ Rules:
 - Use non-overlapping scopes for parallel work.
 - Prefer read-only scopes unless the user explicitly asks for parallel implementation.
 - Never allow two active implementation workers to edit or own the same files.
-- Keep a maximum of three active subagents at once.
+- Vegvisir defaults to three active subagents at once, but operators can change the session limit with `/agents max=<n>` or `/subagents max <n>`.
 - If a scope conflict is reported, narrow the new task or continue on the main thread.
 
 Example scopes:
@@ -119,11 +119,20 @@ Cancel a queued or running task:
 /subagents cancel <id-or-name>
 ```
 
+Set the active session limit:
+
+```text
+/agents max=6
+/subagents max 6
+```
+
 Show the active policy help:
 
 ```text
 /subagents policy
 ```
+
+Subagent spawning remains locked to YOLO mode for now even when the active limit is raised.
 
 ## Model-Facing Tool
 

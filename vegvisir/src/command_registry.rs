@@ -156,6 +156,12 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
             &[],
         ),
         cmd(
+            "/agents",
+            "inspect agents and configure subagent concurrency",
+            "/agents [max=<n>|max <n>|list]",
+            &["/agent"],
+        ),
+        cmd(
             "/attach",
             "attach file or image to next message",
             "/attach [path|clear]",
@@ -295,7 +301,7 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
         cmd(
             "/subagents",
             "inspect durable subagent task records",
-            "/subagents [list|show <id-or-name>|cancel <id-or-name>|policy]",
+            "/subagents [list|show <id-or-name>|cancel <id-or-name>|policy|max=<n>|max <n>]",
             &["/workers"],
         ),
         cmd(

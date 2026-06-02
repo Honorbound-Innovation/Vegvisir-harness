@@ -230,7 +230,7 @@ impl TuiApplication {
             "/compress" => self.compress(&args),
             "/system" => self.system_command(&args)?,
             "/system-prompt" => self.system_command(&[])?,
-            "/agent" => self.agent_command(&args)?,
+            "/agent" | "/agents" => self.agent_command(&args)?,
             "/attach" => self.attach_command(&args)?,
             "/ka" => self.persona_command(&args)?,
             "/profile" => self.profile_command(&args)?,

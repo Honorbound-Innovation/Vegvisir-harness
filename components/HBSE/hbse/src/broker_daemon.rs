@@ -939,12 +939,19 @@ fn is_multipart_request(headers: &serde_json::Map<String, Value>) -> bool {
         key.eq_ignore_ascii_case("content-type")
             && value
                 .as_str()
-                .map(|value| value.to_ascii_lowercase().starts_with("multipart/form-data"))
+                .map(|value| {
+                    value
+                        .to_ascii_lowercase()
+                        .starts_with("multipart/form-data")
+                })
                 .unwrap_or(false)
     })
 }
 
-fn send_multipart_bytes(request: ureq::Request, body: &[u8]) -> Result<ureq::Response, ureq::Error> {
+fn send_multipart_bytes(
+    request: ureq::Request,
+    body: &[u8],
+) -> Result<ureq::Response, ureq::Error> {
     // Multipart providers are often strict about request framing. ureq::Request::send(reader)
     // uses chunked transfer encoding unless Content-Length is set, and some OpenAI-compatible
     // transcription endpoints reject chunked multipart bodies as "Could not parse multipart
@@ -1164,7 +1171,10 @@ mod tests {
         );
         assert!(is_multipart_request(&headers));
 
-        headers.insert("Content-Type".to_string(), Value::String("application/json".to_string()));
+        headers.insert(
+            "Content-Type".to_string(),
+            Value::String("application/json".to_string()),
+        );
         assert!(!is_multipart_request(&headers));
     }
 

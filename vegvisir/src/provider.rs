@@ -2936,11 +2936,7 @@ fn parse_response_sse_text_reader<R: BufRead>(
             );
         }
     }
-    close_reasoning_trace_if_unanswered(
-        on_delta,
-        emitted_reasoning_trace,
-        emitted_answer_header,
-    );
+    close_reasoning_trace_if_unanswered(on_delta, emitted_reasoning_trace, emitted_answer_header);
     if output.is_empty() {
         anyhow::bail!("openai-sso response stream did not contain assistant text.");
     }
@@ -3102,11 +3098,7 @@ fn parse_response_sse_value_reader<R: BufRead>(
             "output_text": output_text,
         }));
     }
-    close_reasoning_trace_if_unanswered(
-        on_delta,
-        emitted_reasoning_trace,
-        emitted_answer_header,
-    );
+    close_reasoning_trace_if_unanswered(on_delta, emitted_reasoning_trace, emitted_answer_header);
     if !body_lines.is_empty() {
         return Ok(serde_json::from_str(&body_lines.join("\n"))?);
     }

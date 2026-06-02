@@ -43,7 +43,10 @@ use crate::{
     },
     speech::{ActiveSpeechRecording, DEFAULT_PTT_KEY, DEFAULT_PTT_SECONDS, PushToTalkKey},
     subagents::{SubAgentStatus, SubAgentTaskRecord},
-    tools::{ToolExecutor, ToolRegistry, build_builtin_registry_with_cms_and_mode},
+    tools::{
+        DEFAULT_ACTIVE_SUBAGENT_LIMIT, ToolExecutor, ToolRegistry,
+        build_builtin_registry_with_cms_mode_and_subagent_limit,
+    },
     types::ToolCall,
     ui::{
         input::{InputState, Suggestion},
@@ -92,6 +95,7 @@ pub struct TuiApplication {
     pub risky_tools_enabled: bool,
     pub dangerously_bypass_approvals_and_sandbox: bool,
     pub autonomous_mode_enabled: bool,
+    pub active_subagent_limit: usize,
     pub mcp_servers: Vec<crate::core::McpServerConfig>,
     pub hbse_services: Vec<HbseServiceRef>,
     pub pending_send: Option<JoinHandle<anyhow::Result<SessionState>>>,
@@ -559,10 +563,12 @@ impl TuiApplication {
             context_mode: cms_v2::ecm::ContextMode::Project,
             commit_writebacks: true,
         };
-        let tool_registry = build_builtin_registry_with_cms_and_mode(
+        let active_subagent_limit = DEFAULT_ACTIVE_SUBAGENT_LIMIT;
+        let tool_registry = build_builtin_registry_with_cms_mode_and_subagent_limit(
             &cwd,
             cms_config,
             dangerously_bypass_approvals_and_sandbox,
+            active_subagent_limit,
         )?;
         let profile_store = UserProfileStore::new(&data_root);
         let user_profile = profile_store.load()?;
@@ -658,6 +664,7 @@ impl TuiApplication {
             risky_tools_enabled: false,
             dangerously_bypass_approvals_and_sandbox,
             autonomous_mode_enabled: false,
+            active_subagent_limit,
             mcp_servers,
             hbse_services,
             pending_send: None,
@@ -847,8 +854,12 @@ impl TuiApplication {
     fn rebuild_tooling_for_cms(&mut self) -> anyhow::Result<()> {
         let policy = self.tool_executor.guardrails.policy.clone();
         let bypass = policy.bypass_approvals_and_sandbox;
-        let mut tool_registry =
-            build_builtin_registry_with_cms_and_mode(&self.cwd, self.cms.config.clone(), bypass)?;
+        let mut tool_registry = build_builtin_registry_with_cms_mode_and_subagent_limit(
+            &self.cwd,
+            self.cms.config.clone(),
+            bypass,
+            self.active_subagent_limit,
+        )?;
         let mcp_servers = self.active_mcp_servers();
         register_mcp_tools(
             &mut tool_registry,
@@ -1541,8 +1552,7 @@ mod tests {
                 .contains("make")
         );
         assert!(
-            !app
-                .tool_executor
+            !app.tool_executor
                 .guardrails
                 .policy
                 .bypass_approvals_and_sandbox
@@ -2118,6 +2128,38 @@ mod tests {
 
         assert!(!tool.risky);
         assert!(tool.description.contains("Delegate a bounded task"));
+        Ok(())
+    }
+
+    #[test]
+    fn agents_max_updates_active_subagent_limit() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+
+        assert_eq!(
+            app.active_subagent_limit,
+            crate::tools::DEFAULT_ACTIVE_SUBAGENT_LIMIT
+        );
+
+        let response = app.execute_command("/agents max=7")?.unwrap();
+
+        assert_eq!(app.active_subagent_limit, 7);
+        assert!(response.contains("Active subagent limit set to 7"));
+        assert!(response.contains("YOLO mode"));
+        Ok(())
+    }
+
+    #[test]
+    fn subagents_max_updates_active_subagent_limit() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+
+        let response = app.execute_command("/subagents max 5")?.unwrap();
+
+        assert_eq!(app.active_subagent_limit, 5);
+        assert!(response.contains("Active subagent limit set to 5"));
+        let policy = app.execute_command("/subagents policy")?.unwrap();
+        assert!(policy.contains("current session limit is 5"));
         Ok(())
     }
 

@@ -32,7 +32,7 @@ use crate::{
 const LIST_FILES_DEFAULT_LIMIT: usize = 500;
 const LIST_FILES_MAX_LIMIT: usize = 2_000;
 const CHATGPT_ARCHIVE_EXCERPT_CHARS: usize = 1_800;
-const MAX_ACTIVE_SUBAGENTS: usize = 3;
+pub const DEFAULT_ACTIVE_SUBAGENT_LIMIT: usize = 3;
 
 fn parse_skiller_forge_pass(value: Option<&str>) -> anyhow::Result<ForgePassType> {
     let raw = value.unwrap_or("skill_expansion").trim();
@@ -498,6 +498,20 @@ pub fn build_builtin_registry_with_cms_and_mode(
     cms_config: VegvisirCmsConfig,
     bypass_sandbox: bool,
 ) -> anyhow::Result<ToolRegistry> {
+    build_builtin_registry_with_cms_mode_and_subagent_limit(
+        workspace,
+        cms_config,
+        bypass_sandbox,
+        DEFAULT_ACTIVE_SUBAGENT_LIMIT,
+    )
+}
+
+pub fn build_builtin_registry_with_cms_mode_and_subagent_limit(
+    workspace: impl AsRef<Path>,
+    cms_config: VegvisirCmsConfig,
+    bypass_sandbox: bool,
+    active_subagent_limit: usize,
+) -> anyhow::Result<ToolRegistry> {
     let sandbox = if bypass_sandbox {
         WorkspaceSandbox::new_unrestricted(workspace)?
     } else {
@@ -508,6 +522,7 @@ pub fn build_builtin_registry_with_cms_and_mode(
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| sandbox.root.join(".vegvisir"));
+    let active_subagent_limit = active_subagent_limit.max(1);
     let mut registry = ToolRegistry::default();
 
     let list_sandbox = sandbox.clone();
@@ -1491,10 +1506,10 @@ pub fn build_builtin_registry_with_cms_and_mode(
 
             let board_path = subagent_data_root.join("subagents.json");
             match active_subagent_count(&board_path) {
-                Ok(active) if active >= MAX_ACTIVE_SUBAGENTS => {
+                Ok(active) if active >= active_subagent_limit => {
                     return Observation::err(
                         format!(
-                            "Maximum active subagents reached ({MAX_ACTIVE_SUBAGENTS}). Wait for a running task to finish or cancel one with /subagents cancel <id>."
+                            "Maximum active subagents reached ({active_subagent_limit}). Wait for a running task to finish or cancel one with /subagents cancel <id>."
                         ),
                         "SubagentLimit",
                     );
@@ -2250,6 +2265,72 @@ mod skiller_tool_tests {
         assert!(!observation.ok);
         assert_eq!(observation.error.as_deref(), Some("SubagentRequiresYolo"));
         assert!(observation.content.contains("YOLO mode"));
+        Ok(())
+    }
+
+    #[test]
+    fn spawn_subagent_uses_configurable_active_limit() -> anyhow::Result<()> {
+        let workspace = TempDir::new()?;
+        let cms_config = VegvisirCmsConfig::for_workspace(workspace.path());
+        let board_path = cms_config
+            .db_path
+            .parent()
+            .expect("cms db parent")
+            .join("subagents.json");
+        std::fs::create_dir_all(board_path.parent().expect("board parent"))?;
+        let now = Utc::now();
+        let records = vec![SubAgentTaskRecord {
+            id: "active-1".to_string(),
+            name: "active".to_string(),
+            workspace: workspace.path().to_path_buf(),
+            goal: "existing".to_string(),
+            file_scope: vec![workspace.path().join("other")],
+            work_budget: SubAgentWorkBudget::default(),
+            status: SubAgentStatus::Running,
+            created_at: now,
+            started_at: Some(now),
+            finished_at: None,
+            checkpoint: None,
+            final_answer: None,
+            error: None,
+        }];
+        std::fs::write(&board_path, serde_json::to_string_pretty(&records)?)?;
+        let registry = build_builtin_registry_with_cms_mode_and_subagent_limit(
+            workspace.path(),
+            cms_config,
+            true,
+            1,
+        )?;
+        let mut executor = ToolExecutor {
+            registry,
+            guardrails: GuardrailEngine {
+                policy: crate::guardrails::PermissionPolicy {
+                    allow_risky_tools: true,
+                    require_human_approval: false,
+                    bypass_approvals_and_sandbox: true,
+                    ..crate::guardrails::PermissionPolicy::default()
+                },
+                approvals: crate::guardrails::ApprovalLedger::default(),
+            },
+            runtime_policy: RuntimePolicy::default(),
+            logger: EventLogger::new(None),
+        };
+
+        let observation = executor.execute(ToolCall {
+            name: "spawn_subagent".to_string(),
+            args: serde_json::from_value(json!({
+                "goal": "inspect without editing",
+                "file_scope": ["fresh"]
+            }))?,
+        });
+
+        assert!(!observation.ok);
+        assert_eq!(observation.error.as_deref(), Some("SubagentLimit"));
+        assert!(
+            observation
+                .content
+                .contains("Maximum active subagents reached (1)")
+        );
         Ok(())
     }
 

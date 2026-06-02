@@ -116,7 +116,8 @@ impl TuiApplication {
              active_agent: {}\n\
              autonomous_mode: {}\n\
              risky_tools: {}\n\
-             dangerous_bypass: {}\n\n\
+             dangerous_bypass: {}\n\
+             active_subagent_limit: {}\n\n\
              Hardware / parallelism\n\
              available_parallelism: {}\n\
              reserved_cores: {}\n\
@@ -169,6 +170,7 @@ impl TuiApplication {
             } else {
                 "disabled"
             },
+            self.active_subagent_limit,
             self.parallelism.available_parallelism,
             self.parallelism.reserved_cores,
             self.parallelism.max_workers,
@@ -563,8 +565,13 @@ impl TuiApplication {
     }
 
     pub(crate) fn subagents_command(&mut self, args: &[String]) -> anyhow::Result<String> {
+        if let Some(response) = self.try_subagent_limit_command(args)? {
+            return Ok(response);
+        }
         match args.first().map(String::as_str) {
-            Some("policy") | Some("help") => Ok(Self::subagent_policy_help()),
+            Some("policy") | Some("help") => {
+                Ok(Self::subagent_policy_help(self.active_subagent_limit))
+            }
             None | Some("list") | Some("tasks") => {
                 let records = self.load_subagent_records()?;
                 if records.is_empty() {
@@ -640,7 +647,46 @@ impl TuiApplication {
         }
     }
 
-    fn subagent_policy_help() -> String {
+    pub(crate) fn try_subagent_limit_command(
+        &mut self,
+        args: &[String],
+    ) -> anyhow::Result<Option<String>> {
+        let Some(first) = args.first().map(String::as_str) else {
+            return Ok(None);
+        };
+        let value = if let Some(value) = first.strip_prefix("max=") {
+            Some(value)
+        } else if first == "max" || first == "limit" {
+            args.get(1).map(String::as_str)
+        } else {
+            None
+        };
+        let Some(raw) = value else {
+            return Ok(None);
+        };
+        let limit = raw
+            .trim()
+            .parse::<usize>()
+            .map_err(|_| anyhow::anyhow!("Usage: /agents max=<n> or /subagents max <n>"))?;
+        if limit == 0 {
+            anyhow::bail!("Subagent max must be at least 1");
+        }
+        self.active_subagent_limit = limit;
+        self.rebuild_tooling_for_cms()?;
+        self.logger.emit(
+            "subagent.limit_updated",
+            json!({
+                "active_subagent_limit": limit,
+                "source": "tui-command",
+                "spawn_requires_yolo": true,
+            }),
+        );
+        Ok(Some(format!(
+            "Active subagent limit set to {limit} for this session. Subagent spawning remains locked to YOLO mode (--dangerously-bypass-approvals-and-sandbox)."
+        )))
+    }
+
+    fn subagent_policy_help(active_subagent_limit: usize) -> String {
         r#"Subagent delegation policy
 
 Vegvisir exposes `spawn_subagent` as a normal bounded delegation tool. The model receives hidden task-local orchestration guidance encouraging subagents for complex, multi-part, evidence-seeking work.
@@ -663,14 +709,18 @@ Boundaries:
 - use budget notes like "avoid huge raw reads; prefer targeted search/listing; report if more budget is needed"
 - assign explicit non-overlapping file_scope values for file-touching work
 - never let two active subagents own/edit the same files at the same time
-- never more than three active subagents at once
+- default active subagent limit is 3; current session limit is {active_subagent_limit}
+- change the session limit with /agents max=<n> or /subagents max <n>
+- subagent spawning remains locked to YOLO mode for now
 
 Commands:
 /subagents list
 /subagents show <id-or-name>
 /subagents cancel <id-or-name>
-/subagents policy"#
-        .to_string()
+/subagents policy
+/subagents max <n>
+/agents max=<n>"#
+        .replace("{active_subagent_limit}", &active_subagent_limit.to_string())
     }
 
     pub(crate) fn subagent_board_path(&self) -> PathBuf {
