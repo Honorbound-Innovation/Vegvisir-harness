@@ -1,6 +1,13 @@
 # Vegvisir first-class component manifest.
 # This manifest records source components vendored into the monorepo. Runtime
 # installers should build/materialize executable artifacts under ~/.vegvisir/tools.
+#
+# External vendored-code policy:
+# - Ghidra and GhidraMCP are third-party source snapshots.
+# - They must never be automatically updated, fetched, pulled, or synchronized
+#   from their originating upstream repositories by installer/package/runtime
+#   workflows.
+# - Future updates are manual-only and require explicit user direction.
 
 [components.solarium]
 name = "Solarium"
@@ -22,6 +29,8 @@ path = "components/ghidra"
 source_snapshot = "/mnt/storage/Vegvisir-Projects/ghidra"
 runtime_root = "~/.vegvisir/tools/ghidra"
 wrappers = ["ghidra", "analyzeHeadless"]
+update_policy = "manual-only; never auto-update from upstream"
+upstream_auto_update = false
 excluded = [".git", ".gradle", "build", "**/build", "dependencies"]
 
 [components.ghidra_mcp]
@@ -34,6 +43,8 @@ source_snapshot = "/mnt/storage/Vegvisir-Projects/GhidraMCP"
 runtime_root = "~/.vegvisir/tools/src/GhidraMCP"
 wrappers = ["ghidra-mcp"]
 mcp_servers = ["ghidra-ui"]
+update_policy = "manual-only; never auto-update from upstream"
+upstream_auto_update = false
 excluded = [".git", "target", ".venv"]
 notes = "Vendored from current local source state, including pre-existing local source edits."
 
@@ -59,4 +70,3 @@ source_snapshot = "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench"
 runtime_root = "~/.vegvisir/tools/src/binary-intelligence-workbench"
 wrappers = ["biw"]
 excluded = [".git", "__pycache__", "*.pyc", ".pytest_cache", ".vegvisir"]
-

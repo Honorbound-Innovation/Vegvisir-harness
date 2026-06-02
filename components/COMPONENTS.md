@@ -49,6 +49,17 @@ Excluded from the vendored source copies:
 `components/ghidra-mcp` was copied from the current local source state, including
 its pre-existing local source edits.
 
+## External vendored-code update policy
+
+`components/ghidra` and `components/ghidra-mcp` are externally vendored source
+snapshots. They must not be automatically updated, synchronized, fetched, pulled,
+or refreshed from their originating upstream repositories by Vegvisir installers,
+packaging scripts, maintenance scripts, MCP setup, or agent workflows.
+
+Future updates to these external vendored snapshots are manual-only and require
+an explicit user-directed update. Until then, the checked-in component trees are
+the authoritative source for Vegvisir builds and runtime materialization.
+
 ## Runtime integration
 
 Installed Vegvisir should continue to materialize executable wrappers, Python
