@@ -1,0 +1,6 @@
+- query: "What does this unknown ELF appear to do?"
+  expected_skill: "binary.triage.unknown"
+- query: "Explain the main function from this case"
+  expected_skill: "binary.explain.function"
+- query: "Write a reverse engineering report for the case"
+  expected_skill: "binary.generate_re_report"

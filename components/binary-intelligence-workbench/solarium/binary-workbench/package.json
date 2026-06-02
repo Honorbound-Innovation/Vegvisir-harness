@@ -1,0 +1,9 @@
+{
+  "name": "biw-solarium-workbench",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Static Solarium-facing Binary Intelligence Workbench UI scaffold",
+  "scripts": {
+    "check": "node -e \"JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log('package ok')\""
+  }
+}

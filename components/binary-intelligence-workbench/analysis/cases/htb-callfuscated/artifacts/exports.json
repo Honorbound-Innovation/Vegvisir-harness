@@ -1,0 +1,41 @@
+{
+  "exports": [
+    {
+      "address": "00401000",
+      "name": "__DT_INIT",
+      "type": "Label"
+    },
+    {
+      "address": "00401000",
+      "name": "_DT_INIT",
+      "type": "Function"
+    },
+    {
+      "address": "00401080",
+      "name": "entry",
+      "type": "Function"
+    },
+    {
+      "address": "00401130",
+      "name": "_FINI_0",
+      "type": "Function"
+    },
+    {
+      "address": "00401160",
+      "name": "_INIT_0",
+      "type": "Function"
+    },
+    {
+      "address": "0040c5c8",
+      "name": "__DT_FINI",
+      "type": "Label"
+    },
+    {
+      "address": "0040c5c8",
+      "name": "_DT_FINI",
+      "type": "Function"
+    }
+  ],
+  "schema_version": "biw.exports.v1",
+  "source": "ghidra"
+}

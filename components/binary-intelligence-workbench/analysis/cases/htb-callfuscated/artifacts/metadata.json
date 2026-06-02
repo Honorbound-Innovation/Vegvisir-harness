@@ -1,0 +1,10 @@
+{
+  "architecture": "x86_64",
+  "filename": "crackme",
+  "format": "ELF",
+  "mime": "application/x-elf",
+  "path": "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench/samples/htb-callfuscated/crackme",
+  "schema_version": "biw.metadata.v1",
+  "sha256": "2389a35ac38bff9546a4c356c7d22633b22e8a1616b61adb85991afda40a3e36",
+  "size_bytes": 59528
+}

@@ -1,0 +1,27 @@
+From: Sophie Brun <sophie@offensive-security.com>
+Date: Tue, 29 Sep 2020 12:14:34 +0200
+Subject: fix listen mode segfault
+
+Last-Update: 2020-09-29
+Author: Niek Linnenbank <niek.linnenbank@planet.nl>
+
+Fix segfault in listen mode (Closes: #431010)
+---
+ farm9crypt.cc | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/farm9crypt.cc b/farm9crypt.cc
+index 3b02555..7815c5e 100755
+--- a/farm9crypt.cc
++++ b/farm9crypt.cc
+@@ -104,8 +104,8 @@ extern "C" void farm9crypt_init( char* keystr ) {
+  *
+  *  Parameters same as "recv"
+  */
+-static char outBuffer[8193];
+-static char inBuffer[8193];
++static char outBuffer[8193 + 32];
++static char inBuffer[8193 + 32];
+ 
+ extern "C" int farm9crypt_read( int sockfd, char* buf, int size ) {
+ 	int total = 0;

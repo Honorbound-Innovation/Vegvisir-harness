@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HTB Wonky AES — CTF Writeup</title>
+  <style>
+:root {
+  --bg: #080b10;
+  --panel: #101722;
+  --panel2: #0d131d;
+  --text: #e8eef7;
+  --muted: #9fb0c5;
+  --subtle: #6d7d91;
+  --accent: #67e8f9;
+  --accent2: #a78bfa;
+  --good: #34d399;
+  --warn: #fbbf24;
+  --bad: #fb7185;
+  --code: #07111d;
+  --border: #223044;
+  --shadow: rgba(0,0,0,.35);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  color: var(--text);
+  background:
+    radial-gradient(circle at top left, rgba(103,232,249,.16), transparent 34rem),
+    radial-gradient(circle at top right, rgba(167,139,250,.14), transparent 28rem),
+    linear-gradient(180deg, #070a0f 0%, #0a0f16 45%, #070a0f 100%);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1.6;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.container { width: min(1120px, calc(100% - 40px)); margin: 0 auto; }
+.hero {
+  padding: 56px 0 32px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+}
+.kicker {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--accent);
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  font-size: .78rem;
+}
+.kicker::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 20px var(--accent); }
+h1 { font-size: clamp(2.2rem, 5vw, 4.6rem); line-height: .95; margin: 18px 0 18px; letter-spacing: -.05em; }
+.subtitle { color: var(--muted); max-width: 860px; font-size: 1.08rem; }
+.meta-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-top: 28px; }
+.meta-card { background: rgba(16,23,34,.74); border: 1px solid var(--border); border-radius: 18px; padding: 16px; box-shadow: 0 12px 40px var(--shadow); backdrop-filter: blur(10px); }
+.meta-label { color: var(--subtle); font-size: .76rem; text-transform: uppercase; letter-spacing: .12em; }
+.meta-value { margin-top: 5px; font-weight: 800; overflow-wrap: anywhere; }
+.flag-card { margin-top: 24px; border: 1px solid rgba(52,211,153,.35); background: linear-gradient(135deg, rgba(52,211,153,.14), rgba(103,232,249,.08)); border-radius: 22px; padding: 20px; }
+.flag-label { color: var(--good); font-weight: 800; text-transform: uppercase; font-size: .8rem; letter-spacing: .12em; }
+.flag { margin-top: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: clamp(1rem, 2.4vw, 1.35rem); overflow-wrap: anywhere; }
+.layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 28px; padding: 34px 0 70px; }
+.toc { position: sticky; top: 18px; align-self: start; background: rgba(13,19,29,.76); border: 1px solid var(--border); border-radius: 20px; padding: 18px; }
+.toc-title { color: var(--muted); font-size: .78rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; margin-bottom: 10px; }
+.toc a { display: block; color: var(--muted); padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,.045); font-size: .92rem; }
+.toc a:last-child { border-bottom: 0; }
+.content { min-width: 0; }
+section { background: rgba(16,23,34,.68); border: 1px solid var(--border); border-radius: 22px; padding: 26px; margin-bottom: 22px; box-shadow: 0 18px 45px var(--shadow); }
+h2 { margin: 0 0 14px; font-size: 1.72rem; letter-spacing: -.03em; }
+h3 { margin: 24px 0 10px; color: #dce6f5; }
+p, li { color: #c8d4e4; }
+ul, ol { padding-left: 1.35rem; }
+hr { border: 0; border-top: 1px solid var(--border); margin: 22px 0; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+code { background: rgba(7,17,29,.8); color: #d8f8ff; padding: .14rem .34rem; border-radius: 7px; border: 1px solid rgba(103,232,249,.13); }
+pre { background: var(--code); color: #d6e9ff; padding: 18px; border-radius: 16px; overflow-x: auto; border: 1px solid rgba(103,232,249,.14); box-shadow: inset 0 0 0 1px rgba(255,255,255,.02); }
+.callout { border-left: 4px solid var(--accent); background: rgba(103,232,249,.08); padding: 14px 16px; border-radius: 12px; color: #d9f8ff; margin: 16px 0; }
+.callout.good { border-left-color: var(--good); background: rgba(52,211,153,.08); }
+.callout.warn { border-left-color: var(--warn); background: rgba(251,191,36,.08); }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; margin: 14px 0; }
+th, td { border-bottom: 1px solid var(--border); padding: 10px 10px; text-align: left; vertical-align: top; }
+th { color: #eef6ff; background: rgba(255,255,255,.035); font-size: .86rem; text-transform: uppercase; letter-spacing: .07em; }
+td { color: #c8d4e4; }
+.badge { display: inline-flex; align-items: center; gap: 6px; border: 1px solid rgba(103,232,249,.25); background: rgba(103,232,249,.08); color: var(--accent); border-radius: 999px; padding: 4px 10px; font-size: .82rem; font-weight: 700; }
+.footer { color: var(--subtle); font-size: .9rem; padding: 26px 0 46px; border-top: 1px solid rgba(255,255,255,.06); }
+@media (max-width: 900px) {
+  .meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .layout { grid-template-columns: 1fr; }
+  .toc { position: static; }
+}
+@media (max-width: 560px) { .meta-grid { grid-template-columns: 1fr; } .container { width: min(100% - 24px, 1120px); } section { padding: 20px; } }
+</style>
+</head>
+<body>
+  <header class="hero">
+    <div class="container">
+      <div class="kicker">Polished CTF Writeup</div>
+      <h1>HTB Wonky AES</h1>
+      <p class="subtitle">An Insane crypto challenge requiring AES Differential Fault Analysis to recover a live service key and decrypt the encrypted flag.</p>
+      <div class="meta-grid"><div class="meta-card"><div class="meta-label">Category</div><div class="meta-value">Crypto</div></div>
+<div class="meta-card"><div class="meta-label">Difficulty</div><div class="meta-value">Insane</div></div>
+<div class="meta-card"><div class="meta-label">Technique</div><div class="meta-value">AES Differential Fault Analysis</div></div>
+<div class="meta-card"><div class="meta-label">Endpoint</div><div class="meta-value">154.57.164.83:31929</div></div></div>
+      <div class="flag-card"><div class="flag-label">Recovered Flag</div><div class="flag">HTB{fcdd3d2cacd358595dc55f8eff000f0c}</div></div>
+    </div>
+  </header>
+  <main class="container layout">
+    <nav class="toc"><div class="toc-title">Contents</div><a href="#overview">Overview</a>
+<a href="#source">Source Review</a>
+<a href="#fault">Fault Model</a>
+<a href="#dfa">DFA Attack</a>
+<a href="#implementation">Solver Implementation</a>
+<a href="#remote">Remote Exploitation</a>
+<a href="#verification">Verification</a>
+<a href="#lessons">Lessons Learned</a></nav>
+    <article class="content"><section id="overview"><h2>Overview</h2><p><strong>Wonky AES</strong> provided source code for an AES encryptor and hinted that something about the implementation was “wonky.” The vulnerability was not in AES itself, but in the deliberate exposure of correct and faulted encryptions under the same random key.</p><p>The solve required recovering the AES-128 key through Differential Fault Analysis, then decrypting the final encrypted flag from the remote service.</p></section>
+<section id="source"><h2>Source Review</h2><p>The archive contained:</p><pre><code>crypto_wonky_aes/
+  enc_fault
+  src/aes.c
+  src/aes.h
+  src/enc_fault.c
+  src/Makefile</code></pre><p>The service offered repeated encryption queries. For each query, it revealed:</p><pre><code>Correct encryption: AES_K(P)
+Faulty encryption:  AES_K_faulted(P)</code></pre><p>At the end, it printed an encrypted flag under the same AES key.</p></section>
+<section id="fault"><h2>Fault Model</h2><p>The vulnerable code injected a single-byte fault during AES encryption:</p><pre><code>if (is_fault && round == Nr - 1) {
+  (*state)[pos % 4][pos / 4] ^= fault;
+}</code></pre><p>This means:</p><ul><li>The same unknown AES-128 key is reused.</li><li>The attacker receives correct and faulty ciphertexts for random plaintexts.</li><li>The fault is injected before the final full round structure completes.</li><li>A single byte fault propagates through <code>MixColumns</code> into a four-byte ciphertext difference group.</li></ul><div class="callout good"><strong>Cryptanalytic opening:</strong> correct/faulty ciphertext pairs leak enough information to recover the final round key column by column.</div></section>
+<section id="dfa"><h2>DFA Attack</h2><p>The attack works backward through the final AES round. For each correct/faulty ciphertext pair:</p><ol><li>Identify which four ciphertext bytes differ.</li><li>Map those positions through the final <code>ShiftRows</code> layout.</li><li>Guess four bytes of the last round key for the affected group.</li><li>Apply inverse S-box relationships to test whether the observed difference is consistent with a one-byte fault before <code>MixColumns</code>.</li><li>Intersect candidates across many samples until a unique round-10 key remains.</li></ol><p>Once the full AES round-10 key is recovered, AES-128 key schedule inversion gives the original encryption key.</p><p>The main implementation pitfalls were:</p><ul><li>tiny-AES stores state as <code>state[column][row]</code>.</li><li>Fault positions and ciphertext byte indexes must be grouped in AES state order, not simple ascending output order.</li><li>Recovering the last round key is only half the job; the key schedule must be inverted to recover round zero.</li></ul></section>
+<section id="implementation"><h2>Solver Implementation</h2><p>A reusable solver was written at:</p><pre><code>binary-intelligence-workbench/samples/htb-wonky-aes/solve_wonky_aes.py</code></pre><p>The solver supports both local and remote modes:</p><pre><code>python3 solve_wonky_aes.py --local crypto_wonky_aes/enc_fault --samples 200
+python3 solve_wonky_aes.py --remote HOST PORT --samples 200</code></pre><p>The local mode was validated using a dummy <code>flag.txt</code>, proving the solver could recover the generated AES key and decrypt the dummy encrypted flag before attacking the live endpoint.</p></section>
+<section id="remote"><h2>Remote Exploitation</h2><p>The challenge endpoint was:</p><pre><code>154.57.164.83:31929</code></pre><p>The verified solver was run as:</p><pre><code>python3 solve_wonky_aes.py --remote 154.57.164.83 31929 --samples 200</code></pre><p>Recovered live values:</p><pre><code>encrypted flag:
+44aaa94e9989d75744c578895b2da1929d46be680fbd67df936df1325a6bb7ffd13ae97e286e07de9bbd837dd0fdd4f8
+
+AES key:
+e791d80555fdc500377da7ac22463a06
+
+round10 key:
+398cc3a202e610dc249b7818de260ba2</code></pre></section>
+<section id="verification"><h2>Verification</h2><p>Decrypting the encrypted flag with the recovered AES key produced:</p><pre><code>b'HTB{fcdd3d2cacd358595dc55f8eff000f0c}           '</code></pre><p>After stripping null padding:</p><pre><code>HTB{fcdd3d2cacd358595dc55f8eff000f0c}</code></pre></section>
+<section id="lessons"><h2>Lessons Learned</h2><ul><li>Source availability did not make the challenge easy; the solver still required specialist AES DFA knowledge.</li><li>State layout mistakes can completely invalidate a correct cryptanalytic idea.</li><li>The correct/faulty pair oracle is devastating when the fault location is late and the key is reused.</li><li>A live remote flag can be recovered without brute forcing the key or breaking AES itself.</li></ul></section></article>
+  </main>
+  <footer class="container footer">Generated as a standalone dark-mode HTML writeup. All analysis described here was performed against authorized HTB/CTF challenge artifacts.</footer>
+</body>
+</html>

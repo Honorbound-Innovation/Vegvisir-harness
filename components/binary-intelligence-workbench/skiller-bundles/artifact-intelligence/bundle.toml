@@ -1,0 +1,23 @@
+name = "artifact-intelligence"
+version = "0.1.0"
+domain = "artifact-analysis"
+description = "Generalized workflows for safely analyzing adversarial technical artifacts: archives, binaries, packet captures, payloads, crypto oracles, incident evidence, and reports."
+
+[metadata]
+owner = "Vegvisir"
+safety_scope = "authorized CTF, lab, defensive security, incident-response, malware-analysis, reverse-engineering, and crypto-analysis workflows"
+artifact_root = "analysis/cases"
+source_session = "generalized from validated BIW reversing, forensics, and crypto workflows"
+secrets_policy = "do not store credentials, private keys, tokens, flags, or secret-like challenge answers in memory or examples"
+
+general_analysis_discipline = "hypothesis/evidence separation, checkpoint verification, and anti-anchoring for all artifact workflows"
+
+# Added generalized skill: analysis.multi_stage_artifact_chain
+
+# Added generalized skill: forensics.image_stego_chain
+
+# Added generalized skill: crypto.classical_cipher_chain
+
+# Added generalized skill: binary.dotnet_gui_constraint_recovery
+
+# Added generalized skill: forensics.pcap_embedded_artifact_chain

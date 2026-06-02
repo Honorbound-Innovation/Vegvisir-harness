@@ -1,0 +1,72 @@
+{
+  "imports": [
+    {
+      "address": "EXTERNAL:00000001",
+      "name": "<EXTERNAL>::__libc_start_main",
+      "namespace": "<EXTERNAL>",
+      "type": "Function"
+    },
+    {
+      "address": "EXTERNAL:00000002",
+      "name": "<EXTERNAL>::puts",
+      "namespace": "<EXTERNAL>",
+      "type": "Function"
+    },
+    {
+      "address": "EXTERNAL:00000003",
+      "name": "<EXTERNAL>::__stack_chk_fail",
+      "namespace": "<EXTERNAL>",
+      "type": "Function"
+    },
+    {
+      "address": "EXTERNAL:00000004",
+      "name": "<EXTERNAL>::strchr",
+      "namespace": "<EXTERNAL>",
+      "type": "Function"
+    },
+    {
+      "address": "EXTERNAL:00000005",
+      "name": "<EXTERNAL>::printf",
+      "namespace": "<EXTERNAL>",
+      "type": "Function"
+    },
+    {
+      "address": "EXTERNAL:00000006",
+      "name": "<EXTERNAL>::fgets",
+      "namespace": "<EXTERNAL>",
+      "type": "Function"
+    },
+    {
+      "address": "EXTERNAL:00000007",
+      "name": "<EXTERNAL>::strcmp",
+      "namespace": "<EXTERNAL>",
+      "type": "Function"
+    },
+    {
+      "address": "EXTERNAL:00000008",
+      "name": "<EXTERNAL>::__cxa_finalize",
+      "namespace": "<EXTERNAL>",
+      "type": "Function"
+    },
+    {
+      "address": "EXTERNAL:00000009",
+      "name": "<EXTERNAL>::_ITM_deregisterTMCloneTable",
+      "namespace": "<EXTERNAL>",
+      "type": "Function"
+    },
+    {
+      "address": "EXTERNAL:0000000a",
+      "name": "<EXTERNAL>::_ITM_registerTMCloneTable",
+      "namespace": "<EXTERNAL>",
+      "type": "Function"
+    },
+    {
+      "address": "EXTERNAL:0000000b",
+      "name": "<EXTERNAL>::__gmon_start__",
+      "namespace": "<EXTERNAL>",
+      "type": "Function"
+    }
+  ],
+  "schema_version": "biw.imports.v1",
+  "source": "ghidra"
+}

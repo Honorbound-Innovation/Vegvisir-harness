@@ -1,0 +1,32 @@
+{
+  "case_id": "htb-callfuscated",
+  "created_at": "2026-05-31T02:16:55Z",
+  "extraction": {
+    "ghidra_error": "Ghidra import failed: {'ok': False, 'returncode': 1, 'stderr_tail': [], 'stdout_tail': ['    /mnt/storage/Vegvisir-Projects/ghidra/Ghidra/Features/MicrosoftDemangler/developer_scripts', '    /mnt/storage/Vegvisir-Projects/ghidra/Ghidra/Processors/PIC/ghidra_scripts', '    /mnt/storage/Vegvisir-Projects/ghidra/Ghidra/Features/FileFormats/ghidra_scripts', '    /mnt/storage/Vegvisir-Projects/ghidra/Ghidra/Extensions/Jython/ghidra_scripts', '    /mnt/storage/Vegvisir-Projects/ghidra/Ghidra/Features/PyGhidra/ghidra_scripts', '    /mnt/storage/Vegvisir-Projects/ghidra/Ghidra/Features/SystemEmulation/ghidra_scripts', '    /mnt/storage/Vegvisir-Projects/ghidra/Ghidra/Extensions/SleighDevTools/ghidra_scripts', '    /mnt/storage/Vegvisir-Projects/ghidra/Ghidra/Features/WildcardAssembler/ghidra_scripts', '    /mnt/storage/Vegvisir-Projects/ghidra/Ghidra/Features/VersionTracking/ghidra_scripts', '    /mnt/storage/Vegvisir-Projects/ghidra/Ghidra/Extensions/MachineLearning/ghidra_scripts', '    /mnt/storage/Vegvisir-Projects/ghidra/Ghidra/Features/GnuDemangler/ghidra_scripts', '    /mnt/storage/Vegvisir-Projects/GhidraHeadlessMCP/scripts', '    /mnt/storage/Vegvisir-Projects/ghidra/Ghidra/Features/Base/ghidra_scripts', '    /mnt/storage/Vegvisir-Projects/ghidra/Ghidra/Features/BSim/ghidra_scripts', '    /mnt/storage/Vegvisir-Projects/ghidra/Ghidra/Features/FunctionID/ghidra_scripts', '    /mnt/storage/Vegvisir-Projects/ghidra/Ghidra/Features/MicrosoftCodeAnalyzer/ghidra_scripts', '    /mnt/storage/Vegvisir-Projects/ghidra/Ghidra/Features/MicrosoftDmang/developer_scripts', '    /mnt/storage/Vegvisir-Projects/ghidra/Ghidra/Features/FileFormats/developer_scripts', '    /mnt/storage/Vegvisir-Projects/ghidra/Ghidra/Debug/Debugger-rmi-trace/ghidra_scripts', '    /mnt/storage/Vegvisir-Projects/ghidra/Ghidra/Processors/Atmel/ghidra_scripts', '    /mnt/storage/Vegvisir-Projects/ghidra/Ghidra/Processors/JVM/ghidra_scripts', '    /mnt/storage/Vegvisir-Projects/ghidra/Ghidra/Processors/Hexagon/developer_scripts', '    /mnt/storage/Vegvisir-Projects/ghidra/Ghidra/Features/BytePatterns/ghidra_scripts', '    /mnt/storage/Vegvisir-Projects/ghidra/Ghidra/Features/DecompilerDependent/ghidra_scripts', '    /mnt/storage/Vegvisir-Projects/ghidra/Ghidra/Features/Base/developer_scripts', '    /mnt/storage/Vegvisir-Projects/ghidra/Ghidra/Features/VersionTracking/developer_scripts', '    /mnt/storage/Vegvisir-Projects/ghidra/Ghidra/Processors/8051/ghidra_scripts', '    /mnt/storage/Vegvisir-Projects/ghidra/Ghidra/Processors/DATA/ghidra_scripts   (HeadlessAnalyzer.java:721) ', 'INFO  HEADLESS: execution starts   (HeadlessAnalyzer.java:429) ', \"ERROR Abort due to Headless analyzer error: Path element starting with '.' is not permitted java.lang.IllegalArgumentException: Path element starting with '.' is not permitted\", '\\tat ghidra.util.NamingUtilities.checkName(NamingUtilities.java:108)', '\\tat ghidra.framework.protocol.ghidra.GhidraURL.checkValidProjectPath(GhidraURL.java:448)', '\\tat ghidra.framework.protocol.ghidra.GhidraURL.checkLocalAbsolutePath(GhidraURL.java:429)', '\\tat ghidra.framework.model.ProjectLocator.<init>(ProjectLocator.java:75)', '\\tat ghidra.framework.model.ProjectLocator.<init>(ProjectLocator.java:60)', '\\tat ghidra.app.util.headless.HeadlessAnalyzer.processLocal(HeadlessAnalyzer.java:432)', '\\tat ghidra.app.util.headless.AnalyzeHeadless.launch(AnalyzeHeadless.java:199)', '\\tat ghidra.GhidraLauncher.launch(GhidraLauncher.java:81)', '\\tat ghidra.Ghidra.main(Ghidra.java:54)', '  (AnalyzeHeadless.java:203) ']}",
+    "mode": "basic-fallback"
+  },
+  "risk": {
+    "level": "low",
+    "rationale": [
+      "Suspicious strings: credential-keyword"
+    ],
+    "score": 3
+  },
+  "schema_version": "biw.case.v1",
+  "source": {
+    "architecture": "x86_64",
+    "filename": "crackme",
+    "format": "ELF",
+    "mime": "application/x-elf",
+    "path": "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench/samples/htb-callfuscated/crackme",
+    "sha256": "2389a35ac38bff9546a4c356c7d22633b22e8a1616b61adb85991afda40a3e36",
+    "size_bytes": 59528
+  },
+  "status": "triaged",
+  "tags": [
+    "ELF",
+    "x86_64"
+  ],
+  "title": "crackme",
+  "updated_at": "2026-05-31T02:16:57Z"
+}

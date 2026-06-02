@@ -1,0 +1,188 @@
+{
+  "functions": [
+    {
+      "entry": "00101000",
+      "external": false,
+      "name": "_init",
+      "signature": "int _init(EVP_PKEY_CTX * ctx)",
+      "thunk": false
+    },
+    {
+      "entry": "00101020",
+      "external": false,
+      "name": "FUN_00101020",
+      "signature": "undefined FUN_00101020(void)",
+      "thunk": false
+    },
+    {
+      "entry": "00101030",
+      "external": false,
+      "name": "puts",
+      "signature": "int puts(char * __s)",
+      "thunk": true
+    },
+    {
+      "entry": "00101040",
+      "external": false,
+      "name": "__stack_chk_fail",
+      "signature": "undefined __stack_chk_fail(void)",
+      "thunk": true
+    },
+    {
+      "entry": "00101050",
+      "external": false,
+      "name": "strchr",
+      "signature": "char * strchr(char * __s, int __c)",
+      "thunk": true
+    },
+    {
+      "entry": "00101060",
+      "external": false,
+      "name": "printf",
+      "signature": "int printf(char * __format, ...)",
+      "thunk": true
+    },
+    {
+      "entry": "00101070",
+      "external": false,
+      "name": "fgets",
+      "signature": "char * fgets(char * __s, int __n, FILE * __stream)",
+      "thunk": true
+    },
+    {
+      "entry": "00101080",
+      "external": false,
+      "name": "strcmp",
+      "signature": "int strcmp(char * __s1, char * __s2)",
+      "thunk": true
+    },
+    {
+      "entry": "00101090",
+      "external": false,
+      "name": "_start",
+      "signature": "undefined _start(void)",
+      "thunk": false
+    },
+    {
+      "entry": "001010c0",
+      "external": false,
+      "name": "FUN_001010c0",
+      "signature": "undefined FUN_001010c0(void)",
+      "thunk": false
+    },
+    {
+      "entry": "001010f0",
+      "external": false,
+      "name": "FUN_001010f0",
+      "signature": "undefined FUN_001010f0(void)",
+      "thunk": false
+    },
+    {
+      "entry": "00101130",
+      "external": false,
+      "name": "_FINI_0",
+      "signature": "undefined _FINI_0(void)",
+      "thunk": false
+    },
+    {
+      "entry": "00101180",
+      "external": false,
+      "name": "_INIT_0",
+      "signature": "undefined _INIT_0(void)",
+      "thunk": true
+    },
+    {
+      "entry": "00101189",
+      "external": false,
+      "name": "main",
+      "signature": "undefined main(void)",
+      "thunk": false
+    },
+    {
+      "entry": "001012ec",
+      "external": false,
+      "name": "_fini",
+      "signature": "undefined _fini(void)",
+      "thunk": false
+    },
+    {
+      "entry": "00105000",
+      "external": false,
+      "name": "__libc_start_main",
+      "signature": "undefined __libc_start_main(void)",
+      "thunk": true
+    },
+    {
+      "entry": "00105008",
+      "external": false,
+      "name": "_ITM_deregisterTMCloneTable",
+      "signature": "undefined _ITM_deregisterTMCloneTable(void)",
+      "thunk": true
+    },
+    {
+      "entry": "00105010",
+      "external": false,
+      "name": "puts",
+      "signature": "int puts(char * __s)",
+      "thunk": true
+    },
+    {
+      "entry": "00105018",
+      "external": false,
+      "name": "__stack_chk_fail",
+      "signature": "undefined __stack_chk_fail(void)",
+      "thunk": true
+    },
+    {
+      "entry": "00105020",
+      "external": false,
+      "name": "strchr",
+      "signature": "char * strchr(char * __s, int __c)",
+      "thunk": true
+    },
+    {
+      "entry": "00105028",
+      "external": false,
+      "name": "printf",
+      "signature": "int printf(char * __format, ...)",
+      "thunk": true
+    },
+    {
+      "entry": "00105030",
+      "external": false,
+      "name": "fgets",
+      "signature": "char * fgets(char * __s, int __n, FILE * __stream)",
+      "thunk": true
+    },
+    {
+      "entry": "00105038",
+      "external": false,
+      "name": "strcmp",
+      "signature": "int strcmp(char * __s1, char * __s2)",
+      "thunk": true
+    },
+    {
+      "entry": "00105040",
+      "external": false,
+      "name": "__gmon_start__",
+      "signature": "undefined __gmon_start__(void)",
+      "thunk": true
+    },
+    {
+      "entry": "00105048",
+      "external": false,
+      "name": "_ITM_registerTMCloneTable",
+      "signature": "undefined _ITM_registerTMCloneTable(void)",
+      "thunk": true
+    },
+    {
+      "entry": "00105050",
+      "external": false,
+      "name": "__cxa_finalize",
+      "signature": "undefined __cxa_finalize(void)",
+      "thunk": true
+    }
+  ],
+  "schema_version": "biw.functions.v1",
+  "source": "ghidra"
+}

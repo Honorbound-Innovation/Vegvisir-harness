@@ -1,0 +1,29 @@
+{
+  "case_id": "thm-strings3",
+  "created_at": "2026-05-31T05:43:41Z",
+  "extraction": {
+    "ghidra_error": null,
+    "mode": "basic"
+  },
+  "risk": {
+    "level": "unknown",
+    "rationale": [],
+    "score": 0
+  },
+  "schema_version": "biw.case.v1",
+  "source": {
+    "architecture": null,
+    "filename": "strings3.exe_",
+    "format": "PE",
+    "mime": "application/vnd.microsoft.portable-executable",
+    "path": "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench/samples/thm-strings3/strings3.exe_",
+    "sha256": "5fdbaad8759fd55ed33a1e834cccc6da0d78032f1f309b0bc46b52dfb2221ed4",
+    "size_bytes": 52736
+  },
+  "status": "triaged",
+  "tags": [
+    "PE"
+  ],
+  "title": "strings3.exe_",
+  "updated_at": "2026-05-31T05:43:42Z"
+}

@@ -1,0 +1,121 @@
+id: skill-analysis-hypothesis-evidence-control
+title: analysis.hypothesis_evidence_control
+summary: Manage competing hypotheses and keep hints distinct from verified evidence
+skill_type: Procedure
+scope: TaskLevel
+status: Approved
+maturity: Level4HumanApproved
+domain: artifact-analysis
+source_section_ids:
+- skill-analysis-hypothesis-evidence-control
+procedure:
+- Restate the concrete question being solved and the authorized scope.
+- Separate user authority, user hints, artifact observations, tool output, external references, and analyst inference.
+- Maintain a hypothesis ledger with source, support, contradiction, verification method, and status.
+- Identify layer-specific evidence checkpoints such as hashes, counts, stream lengths, parser roundtrips, magic bytes, or runtime output.
+- Test the cheapest decisive checks first and preserve parallel branches when hints and artifacts suggest different interpretations.
+- If a tool has been independently validated, stop repeatedly blaming the tool unless new evidence points back to it.
+- Promote only artifact-verified findings to conclusions and document abandoned branches briefly.
+inputs:
+- User task and authorized scope.
+- User hints or steering messages.
+- Artifact observations and tool outputs.
+- Candidate hypotheses, assumptions, failed attempts, and known checkpoints.
+outputs:
+- hypothesis ledger
+- evidence checkpoint table
+- verification plan
+- pivot criteria
+- updated artifact-grounded analysis plan
+guardrails:
+- Treat user hints as high-value hypotheses, not automatically verified facts.
+- Keep user authority over scope and intent distinct from evidence used for technical conclusions.
+- Prefer reproducible artifact evidence, hashes, protocol behavior, runtime output, and independent tool checks.
+- Do not claim solved status without artifact-backed verification.
+- Do not store secret-like recovered material in durable memory.
+- Preserve authorization, sandboxing, and external-contact boundaries.
+anti_patterns:
+- Anchoring on one plausible hint while ignoring narrower artifact wording.
+- Re-debugging validated tools because candidate inputs fail.
+- Collapsing hint, assumption, and fact into the same category.
+- Reporting guessed values without verification.
+- Following external references blindly without reproducing the evidence path.
+evals:
+- id: eval-skill-analysis-hypothesis-evidence-control-routing
+  prompt: "An investigation has user hints pointing one way, but artifact evidence and parser checks keep contradicting that branch. Which skill helps manage this?"
+  expected_behavior: Routes to analysis.hypothesis_evidence_control and explains that hints become hypotheses while conclusions require artifact verification.
+  eval_type: Routing
+  safety_notes:
+  - Preserve authorized scope and evidence provenance.
+- id: eval-skill-analysis-hypothesis-evidence-control-source-grounding
+  prompt: "Show the evidence discipline for handling conflicting hints, tool output, and artifact observations."
+  expected_behavior: Cites generalized source section skill-analysis-hypothesis-evidence-control, separates evidence categories, and avoids task-specific claims.
+  eval_type: SourceGrounding
+  safety_notes: []
+- id: eval-skill-analysis-hypothesis-evidence-control-tool-planning
+  prompt: "Plan how to decide whether a failure is caused by a bad parser, wrong key, bad extraction, or wrong clue interpretation."
+  expected_behavior: Builds checkpoints for extraction integrity, stream/object selection, parser roundtrip validation, candidate testing, and pivot criteria.
+  eval_type: ToolUsePlanning
+  safety_notes:
+  - Use read-only checks first and avoid unverified conclusions.
+citations:
+- citation_id: cite-skill-analysis-hypothesis-evidence-control
+  source_id: generalized-biw-session
+  section_id: skill-analysis-hypothesis-evidence-control
+  excerpt: Generalized evidence discipline for managing competing hypotheses, user hints, artifact observations, tool validation, and verified conclusions.
+confidence:
+  raw: 0.82
+  extraction: 0.8
+  inference: 0.62
+  procedure: 0.86
+  guardrail: 0.9
+  eval: 0.7
+  routing: 0.78
+  source_quality: 0.82
+  human_review: 1.0
+  runtime: 0.0
+evidence_breakdown:
+  direct_extraction: 0.2
+  supporting_inference: 0.3
+  operational_synthesis: 0.45
+  speculative_candidate: 0.0
+  community_derived: 0.0
+  internal_policy_derived: 0.05
+inference_records: []
+role_suitability:
+- role: Artifact Intelligence Analyst
+  suitability: 0.9
+  rationale: Applies broadly to artifact-analysis workflows where hints, assumptions, and evidence must be managed explicitly.
+- role: Incident Responder
+  suitability: 0.84
+  rationale: Supports evidence-led investigation and prevents over-anchoring on unverified narratives.
+- role: Reverse Engineer
+  suitability: 0.82
+  rationale: Helps separate decompiler/tool failures from wrong assumptions or inputs.
+tool_requirements:
+- name: Direct
+  requirement_type: Optional
+  permission_level: ReadOnly
+  dry_run_available: true
+  rollback_required: false
+runtime_policy:
+  conceptual_answer: true
+  recommend_commands: true
+  run_read_only_commands: true
+  modify_files: false
+  modify_external_systems: false
+  requires_user_approval: false
+  requires_backup_or_rollback: false
+  handles_secrets: false
+  handles_licensed_source: false
+version_applicability:
+  supported_versions: []
+  unsupported_versions: []
+  version_source_refs: []
+  version_confidence: 0.0
+  migration_notes: []
+  deprecated_flags: []
+metadata:
+  interface_kind: workflow
+  source_trust: ValidatedSessionGeneralization
+  extended_context: skills/analysis_hypothesis_evidence_control.md

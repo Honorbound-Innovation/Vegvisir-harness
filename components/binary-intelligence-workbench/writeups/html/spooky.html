@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HTB SpookyPass — CTF Writeup</title>
+  <style>
+:root {
+  --bg: #080b10;
+  --panel: #101722;
+  --panel2: #0d131d;
+  --text: #e8eef7;
+  --muted: #9fb0c5;
+  --subtle: #6d7d91;
+  --accent: #67e8f9;
+  --accent2: #a78bfa;
+  --good: #34d399;
+  --warn: #fbbf24;
+  --bad: #fb7185;
+  --code: #07111d;
+  --border: #223044;
+  --shadow: rgba(0,0,0,.35);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  color: var(--text);
+  background:
+    radial-gradient(circle at top left, rgba(103,232,249,.16), transparent 34rem),
+    radial-gradient(circle at top right, rgba(167,139,250,.14), transparent 28rem),
+    linear-gradient(180deg, #070a0f 0%, #0a0f16 45%, #070a0f 100%);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1.6;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.container { width: min(1120px, calc(100% - 40px)); margin: 0 auto; }
+.hero {
+  padding: 56px 0 32px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+}
+.kicker {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--accent);
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  font-size: .78rem;
+}
+.kicker::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 20px var(--accent); }
+h1 { font-size: clamp(2.2rem, 5vw, 4.6rem); line-height: .95; margin: 18px 0 18px; letter-spacing: -.05em; }
+.subtitle { color: var(--muted); max-width: 860px; font-size: 1.08rem; }
+.meta-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-top: 28px; }
+.meta-card { background: rgba(16,23,34,.74); border: 1px solid var(--border); border-radius: 18px; padding: 16px; box-shadow: 0 12px 40px var(--shadow); backdrop-filter: blur(10px); }
+.meta-label { color: var(--subtle); font-size: .76rem; text-transform: uppercase; letter-spacing: .12em; }
+.meta-value { margin-top: 5px; font-weight: 800; overflow-wrap: anywhere; }
+.flag-card { margin-top: 24px; border: 1px solid rgba(52,211,153,.35); background: linear-gradient(135deg, rgba(52,211,153,.14), rgba(103,232,249,.08)); border-radius: 22px; padding: 20px; }
+.flag-label { color: var(--good); font-weight: 800; text-transform: uppercase; font-size: .8rem; letter-spacing: .12em; }
+.flag { margin-top: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: clamp(1rem, 2.4vw, 1.35rem); overflow-wrap: anywhere; }
+.layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 28px; padding: 34px 0 70px; }
+.toc { position: sticky; top: 18px; align-self: start; background: rgba(13,19,29,.76); border: 1px solid var(--border); border-radius: 20px; padding: 18px; }
+.toc-title { color: var(--muted); font-size: .78rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; margin-bottom: 10px; }
+.toc a { display: block; color: var(--muted); padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,.045); font-size: .92rem; }
+.toc a:last-child { border-bottom: 0; }
+.content { min-width: 0; }
+section { background: rgba(16,23,34,.68); border: 1px solid var(--border); border-radius: 22px; padding: 26px; margin-bottom: 22px; box-shadow: 0 18px 45px var(--shadow); }
+h2 { margin: 0 0 14px; font-size: 1.72rem; letter-spacing: -.03em; }
+h3 { margin: 24px 0 10px; color: #dce6f5; }
+p, li { color: #c8d4e4; }
+ul, ol { padding-left: 1.35rem; }
+hr { border: 0; border-top: 1px solid var(--border); margin: 22px 0; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+code { background: rgba(7,17,29,.8); color: #d8f8ff; padding: .14rem .34rem; border-radius: 7px; border: 1px solid rgba(103,232,249,.13); }
+pre { background: var(--code); color: #d6e9ff; padding: 18px; border-radius: 16px; overflow-x: auto; border: 1px solid rgba(103,232,249,.14); box-shadow: inset 0 0 0 1px rgba(255,255,255,.02); }
+.callout { border-left: 4px solid var(--accent); background: rgba(103,232,249,.08); padding: 14px 16px; border-radius: 12px; color: #d9f8ff; margin: 16px 0; }
+.callout.good { border-left-color: var(--good); background: rgba(52,211,153,.08); }
+.callout.warn { border-left-color: var(--warn); background: rgba(251,191,36,.08); }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; margin: 14px 0; }
+th, td { border-bottom: 1px solid var(--border); padding: 10px 10px; text-align: left; vertical-align: top; }
+th { color: #eef6ff; background: rgba(255,255,255,.035); font-size: .86rem; text-transform: uppercase; letter-spacing: .07em; }
+td { color: #c8d4e4; }
+.badge { display: inline-flex; align-items: center; gap: 6px; border: 1px solid rgba(103,232,249,.25); background: rgba(103,232,249,.08); color: var(--accent); border-radius: 999px; padding: 4px 10px; font-size: .82rem; font-weight: 700; }
+.footer { color: var(--subtle); font-size: .9rem; padding: 26px 0 46px; border-top: 1px solid rgba(255,255,255,.06); }
+@media (max-width: 900px) {
+  .meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .layout { grid-template-columns: 1fr; }
+  .toc { position: static; }
+}
+@media (max-width: 560px) { .meta-grid { grid-template-columns: 1fr; } .container { width: min(100% - 24px, 1120px); } section { padding: 20px; } }
+</style>
+</head>
+<body>
+  <header class="hero">
+    <div class="container">
+      <div class="kicker">Polished CTF Writeup</div>
+      <h1>HTB SpookyPass</h1>
+      <p class="subtitle">A compact reversing challenge where fast triage, visible strings, and symbol-aware inspection reveal the password and reconstructed flag.</p>
+      <div class="meta-grid"><div class="meta-card"><div class="meta-label">Category</div><div class="meta-value">Reversing</div></div>
+<div class="meta-card"><div class="meta-label">Difficulty</div><div class="meta-value">Easy/Medium</div></div>
+<div class="meta-card"><div class="meta-label">Technique</div><div class="meta-value">String + symbol triage</div></div>
+<div class="meta-card"><div class="meta-label">Binary</div><div class="meta-value">64-bit Linux PIE, not stripped</div></div></div>
+      <div class="flag-card"><div class="flag-label">Recovered Flag</div><div class="flag">HTB{un0bfu5c4t3d_5tr1ng5}</div></div>
+    </div>
+  </header>
+  <main class="container layout">
+    <nav class="toc"><div class="toc-title">Contents</div><a href="#overview">Overview</a>
+<a href="#triage">Initial Triage</a>
+<a href="#logic">Program Logic</a>
+<a href="#flag">Flag Reconstruction</a>
+<a href="#verification">Verification</a>
+<a href="#lessons">Lessons Learned</a></nav>
+    <article class="content"><section id="overview"><h2>Overview</h2><p><strong>SpookyPass</strong> was the opposite of Callfuscated: a small, friendly reversing target where the key was not overcomplicating the solve. The binary retained useful symbols and contained the password in readable data.</p></section>
+<section id="triage"><h2>Initial Triage</h2><p>The target was extracted from:</p><pre><code>Spooky.zip</code></pre><p>using the standard HTB archive password:</p><pre><code>hackthebox</code></pre><p>Target binary:</p><pre><code>rev_spookypass/pass</code></pre><div class="table-wrap"><table><tr><th>Property</th><th>Value</th></tr><tr><td>Format</td><td>ELF 64-bit PIE executable</td></tr><tr><td>Architecture</td><td>x86-64</td></tr><tr><td>Symbols</td><td>Not stripped</td></tr><tr><td>Primary functions</td><td><code>main</code>, standard libc calls</td></tr></table></div><p>String triage immediately revealed a likely password:</p><pre><code>s3cr3t_p455_f0r_gh05t5_4nd_gh0ul5</code></pre></section>
+<section id="logic"><h2>Program Logic</h2><p>The program logic was straightforward:</p><ol><li>Print a welcome prompt.</li><li>Read user input with <code>fgets</code>.</li><li>Strip the trailing newline using <code>strchr</code>.</li><li>Compare the input with <code>strcmp</code>.</li><li>If the password matches, reconstruct and print the flag.</li><li>Otherwise, print a failure message.</li></ol><p>The prompt and failure message were:</p><pre><code>Welcome to the SPOOKIEST party of the year.
+Before we let you in, you'll need to give us the password:
+You're not a real ghost; clear off!</code></pre></section>
+<section id="flag"><h2>Flag Reconstruction</h2><p>The flag was not directly stored as one plain string. Instead, it was reconstructed from a global integer array named conceptually like <code>parts</code>. The array held character values:</p><pre><code>'H','T','B','{','u','n','0','b','f','u','5','c','4',
+'t','3','d','_','5','t','r','1','n','g','5','}'</code></pre><p>When converted back to characters, this yields:</p><pre><code>HTB{un0bfu5c4t3d_5tr1ng5}</code></pre></section>
+<section id="verification"><h2>Verification</h2><p>The recovered password was verified by running:</p><pre><code>printf 's3cr3t_p455_f0r_gh05t5_4nd_gh0ul5
+' | ./pass</code></pre><p>Output:</p><pre><code>Welcome to the SPOOKIEST party of the year.
+Before we let you in, you'll need to give us the password: Welcome inside!
+HTB{un0bfu5c4t3d_5tr1ng5}</code></pre></section>
+<section id="lessons"><h2>Lessons Learned</h2><ul><li>Not every reversing challenge needs heavy tooling.</li><li>Fast triage with <code>strings</code>, symbols, and basic control-flow inspection can solve simple crackmes quickly.</li><li>Even when a password is visible, verify the success path to distinguish password from final flag.</li></ul></section></article>
+  </main>
+  <footer class="container footer">Generated as a standalone dark-mode HTML writeup. All analysis described here was performed against authorized HTB/CTF challenge artifacts.</footer>
+</body>
+</html>

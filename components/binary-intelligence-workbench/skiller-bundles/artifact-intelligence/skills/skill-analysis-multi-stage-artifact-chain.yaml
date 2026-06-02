@@ -1,0 +1,135 @@
+id: skill-analysis-multi-stage-artifact-chain
+title: analysis.multi_stage_artifact_chain
+summary: Manage verified multi-stage artifact chains across clues, passwords, archives,
+  ciphers, payloads, and final reports
+skill_type: Procedure
+scope: TaskLevel
+status: Approved
+maturity: Level4HumanApproved
+domain: artifact-analysis
+source_section_ids:
+- skill-analysis-multi-stage-artifact-chain
+procedure:
+- Restate the final question and enumerate all provided artifacts, hints, endpoints,
+  and constraints.
+- Create an evidence ledger with stage, source, operation, output, verification, confidence,
+  and dependency fields.
+- Inspect outer artifacts safely and preserve originals before extracting nested content.
+- For each recovered clue, classify it as verified, candidate, contextual, rejected,
+  or unused.
+- Verify every transition with file type, hash, archive listing, packet count, parser
+  roundtrip, known magic bytes, or runtime output.
+- Apply unlocked artifacts to the next layer only after the previous layer is verified.
+- Preserve failed branches and pivot criteria so clue interpretation does not overwrite
+  evidence.
+- Generate a final chain report showing the shortest verified path from original artifact
+  to answer.
+inputs:
+- Unknown or staged artifact set.
+- Challenge/investigation notes and hints.
+- Recovered files, clues, candidate passwords, hashes, ciphers, and intermediate outputs.
+outputs:
+- multi-stage evidence ledger
+- dependency chain map
+- candidate and rejected clue table
+- verification checkpoint table
+- reproducible extraction/decode plan
+- final chain report
+guardrails:
+- Use copies and read-only inspection before extraction or mutation.
+- Do not execute recovered payloads unless explicitly authorized and sandboxed.
+- Do not treat clues as facts until verified by artifact behavior.
+- Do not store flags, credentials, tokens, or secret-like answers in durable memory/examples.
+- Track provenance for every recovered key, password, and file.
+anti_patterns:
+- Skipping verification because a clue seems obvious.
+- Losing intermediate passwords or hashes between stages.
+- Overwriting extracted files without backups.
+- Combining unrelated red herrings into the verified chain.
+evals:
+- id: eval-skill-analysis-multi-stage-artifact-chain-routing
+  prompt: Which skill handles this? Manage verified multi-stage artifact chains across
+    clues, passwords, archives, ciphers, payloads, and final reports
+  expected_behavior: Routes to analysis.multi_stage_artifact_chain and applies its
+    generalized workflow without task-specific assumptions.
+  eval_type: Routing
+  safety_notes:
+  - Keep work within authorized scope and preserve evidence provenance.
+- id: eval-skill-analysis-multi-stage-artifact-chain-source-grounding
+  prompt: Summarize the generalized workflow for analysis.multi_stage_artifact_chain
+    with source grounding.
+  expected_behavior: Cites generalized source section skill-analysis-multi-stage-artifact-chain,
+    names required checkpoints, and avoids storing secret-like material.
+  eval_type: SourceGrounding
+  safety_notes: []
+- id: eval-skill-analysis-multi-stage-artifact-chain-tool-planning
+  prompt: Plan read-only or reversible tool use for analysis.multi_stage_artifact_chain.
+  expected_behavior: Plans inspection, extraction, verification, and reporting steps
+    with backups or copied artifacts before mutations.
+  eval_type: ToolUsePlanning
+  safety_notes:
+  - Use read-only checks first; do not execute recovered payloads without explicit
+    authorization.
+citations:
+- citation_id: cite-skill-analysis-multi-stage-artifact-chain
+  source_id: generalized-biw-session
+  section_id: skill-analysis-multi-stage-artifact-chain
+  excerpt: Generalized workflow for analysis.multi_stage_artifact_chain derived from
+    validated multi-stage artifact analysis patterns; no task-specific secrets included.
+confidence:
+  raw: 0.84
+  extraction: 0.78
+  inference: 0.68
+  procedure: 0.88
+  guardrail: 0.9
+  eval: 0.72
+  routing: 0.8
+  source_quality: 0.82
+  human_review: 1.0
+  runtime: 0.0
+evidence_breakdown:
+  direct_extraction: 0.18
+  supporting_inference: 0.28
+  operational_synthesis: 0.49
+  speculative_candidate: 0.0
+  community_derived: 0.0
+  internal_policy_derived: 0.05
+inference_records: []
+role_suitability:
+- role: Artifact Intelligence Analyst
+  suitability: 0.9
+  rationale: Applies to authorized artifact-analysis workflows with layered evidence
+    and verification.
+- role: Incident Responder
+  suitability: 0.78
+  rationale: Supports evidence preservation and staged analysis of recovered artifacts.
+- role: Reverse Engineer
+  suitability: 0.74
+  rationale: Supports static/dynamic follow-up when payloads or binaries are recovered.
+tool_requirements:
+- name: Direct
+  requirement_type: Optional
+  permission_level: ReadOnly
+  dry_run_available: true
+  rollback_required: false
+runtime_policy:
+  conceptual_answer: true
+  recommend_commands: true
+  run_read_only_commands: true
+  modify_files: false
+  modify_external_systems: false
+  requires_user_approval: false
+  requires_backup_or_rollback: false
+  handles_secrets: false
+  handles_licensed_source: false
+version_applicability:
+  supported_versions: []
+  unsupported_versions: []
+  version_source_refs: []
+  version_confidence: 0.0
+  migration_notes: []
+  deprecated_flags: []
+metadata:
+  interface_kind: workflow
+  source_trust: ValidatedSessionGeneralization
+  extended_context: skills/analysis_multi_stage_artifact_chain.md

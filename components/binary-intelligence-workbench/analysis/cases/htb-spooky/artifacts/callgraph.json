@@ -1,0 +1,120 @@
+{
+  "edges": [
+    {
+      "from": "00101000",
+      "fromName": "_init",
+      "to": "00105040",
+      "toName": "__gmon_start__"
+    },
+    {
+      "from": "00101030",
+      "fromName": "puts",
+      "to": "00105010",
+      "toName": "puts"
+    },
+    {
+      "from": "00101040",
+      "fromName": "__stack_chk_fail",
+      "to": "00105018",
+      "toName": "__stack_chk_fail"
+    },
+    {
+      "from": "00101050",
+      "fromName": "strchr",
+      "to": "00105020",
+      "toName": "strchr"
+    },
+    {
+      "from": "00101060",
+      "fromName": "printf",
+      "to": "00105028",
+      "toName": "printf"
+    },
+    {
+      "from": "00101070",
+      "fromName": "fgets",
+      "to": "00105030",
+      "toName": "fgets"
+    },
+    {
+      "from": "00101080",
+      "fromName": "strcmp",
+      "to": "00105038",
+      "toName": "strcmp"
+    },
+    {
+      "from": "00101090",
+      "fromName": "_start",
+      "to": "00105000",
+      "toName": "__libc_start_main"
+    },
+    {
+      "from": "001010c0",
+      "fromName": "FUN_001010c0",
+      "to": "00105008",
+      "toName": "_ITM_deregisterTMCloneTable"
+    },
+    {
+      "from": "001010f0",
+      "fromName": "FUN_001010f0",
+      "to": "00105048",
+      "toName": "_ITM_registerTMCloneTable"
+    },
+    {
+      "from": "00101130",
+      "fromName": "_FINI_0",
+      "to": "00105050",
+      "toName": "__cxa_finalize"
+    },
+    {
+      "from": "00101130",
+      "fromName": "_FINI_0",
+      "to": "001010c0",
+      "toName": "FUN_001010c0"
+    },
+    {
+      "from": "00101180",
+      "fromName": "_INIT_0",
+      "to": "001010f0",
+      "toName": "FUN_001010f0"
+    },
+    {
+      "from": "00101189",
+      "fromName": "main",
+      "to": "00101050",
+      "toName": "strchr"
+    },
+    {
+      "from": "00101189",
+      "fromName": "main",
+      "to": "00101060",
+      "toName": "printf"
+    },
+    {
+      "from": "00101189",
+      "fromName": "main",
+      "to": "00101070",
+      "toName": "fgets"
+    },
+    {
+      "from": "00101189",
+      "fromName": "main",
+      "to": "00101080",
+      "toName": "strcmp"
+    },
+    {
+      "from": "00101189",
+      "fromName": "main",
+      "to": "00101040",
+      "toName": "__stack_chk_fail"
+    },
+    {
+      "from": "00101189",
+      "fromName": "main",
+      "to": "00101030",
+      "toName": "puts"
+    }
+  ],
+  "schema_version": "biw.callgraph.v1",
+  "source": "ghidra"
+}

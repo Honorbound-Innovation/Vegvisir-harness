@@ -1,0 +1,57 @@
+From: Sophie Brun <sophie@offensive-security.com>
+Date: Tue, 29 Sep 2020 12:12:05 +0200
+Subject: Makefile
+
+Last-Update: 2020-09-29
+Author: 2003  by Lars Bahner <bahner@debian.org>
+---
+ Makefile | 15 ++++++++++++---
+ 1 file changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/Makefile b/Makefile
+index c3bff2b..d16f45e 100755
+--- a/Makefile
++++ b/Makefile
+@@ -5,18 +5,22 @@
+ 
+ ### PREDEFINES
+ 
++# Added for Debian GNU/Linux
++DESTDIR =
++BIN = $DESTDIR/usr/bin
++
+ # DEFAULTS, possibly overridden by <systype> recursive call:
+ # pick gcc if you'd rather , and/or do -g instead of -O if debugging
+ # debugging
+ # DFLAGS = -DTEST -DDEBUG
+-DFLAGS = -DGAPING_SECURITY_HOLE
++DFLAGS =
+ CFLAGS = -O
+ XFLAGS = 	# xtra cflags, set by systype targets
+ XLIBS =		# xtra libs if necessary?
+ # -Bstatic for sunos,  -static for gcc, etc.  You want this, trust me.
+ STATIC =
+ CC = cc $(CFLAGS)
+-LD = $(CC) -s	# linker; defaults to stripped executables
++LD = $(CC)	# linker; defaults to stripped executables no more
+ o = o		# object extension
+ 
+ ALL = cryptcat
+@@ -68,7 +72,9 @@ aix:
+ 	make -e $(ALL) $(MFLAGS) XFLAGS='-DAIX'
+ 
+ linux:
+-	make -e $(ALL) $(MFLAGS) XFLAGS='-DLINUX' STATIC=-static
++# Linked dynamically for Debian
++#	make -e $(ALL) $(MFLAGS) XFLAGS='-DLINUX' STATIC=-static
++	make -e $(ALL) $(MFLAGS) XLIBS='-lstdc++' XFLAGS='-DLINUX'
+ 
+ # irix 5.2, dunno 'bout earlier versions.  If STATIC='-non_shared' doesn't
+ # work for you, null it out and yell at SGI for their STUPID default
+@@ -129,3 +135,6 @@ generic:
+ clean:
+ 	rm -f $(ALL) *.o *.obj
+ 
++#Added for Debian GNU/Linux
++install:	cryptcat
++	cp -a ./cryptcat $(DESTDIR)/usr/bin

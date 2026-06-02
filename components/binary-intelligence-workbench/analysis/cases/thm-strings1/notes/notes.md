@@ -1,0 +1,2 @@
+# Notes — thm-strings1
+

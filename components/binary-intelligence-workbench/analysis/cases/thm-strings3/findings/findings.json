@@ -1,0 +1,9 @@
+{
+  "findings": [],
+  "risk": {
+    "level": "unknown",
+    "rationale": [],
+    "score": 0
+  },
+  "schema_version": "biw.findings.v1"
+}

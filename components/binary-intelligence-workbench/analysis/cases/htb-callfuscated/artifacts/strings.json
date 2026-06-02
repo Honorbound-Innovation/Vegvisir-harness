@@ -1,0 +1,211 @@
+{
+  "schema_version": "biw.strings.v1",
+  "source": "ghidra",
+  "strings": [
+    {
+      "address": "00400318",
+      "length": 27,
+      "value": "/lib64/ld-linux-x86-64.so.2"
+    },
+    {
+      "address": "00400481",
+      "length": 17,
+      "value": "__libc_start_main"
+    },
+    {
+      "address": "00400493",
+      "length": 5,
+      "value": "srand"
+    },
+    {
+      "address": "00400499",
+      "length": 4,
+      "value": "puts"
+    },
+    {
+      "address": "0040049e",
+      "length": 14,
+      "value": "__isoc99_scanf"
+    },
+    {
+      "address": "004004ad",
+      "length": 6,
+      "value": "printf"
+    },
+    {
+      "address": "004004b4",
+      "length": 9,
+      "value": "libc.so.6"
+    },
+    {
+      "address": "004004be",
+      "length": 9,
+      "value": "GLIBC_2.7"
+    },
+    {
+      "address": "004004c8",
+      "length": 11,
+      "value": "GLIBC_2.2.5"
+    },
+    {
+      "address": "004004d4",
+      "length": 10,
+      "value": "GLIBC_2.34"
+    },
+    {
+      "address": "004004df",
+      "length": 14,
+      "value": "__gmon_start__"
+    },
+    {
+      "address": "0040d008",
+      "length": 66,
+      "value": "Welcome to callfuscated crackme.\nTo register enter your password: "
+    },
+    {
+      "address": "0040d050",
+      "length": 51,
+      "value": "Correct. Validate the challenge using the flag: %s\n"
+    },
+    {
+      "address": "0040d084",
+      "length": 25,
+      "value": "Incorrect flag. Try again"
+    },
+    {
+      "address": ".comment::00000000",
+      "length": 42,
+      "value": "GCC: (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0"
+    },
+    {
+      "address": ".shstrtab::00000001",
+      "length": 9,
+      "value": ".shstrtab"
+    },
+    {
+      "address": ".shstrtab::0000000b",
+      "length": 7,
+      "value": ".interp"
+    },
+    {
+      "address": ".shstrtab::00000013",
+      "length": 18,
+      "value": ".note.gnu.property"
+    },
+    {
+      "address": ".shstrtab::00000026",
+      "length": 18,
+      "value": ".note.gnu.build-id"
+    },
+    {
+      "address": ".shstrtab::00000039",
+      "length": 13,
+      "value": ".note.ABI-tag"
+    },
+    {
+      "address": ".shstrtab::00000047",
+      "length": 9,
+      "value": ".gnu.hash"
+    },
+    {
+      "address": ".shstrtab::00000051",
+      "length": 7,
+      "value": ".dynsym"
+    },
+    {
+      "address": ".shstrtab::00000059",
+      "length": 7,
+      "value": ".dynstr"
+    },
+    {
+      "address": ".shstrtab::00000061",
+      "length": 12,
+      "value": ".gnu.version"
+    },
+    {
+      "address": ".shstrtab::0000006e",
+      "length": 14,
+      "value": ".gnu.version_r"
+    },
+    {
+      "address": ".shstrtab::0000007d",
+      "length": 9,
+      "value": ".rela.dyn"
+    },
+    {
+      "address": ".shstrtab::00000087",
+      "length": 9,
+      "value": ".rela.plt"
+    },
+    {
+      "address": ".shstrtab::00000091",
+      "length": 5,
+      "value": ".init"
+    },
+    {
+      "address": ".shstrtab::00000097",
+      "length": 5,
+      "value": ".text"
+    },
+    {
+      "address": ".shstrtab::0000009d",
+      "length": 5,
+      "value": ".fini"
+    },
+    {
+      "address": ".shstrtab::000000a3",
+      "length": 7,
+      "value": ".rodata"
+    },
+    {
+      "address": ".shstrtab::000000ab",
+      "length": 13,
+      "value": ".eh_frame_hdr"
+    },
+    {
+      "address": ".shstrtab::000000b9",
+      "length": 9,
+      "value": ".eh_frame"
+    },
+    {
+      "address": ".shstrtab::000000c3",
+      "length": 11,
+      "value": ".init_array"
+    },
+    {
+      "address": ".shstrtab::000000cf",
+      "length": 11,
+      "value": ".fini_array"
+    },
+    {
+      "address": ".shstrtab::000000db",
+      "length": 8,
+      "value": ".dynamic"
+    },
+    {
+      "address": ".shstrtab::000000e4",
+      "length": 4,
+      "value": ".got"
+    },
+    {
+      "address": ".shstrtab::000000e9",
+      "length": 8,
+      "value": ".got.plt"
+    },
+    {
+      "address": ".shstrtab::000000f2",
+      "length": 5,
+      "value": ".data"
+    },
+    {
+      "address": ".shstrtab::000000f8",
+      "length": 4,
+      "value": ".bss"
+    },
+    {
+      "address": ".shstrtab::000000fd",
+      "length": 8,
+      "value": ".comment"
+    }
+  ]
+}

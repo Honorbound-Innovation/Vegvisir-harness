@@ -1,0 +1,69 @@
+bundle_id: artifact-intelligence
+name: artifact-intelligence
+version: 0.1.0
+domain: artifact-analysis
+description: Generalized workflows for safely analyzing adversarial technical artifacts
+  including archives, binaries, packet captures, payloads, crypto oracles, incident
+  evidence, and reports.
+owner: Vegvisir
+safety_scope: authorized CTF, lab, defensive security, incident-response, malware-analysis,
+  reverse-engineering, and crypto-analysis workflows
+artifact_root: analysis/cases
+source_corpus:
+- generalized-biw-session
+review_status: Approved
+publish_status: Unpublished
+compatibility:
+  domain: artifact-analysis
+created_at: 2026-05-31 00:00:00+00:00
+metadata:
+  source_session: generalized from validated BIW reversing, forensics, and crypto
+    workflows
+  secrets_policy: do not store credentials, private keys, tokens, flags, or secret-like
+    challenge answers in memory or examples
+skills:
+- id: artifact.triage_and_route
+  path: skills/artifact_triage_and_route.md
+- id: analysis.hypothesis_evidence_control
+  path: skills/analysis_hypothesis_evidence_control.md
+- id: artifact.safe_extract_inventory
+  path: skills/artifact_safe_extract_inventory.md
+- id: binary.static_triage
+  path: skills/binary_static_triage.md
+- id: binary.validation_logic_recovery
+  path: skills/binary_validation_logic_recovery.md
+- id: binary.control_flow_deobfuscation
+  path: skills/binary_control_flow_deobfuscation.md
+- id: binary.vm_lift_and_reduce
+  path: skills/binary_vm_lift_and_reduce.md
+- id: forensics.network_capture_triage
+  path: skills/forensics_network_capture_triage.md
+- id: incident.redis_protocol_abuse
+  path: skills/incident_redis_protocol_abuse.md
+- id: forensics.payload_carve_and_decode
+  path: skills/forensics_payload_carve_and_decode.md
+- id: crypto.fault_oracle_analysis
+  path: skills/crypto_fault_oracle_analysis.md
+- id: crypto.aes_dfa_key_recovery
+  path: skills/crypto_aes_dfa_key_recovery.md
+- id: report.professional_writeup_generate
+  path: skills/report_professional_writeup_generate.md
+- id: analysis.multi_stage_artifact_chain
+  path: skills/analysis_multi_stage_artifact_chain.md
+- id: forensics.image_stego_chain
+  path: skills/forensics_image_stego_chain.md
+- id: crypto.classical_cipher_chain
+  path: skills/crypto_classical_cipher_chain.md
+- id: binary.dotnet_gui_constraint_recovery
+  path: skills/binary_dotnet_gui_constraint_recovery.md
+- id: forensics.pcap_embedded_artifact_chain
+  path: skills/forensics_pcap_embedded_artifact_chain.md
+evals:
+- evals/routing_cases.yaml
+- evals/safety_cases.yaml
+- evals/output_contract_cases.yaml
+examples:
+- examples/callthreaded_vm_sanitized.md
+- examples/redis_intrusion_sanitized.md
+- examples/aes_fault_oracle_sanitized.md
+- examples/writeup_sanitized.md

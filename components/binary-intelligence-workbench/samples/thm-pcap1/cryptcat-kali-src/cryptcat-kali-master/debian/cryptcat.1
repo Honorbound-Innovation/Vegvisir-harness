@@ -1,0 +1,52 @@
+.\"                                      Hey, EMACS: -*- nroff -*-
+.TH cryptcat 1 "August 9, 2001" "Debian GNU/Linux" "Cryptcat"
+.SH NAME
+cryptcat \- twofish encryption enabled version of 
+.B nc(1)
+.SH SYNOPSIS
+.B cryptcat
+.RI "-k \fIsecret\fP [-options] hostname port[s] [ports]"
+.br
+.B cryptcat
+.RI "-k \fIsecret\fP -l -p port [-options] [hostname] [port]"
+.SH DESCRIPTION
+This manual page documents briefly the \fBcryptcat\fP command.
+This manual page was written for the Debian GNU/Linux distribution because the original program does not have a manual page. It only documents the features specific to \fBcryptcat\fP and not the features that are described at length in the manpage for \fBnc(1)\fP.
+.br
+If you do not know \fBnc\fP then the chances are you won't have much use for this manpage.
+.PP
+\fBcryptcat\fP can act as a \fBtcp\fP or \fBudp\fP client or server - connecting to or listening on a socket, while otherwise working as the standard Unix command \fBcat(1)\fP.
+.PP
+\fBcryptcat\fP takes a password as a salt to encrypt the data being sent over the connection.
+Without a specified password \fBcryptcat\fP will default to the hardcoded password ``\fImetallica\fP''. Needless to say, failure to specify a different password makes the connection as good as unencrypted.
+.PP
+.SH OPTIONS
+This programs \fIdoes not\fP follow the usual GNU command line syntax, with long options starting with two dashes (`-').
+A summary of the options specific to cryptcat is included below.
+.TP
+.B \-h
+.br
+Show summary of options.
+.TP
+.B \-k \fIsecret password\fP
+.br
+Change the shared secret password to be used to establish a connection.
+.SH
+BUGS
+This version of \fBcryptcat\fP does not support the \fB-e\fP \fIcommand\fP command line option available in some versions of \fBnc\fP.
+.SH SEE ALSO
+.BR nc(1),
+.BR cat(1).
+.br
+/usr/share/doc/cryptcat/README.gz
+.br
+/usr/share/doc/cryptcat/README.cryptcat
+.br
+/usr/share/doc/cryptcat/README.Debian
+.SH AUTHOR
+The original \fBnetcat\fP was written by \fBhobbit@avian.org\fP.
+
+\fBcryptcat\fP is the work of \fBfarm9 <info@farm9.org>\fP with the help of Dan F, Jeff Nathan, Matt W, Frank Knobbe, Dragos, Bill Weiss, Jimmy.
+
+This manual page was written by Lars Bahner <bahner@debian.org> for Debian.
+

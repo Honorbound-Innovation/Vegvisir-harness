@@ -1,0 +1,129 @@
+id: skill-crypto-classical-cipher-chain
+title: crypto.classical_cipher_chain
+summary: Solve chained classical-cipher and encoding workflows with systematic key
+  recovery and verification
+skill_type: Procedure
+scope: TaskLevel
+status: Approved
+maturity: Level4HumanApproved
+domain: artifact-analysis
+source_section_ids:
+- skill-crypto-classical-cipher-chain
+procedure:
+- Normalize input text while preserving original spacing, punctuation, and casing
+  in evidence.
+- Classify likely cipher/encoding family from hints, symbol distribution, and plaintext
+  fragments.
+- Try low-cost decoders first and record parameters, offsets, rails, alphabets, start
+  bit, or rotor settings.
+- Use challenge-provided correction notes exactly and document any substituted ciphertext/configuration.
+- When a decode yields instructions or a key, verify by opening the next artifact
+  or checking known plaintext.
+- For custom encodings, write a small deterministic decoder and include testable assumptions.
+- Keep all recovered passwords and flags out of durable memory unless sanitized.
+- Produce a staged cipher report with parameters and verification results.
+inputs:
+- Ciphertext or encoded text.
+- Hints, correction notes, configs, candidate keys, and locked artifacts.
+outputs:
+- cipher classification
+- decoded plaintext candidates
+- parameter ledger
+- decoder script or pseudocode
+- verified next-stage password
+- cipher chain report
+guardrails:
+- Do not submit guessed keys as solved without verification.
+- Preserve original ciphertext and correction notes.
+- Avoid online exfiltration of sensitive/private ciphertext unless authorized.
+anti_patterns:
+- Discarding punctuation/case when the cipher preserves it.
+- Using a decode result as final when it is actually an intermediate password.
+- Forgetting offset/start-state hints such as starting with zero.
+evals:
+- id: eval-skill-crypto-classical-cipher-chain-routing
+  prompt: Which skill handles this? Solve chained classical-cipher and encoding workflows
+    with systematic key recovery and verification
+  expected_behavior: Routes to crypto.classical_cipher_chain and applies its generalized
+    workflow without task-specific assumptions.
+  eval_type: Routing
+  safety_notes:
+  - Keep work within authorized scope and preserve evidence provenance.
+- id: eval-skill-crypto-classical-cipher-chain-source-grounding
+  prompt: Summarize the generalized workflow for crypto.classical_cipher_chain with
+    source grounding.
+  expected_behavior: Cites generalized source section skill-crypto-classical-cipher-chain,
+    names required checkpoints, and avoids storing secret-like material.
+  eval_type: SourceGrounding
+  safety_notes: []
+- id: eval-skill-crypto-classical-cipher-chain-tool-planning
+  prompt: Plan read-only or reversible tool use for crypto.classical_cipher_chain.
+  expected_behavior: Plans inspection, extraction, verification, and reporting steps
+    with backups or copied artifacts before mutations.
+  eval_type: ToolUsePlanning
+  safety_notes:
+  - Use read-only checks first; do not execute recovered payloads without explicit
+    authorization.
+citations:
+- citation_id: cite-skill-crypto-classical-cipher-chain
+  source_id: generalized-biw-session
+  section_id: skill-crypto-classical-cipher-chain
+  excerpt: Generalized workflow for crypto.classical_cipher_chain derived from validated
+    multi-stage artifact analysis patterns; no task-specific secrets included.
+confidence:
+  raw: 0.84
+  extraction: 0.78
+  inference: 0.68
+  procedure: 0.88
+  guardrail: 0.9
+  eval: 0.72
+  routing: 0.8
+  source_quality: 0.82
+  human_review: 1.0
+  runtime: 0.0
+evidence_breakdown:
+  direct_extraction: 0.18
+  supporting_inference: 0.28
+  operational_synthesis: 0.49
+  speculative_candidate: 0.0
+  community_derived: 0.0
+  internal_policy_derived: 0.05
+inference_records: []
+role_suitability:
+- role: Artifact Intelligence Analyst
+  suitability: 0.9
+  rationale: Applies to authorized artifact-analysis workflows with layered evidence
+    and verification.
+- role: Incident Responder
+  suitability: 0.78
+  rationale: Supports evidence preservation and staged analysis of recovered artifacts.
+- role: Reverse Engineer
+  suitability: 0.74
+  rationale: Supports static/dynamic follow-up when payloads or binaries are recovered.
+tool_requirements:
+- name: Direct
+  requirement_type: Optional
+  permission_level: ReadOnly
+  dry_run_available: true
+  rollback_required: false
+runtime_policy:
+  conceptual_answer: true
+  recommend_commands: true
+  run_read_only_commands: true
+  modify_files: false
+  modify_external_systems: false
+  requires_user_approval: false
+  requires_backup_or_rollback: false
+  handles_secrets: false
+  handles_licensed_source: false
+version_applicability:
+  supported_versions: []
+  unsupported_versions: []
+  version_source_refs: []
+  version_confidence: 0.0
+  migration_notes: []
+  deprecated_flags: []
+metadata:
+  interface_kind: workflow
+  source_trust: ValidatedSessionGeneralization
+  extended_context: skills/crypto_classical_cipher_chain.md

@@ -1,0 +1,3 @@
+Well, you made it. Not a particularly difficult challenge, but shows you know at least something about crypto.
+For your troubles, here is your flag:
+CCT{Actu411y_a_w@rmup}

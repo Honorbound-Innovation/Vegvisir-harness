@@ -1,0 +1,16 @@
+Name: cryptcat
+Archive: SourceForge
+X-SourceForge-Project: projects
+Homepage: http://farm9.com/content/Free_Tools/cryptcat_linux2.tar
+X-Summary: lightweight version netcat extended with twofish encryption
+X-Description: |-
+  Cryptcat is a simple Unix utility which reads and writes data across
+  network connections, using TCP or UDP protocol while encrypting the
+  data being transmitted.
+  It is designed to be a reliable "back-end" tool that can be used directly
+  or easily driven by other programs and scripts.  At the same time, it is a
+  feature-rich network debugging and exploration tool, since it can create
+  almost any kind of connection you would need and has several interesting
+  built-in capabilities.
+X-Version: '20031202'
+X-License: GPL-2+

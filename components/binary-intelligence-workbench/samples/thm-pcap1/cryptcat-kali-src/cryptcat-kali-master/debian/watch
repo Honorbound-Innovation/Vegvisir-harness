@@ -1,0 +1,8 @@
+version=4
+# The debian mirror gives us a really weird output for the version number so
+# lets mangle it to only give us 1.2.1 - there hasn't been an update to this
+# package in ages, and it's unlikely to happen any time soon.
+opts=uversionmangle=s/.*/1.2.1/,searchmode=plain \
+http://sourceforge.net/projects/cryptcat/rss?limit=10000000000000000000 \
+https?://.*/cryptcat-unix-@ANY_VERSION@\.tar debian uupdate
+#https://sf.net/cryptcat/ cryptcat-unix-(.+)\.tar debian uupdate

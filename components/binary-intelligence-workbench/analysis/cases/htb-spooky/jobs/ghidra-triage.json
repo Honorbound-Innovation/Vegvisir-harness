@@ -1,0 +1,112 @@
+{
+  "commands": [
+    {
+      "cmd": [
+        "/mnt/storage/Vegvisir-Projects/GhidraHeadlessMCP/bin/ghidra-headless",
+        "import",
+        "--binary",
+        "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench/samples/htb-spooky/rev_spookypass/pass",
+        "--overwrite",
+        "--project-dir",
+        "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench/analysis/cases/htb-spooky/ghidra-project",
+        "--project-name",
+        "htb-spooky"
+      ],
+      "name": "import",
+      "returncode": 0,
+      "stderr_tail": []
+    },
+    {
+      "cmd": [
+        "/mnt/storage/Vegvisir-Projects/GhidraHeadlessMCP/bin/ghidra-headless",
+        "list-strings",
+        "--program",
+        "pass",
+        "--limit",
+        "500",
+        "--project-dir",
+        "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench/analysis/cases/htb-spooky/ghidra-project",
+        "--project-name",
+        "htb-spooky"
+      ],
+      "name": "list-strings",
+      "returncode": 0,
+      "stderr_tail": []
+    },
+    {
+      "cmd": [
+        "/mnt/storage/Vegvisir-Projects/GhidraHeadlessMCP/bin/ghidra-headless",
+        "list-imports",
+        "--program",
+        "pass",
+        "--limit",
+        "500",
+        "--project-dir",
+        "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench/analysis/cases/htb-spooky/ghidra-project",
+        "--project-name",
+        "htb-spooky"
+      ],
+      "name": "list-imports",
+      "returncode": 0,
+      "stderr_tail": []
+    },
+    {
+      "cmd": [
+        "/mnt/storage/Vegvisir-Projects/GhidraHeadlessMCP/bin/ghidra-headless",
+        "list-exports",
+        "--program",
+        "pass",
+        "--limit",
+        "500",
+        "--project-dir",
+        "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench/analysis/cases/htb-spooky/ghidra-project",
+        "--project-name",
+        "htb-spooky"
+      ],
+      "name": "list-exports",
+      "returncode": 0,
+      "stderr_tail": []
+    },
+    {
+      "cmd": [
+        "/mnt/storage/Vegvisir-Projects/GhidraHeadlessMCP/bin/ghidra-headless",
+        "list-functions",
+        "--program",
+        "pass",
+        "--limit",
+        "500",
+        "--project-dir",
+        "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench/analysis/cases/htb-spooky/ghidra-project",
+        "--project-name",
+        "htb-spooky"
+      ],
+      "name": "list-functions",
+      "returncode": 0,
+      "stderr_tail": []
+    },
+    {
+      "cmd": [
+        "/mnt/storage/Vegvisir-Projects/GhidraHeadlessMCP/bin/ghidra-headless",
+        "callgraph",
+        "--program",
+        "pass",
+        "--mode",
+        "edges",
+        "--limit",
+        "500",
+        "--project-dir",
+        "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench/analysis/cases/htb-spooky/ghidra-project",
+        "--project-name",
+        "htb-spooky"
+      ],
+      "name": "callgraph",
+      "returncode": 0,
+      "stderr_tail": []
+    }
+  ],
+  "mode": "ghidra",
+  "program": "pass",
+  "project_dir": "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench/analysis/cases/htb-spooky/ghidra-project",
+  "project_name": "htb-spooky",
+  "wrapper": "/mnt/storage/Vegvisir-Projects/GhidraHeadlessMCP/bin/ghidra-headless"
+}

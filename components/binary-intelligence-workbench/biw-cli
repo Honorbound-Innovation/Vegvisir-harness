@@ -1,0 +1,3 @@
+#!/usr/bin/env python3
+from biw.cli import main
+raise SystemExit(main())

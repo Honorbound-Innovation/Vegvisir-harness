@@ -12,6 +12,7 @@ monorepo:
 - `components/ghidra` — Ghidra source tree used by Vegvisir's reverse-engineering tooling; third-party Apache-2.0 component with upstream notices preserved.
 - `components/ghidra-mcp` — Ghidra UI MCP bridge/extension component; third-party Apache-2.0 component.
 - `components/ghidra-headless-mcp` — Ghidra headless MCP bridge component; first-party Vegvisir-owned component under the Vegvisir MIT License.
+- `components/binary-intelligence-workbench` — Binary Intelligence Workbench Python analysis/reporting component; first-party Vegvisir-owned component under the Vegvisir MIT License.
 
 These are source components. Runtime products such as virtual environments,
 `node_modules`, Gradle caches, build directories, generated distributions, and
@@ -43,6 +44,7 @@ Excluded from the vendored source copies:
 - `build/`
 - dependency caches such as Ghidra's local `dependencies/`
 - per-project `.vegvisir/` runtime state
+- Python bytecode caches such as `__pycache__/` and `*.pyc`
 
 `components/ghidra-mcp` was copied from the current local source state, including
 its pre-existing local source edits.

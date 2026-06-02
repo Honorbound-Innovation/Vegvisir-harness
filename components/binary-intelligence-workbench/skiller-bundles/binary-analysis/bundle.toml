@@ -1,0 +1,9 @@
+name = "binary-analysis"
+version = "0.1.0"
+domain = "reverse-engineering"
+description = "Reusable workflows for Binary Intelligence Workbench case triage, function analysis, and report generation."
+
+[metadata]
+owner = "Vegvisir"
+safety_scope = "authorized static binary analysis and defensive reverse engineering"
+artifact_root = ".analysis/cases"

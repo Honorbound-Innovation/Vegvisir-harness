@@ -1,0 +1,66 @@
+{
+  "created_at": "2026-05-31T02:18:25Z",
+  "explanation": {
+    "case_id": "htb-callfuscated",
+    "confidence": "medium",
+    "function": {
+      "entry": "00401080",
+      "external": false,
+      "name": "entry",
+      "signature": "undefined entry(void)",
+      "thunk": false
+    },
+    "function_selector": "entry",
+    "generated_at": "2026-05-31T02:18:25Z",
+    "limitations": [
+      "This MVP explanation is deterministic and evidence-oriented; it is not a full semantic proof.",
+      "Decompiler output may be incomplete or misleading for optimized/obfuscated binaries."
+    ],
+    "notable_terms": [],
+    "observed_calls_or_tokens": [
+      "entry",
+      "__libc_start_main"
+    ],
+    "schema_version": "biw.function_explanation.v1",
+    "summary": "Decompiled code was captured for review."
+  },
+  "function": {
+    "entry": "00401080",
+    "external": false,
+    "name": "entry",
+    "signature": "undefined entry(void)",
+    "thunk": false
+  },
+  "mode": "ghidra",
+  "ok": true,
+  "payload": {
+    "c": "\nvoid processEntry entry(undefined8 param_1,undefined8 param_2)\n\n{\n  undefined1 auStack_8 [8];\n  \n  __libc_start_main(&LAB_00409002,param_2,&stack0x00000008,0,0,param_1,auStack_8);\n  do {\n                    /* WARNING: Do nothing block with infinite loop */\n  } while( true );\n}\n\n",
+    "command": [
+      "/mnt/storage/Vegvisir-Projects/GhidraHeadlessMCP/bin/ghidra-headless",
+      "decompile",
+      "--project-dir",
+      "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench/analysis/cases/htb-callfuscated/ghidra-project",
+      "--project-name",
+      "htb-callfuscated",
+      "--program",
+      "crackme",
+      "--timeout-seconds",
+      "900",
+      "--max-chars",
+      "20000",
+      "--function",
+      "entry"
+    ],
+    "decompileCompleted": true,
+    "errorMessage": "",
+    "function": {
+      "entry": "00401080",
+      "name": "entry"
+    },
+    "ok": true,
+    "program": "crackme",
+    "returncode": 0,
+    "truncated": false
+  },
+  "schema_version": "biw.decompile.v1"
+}

@@ -1,0 +1,32 @@
+{
+  "case_id": "htb-callfuscated",
+  "created_at": "2026-05-31T02:17:07Z",
+  "extraction": {
+    "ghidra_error": null,
+    "mode": "ghidra"
+  },
+  "risk": {
+    "level": "low",
+    "rationale": [
+      "Suspicious strings: credential-keyword"
+    ],
+    "score": 3
+  },
+  "schema_version": "biw.case.v1",
+  "source": {
+    "architecture": "x86_64",
+    "filename": "crackme",
+    "format": "ELF",
+    "mime": "application/x-elf",
+    "path": "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench/samples/htb-callfuscated/crackme",
+    "sha256": "2389a35ac38bff9546a4c356c7d22633b22e8a1616b61adb85991afda40a3e36",
+    "size_bytes": 59528
+  },
+  "status": "triaged",
+  "tags": [
+    "ELF",
+    "x86_64"
+  ],
+  "title": "crackme",
+  "updated_at": "2026-05-31T02:18:09Z"
+}

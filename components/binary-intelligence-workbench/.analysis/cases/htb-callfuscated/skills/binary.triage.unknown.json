@@ -1,0 +1,156 @@
+{
+  "bundle": {
+    "name": "binary-analysis",
+    "path": "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench/skiller-bundles/binary-analysis",
+    "version": "0.1.0"
+  },
+  "case_id": "htb-callfuscated",
+  "created_at": "2026-05-31T02:16:57Z",
+  "inputs": {
+    "artifacts": [
+      "callgraph.json",
+      "exports.json",
+      "functions.json",
+      "hashes.json",
+      "imports.json",
+      "metadata.json",
+      "strings.json"
+    ],
+    "case": "case.json",
+    "findings": [
+      "capability-map.json",
+      "findings.json",
+      "suspicious-strings.json"
+    ]
+  },
+  "result": {
+    "artifact_counts": {
+      "callgraph_edges": 0,
+      "exports": 0,
+      "functions": 0,
+      "imports": 7,
+      "strings": 325
+    },
+    "capabilities": [],
+    "recommended_next_steps": [
+      "Review high/medium findings and validate evidence manually.",
+      "Run `biw explain function` on functions near suspicious imports or strings.",
+      "Generate `biw report full` after function-level notes are added."
+    ],
+    "representative_strings": [
+      {
+        "offset": 792,
+        "value": "/lib64/ld-linux-x86-64.so.2"
+      },
+      {
+        "offset": 1153,
+        "value": "__libc_start_main"
+      },
+      {
+        "offset": 1171,
+        "value": "srand"
+      },
+      {
+        "offset": 1177,
+        "value": "puts"
+      },
+      {
+        "offset": 1182,
+        "value": "__isoc99_scanf"
+      },
+      {
+        "offset": 1197,
+        "value": "printf"
+      },
+      {
+        "offset": 1204,
+        "value": "libc.so.6"
+      },
+      {
+        "offset": 1214,
+        "value": "GLIBC_2.7"
+      },
+      {
+        "offset": 1224,
+        "value": "GLIBC_2.2.5"
+      },
+      {
+        "offset": 1236,
+        "value": "GLIBC_2.34"
+      },
+      {
+        "offset": 1247,
+        "value": "__gmon_start__"
+      },
+      {
+        "offset": 4241,
+        "value": "PTE1"
+      },
+      {
+        "offset": 4458,
+        "value": "PAXU"
+      },
+      {
+        "offset": 4563,
+        "value": "AX3E"
+      },
+      {
+        "offset": 4583,
+        "value": "AX#E"
+      },
+      {
+        "offset": 4646,
+        "value": "AX3E"
+      },
+      {
+        "offset": 4656,
+        "value": "AX3E"
+      },
+      {
+        "offset": 4704,
+        "value": "AX3E"
+      },
+      {
+        "offset": 4771,
+        "value": "AX3E"
+      },
+      {
+        "offset": 4791,
+        "value": "AX#E"
+      }
+    ],
+    "risk": {
+      "level": "low",
+      "rationale": [
+        "Suspicious strings: credential-keyword"
+      ],
+      "score": 3
+    },
+    "summary": "Case htb-callfuscated is triaged as low risk with 1 heuristic findings.",
+    "top_findings": [
+      {
+        "category": "strings",
+        "confidence": "medium",
+        "created_at": "2026-05-31T02:16:57Z",
+        "created_by": "biw.heuristics",
+        "description": "Found 1 string(s) matching credential-keyword patterns.",
+        "evidence": [
+          {
+            "artifact": "strings.json",
+            "type": "string",
+            "value": "To register enter your password: "
+          }
+        ],
+        "id": "finding_string_credential_keyword",
+        "recommended_next_steps": [
+          "Inspect functions referencing these strings in Ghidra."
+        ],
+        "severity": "medium",
+        "title": "Suspicious strings: credential-keyword"
+      }
+    ]
+  },
+  "schema_version": "biw.skill-output.v1",
+  "skill_id": "binary.triage.unknown",
+  "skill_title": "Skill: binary.triage.unknown"
+}

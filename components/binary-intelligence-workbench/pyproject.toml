@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "binary-intelligence-workbench"
+version = "0.1.0"
+description = "Vegvisir-native binary triage workbench MVP"
+requires-python = ">=3.10"
+
+[project.scripts]
+biw = "biw.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

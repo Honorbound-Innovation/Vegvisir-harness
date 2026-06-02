@@ -1,0 +1,21 @@
+{
+  "schema_version": "biw.suspicious_strings.v1",
+  "suspicious_strings": [
+    {
+      "address": null,
+      "categories": [
+        "credential-keyword"
+      ],
+      "offset": 10400,
+      "value": "FLAG{THE-SUPREME-DUTY-ORGANISATION-SECRET}"
+    },
+    {
+      "address": null,
+      "categories": [
+        "credential-keyword"
+      ],
+      "offset": 34440,
+      "value": "FLAG{SECRET-MEASURES-PROCEDURE-REPUBLIC-MANAGEMENT}"
+    }
+  ]
+}

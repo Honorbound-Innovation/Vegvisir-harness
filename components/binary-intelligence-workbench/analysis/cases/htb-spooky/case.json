@@ -1,0 +1,32 @@
+{
+  "case_id": "htb-spooky",
+  "created_at": "2026-05-31T02:51:29Z",
+  "extraction": {
+    "ghidra_error": null,
+    "mode": "ghidra"
+  },
+  "risk": {
+    "level": "low",
+    "rationale": [
+      "Suspicious strings: credential-keyword"
+    ],
+    "score": 3
+  },
+  "schema_version": "biw.case.v1",
+  "source": {
+    "architecture": "x86_64",
+    "filename": "pass",
+    "format": "ELF",
+    "mime": "application/x-elf",
+    "path": "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench/samples/htb-spooky/rev_spookypass/pass",
+    "sha256": "717409ebbd5e006a6ef01d6a05c6eb57275f5e48a3c4dbf4bc8b0454d4bf0b51",
+    "size_bytes": 15912
+  },
+  "status": "triaged",
+  "tags": [
+    "ELF",
+    "x86_64"
+  ],
+  "title": "pass",
+  "updated_at": "2026-05-31T02:51:57Z"
+}

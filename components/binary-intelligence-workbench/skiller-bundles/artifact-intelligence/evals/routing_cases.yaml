@@ -1,0 +1,81 @@
+cases:
+- id: archive_unknown_zip
+  query: I have an unknown password-protected zip with a binary and source files.
+    Safely extract and tell me what it is.
+  expected_skills:
+  - artifact.safe_extract_inventory
+  - artifact.triage_and_route
+- id: simple_password_binary
+  query: ELF asks for a password and prints success or failure. Symbols and strcmp
+    are present.
+  expected_skills:
+  - binary.static_triage
+  - binary.validation_logic_recovery
+- id: call_threaded_vm
+  query: Ghidra cannot decompile main correctly; binary uses many call target pop
+    r8 blocks and looks like a VM.
+  expected_skills:
+  - binary.control_flow_deobfuscation
+  - binary.vm_lift_and_reduce
+- id: pcap_redis_intrusion
+  query: PCAP contains Redis AUTH, SLAVEOF, CONFIG SET, MODULE LOAD, and custom system.exec
+    commands.
+  expected_skills:
+  - forensics.network_capture_triage
+  - incident.redis_protocol_abuse
+  - forensics.payload_carve_and_decode
+- id: staged_payload_carving
+  query: A TCP stream contains an embedded ELF shared object and an obfuscated shell
+    script payload.
+  expected_skills:
+  - forensics.payload_carve_and_decode
+  - binary.static_triage
+- id: aes_fault_oracle
+  query: Service returns correct AES ciphertext and faulty ciphertext for the same
+    plaintext, then gives encrypted target data.
+  expected_skills:
+  - crypto.fault_oracle_analysis
+  - crypto.aes_dfa_key_recovery
+- id: writeup_request
+  query: Generate a polished dark-mode HTML writeup from the case artifacts and solve
+    notes.
+  expected_skills:
+  - report.professional_writeup_generate
+- id: conflicting_hint_evidence
+  query: User hints suggest one key or explanation, but validated tool checks and
+    artifact evidence keep contradicting it. Manage hypotheses and decide what to
+    trust.
+  expected_skills:
+  - analysis.hypothesis_evidence_control
+  - artifact.triage_and_route
+- id: multi_stage_chain
+  query: An investigation has metadata clues, a carved zip, chained passwords, a cipher
+    step, and a final archive. Keep an evidence ledger and verify each layer.
+  expected_skills:
+  - analysis.multi_stage_artifact_chain
+  - analysis.hypothesis_evidence_control
+- id: image_stego_chain
+  query: JPEG contains EXIF clues, trailing zip data, steghide payload, nested archives,
+    and a final cipher to solve.
+  expected_skills:
+  - forensics.image_stego_chain
+  - analysis.multi_stage_artifact_chain
+- id: classical_cipher_chain
+  query: Solve a staged crypto puzzle with keyboard-layout substitution, rail fence,
+    and alternating run-length encoded binary.
+  expected_skills:
+  - crypto.classical_cipher_chain
+  - analysis.multi_stage_artifact_chain
+- id: dotnet_gui_constraints
+  query: A Windows .NET GUI has sliders and a Check button; recover the 32-character
+    key by solving static constraints instead of running the GUI.
+  expected_skills:
+  - binary.dotnet_gui_constraint_recovery
+  - binary.validation_logic_recovery
+- id: pcap_embedded_artifact_chain
+  query: PCAPNG is USBPcap; extract embedded zip, nested pcap, covert ICMP chat, encrypted
+    port 4444 stream, then analyze decrypted payload.
+  expected_skills:
+  - forensics.pcap_embedded_artifact_chain
+  - forensics.network_capture_triage
+  - analysis.multi_stage_artifact_chain

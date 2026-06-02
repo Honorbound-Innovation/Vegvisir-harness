@@ -1,0 +1,13 @@
+{
+  "schema_version": "biw.suspicious_strings.v1",
+  "suspicious_strings": [
+    {
+      "address": null,
+      "categories": [
+        "credential-keyword"
+      ],
+      "offset": 53289,
+      "value": "To register enter your password: "
+    }
+  ]
+}

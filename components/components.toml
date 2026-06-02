@@ -48,3 +48,15 @@ runtime_root = "~/.vegvisir/tools/src/GhidraHeadlessMCP"
 wrappers = ["ghidra-headless", "ghidra-headless-mcp"]
 mcp_servers = ["ghidra-headless"]
 excluded = []
+
+[components.binary_intelligence_workbench]
+name = "Binary Intelligence Workbench"
+ownership = "first-party"
+license = "MIT (Vegvisir)"
+kind = "python"
+path = "components/binary-intelligence-workbench"
+source_snapshot = "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench"
+runtime_root = "~/.vegvisir/tools/src/binary-intelligence-workbench"
+wrappers = ["biw-cli"]
+excluded = [".git", "__pycache__", "*.pyc", ".pytest_cache", ".vegvisir"]
+

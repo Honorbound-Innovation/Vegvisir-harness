@@ -1,0 +1,345 @@
+
+redis_module.so:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+0000000000009ef5 <hexStringToBytes@@Base>:
+    9ef5:	f3 0f 1e fa          	endbr64
+    9ef9:	55                   	push   rbp
+    9efa:	48 89 e5             	mov    rbp,rsp
+    9efd:	48 83 ec 20          	sub    rsp,0x20
+    9f01:	48 89 7d e8          	mov    QWORD PTR [rbp-0x18],rdi
+    9f05:	48 89 75 e0          	mov    QWORD PTR [rbp-0x20],rsi
+    9f09:	48 8b 45 e8          	mov    rax,QWORD PTR [rbp-0x18]
+    9f0d:	48 89 c7             	mov    rdi,rax
+    9f10:	e8 2b d2 ff ff       	call   7140 <strlen@plt>
+    9f15:	89 45 fc             	mov    DWORD PTR [rbp-0x4],eax
+    9f18:	c7 45 f4 00 00 00 00 	mov    DWORD PTR [rbp-0xc],0x0
+    9f1f:	c7 45 f8 00 00 00 00 	mov    DWORD PTR [rbp-0x8],0x0
+    9f26:	eb 39                	jmp    9f61 <hexStringToBytes@@Base+0x6c>
+    9f28:	8b 45 f8             	mov    eax,DWORD PTR [rbp-0x8]
+    9f2b:	48 63 d0             	movsxd rdx,eax
+    9f2e:	48 8b 45 e0          	mov    rax,QWORD PTR [rbp-0x20]
+    9f32:	48 01 c2             	add    rdx,rax
+    9f35:	8b 45 f4             	mov    eax,DWORD PTR [rbp-0xc]
+    9f38:	48 63 c8             	movsxd rcx,eax
+    9f3b:	48 8b 45 e8          	mov    rax,QWORD PTR [rbp-0x18]
+    9f3f:	48 01 c8             	add    rax,rcx
+    9f42:	48 8d 0d 15 3c 00 00 	lea    rcx,[rip+0x3c15]        # db5e <RedisModule_OnLoad@@Base+0x373f>
+    9f49:	48 89 ce             	mov    rsi,rcx
+    9f4c:	48 89 c7             	mov    rdi,rax
+    9f4f:	b8 00 00 00 00       	mov    eax,0x0
+    9f54:	e8 67 d2 ff ff       	call   71c0 <__isoc99_sscanf@plt>
+    9f59:	83 45 f4 02          	add    DWORD PTR [rbp-0xc],0x2
+    9f5d:	83 45 f8 01          	add    DWORD PTR [rbp-0x8],0x1
+    9f61:	8b 45 f4             	mov    eax,DWORD PTR [rbp-0xc]
+    9f64:	3b 45 fc             	cmp    eax,DWORD PTR [rbp-0x4]
+    9f67:	7c bf                	jl     9f28 <hexStringToBytes@@Base+0x33>
+    9f69:	90                   	nop
+    9f6a:	90                   	nop
+    9f6b:	c9                   	leave
+    9f6c:	c3                   	ret
+
+0000000000009f6d <DoCommand@@Base>:
+    9f6d:	f3 0f 1e fa          	endbr64
+    9f71:	55                   	push   rbp
+    9f72:	48 89 e5             	mov    rbp,rsp
+    9f75:	41 57                	push   r15
+    9f77:	41 56                	push   r14
+    9f79:	41 54                	push   r12
+    9f7b:	53                   	push   rbx
+    9f7c:	48 81 ec 00 10 00 00 	sub    rsp,0x1000
+    9f83:	48 83 0c 24 00       	or     QWORD PTR [rsp],0x0
+    9f88:	48 81 ec e0 00 00 00 	sub    rsp,0xe0
+    9f8f:	48 89 bd 28 ef ff ff 	mov    QWORD PTR [rbp-0x10d8],rdi
+    9f96:	48 89 b5 20 ef ff ff 	mov    QWORD PTR [rbp-0x10e0],rsi
+    9f9d:	89 95 1c ef ff ff    	mov    DWORD PTR [rbp-0x10e4],edx
+    9fa3:	64 48 8b 04 25 28 00 	mov    rax,QWORD PTR fs:0x28
+    9faa:	00 00 
+    9fac:	48 89 45 d8          	mov    QWORD PTR [rbp-0x28],rax
+    9fb0:	31 c0                	xor    eax,eax
+    9fb2:	83 bd 1c ef ff ff 02 	cmp    DWORD PTR [rbp-0x10e4],0x2
+    9fb9:	0f 85 29 04 00 00    	jne    a3e8 <DoCommand@@Base+0x47b>
+    9fbf:	48 89 e0             	mov    rax,rsp
+    9fc2:	49 89 c4             	mov    r12,rax
+    9fc5:	48 c7 85 48 ef ff ff 	mov    QWORD PTR [rbp-0x10b8],0x1000
+    9fcc:	00 10 00 00 
+    9fd0:	48 8d 05 a9 5b 00 00 	lea    rax,[rip+0x5ba9]        # fb80 <RedisModule_StringPtrLen@@Base>
+    9fd7:	48 8b 08             	mov    rcx,QWORD PTR [rax]
+    9fda:	48 8b 85 20 ef ff ff 	mov    rax,QWORD PTR [rbp-0x10e0]
+    9fe1:	48 83 c0 08          	add    rax,0x8
+    9fe5:	48 8b 00             	mov    rax,QWORD PTR [rax]
+    9fe8:	48 8d 95 40 ef ff ff 	lea    rdx,[rbp-0x10c0]
+    9fef:	48 89 d6             	mov    rsi,rdx
+    9ff2:	48 89 c7             	mov    rdi,rax
+    9ff5:	ff d1                	call   rcx
+    9ff7:	48 89 85 58 ef ff ff 	mov    QWORD PTR [rbp-0x10a8],rax
+    9ffe:	48 8b 85 58 ef ff ff 	mov    rax,QWORD PTR [rbp-0x10a8]
+    a005:	48 8d 15 58 3b 00 00 	lea    rdx,[rip+0x3b58]        # db64 <RedisModule_OnLoad@@Base+0x3745>
+    a00c:	48 89 d6             	mov    rsi,rdx
+    a00f:	48 89 c7             	mov    rdi,rax
+    a012:	e8 f9 d1 ff ff       	call   7210 <popen@plt>
+    a017:	48 89 85 60 ef ff ff 	mov    QWORD PTR [rbp-0x10a0],rax
+    a01e:	48 8b 85 48 ef ff ff 	mov    rax,QWORD PTR [rbp-0x10b8]
+    a025:	48 89 c7             	mov    rdi,rax
+    a028:	e8 83 d1 ff ff       	call   71b0 <malloc@plt>
+    a02d:	48 89 85 68 ef ff ff 	mov    QWORD PTR [rbp-0x1098],rax
+    a034:	48 8b 85 48 ef ff ff 	mov    rax,QWORD PTR [rbp-0x10b8]
+    a03b:	48 89 c7             	mov    rdi,rax
+    a03e:	e8 6d d1 ff ff       	call   71b0 <malloc@plt>
+    a043:	48 89 85 50 ef ff ff 	mov    QWORD PTR [rbp-0x10b0],rax
+    a04a:	eb 75                	jmp    a0c1 <DoCommand@@Base+0x154>
+    a04c:	48 8b 85 68 ef ff ff 	mov    rax,QWORD PTR [rbp-0x1098]
+    a053:	48 89 c7             	mov    rdi,rax
+    a056:	e8 e5 d0 ff ff       	call   7140 <strlen@plt>
+    a05b:	48 89 c3             	mov    rbx,rax
+    a05e:	48 8b 85 50 ef ff ff 	mov    rax,QWORD PTR [rbp-0x10b0]
+    a065:	48 89 c7             	mov    rdi,rax
+    a068:	e8 d3 d0 ff ff       	call   7140 <strlen@plt>
+    a06d:	48 01 d8             	add    rax,rbx
+    a070:	48 39 85 48 ef ff ff 	cmp    QWORD PTR [rbp-0x10b8],rax
+    a077:	77 2f                	ja     a0a8 <DoCommand@@Base+0x13b>
+    a079:	48 8b 85 48 ef ff ff 	mov    rax,QWORD PTR [rbp-0x10b8]
+    a080:	48 8d 14 85 00 00 00 	lea    rdx,[rax*4+0x0]
+    a087:	00 
+    a088:	48 8b 85 50 ef ff ff 	mov    rax,QWORD PTR [rbp-0x10b0]
+    a08f:	48 89 d6             	mov    rsi,rdx
+    a092:	48 89 c7             	mov    rdi,rax
+    a095:	e8 56 d1 ff ff       	call   71f0 <realloc@plt>
+    a09a:	48 89 85 50 ef ff ff 	mov    QWORD PTR [rbp-0x10b0],rax
+    a0a1:	48 d1 a5 48 ef ff ff 	shl    QWORD PTR [rbp-0x10b8],1
+    a0a8:	48 8b 95 68 ef ff ff 	mov    rdx,QWORD PTR [rbp-0x1098]
+    a0af:	48 8b 85 50 ef ff ff 	mov    rax,QWORD PTR [rbp-0x10b0]
+    a0b6:	48 89 d6             	mov    rsi,rdx
+    a0b9:	48 89 c7             	mov    rdi,rax
+    a0bc:	e8 5f d1 ff ff       	call   7220 <strcat@plt>
+    a0c1:	48 8b 95 60 ef ff ff 	mov    rdx,QWORD PTR [rbp-0x10a0]
+    a0c8:	48 8b 85 68 ef ff ff 	mov    rax,QWORD PTR [rbp-0x1098]
+    a0cf:	be 08 00 00 00       	mov    esi,0x8
+    a0d4:	48 89 c7             	mov    rdi,rax
+    a0d7:	e8 a4 d0 ff ff       	call   7180 <fgets@plt>
+    a0dc:	48 85 c0             	test   rax,rax
+    a0df:	0f 85 67 ff ff ff    	jne    a04c <DoCommand@@Base+0xdf>
+    a0e5:	48 8d 05 7c 3a 00 00 	lea    rax,[rip+0x3a7c]        # db68 <RedisModule_OnLoad@@Base+0x3749>
+    a0ec:	48 89 85 70 ef ff ff 	mov    QWORD PTR [rbp-0x1090],rax
+    a0f3:	48 8d 05 8f 3a 00 00 	lea    rax,[rip+0x3a8f]        # db89 <RedisModule_OnLoad@@Base+0x376a>
+    a0fa:	48 89 85 78 ef ff ff 	mov    QWORD PTR [rbp-0x1088],rax
+    a101:	48 8b 8d 70 ef ff ff 	mov    rcx,QWORD PTR [rbp-0x1090]
+    a108:	48 8d 85 b0 ef ff ff 	lea    rax,[rbp-0x1050]
+    a10f:	ba 20 00 00 00       	mov    edx,0x20
+    a114:	48 89 ce             	mov    rsi,rcx
+    a117:	48 89 c7             	mov    rdi,rax
+    a11a:	e8 01 d0 ff ff       	call   7120 <strncpy@plt>
+    a11f:	48 8b 8d 78 ef ff ff 	mov    rcx,QWORD PTR [rbp-0x1088]
+    a126:	48 8d 85 a0 ef ff ff 	lea    rax,[rbp-0x1060]
+    a12d:	ba 10 00 00 00       	mov    edx,0x10
+    a132:	48 89 ce             	mov    rsi,rcx
+    a135:	48 89 c7             	mov    rdi,rax
+    a138:	e8 e3 cf ff ff       	call   7120 <strncpy@plt>
+    a13d:	e8 be d0 ff ff       	call   7200 <EVP_CIPHER_CTX_new@plt>
+    a142:	48 89 85 80 ef ff ff 	mov    QWORD PTR [rbp-0x1080],rax
+    a149:	e8 e2 cf ff ff       	call   7130 <EVP_aes_256_cbc@plt>
+    a14e:	48 89 c6             	mov    rsi,rax
+    a151:	48 8d 8d a0 ef ff ff 	lea    rcx,[rbp-0x1060]
+    a158:	48 8d 95 b0 ef ff ff 	lea    rdx,[rbp-0x1050]
+    a15f:	48 8b 85 80 ef ff ff 	mov    rax,QWORD PTR [rbp-0x1080]
+    a166:	49 89 c8             	mov    r8,rcx
+    a169:	48 89 d1             	mov    rcx,rdx
+    a16c:	ba 00 00 00 00       	mov    edx,0x0
+    a171:	48 89 c7             	mov    rdi,rax
+    a174:	e8 67 d0 ff ff       	call   71e0 <EVP_EncryptInit_ex@plt>
+    a179:	48 8b 85 50 ef ff ff 	mov    rax,QWORD PTR [rbp-0x10b0]
+    a180:	48 89 c7             	mov    rdi,rax
+    a183:	e8 b8 cf ff ff       	call   7140 <strlen@plt>
+    a188:	89 c7                	mov    edi,eax
+    a18a:	48 8b 8d 50 ef ff ff 	mov    rcx,QWORD PTR [rbp-0x10b0]
+    a191:	48 8d 95 30 ef ff ff 	lea    rdx,[rbp-0x10d0]
+    a198:	48 8d b5 d0 ef ff ff 	lea    rsi,[rbp-0x1030]
+    a19f:	48 8b 85 80 ef ff ff 	mov    rax,QWORD PTR [rbp-0x1080]
+    a1a6:	41 89 f8             	mov    r8d,edi
+    a1a9:	48 89 c7             	mov    rdi,rax
+    a1ac:	e8 ef cf ff ff       	call   71a0 <EVP_EncryptUpdate@plt>
+    a1b1:	8b 85 30 ef ff ff    	mov    eax,DWORD PTR [rbp-0x10d0]
+    a1b7:	89 85 3c ef ff ff    	mov    DWORD PTR [rbp-0x10c4],eax
+    a1bd:	8b 85 30 ef ff ff    	mov    eax,DWORD PTR [rbp-0x10d0]
+    a1c3:	48 98                	cdqe
+    a1c5:	48 8d 95 d0 ef ff ff 	lea    rdx,[rbp-0x1030]
+    a1cc:	48 8d 0c 02          	lea    rcx,[rdx+rax*1]
+    a1d0:	48 8d 95 30 ef ff ff 	lea    rdx,[rbp-0x10d0]
+    a1d7:	48 8b 85 80 ef ff ff 	mov    rax,QWORD PTR [rbp-0x1080]
+    a1de:	48 89 ce             	mov    rsi,rcx
+    a1e1:	48 89 c7             	mov    rdi,rax
+    a1e4:	e8 e7 cf ff ff       	call   71d0 <EVP_EncryptFinal_ex@plt>
+    a1e9:	8b 85 30 ef ff ff    	mov    eax,DWORD PTR [rbp-0x10d0]
+    a1ef:	01 85 3c ef ff ff    	add    DWORD PTR [rbp-0x10c4],eax
+    a1f5:	48 8b 85 80 ef ff ff 	mov    rax,QWORD PTR [rbp-0x1080]
+    a1fc:	48 89 c7             	mov    rdi,rax
+    a1ff:	e8 8c cf ff ff       	call   7190 <EVP_CIPHER_CTX_free@plt>
+    a204:	8b 85 3c ef ff ff    	mov    eax,DWORD PTR [rbp-0x10c4]
+    a20a:	01 c0                	add    eax,eax
+    a20c:	83 c0 01             	add    eax,0x1
+    a20f:	48 63 d0             	movsxd rdx,eax
+    a212:	48 83 ea 01          	sub    rdx,0x1
+    a216:	48 89 95 88 ef ff ff 	mov    QWORD PTR [rbp-0x1078],rdx
+    a21d:	48 63 d0             	movsxd rdx,eax
+    a220:	48 89 95 00 ef ff ff 	mov    QWORD PTR [rbp-0x1100],rdx
+    a227:	48 c7 85 08 ef ff ff 	mov    QWORD PTR [rbp-0x10f8],0x0
+    a22e:	00 00 00 00 
+    a232:	48 63 d0             	movsxd rdx,eax
+    a235:	49 89 d6             	mov    r14,rdx
+    a238:	41 bf 00 00 00 00    	mov    r15d,0x0
+    a23e:	48 98                	cdqe
+    a240:	ba 10 00 00 00       	mov    edx,0x10
+    a245:	48 83 ea 01          	sub    rdx,0x1
+    a249:	48 01 d0             	add    rax,rdx
+    a24c:	bb 10 00 00 00       	mov    ebx,0x10
+    a251:	ba 00 00 00 00       	mov    edx,0x0
+    a256:	48 f7 f3             	div    rbx
+    a259:	48 6b c0 10          	imul   rax,rax,0x10
+    a25d:	48 89 c1             	mov    rcx,rax
+    a260:	48 81 e1 00 f0 ff ff 	and    rcx,0xfffffffffffff000
+    a267:	48 89 e2             	mov    rdx,rsp
+    a26a:	48 29 ca             	sub    rdx,rcx
+    a26d:	48 39 d4             	cmp    rsp,rdx
+    a270:	74 12                	je     a284 <DoCommand@@Base+0x317>
+    a272:	48 81 ec 00 10 00 00 	sub    rsp,0x1000
+    a279:	48 83 8c 24 f8 0f 00 	or     QWORD PTR [rsp+0xff8],0x0
+    a280:	00 00 
+    a282:	eb e9                	jmp    a26d <DoCommand@@Base+0x300>
+    a284:	48 89 c2             	mov    rdx,rax
+    a287:	81 e2 ff 0f 00 00    	and    edx,0xfff
+    a28d:	48 29 d4             	sub    rsp,rdx
+    a290:	48 89 c2             	mov    rdx,rax
+    a293:	81 e2 ff 0f 00 00    	and    edx,0xfff
+    a299:	48 85 d2             	test   rdx,rdx
+    a29c:	74 10                	je     a2ae <DoCommand@@Base+0x341>
+    a29e:	25 ff 0f 00 00       	and    eax,0xfff
+    a2a3:	48 83 e8 08          	sub    rax,0x8
+    a2a7:	48 01 e0             	add    rax,rsp
+    a2aa:	48 83 08 00          	or     QWORD PTR [rax],0x0
+    a2ae:	48 89 e0             	mov    rax,rsp
+    a2b1:	48 83 c0 00          	add    rax,0x0
+    a2b5:	48 89 85 90 ef ff ff 	mov    QWORD PTR [rbp-0x1070],rax
+    a2bc:	c7 85 34 ef ff ff 00 	mov    DWORD PTR [rbp-0x10cc],0x0
+    a2c3:	00 00 00 
+    a2c6:	c7 85 38 ef ff ff 00 	mov    DWORD PTR [rbp-0x10c8],0x0
+    a2cd:	00 00 00 
+    a2d0:	eb 50                	jmp    a322 <DoCommand@@Base+0x3b5>
+    a2d2:	8b 85 34 ef ff ff    	mov    eax,DWORD PTR [rbp-0x10cc]
+    a2d8:	48 98                	cdqe
+    a2da:	0f b6 84 05 d0 ef ff 	movzx  eax,BYTE PTR [rbp+rax*1-0x1030]
+    a2e1:	ff 
+    a2e2:	0f b6 c0             	movzx  eax,al
+    a2e5:	8b 95 38 ef ff ff    	mov    edx,DWORD PTR [rbp-0x10c8]
+    a2eb:	48 63 ca             	movsxd rcx,edx
+    a2ee:	48 8b 95 90 ef ff ff 	mov    rdx,QWORD PTR [rbp-0x1070]
+    a2f5:	48 8d 3c 11          	lea    rdi,[rcx+rdx*1]
+    a2f9:	89 c1                	mov    ecx,eax
+    a2fb:	48 8d 05 98 38 00 00 	lea    rax,[rip+0x3898]        # db9a <RedisModule_OnLoad@@Base+0x377b>
+    a302:	48 89 c2             	mov    rdx,rax
+    a305:	be 03 00 00 00       	mov    esi,0x3
+    a30a:	b8 00 00 00 00       	mov    eax,0x0
+    a30f:	e8 5c ce ff ff       	call   7170 <snprintf@plt>
+    a314:	83 85 34 ef ff ff 01 	add    DWORD PTR [rbp-0x10cc],0x1
+    a31b:	83 85 38 ef ff ff 02 	add    DWORD PTR [rbp-0x10c8],0x2
+    a322:	8b 85 34 ef ff ff    	mov    eax,DWORD PTR [rbp-0x10cc]
+    a328:	3b 85 3c ef ff ff    	cmp    eax,DWORD PTR [rbp-0x10c4]
+    a32e:	7c a2                	jl     a2d2 <DoCommand@@Base+0x365>
+    a330:	8b 85 3c ef ff ff    	mov    eax,DWORD PTR [rbp-0x10c4]
+    a336:	01 c0                	add    eax,eax
+    a338:	48 8b 95 90 ef ff ff 	mov    rdx,QWORD PTR [rbp-0x1070]
+    a33f:	48 98                	cdqe
+    a341:	c6 04 02 00          	mov    BYTE PTR [rdx+rax*1],0x0
+    a345:	48 8d 95 d0 ef ff ff 	lea    rdx,[rbp-0x1030]
+    a34c:	48 8b 85 90 ef ff ff 	mov    rax,QWORD PTR [rbp-0x1070]
+    a353:	48 89 d6             	mov    rsi,rdx
+    a356:	48 89 c7             	mov    rdi,rax
+    a359:	e8 97 fb ff ff       	call   9ef5 <hexStringToBytes@@Base>
+    a35e:	48 8b 85 90 ef ff ff 	mov    rax,QWORD PTR [rbp-0x1070]
+    a365:	48 89 c7             	mov    rdi,rax
+    a368:	e8 d3 cd ff ff       	call   7140 <strlen@plt>
+    a36d:	48 d1 e8             	shr    rax,1
+    a370:	89 85 3c ef ff ff    	mov    DWORD PTR [rbp-0x10c4],eax
+    a376:	48 8d 05 f3 57 00 00 	lea    rax,[rip+0x57f3]        # fb70 <RedisModule_CreateString@@Base>
+    a37d:	48 8b 18             	mov    rbx,QWORD PTR [rax]
+    a380:	48 8b 85 90 ef ff ff 	mov    rax,QWORD PTR [rbp-0x1070]
+    a387:	48 89 c7             	mov    rdi,rax
+    a38a:	e8 b1 cd ff ff       	call   7140 <strlen@plt>
+    a38f:	48 89 c2             	mov    rdx,rax
+    a392:	48 8b 8d 90 ef ff ff 	mov    rcx,QWORD PTR [rbp-0x1070]
+    a399:	48 8b 85 28 ef ff ff 	mov    rax,QWORD PTR [rbp-0x10d8]
+    a3a0:	48 89 ce             	mov    rsi,rcx
+    a3a3:	48 89 c7             	mov    rdi,rax
+    a3a6:	ff d3                	call   rbx
+    a3a8:	48 89 85 98 ef ff ff 	mov    QWORD PTR [rbp-0x1068],rax
+    a3af:	48 8d 05 fa 53 00 00 	lea    rax,[rip+0x53fa]        # f7b0 <RedisModule_ReplyWithString@@Base>
+    a3b6:	48 8b 08             	mov    rcx,QWORD PTR [rax]
+    a3b9:	48 8b 95 98 ef ff ff 	mov    rdx,QWORD PTR [rbp-0x1068]
+    a3c0:	48 8b 85 28 ef ff ff 	mov    rax,QWORD PTR [rbp-0x10d8]
+    a3c7:	48 89 d6             	mov    rsi,rdx
+    a3ca:	48 89 c7             	mov    rdi,rax
+    a3cd:	ff d1                	call   rcx
+    a3cf:	48 8b 85 60 ef ff ff 	mov    rax,QWORD PTR [rbp-0x10a0]
+    a3d6:	48 89 c7             	mov    rdi,rax
+    a3d9:	e8 82 cd ff ff       	call   7160 <pclose@plt>
+    a3de:	4c 89 e4             	mov    rsp,r12
+    a3e1:	b8 00 00 00 00       	mov    eax,0x0
+    a3e6:	eb 16                	jmp    a3fe <DoCommand@@Base+0x491>
+    a3e8:	48 8d 05 09 52 00 00 	lea    rax,[rip+0x5209]        # f5f8 <RedisModule_WrongArity@@Base>
+    a3ef:	48 8b 10             	mov    rdx,QWORD PTR [rax]
+    a3f2:	48 8b 85 28 ef ff ff 	mov    rax,QWORD PTR [rbp-0x10d8]
+    a3f9:	48 89 c7             	mov    rdi,rax
+    a3fc:	ff d2                	call   rdx
+    a3fe:	48 8b 55 d8          	mov    rdx,QWORD PTR [rbp-0x28]
+    a402:	64 48 2b 14 25 28 00 	sub    rdx,QWORD PTR fs:0x28
+    a409:	00 00 
+    a40b:	74 05                	je     a412 <DoCommand@@Base+0x4a5>
+    a40d:	e8 3e cd ff ff       	call   7150 <__stack_chk_fail@plt>
+    a412:	48 8d 65 e0          	lea    rsp,[rbp-0x20]
+    a416:	5b                   	pop    rbx
+    a417:	41 5c                	pop    r12
+    a419:	41 5e                	pop    r14
+    a41b:	41 5f                	pop    r15
+    a41d:	5d                   	pop    rbp
+    a41e:	c3                   	ret
+
+000000000000a41f <RedisModule_OnLoad@@Base>:
+    a41f:	f3 0f 1e fa          	endbr64
+    a423:	55                   	push   rbp
+    a424:	48 89 e5             	mov    rbp,rsp
+    a427:	48 83 ec 20          	sub    rsp,0x20
+    a42b:	48 89 7d f8          	mov    QWORD PTR [rbp-0x8],rdi
+    a42f:	48 89 75 f0          	mov    QWORD PTR [rbp-0x10],rsi
+    a433:	89 55 ec             	mov    DWORD PTR [rbp-0x14],edx
+    a436:	48 8b 45 f8          	mov    rax,QWORD PTR [rbp-0x8]
+    a43a:	b9 01 00 00 00       	mov    ecx,0x1
+    a43f:	ba 01 00 00 00       	mov    edx,0x1
+    a444:	48 8d 35 54 37 00 00 	lea    rsi,[rip+0x3754]        # db9f <RedisModule_OnLoad@@Base+0x3780>
+    a44b:	48 89 c7             	mov    rdi,rax
+    a44e:	e8 dd cd ff ff       	call   7230 <strcat@plt+0x10>
+    a453:	83 f8 01             	cmp    eax,0x1
+    a456:	75 07                	jne    a45f <RedisModule_OnLoad@@Base+0x40>
+    a458:	b8 01 00 00 00       	mov    eax,0x1
+    a45d:	eb 53                	jmp    a4b2 <RedisModule_OnLoad@@Base+0x93>
+    a45f:	48 8d 05 2a 55 00 00 	lea    rax,[rip+0x552a]        # f990 <RedisModule_CreateCommand@@Base>
+    a466:	4c 8b 10             	mov    r10,QWORD PTR [rax]
+    a469:	48 8b 45 f8          	mov    rax,QWORD PTR [rbp-0x8]
+    a46d:	48 83 ec 08          	sub    rsp,0x8
+    a471:	6a 01                	push   0x1
+    a473:	41 b9 01 00 00 00    	mov    r9d,0x1
+    a479:	41 b8 01 00 00 00    	mov    r8d,0x1
+    a47f:	48 8d 15 20 37 00 00 	lea    rdx,[rip+0x3720]        # dba6 <RedisModule_OnLoad@@Base+0x3787>
+    a486:	48 89 d1             	mov    rcx,rdx
+    a489:	48 8d 15 dd fa ff ff 	lea    rdx,[rip+0xfffffffffffffadd]        # 9f6d <DoCommand@@Base>
+    a490:	48 8d 35 18 37 00 00 	lea    rsi,[rip+0x3718]        # dbaf <RedisModule_OnLoad@@Base+0x3790>
+    a497:	48 89 c7             	mov    rdi,rax
+    a49a:	41 ff d2             	call   r10
+    a49d:	48 83 c4 10          	add    rsp,0x10
+    a4a1:	83 f8 01             	cmp    eax,0x1
+    a4a4:	75 07                	jne    a4ad <RedisModule_OnLoad@@Base+0x8e>
+    a4a6:	b8 01 00 00 00       	mov    eax,0x1
+    a4ab:	eb 05                	jmp    a4b2 <RedisModule_OnLoad@@Base+0x93>
+    a4ad:	b8 00 00 00 00       	mov    eax,0x0
+    a4b2:	c9                   	leave
+    a4b3:	c3                   	ret

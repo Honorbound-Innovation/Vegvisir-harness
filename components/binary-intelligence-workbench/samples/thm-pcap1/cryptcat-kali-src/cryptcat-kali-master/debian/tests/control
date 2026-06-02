@@ -1,0 +1,3 @@
+Tests: runtests.sh
+Depends: @, iproute2
+Restrictions: allow-stderr

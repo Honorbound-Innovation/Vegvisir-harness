@@ -1,0 +1,21 @@
+cryptcat for Debian
+-------------------
+
+Package compiled without ``-DGAPING_SECURITY_HOLE'', so that it will not
+run as an alternative to inetd. This should remedy CERT advisory 165099.
+While it doesn't fix the problem, it removes the -e switch. For more
+information please refer to http://www.kb.cert.org/vuls/id/165099
+
+Furthermore this package is linked dynamically in contrast to the advice
+of the author.
+
+There were some uncertainties with the licensing, but they have been fixed.
+
+As of 2008-08-23 I won't upgrade to a newer version of cryptcat, as the
+changes made to the code does not have any bearing on the version in debian.
+I write this here, so that I may close bug #390033, instead of leaving it
+open as a wontfix bug. 
+Furthermore the licensing of the new tarball - although GPL - does not
+contain any licensing information.
+
+ -- Lars Bahner <bahner@debian.org>, Wed, 03 Dec 2003 12:32:35 +0100

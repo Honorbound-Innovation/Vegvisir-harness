@@ -1,0 +1,101 @@
+{
+  "exports": [
+    {
+      "address": "00101000",
+      "name": "__DT_INIT",
+      "type": "Label"
+    },
+    {
+      "address": "00101000",
+      "name": "_init",
+      "type": "Function"
+    },
+    {
+      "address": "00101090",
+      "name": "_start",
+      "type": "Function"
+    },
+    {
+      "address": "00101130",
+      "name": "_FINI_0",
+      "type": "Function"
+    },
+    {
+      "address": "00101180",
+      "name": "_INIT_0",
+      "type": "Function"
+    },
+    {
+      "address": "00101189",
+      "name": "main",
+      "type": "Function"
+    },
+    {
+      "address": "001012ec",
+      "name": "__DT_FINI",
+      "type": "Label"
+    },
+    {
+      "address": "001012ec",
+      "name": "_fini",
+      "type": "Function"
+    },
+    {
+      "address": "00102000",
+      "name": "_IO_stdin_used",
+      "type": "Label"
+    },
+    {
+      "address": "00104040",
+      "name": "data_start",
+      "type": "Label"
+    },
+    {
+      "address": "00104040",
+      "name": "__data_start",
+      "type": "Label"
+    },
+    {
+      "address": "00104048",
+      "name": "__dso_handle",
+      "type": "Label"
+    },
+    {
+      "address": "00104060",
+      "name": "parts",
+      "type": "Label"
+    },
+    {
+      "address": "001040c8",
+      "name": "_edata",
+      "type": "Label"
+    },
+    {
+      "address": "001040c8",
+      "name": "__TMC_END__",
+      "type": "Label"
+    },
+    {
+      "address": "001040d0",
+      "name": "stdin",
+      "type": "Label"
+    },
+    {
+      "address": "001040d0",
+      "name": "stdin@GLIBC_2.2.5",
+      "type": "Label"
+    },
+    {
+      "address": "001040d0",
+      "name": "__bss_start",
+      "type": "Label"
+    },
+    {
+      "address": "001040e0",
+      "name": "_end",
+      "type": "Label"
+    }
+  ],
+  "schema_version": "biw.exports.v1",
+  "source": "ghidra"
+}

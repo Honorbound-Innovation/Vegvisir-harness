@@ -1,0 +1,48 @@
+{
+  "imports": [
+    {
+      "address": "EXTERNAL:00000001",
+      "name": "<EXTERNAL>::__libc_start_main",
+      "namespace": "<EXTERNAL>",
+      "type": "Function"
+    },
+    {
+      "address": "EXTERNAL:00000002",
+      "name": "<EXTERNAL>::puts",
+      "namespace": "<EXTERNAL>",
+      "type": "Function"
+    },
+    {
+      "address": "EXTERNAL:00000003",
+      "name": "<EXTERNAL>::printf",
+      "namespace": "<EXTERNAL>",
+      "type": "Function"
+    },
+    {
+      "address": "EXTERNAL:00000004",
+      "name": "<EXTERNAL>::srand",
+      "namespace": "<EXTERNAL>",
+      "type": "Function"
+    },
+    {
+      "address": "EXTERNAL:00000005",
+      "name": "<EXTERNAL>::__isoc99_scanf",
+      "namespace": "<EXTERNAL>",
+      "type": "Function"
+    },
+    {
+      "address": "EXTERNAL:00000006",
+      "name": "<EXTERNAL>::rand",
+      "namespace": "<EXTERNAL>",
+      "type": "Function"
+    },
+    {
+      "address": "EXTERNAL:00000007",
+      "name": "<EXTERNAL>::__gmon_start__",
+      "namespace": "<EXTERNAL>",
+      "type": "Function"
+    }
+  ],
+  "schema_version": "biw.imports.v1",
+  "source": "ghidra"
+}

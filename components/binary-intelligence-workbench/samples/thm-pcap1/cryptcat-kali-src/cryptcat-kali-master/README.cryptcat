@@ -1,0 +1,65 @@
+README.cryptcat, 12-02-2003
+
+Thanks for downloading cryptcat!
+
+cryptcat = netcat + encryption
+
+Cryptcat is the standard netcat enhanced with twofish encryption. 
+netcat was origianally written by the l0pht (hobbit and weld pond).
+
+The portion of the code written by farm9 is being released as Open Source.
+
+Note that the L0pht has information on their copyrights covering netcat.  See the 
+'hobbit.txt' file for that information.
+
+Cryptcat is licensed under the the GNU General Public License, Version 2 or later
+in conformance with the original NetCat license.
+
+  http://www.fsf.org/licenses/info/GPLv2orLater.html
+
+Twofish is courtesy of counterpane, and cryptix. We started with the 
+Java version of twofish from cryptix, converted it to C++ (don't ask why), 
+and enhanced it by adding CBC mode and the ciphertext stealing technique 
+from Applied Cryptography (pg. 196) 
+
+How do you use it?
+
+  Machine A: cryptcat -l -p 1234 < testfile 
+  Machine B: cryptcat <machine A IP> 1234 
+
+This is identical to the normal netcat options for doing exactly the 
+same thing.  However, in this case the data transferred is encrypted. 
+
+
+
+Changes -- been putting these in Changelog file...
+
+Since release alot of people have been submitting changes (many times
+for the same thing).  I've been doing my best to keep up, we are trying
+to get this up on sourceforge, but there seems to be some sort of 
+"approval" process that makes it unclear if that will actually happen.
+
+So, if you have submitted something, and its not here, let me know.  If you've
+submitted a change, and its here with someone else's name, that just means 
+someone else got the same change in before you.
+
+If you have a change, let me know what name if any to include with
+the change.
+
+jsilva@farm9.com
+
+
+/***************************************************************************
+ *                                                                         *
+ *   This program is free software; you can redistribute it and/or modify  *
+ *   it under the terms of the GNU General Public License as published by  *
+ *   the Free Software Foundation; either version 2 of the License, or     *
+ *   (at your option) any later version.                                   *
+ *                                                                         *
+ *   This program is distributed in the hope that it will be useful,       *
+ *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
+ *   GNU General Public License for more details.                          *
+ *                                                                         *
+ ***************************************************************************/
+

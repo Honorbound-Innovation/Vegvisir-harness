@@ -1,0 +1,176 @@
+{
+  "bundle": {
+    "name": "binary-analysis",
+    "path": "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench/skiller-bundles/binary-analysis",
+    "version": "0.1.0"
+  },
+  "case_id": "htb-spooky",
+  "created_at": "2026-05-31T02:51:57Z",
+  "inputs": {
+    "artifacts": [
+      "callgraph.json",
+      "exports.json",
+      "functions.json",
+      "hashes.json",
+      "imports.json",
+      "metadata.json",
+      "strings.json"
+    ],
+    "case": "case.json",
+    "findings": [
+      "capability-map.json",
+      "findings.json",
+      "suspicious-strings.json"
+    ]
+  },
+  "result": {
+    "artifact_counts": {
+      "callgraph_edges": 19,
+      "exports": 19,
+      "functions": 26,
+      "imports": 11,
+      "strings": 79
+    },
+    "capabilities": [],
+    "recommended_next_steps": [
+      "Review high/medium findings and validate evidence manually.",
+      "Run `biw explain function` on functions near suspicious imports or strings.",
+      "Generate `biw report full` after function-level notes are added."
+    ],
+    "representative_strings": [
+      {
+        "address": "00100318",
+        "length": 27,
+        "value": "/lib64/ld-linux-x86-64.so.2"
+      },
+      {
+        "address": "00100521",
+        "length": 5,
+        "value": "fgets"
+      },
+      {
+        "address": "00100527",
+        "length": 5,
+        "value": "stdin"
+      },
+      {
+        "address": "0010052d",
+        "length": 4,
+        "value": "puts"
+      },
+      {
+        "address": "00100532",
+        "length": 16,
+        "value": "__stack_chk_fail"
+      },
+      {
+        "address": "00100543",
+        "length": 17,
+        "value": "__libc_start_main"
+      },
+      {
+        "address": "00100555",
+        "length": 14,
+        "value": "__cxa_finalize"
+      },
+      {
+        "address": "00100564",
+        "length": 6,
+        "value": "strchr"
+      },
+      {
+        "address": "0010056b",
+        "length": 6,
+        "value": "printf"
+      },
+      {
+        "address": "00100572",
+        "length": 6,
+        "value": "strcmp"
+      },
+      {
+        "address": "00100579",
+        "length": 9,
+        "value": "libc.so.6"
+      },
+      {
+        "address": "00100583",
+        "length": 9,
+        "value": "GLIBC_2.4"
+      },
+      {
+        "address": "0010058d",
+        "length": 11,
+        "value": "GLIBC_2.2.5"
+      },
+      {
+        "address": "00100599",
+        "length": 10,
+        "value": "GLIBC_2.34"
+      },
+      {
+        "address": "001005a4",
+        "length": 27,
+        "value": "_ITM_deregisterTMCloneTable"
+      },
+      {
+        "address": "001005c0",
+        "length": 14,
+        "value": "__gmon_start__"
+      },
+      {
+        "address": "001005cf",
+        "length": 25,
+        "value": "_ITM_registerTMCloneTable"
+      },
+      {
+        "address": "00102027",
+        "length": 22,
+        "value": "[0m party of the year."
+      },
+      {
+        "address": "00102040",
+        "length": 59,
+        "value": "Before we let you in, you'll need to give us the password: "
+      },
+      {
+        "address": "00102080",
+        "length": 33,
+        "value": "s3cr3t_p455_f0r_gh05t5_4nd_gh0ul5"
+      }
+    ],
+    "risk": {
+      "level": "low",
+      "rationale": [
+        "Suspicious strings: credential-keyword"
+      ],
+      "score": 3
+    },
+    "summary": "Case htb-spooky is triaged as low risk with 1 heuristic findings.",
+    "top_findings": [
+      {
+        "category": "strings",
+        "confidence": "medium",
+        "created_at": "2026-05-31T02:51:57Z",
+        "created_by": "biw.heuristics",
+        "description": "Found 1 string(s) matching credential-keyword patterns.",
+        "evidence": [
+          {
+            "artifact": "strings.json",
+            "type": "string",
+            "value": "Before we let you in, you'll need to give us the password: "
+          }
+        ],
+        "id": "finding_string_credential_keyword",
+        "recommended_next_steps": [
+          "Inspect functions referencing these strings in Ghidra."
+        ],
+        "severity": "medium",
+        "title": "Suspicious strings: credential-keyword"
+      }
+    ]
+  },
+  "schema_version": "biw.skill-output.v1",
+  "skill_id": "binary.triage.unknown",
+  "skill_title": "Skill: binary.triage.unknown"
+}

@@ -1,0 +1,194 @@
+{
+  "schema_version": "biw.strings.v1",
+  "source": "basic",
+  "strings": [
+    {
+      "offset": 77,
+      "value": "!This program cannot be run in DOS mode."
+    },
+    {
+      "offset": 200,
+      "value": "Rich"
+    },
+    {
+      "offset": 480,
+      "value": ".text"
+    },
+    {
+      "offset": 519,
+      "value": "`.rdata"
+    },
+    {
+      "offset": 559,
+      "value": "@.data"
+    },
+    {
+      "offset": 600,
+      "value": ".rsrc"
+    },
+    {
+      "offset": 639,
+      "value": "@.reloc"
+    },
+    {
+      "offset": 2152,
+      "value": "QZ^&"
+    },
+    {
+      "offset": 5577,
+      "value": "QXRhH0@"
+    },
+    {
+      "offset": 5592,
+      "value": "TAhR"
+    },
+    {
+      "offset": 5834,
+      "value": "h(0@"
+    },
+    {
+      "offset": 5917,
+      "value": "j0h00@"
+    },
+    {
+      "offset": 5969,
+      "value": "% 0@"
+    },
+    {
+      "offset": 6184,
+      "value": "rc.rc"
+    },
+    {
+      "offset": 6192,
+      "value": "We've been compromised!"
+    },
+    {
+      "offset": 6216,
+      "value": "%02x"
+    },
+    {
+      "offset": 6346,
+      "value": "ExitProcess"
+    },
+    {
+      "offset": 6360,
+      "value": "FindResourceA"
+    },
+    {
+      "offset": 6374,
+      "value": "KERNEL32.dll"
+    },
+    {
+      "offset": 6390,
+      "value": "memset"
+    },
+    {
+      "offset": 6400,
+      "value": "memcpy"
+    },
+    {
+      "offset": 6410,
+      "value": "sprintf"
+    },
+    {
+      "offset": 6418,
+      "value": "ntdll.dll"
+    },
+    {
+      "offset": 6430,
+      "value": "MessageBoxA"
+    },
+    {
+      "offset": 6444,
+      "value": "LoadStringA"
+    },
+    {
+      "offset": 6456,
+      "value": "USER32.dll"
+    },
+    {
+      "offset": 6620,
+      "value": "plaintext3.exe"
+    },
+    {
+      "offset": 6635,
+      "value": "??0MD5@@QAE@XZ"
+    },
+    {
+      "offset": 6650,
+      "value": "?Decode@MD5@@CAXPAKPAEI@Z"
+    },
+    {
+      "offset": 6676,
+      "value": "?Encode@MD5@@CAXPAEPAKI@Z"
+    },
+    {
+      "offset": 6702,
+      "value": "?Final@MD5@@QAEXXZ"
+    },
+    {
+      "offset": 6721,
+      "value": "?Init@MD5@@QAEXXZ"
+    },
+    {
+      "offset": 6739,
+      "value": "?MD5Transform@MD5@@CAXQAKQAE@Z"
+    },
+    {
+      "offset": 6770,
+      "value": "?Update@MD5@@QAEXPAEI@Z"
+    },
+    {
+      "offset": 6794,
+      "value": "?digestMemory@MD5@@QAEPADPAEH@Z"
+    },
+    {
+      "offset": 6826,
+      "value": "?digestString@MD5@@QAEPADPAD@Z"
+    },
+    {
+      "offset": 6857,
+      "value": "?writeToString@MD5@@QAEXXZ"
+    },
+    {
+      "offset": 51492,
+      "value": "<assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\" manifestVersion=\"1.0\">"
+    },
+    {
+      "offset": 51567,
+      "value": "  <trustInfo xmlns=\"urn:schemas-microsoft-com:asm.v3\">"
+    },
+    {
+      "offset": 51623,
+      "value": "    <security>"
+    },
+    {
+      "offset": 51639,
+      "value": "      <requestedPrivileges>"
+    },
+    {
+      "offset": 51668,
+      "value": "        <requestedExecutionLevel level=\"asInvoker\" uiAccess=\"false\"></requestedExecutionLevel>"
+    },
+    {
+      "offset": 51764,
+      "value": "      </requestedPrivileges>"
+    },
+    {
+      "offset": 51794,
+      "value": "    </security>"
+    },
+    {
+      "offset": 51811,
+      "value": "  </trustInfo>"
+    },
+    {
+      "offset": 51827,
+      "value": "</assembly>PAPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDING"
+    },
+    {
+      "offset": 52241,
+      "value": "3 3/373F3L3R3"
+    }
+  ]
+}

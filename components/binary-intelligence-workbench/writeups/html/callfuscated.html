@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HTB Callfuscated — CTF Writeup</title>
+  <style>
+:root {
+  --bg: #080b10;
+  --panel: #101722;
+  --panel2: #0d131d;
+  --text: #e8eef7;
+  --muted: #9fb0c5;
+  --subtle: #6d7d91;
+  --accent: #67e8f9;
+  --accent2: #a78bfa;
+  --good: #34d399;
+  --warn: #fbbf24;
+  --bad: #fb7185;
+  --code: #07111d;
+  --border: #223044;
+  --shadow: rgba(0,0,0,.35);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  color: var(--text);
+  background:
+    radial-gradient(circle at top left, rgba(103,232,249,.16), transparent 34rem),
+    radial-gradient(circle at top right, rgba(167,139,250,.14), transparent 28rem),
+    linear-gradient(180deg, #070a0f 0%, #0a0f16 45%, #070a0f 100%);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1.6;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.container { width: min(1120px, calc(100% - 40px)); margin: 0 auto; }
+.hero {
+  padding: 56px 0 32px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+}
+.kicker {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--accent);
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  font-size: .78rem;
+}
+.kicker::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 20px var(--accent); }
+h1 { font-size: clamp(2.2rem, 5vw, 4.6rem); line-height: .95; margin: 18px 0 18px; letter-spacing: -.05em; }
+.subtitle { color: var(--muted); max-width: 860px; font-size: 1.08rem; }
+.meta-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-top: 28px; }
+.meta-card { background: rgba(16,23,34,.74); border: 1px solid var(--border); border-radius: 18px; padding: 16px; box-shadow: 0 12px 40px var(--shadow); backdrop-filter: blur(10px); }
+.meta-label { color: var(--subtle); font-size: .76rem; text-transform: uppercase; letter-spacing: .12em; }
+.meta-value { margin-top: 5px; font-weight: 800; overflow-wrap: anywhere; }
+.flag-card { margin-top: 24px; border: 1px solid rgba(52,211,153,.35); background: linear-gradient(135deg, rgba(52,211,153,.14), rgba(103,232,249,.08)); border-radius: 22px; padding: 20px; }
+.flag-label { color: var(--good); font-weight: 800; text-transform: uppercase; font-size: .8rem; letter-spacing: .12em; }
+.flag { margin-top: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: clamp(1rem, 2.4vw, 1.35rem); overflow-wrap: anywhere; }
+.layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 28px; padding: 34px 0 70px; }
+.toc { position: sticky; top: 18px; align-self: start; background: rgba(13,19,29,.76); border: 1px solid var(--border); border-radius: 20px; padding: 18px; }
+.toc-title { color: var(--muted); font-size: .78rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; margin-bottom: 10px; }
+.toc a { display: block; color: var(--muted); padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,.045); font-size: .92rem; }
+.toc a:last-child { border-bottom: 0; }
+.content { min-width: 0; }
+section { background: rgba(16,23,34,.68); border: 1px solid var(--border); border-radius: 22px; padding: 26px; margin-bottom: 22px; box-shadow: 0 18px 45px var(--shadow); }
+h2 { margin: 0 0 14px; font-size: 1.72rem; letter-spacing: -.03em; }
+h3 { margin: 24px 0 10px; color: #dce6f5; }
+p, li { color: #c8d4e4; }
+ul, ol { padding-left: 1.35rem; }
+hr { border: 0; border-top: 1px solid var(--border); margin: 22px 0; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+code { background: rgba(7,17,29,.8); color: #d8f8ff; padding: .14rem .34rem; border-radius: 7px; border: 1px solid rgba(103,232,249,.13); }
+pre { background: var(--code); color: #d6e9ff; padding: 18px; border-radius: 16px; overflow-x: auto; border: 1px solid rgba(103,232,249,.14); box-shadow: inset 0 0 0 1px rgba(255,255,255,.02); }
+.callout { border-left: 4px solid var(--accent); background: rgba(103,232,249,.08); padding: 14px 16px; border-radius: 12px; color: #d9f8ff; margin: 16px 0; }
+.callout.good { border-left-color: var(--good); background: rgba(52,211,153,.08); }
+.callout.warn { border-left-color: var(--warn); background: rgba(251,191,36,.08); }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; margin: 14px 0; }
+th, td { border-bottom: 1px solid var(--border); padding: 10px 10px; text-align: left; vertical-align: top; }
+th { color: #eef6ff; background: rgba(255,255,255,.035); font-size: .86rem; text-transform: uppercase; letter-spacing: .07em; }
+td { color: #c8d4e4; }
+.badge { display: inline-flex; align-items: center; gap: 6px; border: 1px solid rgba(103,232,249,.25); background: rgba(103,232,249,.08); color: var(--accent); border-radius: 999px; padding: 4px 10px; font-size: .82rem; font-weight: 700; }
+.footer { color: var(--subtle); font-size: .9rem; padding: 26px 0 46px; border-top: 1px solid rgba(255,255,255,.06); }
+@media (max-width: 900px) {
+  .meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .layout { grid-template-columns: 1fr; }
+  .toc { position: static; }
+}
+@media (max-width: 560px) { .meta-grid { grid-template-columns: 1fr; } .container { width: min(100% - 24px, 1120px); } section { padding: 20px; } }
+</style>
+</head>
+<body>
+  <header class="hero">
+    <div class="container">
+      <div class="kicker">Polished CTF Writeup</div>
+      <h1>HTB Callfuscated</h1>
+      <p class="subtitle">An Insane reversing challenge built around call-threaded control flow, misleading function boundaries, and a compact VM-style validator hidden inside noisy x86.</p>
+      <div class="meta-grid"><div class="meta-card"><div class="meta-label">Category</div><div class="meta-value">Reversing</div></div>
+<div class="meta-card"><div class="meta-label">Difficulty</div><div class="meta-value">Insane</div></div>
+<div class="meta-card"><div class="meta-label">Technique</div><div class="meta-value">Dynamic trace reduction + VM lifting</div></div>
+<div class="meta-card"><div class="meta-label">Binary</div><div class="meta-value">64-bit Linux ELF, stripped</div></div></div>
+      <div class="flag-card"><div class="flag-label">Recovered Flag</div><div class="flag">HTB{Sliced_Up_the_Function_4_Ya}</div></div>
+    </div>
+  </header>
+  <main class="container layout">
+    <nav class="toc"><div class="toc-title">Contents</div><a href="#overview">Overview</a>
+<a href="#triage">Initial Triage</a>
+<a href="#obfuscation">Callfuscation Model</a>
+<a href="#dynamic">Dynamic Analysis</a>
+<a href="#vm">VM Reduction</a>
+<a href="#solve">Recovering the Flag</a>
+<a href="#verification">Verification</a>
+<a href="#lessons">Lessons Learned</a></nav>
+    <article class="content"><section id="overview"><h2>Overview</h2><p><strong>Callfuscated</strong> looked at first like a normal Linux crackme, but normal reverse-engineering workflows quickly broke down. The binary was stripped, the real validation routine was not represented cleanly as a function, and Ghidra could not produce a trustworthy high-level view of the critical code path.</p><p>The final solve came from changing abstraction levels: instead of trying to read the decompiler output, I traced the executed code, recognized a call-threaded VM/stack-machine, recovered its bytecode semantics, and reduced the final password check to simple 32-bit XOR/subtraction constraints.</p></section>
+<section id="triage"><h2>Initial Triage</h2><p>The archive contained a single target binary:</p><pre><code>rev_callfuscated/crackme</code></pre><p>Basic properties:</p><div class="table-wrap"><table><tr><th>Property</th><th>Value</th></tr><tr><td>Format</td><td>ELF 64-bit LSB executable</td></tr><tr><td>Architecture</td><td>x86-64</td></tr><tr><td>Linking</td><td>Dynamically linked</td></tr><tr><td>Symbols</td><td>Stripped</td></tr><tr><td>SHA-256</td><td><code>2389a35ac38bff9546a4c356c7d22633b22e8a1616b61adb85991afda40a3e36</code></td></tr></table></div><p>Runtime behavior:</p><pre><code>Welcome to callfuscated crackme.
+To register enter your password:
+Incorrect flag. Try again</code></pre><p>Important strings and addresses discovered during analysis:</p><pre><code>entry:                 0x401080
+real main-ish target:  0x409002
+input buffer:          0x40f080
+prompt string:         0x40d008
+scanf format:          0x40d04b  "%63s"
+success format:        0x40d050  "Correct. Validate the challenge using the flag: %s"
+failure string:        0x40d084</code></pre></section>
+<section id="obfuscation"><h2>Callfuscation Model</h2><p>The binary used a repeated pattern like:</p><pre><code>call target
+pop r8
+...
+call next_block
+pop r8</code></pre><p>This destroys the assumptions normal disassemblers and decompilers make about calls, returns, and function boundaries. Ghidra could identify many pieces of code, but the apparent functions were not the semantic units that mattered.</p><div class="callout warn"><strong>Key pivot:</strong> the problem was not “find the right function in Ghidra.” The problem was “recover the executed instruction stream and infer the higher-level machine being interpreted.”</div></section>
+<section id="dynamic"><h2>Dynamic Analysis</h2><p>I used controlled dynamic analysis to locate the actual validation flow. The input was stored globally at:</p><pre><code>0x40f080</code></pre><p>Watchpoints and traces showed that the program consumed exactly <strong>32 bytes</strong> of input. A simple prefix oracle did not exist; wrong inputs produced similar late failure states, so the validator was not a straight character-by-character compare.</p><p>The decisive late predicate was observed around:</p><pre><code>0x40b537: test eax, eax
+0x40bcc2: jne  0x4096e1</code></pre><p>For bad inputs, <code>eax</code> ended as <code>0xffffffff</code> and execution reached the failure path.</p></section>
+<section id="vm"><h2>VM Reduction</h2><p>Tracing the semantic instruction stream revealed that the validator behaved like a small stack machine. The clean bytecode semantics were recovered as:</p><div class="table-wrap"><table><tr><th>Opcode</th><th>Meaning</th></tr><tr><td><code>op0</code></td><td>push immediate</td></tr><tr><td><code>op2</code></td><td>add</td></tr><tr><td><code>op3</code></td><td>subtract</td></tr><tr><td><code>op5</code></td><td>multiply</td></tr><tr><td><code>op7</code></td><td>bitwise OR</td></tr><tr><td><code>op8</code></td><td>XOR</td></tr><tr><td><code>op10</code></td><td>load byte from computed address</td></tr></table></div><p>The VM built eight big-endian 32-bit words from the 32-byte input and checked each chunk with:</p><pre><code>((word ^ const_a) - const_b) == 0</code></pre><p>Therefore each required 32-bit input word was simply:</p><pre><code>word = const_a ^ const_b</code></pre></section>
+<section id="solve"><h2>Recovering the Flag</h2><p>The extracted constant pairs produced the full 32-byte input:</p><div class="table-wrap"><table><tr><th>Expression</th><th>Result</th><th>ASCII</th></tr><tr><td><code>0x0915033a ^ 0x41414141</code></td><td><code>0x4854427b</code></td><td><code>HTB{</code></td></tr><tr><td><code>0x427d7872 ^ 0x11111111</code></td><td><code>0x536c6963</code></td><td><code>Slic</code></td></tr><tr><td><code>0x30310a00 ^ 0x55555555</code></td><td><code>0x65645f55</code></td><td><code>ed_U</code></td></tr><tr><td><code>0x2a052e32 ^ 0x5a5a5a5a</code></td><td><code>0x705f7468</code></td><td><code>p_th</code></td></tr><tr><td><code>0xcff5ecdf ^ 0xaaaaaaaa</code></td><td><code>0x655f4675</code></td><td><code>e_Fu</code></td></tr><tr><td><code>0x1914031e ^ 0x77777777</code></td><td><code>0x6e637469</code></td><td><code>ncti</code></td></tr><tr><td><code>0xf6f7c6ad ^ 0x99999999</code></td><td><code>0x6f6e5f34</code></td><td><code>on_4</code></td></tr><tr><td><code>0x6c6a524e ^ 0x33333333</code></td><td><code>0x5f59617d</code></td><td><code>_Ya}</code></td></tr></table></div></section>
+<section id="verification"><h2>Verification</h2><p>Combining the chunks gives:</p><pre><code>HTB{Sliced_Up_the_Function_4_Ya}</code></pre><p>Running the binary with that value reached the success path and printed the expected validation string.</p></section>
+<section id="lessons"><h2>Lessons Learned</h2><ul><li>Decompiler failure was a signal, not a dead end.</li><li>The right abstraction was an executed VM trace, not static function recovery.</li><li>Call-threading can make ordinary control-flow graphs actively misleading.</li><li>The obfuscated arithmetic ultimately collapsed to simple XOR/subtraction equations.</li></ul></section></article>
+  </main>
+  <footer class="container footer">Generated as a standalone dark-mode HTML writeup. All analysis described here was performed against authorized HTB/CTF challenge artifacts.</footer>
+</body>
+</html>

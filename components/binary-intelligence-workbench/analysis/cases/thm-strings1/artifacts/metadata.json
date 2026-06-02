@@ -1,0 +1,10 @@
+{
+  "architecture": null,
+  "filename": "strings1.exe_",
+  "format": "PE",
+  "mime": "application/vnd.microsoft.portable-executable",
+  "path": "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench/samples/thm-strings1/strings1.exe_",
+  "schema_version": "biw.metadata.v1",
+  "sha256": "c2c823a9e2d16051d5efff6e4c17f9930f58d1d52bf9bce2bcf7ce5fc2db3498",
+  "size_bytes": 213504
+}

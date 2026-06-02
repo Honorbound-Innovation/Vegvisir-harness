@@ -1,0 +1,15 @@
+- source_id: generalized-biw-session
+  title: Generalized BIW Artifact Intelligence Session
+  source_type: Markdown
+  origin: Vegvisir validated workflows generalized from authorized artifact-analysis tasks
+  version: 0.1.0
+  license: null
+  owner: Vegvisir
+  visibility: Private
+  ingested_at: 2026-05-31T00:00:00Z
+  hash: 0000000000000000000000000000000000000000000000000000000000000000
+  retention_policy: ExcerptsOnly
+  export_policy: PrivateOnly
+  secret_scan_status: Clean
+  permission_status: Allowed
+  citation_policy: ShortExcerpts

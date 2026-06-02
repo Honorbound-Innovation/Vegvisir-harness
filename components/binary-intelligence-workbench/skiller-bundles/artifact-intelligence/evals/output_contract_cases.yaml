@@ -1,0 +1,37 @@
+cases:
+  - skill: artifact.triage_and_route
+    required_sections:
+      - artifact_inventory_summary
+      - classification
+      - recommended_skills
+      - analysis_plan
+      - risk_notes
+
+  - skill: binary.control_flow_deobfuscation
+    required_sections:
+      - control_flow_model
+      - obfuscation_patterns
+      - trace_summary
+      - recommended_next_steps
+
+  - skill: incident.redis_protocol_abuse
+    required_sections:
+      - redis_timeline
+      - attack_chain
+      - ioc_report
+      - remediation
+
+  - skill: crypto.aes_dfa_key_recovery
+    required_sections:
+      - fault_grouping
+      - recovered_round_key
+      - recovered_key
+      - verification
+
+  - skill: report.professional_writeup_generate
+    required_sections:
+      - executive_summary
+      - evidence
+      - methodology
+      - verification
+      - redaction_notes

@@ -1,0 +1,401 @@
+{
+  "schema_version": "biw.strings.v1",
+  "source": "ghidra",
+  "strings": [
+    {
+      "address": "00100318",
+      "length": 27,
+      "value": "/lib64/ld-linux-x86-64.so.2"
+    },
+    {
+      "address": "00100521",
+      "length": 5,
+      "value": "fgets"
+    },
+    {
+      "address": "00100527",
+      "length": 5,
+      "value": "stdin"
+    },
+    {
+      "address": "0010052d",
+      "length": 4,
+      "value": "puts"
+    },
+    {
+      "address": "00100532",
+      "length": 16,
+      "value": "__stack_chk_fail"
+    },
+    {
+      "address": "00100543",
+      "length": 17,
+      "value": "__libc_start_main"
+    },
+    {
+      "address": "00100555",
+      "length": 14,
+      "value": "__cxa_finalize"
+    },
+    {
+      "address": "00100564",
+      "length": 6,
+      "value": "strchr"
+    },
+    {
+      "address": "0010056b",
+      "length": 6,
+      "value": "printf"
+    },
+    {
+      "address": "00100572",
+      "length": 6,
+      "value": "strcmp"
+    },
+    {
+      "address": "00100579",
+      "length": 9,
+      "value": "libc.so.6"
+    },
+    {
+      "address": "00100583",
+      "length": 9,
+      "value": "GLIBC_2.4"
+    },
+    {
+      "address": "0010058d",
+      "length": 11,
+      "value": "GLIBC_2.2.5"
+    },
+    {
+      "address": "00100599",
+      "length": 10,
+      "value": "GLIBC_2.34"
+    },
+    {
+      "address": "001005a4",
+      "length": 27,
+      "value": "_ITM_deregisterTMCloneTable"
+    },
+    {
+      "address": "001005c0",
+      "length": 14,
+      "value": "__gmon_start__"
+    },
+    {
+      "address": "001005cf",
+      "length": 25,
+      "value": "_ITM_registerTMCloneTable"
+    },
+    {
+      "address": "00102027",
+      "length": 22,
+      "value": "[0m party of the year."
+    },
+    {
+      "address": "00102040",
+      "length": 59,
+      "value": "Before we let you in, you'll need to give us the password: "
+    },
+    {
+      "address": "00102080",
+      "length": 33,
+      "value": "s3cr3t_p455_f0r_gh05t5_4nd_gh0ul5"
+    },
+    {
+      "address": "001020a2",
+      "length": 15,
+      "value": "Welcome inside!"
+    },
+    {
+      "address": "001020b8",
+      "length": 35,
+      "value": "You're not a real ghost; clear off!"
+    },
+    {
+      "address": ".comment::00000000",
+      "length": 26,
+      "value": "GCC: (GNU) 14.2.1 20240805"
+    },
+    {
+      "address": ".comment::0000001b",
+      "length": 26,
+      "value": "GCC: (GNU) 14.2.1 20240910"
+    },
+    {
+      "address": ".shstrtab::00000001",
+      "length": 7,
+      "value": ".symtab"
+    },
+    {
+      "address": ".shstrtab::00000009",
+      "length": 7,
+      "value": ".strtab"
+    },
+    {
+      "address": ".shstrtab::00000011",
+      "length": 9,
+      "value": ".shstrtab"
+    },
+    {
+      "address": ".shstrtab::0000001b",
+      "length": 7,
+      "value": ".interp"
+    },
+    {
+      "address": ".shstrtab::00000023",
+      "length": 18,
+      "value": ".note.gnu.property"
+    },
+    {
+      "address": ".shstrtab::00000036",
+      "length": 18,
+      "value": ".note.gnu.build-id"
+    },
+    {
+      "address": ".shstrtab::00000049",
+      "length": 13,
+      "value": ".note.ABI-tag"
+    },
+    {
+      "address": ".shstrtab::00000057",
+      "length": 9,
+      "value": ".gnu.hash"
+    },
+    {
+      "address": ".shstrtab::00000061",
+      "length": 7,
+      "value": ".dynsym"
+    },
+    {
+      "address": ".shstrtab::00000069",
+      "length": 7,
+      "value": ".dynstr"
+    },
+    {
+      "address": ".shstrtab::00000071",
+      "length": 12,
+      "value": ".gnu.version"
+    },
+    {
+      "address": ".shstrtab::0000007e",
+      "length": 14,
+      "value": ".gnu.version_r"
+    },
+    {
+      "address": ".shstrtab::0000008d",
+      "length": 9,
+      "value": ".rela.dyn"
+    },
+    {
+      "address": ".shstrtab::00000097",
+      "length": 9,
+      "value": ".rela.plt"
+    },
+    {
+      "address": ".shstrtab::000000a1",
+      "length": 5,
+      "value": ".init"
+    },
+    {
+      "address": ".shstrtab::000000a7",
+      "length": 5,
+      "value": ".text"
+    },
+    {
+      "address": ".shstrtab::000000ad",
+      "length": 5,
+      "value": ".fini"
+    },
+    {
+      "address": ".shstrtab::000000b3",
+      "length": 7,
+      "value": ".rodata"
+    },
+    {
+      "address": ".shstrtab::000000bb",
+      "length": 13,
+      "value": ".eh_frame_hdr"
+    },
+    {
+      "address": ".shstrtab::000000c9",
+      "length": 9,
+      "value": ".eh_frame"
+    },
+    {
+      "address": ".shstrtab::000000d3",
+      "length": 11,
+      "value": ".init_array"
+    },
+    {
+      "address": ".shstrtab::000000df",
+      "length": 11,
+      "value": ".fini_array"
+    },
+    {
+      "address": ".shstrtab::000000eb",
+      "length": 8,
+      "value": ".dynamic"
+    },
+    {
+      "address": ".shstrtab::000000f4",
+      "length": 4,
+      "value": ".got"
+    },
+    {
+      "address": ".shstrtab::000000f9",
+      "length": 8,
+      "value": ".got.plt"
+    },
+    {
+      "address": ".shstrtab::00000102",
+      "length": 5,
+      "value": ".data"
+    },
+    {
+      "address": ".shstrtab::00000108",
+      "length": 4,
+      "value": ".bss"
+    },
+    {
+      "address": ".shstrtab::0000010d",
+      "length": 8,
+      "value": ".comment"
+    },
+    {
+      "address": ".strtab::00000001",
+      "length": 6,
+      "value": "main.c"
+    },
+    {
+      "address": ".strtab::00000008",
+      "length": 8,
+      "value": "_DYNAMIC"
+    },
+    {
+      "address": ".strtab::00000011",
+      "length": 18,
+      "value": "__GNU_EH_FRAME_HDR"
+    },
+    {
+      "address": ".strtab::00000024",
+      "length": 21,
+      "value": "_GLOBAL_OFFSET_TABLE_"
+    },
+    {
+      "address": ".strtab::0000003a",
+      "length": 28,
+      "value": "__libc_start_main@GLIBC_2.34"
+    },
+    {
+      "address": ".strtab::00000057",
+      "length": 27,
+      "value": "_ITM_deregisterTMCloneTable"
+    },
+    {
+      "address": ".strtab::00000073",
+      "length": 16,
+      "value": "puts@GLIBC_2.2.5"
+    },
+    {
+      "address": ".strtab::00000084",
+      "length": 17,
+      "value": "stdin@GLIBC_2.2.5"
+    },
+    {
+      "address": ".strtab::00000096",
+      "length": 6,
+      "value": "_edata"
+    },
+    {
+      "address": ".strtab::0000009d",
+      "length": 5,
+      "value": "_fini"
+    },
+    {
+      "address": ".strtab::000000a3",
+      "length": 26,
+      "value": "__stack_chk_fail@GLIBC_2.4"
+    },
+    {
+      "address": ".strtab::000000be",
+      "length": 18,
+      "value": "strchr@GLIBC_2.2.5"
+    },
+    {
+      "address": ".strtab::000000d1",
+      "length": 18,
+      "value": "printf@GLIBC_2.2.5"
+    },
+    {
+      "address": ".strtab::000000e4",
+      "length": 5,
+      "value": "parts"
+    },
+    {
+      "address": ".strtab::000000ea",
+      "length": 17,
+      "value": "fgets@GLIBC_2.2.5"
+    },
+    {
+      "address": ".strtab::000000fc",
+      "length": 12,
+      "value": "__data_start"
+    },
+    {
+      "address": ".strtab::00000109",
+      "length": 18,
+      "value": "strcmp@GLIBC_2.2.5"
+    },
+    {
+      "address": ".strtab::0000011c",
+      "length": 14,
+      "value": "__gmon_start__"
+    },
+    {
+      "address": ".strtab::0000012b",
+      "length": 12,
+      "value": "__dso_handle"
+    },
+    {
+      "address": ".strtab::00000138",
+      "length": 14,
+      "value": "_IO_stdin_used"
+    },
+    {
+      "address": ".strtab::00000147",
+      "length": 4,
+      "value": "_end"
+    },
+    {
+      "address": ".strtab::0000014c",
+      "length": 11,
+      "value": "__bss_start"
+    },
+    {
+      "address": ".strtab::00000158",
+      "length": 4,
+      "value": "main"
+    },
+    {
+      "address": ".strtab::0000015d",
+      "length": 11,
+      "value": "__TMC_END__"
+    },
+    {
+      "address": ".strtab::00000169",
+      "length": 25,
+      "value": "_ITM_registerTMCloneTable"
+    },
+    {
+      "address": ".strtab::00000183",
+      "length": 26,
+      "value": "__cxa_finalize@GLIBC_2.2.5"
+    },
+    {
+      "address": ".strtab::0000019e",
+      "length": 5,
+      "value": "_init"
+    }
+  ]
+}

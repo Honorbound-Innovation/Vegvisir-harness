@@ -1,0 +1,32 @@
+{
+  "findings": [
+    {
+      "category": "strings",
+      "confidence": "medium",
+      "created_at": "2026-05-31T02:16:57Z",
+      "created_by": "biw.heuristics",
+      "description": "Found 1 string(s) matching credential-keyword patterns.",
+      "evidence": [
+        {
+          "artifact": "strings.json",
+          "type": "string",
+          "value": "To register enter your password: "
+        }
+      ],
+      "id": "finding_string_credential_keyword",
+      "recommended_next_steps": [
+        "Inspect functions referencing these strings in Ghidra."
+      ],
+      "severity": "medium",
+      "title": "Suspicious strings: credential-keyword"
+    }
+  ],
+  "risk": {
+    "level": "low",
+    "rationale": [
+      "Suspicious strings: credential-keyword"
+    ],
+    "score": 3
+  },
+  "schema_version": "biw.findings.v1"
+}

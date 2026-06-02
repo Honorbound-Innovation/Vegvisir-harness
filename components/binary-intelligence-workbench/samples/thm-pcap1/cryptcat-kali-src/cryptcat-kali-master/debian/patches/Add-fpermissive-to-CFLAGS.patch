@@ -1,0 +1,32 @@
+From: Arnaud Rebillout <arnaudr@kali.org>
+Date: Mon, 25 Aug 2025 22:36:15 +0700
+Subject: Add -fpermissive to CFLAGS
+
+GCC-14 requires new CFLAGS:
+* -Wno-error=implicit-function-declaration
+* -Wno-error=implicit-int
+
+GCC-15 requires another:
+* -Wno-error=incompatible-pointer-types
+
+For simplicity, just use `-fpermissive`.
+---
+ Makefile | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/Makefile b/Makefile
+index d16f45e..f53584b 100755
+--- a/Makefile
++++ b/Makefile
+@@ -15,6 +15,11 @@ BIN = $DESTDIR/usr/bin
+ # DFLAGS = -DTEST -DDEBUG
+ DFLAGS =
+ CFLAGS = -O
++# Make sure the decades-old source code gets compiled with modern GCC
++CFLAGS += -fpermissive
++#CFLAGS += -Wno-error=implicit-function-declaration \
++#	  -Wno-error=implicit-int \
++#	  -Wno-error=incompatible-pointer-types
+ XFLAGS = 	# xtra cflags, set by systype targets
+ XLIBS =		# xtra libs if necessary?
+ # -Bstatic for sunos,  -static for gcc, etc.  You want this, trust me.

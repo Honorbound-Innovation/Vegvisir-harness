@@ -1,0 +1,13 @@
+{
+  "schema_version": "biw.suspicious_strings.v1",
+  "suspicious_strings": [
+    {
+      "address": "00102040",
+      "categories": [
+        "credential-keyword"
+      ],
+      "offset": null,
+      "value": "Before we let you in, you'll need to give us the password: "
+    }
+  ]
+}

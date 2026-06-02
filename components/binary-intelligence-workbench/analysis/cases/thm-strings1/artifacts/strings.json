@@ -1,0 +1,4006 @@
+{
+  "schema_version": "biw.strings.v1",
+  "source": "basic",
+  "strings": [
+    {
+      "offset": 77,
+      "value": "!This program cannot be run in DOS mode."
+    },
+    {
+      "offset": 192,
+      "value": "Rich"
+    },
+    {
+      "offset": 472,
+      "value": ".text"
+    },
+    {
+      "offset": 511,
+      "value": "`.rdata"
+    },
+    {
+      "offset": 551,
+      "value": "@.data"
+    },
+    {
+      "offset": 592,
+      "value": ".CRT"
+    },
+    {
+      "offset": 631,
+      "value": "@.rsrc"
+    },
+    {
+      "offset": 671,
+      "value": "@.reloc"
+    },
+    {
+      "offset": 2152,
+      "value": "QZ^&"
+    },
+    {
+      "offset": 5577,
+      "value": "QXRhl"
+    },
+    {
+      "offset": 5592,
+      "value": "TAhR"
+    },
+    {
+      "offset": 5829,
+      "value": "j0hT"
+    },
+    {
+      "offset": 6176,
+      "value": "FLAG{THE-DEPICTED-THE-IMPORTANT-THE}"
+    },
+    {
+      "offset": 6216,
+      "value": "FLAG{INCLUDES-COLLECTIVE-AND-SOCIALIST-INQUIRY}"
+    },
+    {
+      "offset": 6264,
+      "value": "FLAG{LAW-IDEOLOGICAL-INTO-THE-THE}"
+    },
+    {
+      "offset": 6300,
+      "value": "FLAG{COMPETENCE-ISSUE-PERSONAL-THE-LAW}"
+    },
+    {
+      "offset": 6340,
+      "value": "FLAG{MATTERS-POLITICAL-DETERMINATION-ITS-SOCIALIST}"
+    },
+    {
+      "offset": 6392,
+      "value": "FLAG{BODIES-PROMOTE-NATIONWIDE-COLLECTIVE-SOVIET}"
+    },
+    {
+      "offset": 6444,
+      "value": "FLAG{STATE-THEIR-WITHOUT-THE-REQUIRED}"
+    },
+    {
+      "offset": 6484,
+      "value": "FLAG{SOVIET-AND-THE-PERFECT-SUPREME}"
+    },
+    {
+      "offset": 6524,
+      "value": "FLAG{AND-LABOUR-THE-THE-SHALL}"
+    },
+    {
+      "offset": 6556,
+      "value": "FLAG{VICTORY-STRUGGLE-GENERAL-SOVIET-BROADENING}"
+    },
+    {
+      "offset": 6608,
+      "value": "FLAG{RIGHTS-RAISED-TRAINING-SHALL-AND}"
+    },
+    {
+      "offset": 6648,
+      "value": "FLAG{STATE-THE-ATTITUDE-ARMED-ARE}"
+    },
+    {
+      "offset": 6684,
+      "value": "FLAG{ORGANISATIONS-MORAL-OTHER-ELECTORAL-ARTICLE}"
+    },
+    {
+      "offset": 6736,
+      "value": "FLAG{THE-TELEGRAPHIC-ARTICLE-ACTIVITY-FRAMED}"
+    },
+    {
+      "offset": 6784,
+      "value": "FLAG{TERRITORY-CONSUMPTION-RIGHT-THE-USE}"
+    },
+    {
+      "offset": 6828,
+      "value": "FLAG{AUTONOMOUS-AND-LOCAL-ELECTED-SUBORDINATE}"
+    },
+    {
+      "offset": 6876,
+      "value": "FLAG{LAWS-REPUBLIC-THE-HAS-ELECTIVENESS}"
+    },
+    {
+      "offset": 6920,
+      "value": "FLAG{EXPECTANT-CITIZEN-DEBATE-CREATED-PUBLIC}"
+    },
+    {
+      "offset": 6968,
+      "value": "FLAG{ARE-DEPUTIES-PROCEDURE-AND-CITIZENS}"
+    },
+    {
+      "offset": 7012,
+      "value": "FLAG{SAFEGUARDING-DUSCUSSION-MINISTERS-AND-STATE}"
+    },
+    {
+      "offset": 7064,
+      "value": "FLAG{ARTICLE-AND-SHOW-THE-REPUBLIC}"
+    },
+    {
+      "offset": 7100,
+      "value": "FLAG{SITTING-THE-PEACEFUL-ITS-LOCAL}"
+    },
+    {
+      "offset": 7140,
+      "value": "FLAG{THEIR-DUTIES-ARE-EMPLOYEES-SOCIALISM}"
+    },
+    {
+      "offset": 7184,
+      "value": "FLAG{SOVIET-AND-TERM-STRUCTURE-RACIAL}"
+    },
+    {
+      "offset": 7224,
+      "value": "FLAG{SPHERES-THEIR-THE-SOCIALIST-SHALL}"
+    },
+    {
+      "offset": 7264,
+      "value": "FLAG{ALL-THE-THE-HIGH-UNIVERSAL}"
+    },
+    {
+      "offset": 7300,
+      "value": "FLAG{PRESIDIUM-LAWS-ADMINISTRATION-THE-POLITICAL}"
+    },
+    {
+      "offset": 7352,
+      "value": "FLAG{THE-CONSTITUENTS-HAS-STRENGTHEN-SPORT}"
+    },
+    {
+      "offset": 7396,
+      "value": "FLAG{THE-AUTHORITY-TRADE-PURSUANCE-SOCIETYS}"
+    },
+    {
+      "offset": 7444,
+      "value": "FLAG{HALF-THE-WITH-AND-ORGANISATIONS}"
+    },
+    {
+      "offset": 7484,
+      "value": "FLAG{GREAT-FREEDOMS-CONSTITUENTS-SCHOOL-FORMED}"
+    },
+    {
+      "offset": 7532,
+      "value": "FLAG{BODIES-CONSTANTLY-FORCE-THEIR-REGIONS}"
+    },
+    {
+      "offset": 7576,
+      "value": "FLAG{PRINCIPLE-CHAPTER-USSR-GENERATION-STATE}"
+    },
+    {
+      "offset": 7624,
+      "value": "FLAG{UNION-PRESIDIUM-CONVERT-TOTAL-AND}"
+    },
+    {
+      "offset": 7664,
+      "value": "FLAG{CONSIST-THE-WATER-EVENING-GUARANTEED}"
+    },
+    {
+      "offset": 7708,
+      "value": "FLAG{SOVEREIGN-WITH-WORKING-THE-UNION}"
+    },
+    {
+      "offset": 7748,
+      "value": "FLAG{THE-USSR-DOWN-THE-WITH}"
+    },
+    {
+      "offset": 7780,
+      "value": "FLAG{SOCIETY-BODIES-AND-SEPARATED-MEDICAL}"
+    },
+    {
+      "offset": 7824,
+      "value": "FLAG{RANKS-PRACTICAL-SUPREME-AND-BECOME}"
+    },
+    {
+      "offset": 7868,
+      "value": "FLAG{TWO-AND-AND-COUNCILS-LEAST}"
+    },
+    {
+      "offset": 7904,
+      "value": "FLAG{SOCIALIST-AGRICULTURAL-WORKING-SHALL-AND}"
+    },
+    {
+      "offset": 7952,
+      "value": "FLAG{THE-USE-REPUBLIC-THE-SUPREME}"
+    },
+    {
+      "offset": 7988,
+      "value": "FLAG{DEPUTIES-TAKE-THEIR-THE-THE}"
+    },
+    {
+      "offset": 8024,
+      "value": "FLAG{OTHER-SHALL-FUNCTIONING-USSR-SOVIET}"
+    },
+    {
+      "offset": 8068,
+      "value": "FLAG{THE-THE-QUALITY-FUTURE-USSR}"
+    },
+    {
+      "offset": 8104,
+      "value": "FLAG{CONSTITUTION-ENTRUSTED-BENEFITS-LOW-AND}"
+    },
+    {
+      "offset": 8152,
+      "value": "FLAG{SOCIAL-OVER-THE-AND-AND}"
+    },
+    {
+      "offset": 8184,
+      "value": "FLAG{HAS-INCOME-FORM-AUTONOMOUS-STATE}"
+    },
+    {
+      "offset": 8224,
+      "value": "FLAG{TAKES-INTERNATIONAL-SIGNIFICANCE-SOVIET-JOINT}"
+    },
+    {
+      "offset": 8276,
+      "value": "FLAG{MAINTAIN-SUPREME-USSR-FOR-AND}"
+    },
+    {
+      "offset": 8312,
+      "value": "FLAG{CHECHEN-AREA-REMUNERATION-OTHER-WARS}"
+    },
+    {
+      "offset": 8356,
+      "value": "FLAG{AND-INDIVIDUALCHAPTER-THE-THEIR-ALLOWANCES}"
+    },
+    {
+      "offset": 8408,
+      "value": "FLAG{AMALGAMATIONS-THE-INCLUDES-MEETINGS-AND}"
+    },
+    {
+      "offset": 8456,
+      "value": "FLAG{THE-AND-INTERNATIONAL-SUPREME-NOT}"
+    },
+    {
+      "offset": 8496,
+      "value": "FLAG{UTILITIES-COMMUNIST-THEM-COMMUNISM-CONSTITUTION}"
+    },
+    {
+      "offset": 8552,
+      "value": "FLAG{LIBERATION-CITIZENSHIP-THE-OBSERVE-CHECK}"
+    },
+    {
+      "offset": 8600,
+      "value": "FLAG{GUARANTEED-PUBLICITY-ORGANISE-UNION-USSR}"
+    },
+    {
+      "offset": 8648,
+      "value": "FLAG{REPUBLIC-THE-DISABILITY-SUBJECT-MOVEMENT}"
+    },
+    {
+      "offset": 8696,
+      "value": "FLAG{ITS-SOVIET-EACH-THE-METHODS}"
+    },
+    {
+      "offset": 8732,
+      "value": "FLAG{SOCIALISM-STRUCTURE-SHALL-USSR-WITHIN}"
+    },
+    {
+      "offset": 8776,
+      "value": "FLAG{AND-USSR-SOVIET-DIRECTION-DISSEMINATION}"
+    },
+    {
+      "offset": 8824,
+      "value": "FLAG{HOLDING-THE-EDUCATION-ADMINISTRATIVE-OCTOBER}"
+    },
+    {
+      "offset": 8876,
+      "value": "FLAG{REDUCING-MAIN-DEVELOPMENT-THE-THE}"
+    },
+    {
+      "offset": 8916,
+      "value": "FLAG{REPUBLIC-AND-STATE-THE-MINISTERS}"
+    },
+    {
+      "offset": 8956,
+      "value": "FLAG{RATIONAL-ACCORDANCE-BROAD-FORCES-DIRECT}"
+    },
+    {
+      "offset": 9004,
+      "value": "FLAG{THE-AND-COUNCIL-TAKE-THE}"
+    },
+    {
+      "offset": 9036,
+      "value": "FLAG{THE-PURSUES-EMPOWERED-CITIZENS-THE}"
+    },
+    {
+      "offset": 9080,
+      "value": "FLAG{ITS-THEM-THRIFTY-NOT-UNITS}"
+    },
+    {
+      "offset": 9116,
+      "value": "FLAG{EVENT-THEIR-EXERCISE-THE-BODIES}"
+    },
+    {
+      "offset": 9156,
+      "value": "FLAG{NUMBER-THE-THE-USSR-VOCATIONAL}"
+    },
+    {
+      "offset": 9196,
+      "value": "FLAG{DEFENDING-THEIR-MANKIND-SOCIALIST-THE}"
+    },
+    {
+      "offset": 9240,
+      "value": "FLAG{GLOBE-AND-UNDER-OBLIGATIONS-AND}"
+    },
+    {
+      "offset": 9280,
+      "value": "FLAG{RURAL-SOVIET-THE-PRESIDIUM-OBSERVANCE}"
+    },
+    {
+      "offset": 9324,
+      "value": "FLAG{AND-ARTICLE-POWERS-CITIZENS-ARTICLE}"
+    },
+    {
+      "offset": 9368,
+      "value": "FLAG{RELEASED-THE-SOCIALIST-LIBERATION-SUPREME}"
+    },
+    {
+      "offset": 9416,
+      "value": "FLAG{CONFORM-USSR-THEIR-WORK-AND}"
+    },
+    {
+      "offset": 9452,
+      "value": "FLAG{AND-SPECIAL-UNION-THE-DISTRIBUTION}"
+    },
+    {
+      "offset": 9496,
+      "value": "FLAG{SHALL-THEIR-COURSE-BASIS-THEIR}"
+    },
+    {
+      "offset": 9536,
+      "value": "FLAG{SHALL-THE-THAT-TREATIES-ARTICLE}"
+    },
+    {
+      "offset": 9576,
+      "value": "FLAG{COUNCIL-SUPREME-ONLY-HIGHEST-FAR}"
+    },
+    {
+      "offset": 9616,
+      "value": "FLAG{EXPLOITATION-SOCIAL-ARTICLE-DUTIES-OTHER}"
+    },
+    {
+      "offset": 9664,
+      "value": "FLAG{THE-MINISTERS-AND-AUTONOMOUS-FOR}"
+    },
+    {
+      "offset": 9704,
+      "value": "FLAG{THE-STATE-RIGHTS-REPUBLIC-SHALL}"
+    },
+    {
+      "offset": 9744,
+      "value": "FLAG{THE-SOVIET-AND-ARE-CONFIRM}"
+    },
+    {
+      "offset": 9780,
+      "value": "FLAG{THE-THE-THE-FOR-USSRS}"
+    },
+    {
+      "offset": 9808,
+      "value": "FLAG{SUPREME-CONTINUOUS-AND-SERVES-THE}"
+    },
+    {
+      "offset": 9848,
+      "value": "FLAG{AND-THE-PEOPLES-AND-SHALL}"
+    },
+    {
+      "offset": 9880,
+      "value": "FLAG{STATE-AGENCIES-SHALL-PRESIDIUM-GREAT}"
+    },
+    {
+      "offset": 9924,
+      "value": "FLAG{REST-THE-DISTRICT-PROCEDURE-ALL}"
+    },
+    {
+      "offset": 9964,
+      "value": "FLAG{TERM-SOCIAL-BROAD-BASIS-LEVEL}"
+    },
+    {
+      "offset": 10000,
+      "value": "FLAG{PROCURATORS-ALL-THE-AND-PRESIDIUM}"
+    },
+    {
+      "offset": 10040,
+      "value": "FLAG{AND-LAW-UNIONS-RURAL-OVER}"
+    },
+    {
+      "offset": 10072,
+      "value": "FLAG{BODIES-COMBINING-LOCAL-UNION-INTO}"
+    },
+    {
+      "offset": 10112,
+      "value": "FLAG{SOVIETS-THE-ALL-CITIZENS-CARRY}"
+    },
+    {
+      "offset": 10152,
+      "value": "FLAG{AND-AND-BEING-THE-THE}"
+    },
+    {
+      "offset": 10180,
+      "value": "FLAG{COURT-DECISIONS-CONTROL-THEM-ELECT}"
+    },
+    {
+      "offset": 10224,
+      "value": "FLAG{WARRANT-LENINIST-WAR-AND-AND}"
+    },
+    {
+      "offset": 10260,
+      "value": "FLAG{SUPREME-CONVENE-COUNTRYS-GUILTY-THE}"
+    },
+    {
+      "offset": 10304,
+      "value": "FLAG{EXTENDED-THE-USSR-IMPLEMENTATION-LARGE}"
+    },
+    {
+      "offset": 10352,
+      "value": "FLAG{SHALL-IMPLEMENTATION-INSTITUTIONS-THE-THE}"
+    },
+    {
+      "offset": 10400,
+      "value": "FLAG{THE-SUPREME-DUTY-ORGANISATION-SECRET}"
+    },
+    {
+      "offset": 10444,
+      "value": "FLAG{AND-CHAIRMAN-LITHUANIAN-ENDORSEMENT-THE}"
+    },
+    {
+      "offset": 10492,
+      "value": "FLAG{SOCIAL-MAY-THE-THE-ORDINANCES}"
+    },
+    {
+      "offset": 10528,
+      "value": "FLAG{THE-REPUBLICS-SOVIET-THE-THE}"
+    },
+    {
+      "offset": 10564,
+      "value": "FLAG{ORGANISE-WILL-THE-SOVIETS-SOCIALIST}"
+    },
+    {
+      "offset": 10608,
+      "value": "FLAG{THE-GUARANTEED-DISCUSSING-APPROPRIATE-USSR}"
+    },
+    {
+      "offset": 10660,
+      "value": "FLAG{SUPREME-LAW-USSR-THE-ITS}"
+    },
+    {
+      "offset": 10692,
+      "value": "FLAG{THE-DEVELOPING-RELYING-STATE-PUBLIC}"
+    },
+    {
+      "offset": 10736,
+      "value": "FLAG{DIRECT-THE-REPUBLIC-HELD-SOVIETS}"
+    },
+    {
+      "offset": 10776,
+      "value": "FLAG{MORAL-PART-ROLE-DEPUTIES-FOREIGN}"
+    },
+    {
+      "offset": 10816,
+      "value": "FLAG{MARI-THE-ARTICLE-SOCIALISM-EXPLOITATION}"
+    },
+    {
+      "offset": 10864,
+      "value": "FLAG{AND-ACCORDANCE-PEOPLES-AND-DEPUTIES}"
+    },
+    {
+      "offset": 10908,
+      "value": "FLAG{ELECTED-FOR-THE-MEN-LIFE}"
+    },
+    {
+      "offset": 10940,
+      "value": "FLAG{SUCH-AND-VITAL-THEIR-THAT}"
+    },
+    {
+      "offset": 10972,
+      "value": "FLAG{THE-SET-OBSERVANCE-THEIR-SOVIET}"
+    },
+    {
+      "offset": 11012,
+      "value": "FLAG{STAGE-AND-PROPERTY-PROTECTION-RIGHTS}"
+    },
+    {
+      "offset": 11056,
+      "value": "FLAG{EVENT-THE-CHAPTER-THROUGH-ACTIVITY}"
+    },
+    {
+      "offset": 11100,
+      "value": "FLAG{PREROGATIVE-INSTITUTIONS-MAY-UNION-TAKE}"
+    },
+    {
+      "offset": 11148,
+      "value": "FLAG{AND-FOR-AUTONOMOUS-HELPS-COMMUNIST}"
+    },
+    {
+      "offset": 11192,
+      "value": "FLAG{GAINS-INSURANCE-SOCIAL-THE-ELECTED}"
+    },
+    {
+      "offset": 11236,
+      "value": "FLAG{SOCIALIST-FORMS-INCLUDES-ALL-SUPREME}"
+    },
+    {
+      "offset": 11280,
+      "value": "FLAG{REPUBLIC-THE-AMEND-STATE-CAPITALIST}"
+    },
+    {
+      "offset": 11324,
+      "value": "FLAG{THE-REVENUES-LOSS-USSR-THE}"
+    },
+    {
+      "offset": 11360,
+      "value": "FLAG{EXECUTIVE-AND-UPHOLD-INTEGRITY-MILITARY}"
+    },
+    {
+      "offset": 11408,
+      "value": "FLAG{AND-THE-PROCESSIONS-SOVIET-THE}"
+    },
+    {
+      "offset": 11448,
+      "value": "FLAG{THEIR-AGE-MANNER-REPUBLICS-MORALITY}"
+    },
+    {
+      "offset": 11492,
+      "value": "FLAG{THE-PROVIDED-ARTICLE-SOVIET-SOCIAL}"
+    },
+    {
+      "offset": 11536,
+      "value": "FLAG{THE-THE-USE-ARTICLE-DECISIONS}"
+    },
+    {
+      "offset": 11572,
+      "value": "FLAG{ARTICLE-PROCEDURE-APPROVAL-THEIR-NAKHICHEVAN}"
+    },
+    {
+      "offset": 11624,
+      "value": "FLAG{THE-THE-GREAT-FINANCIAL-THE}"
+    },
+    {
+      "offset": 11660,
+      "value": "FLAG{DEVELOPED-THE-AND-USSR-THAT}"
+    },
+    {
+      "offset": 11696,
+      "value": "FLAG{WITH-RELIEVE-THE-MINISTERS-OBLIGED}"
+    },
+    {
+      "offset": 11740,
+      "value": "FLAG{THE-AND-WHEN-REPUBLICS-USSR}"
+    },
+    {
+      "offset": 11776,
+      "value": "FLAG{MORE-SHOW-THE-THE-THE}"
+    },
+    {
+      "offset": 11804,
+      "value": "FLAG{SUPREME-REPUBLICS-THE-SUPREME-CONSTITUTION}"
+    },
+    {
+      "offset": 11856,
+      "value": "FLAG{PROMULGATES-HONOUR-THE-MINISTERS-THE}"
+    },
+    {
+      "offset": 11900,
+      "value": "FLAG{EXECUTIVE-LOCAL-CORRESPONDENCE-REQUIRED-JEWISH}"
+    },
+    {
+      "offset": 11956,
+      "value": "FLAG{REVOLUTION-USSR-QUALIFIED-COUNTRY-USSR}"
+    },
+    {
+      "offset": 12004,
+      "value": "FLAG{AND-LAND-USSR-ARTICLES-FOR}"
+    },
+    {
+      "offset": 12040,
+      "value": "FLAG{MOTHERLAND-THAT-COUNCIL-ARTICLE-PEOPLE}"
+    },
+    {
+      "offset": 12088,
+      "value": "FLAG{MEASURES-PUBLIC-PRIVACY-GOLD-FOR}"
+    },
+    {
+      "offset": 12128,
+      "value": "FLAG{THE-UNION-THE-LAWS-USSR}"
+    },
+    {
+      "offset": 12160,
+      "value": "FLAG{SUBJECT-USSR-MINISTERS-INTO-PAID}"
+    },
+    {
+      "offset": 12200,
+      "value": "FLAG{CONSTITUTION-THE-THE-THE-PROVIDED}"
+    },
+    {
+      "offset": 12240,
+      "value": "FLAG{FULL-MATTERS-SOVIET-FOR-DEFINED}"
+    },
+    {
+      "offset": 12280,
+      "value": "FLAG{BOTH-THE-COMMUNIST-ARTICLE-BODIES}"
+    },
+    {
+      "offset": 12320,
+      "value": "FLAG{FREE-THE-TRAINING-USSR-THE}"
+    },
+    {
+      "offset": 12356,
+      "value": "FLAG{AND-THEM-REPUBLIC-REPUBLIC-STATE}"
+    },
+    {
+      "offset": 12396,
+      "value": "FLAG{STATE-SERVICES-PEOPLE-TELEGRAPHIC-OTHER}"
+    },
+    {
+      "offset": 12444,
+      "value": "FLAG{VII-THE-SUSPEND-JOINT-DEVELOPMENT}"
+    },
+    {
+      "offset": 12484,
+      "value": "FLAG{SOVIET-FOR-KEEPING-AND-USSR}"
+    },
+    {
+      "offset": 12520,
+      "value": "FLAG{THE-THE-ARTICLE-BASIS-GENERAL}"
+    },
+    {
+      "offset": 12556,
+      "value": "FLAG{MUTUAL-THE-AGRICULTURAL-THE-POSTPONED}"
+    },
+    {
+      "offset": 12600,
+      "value": "FLAG{CITIZENS-AND-DEPUTIES-THE-ORGANISATIONS}"
+    },
+    {
+      "offset": 12648,
+      "value": "FLAG{THE-THE-UNION-FREE-INTERNATIONAL}"
+    },
+    {
+      "offset": 12688,
+      "value": "FLAG{AND-PEASANTS-CONCERNED-BODIES-AND}"
+    },
+    {
+      "offset": 12728,
+      "value": "FLAG{ARTICLE-AND-PROVIDING-THEM-TWO}"
+    },
+    {
+      "offset": 12768,
+      "value": "FLAG{FOLK-AND-STATUS-ITS-THE}"
+    },
+    {
+      "offset": 12800,
+      "value": "FLAG{WITH-PROCEDURECHAPTER-USSR-ARBITRATION-ALL}"
+    },
+    {
+      "offset": 12852,
+      "value": "FLAG{SUBMIT-ALL-DIPLOMATIC-THE-THE}"
+    },
+    {
+      "offset": 12888,
+      "value": "FLAG{EXCHANGE-SOVIET-STATE-WARRANT-ITS}"
+    },
+    {
+      "offset": 12928,
+      "value": "FLAG{NOT-HUMAN-THE-ADMINISTRATION-COMMUNISM}"
+    },
+    {
+      "offset": 12976,
+      "value": "FLAG{THE-DEFINED-THE-ACCOUNTABLE-REGION}"
+    },
+    {
+      "offset": 13020,
+      "value": "FLAG{RESPECTIVELY-AREA-SHALL-WHICH-REPORTS}"
+    },
+    {
+      "offset": 13064,
+      "value": "FLAG{WORLD-AND-FOR-AUTHORITY-ORGANISATIONS}"
+    },
+    {
+      "offset": 13108,
+      "value": "FLAG{FROM-REFERENDUMS-LOCAL-THE-AND}"
+    },
+    {
+      "offset": 13148,
+      "value": "FLAG{THE-MATTERS-ENTERPRISES-RELATIONS-INCREASE}"
+    },
+    {
+      "offset": 13200,
+      "value": "FLAG{ARRESTED-ITS-CHAIRMAN-FROM-THE}"
+    },
+    {
+      "offset": 13240,
+      "value": "FLAG{AND-ITS-THEY-FOR-RISING}"
+    },
+    {
+      "offset": 13272,
+      "value": "FLAG{THE-PRESIDIUM-SOCIALIST-LAND-AND}"
+    },
+    {
+      "offset": 13312,
+      "value": "FLAG{RIGHT-USSR-AND-FOR-PEOPLE}"
+    },
+    {
+      "offset": 13344,
+      "value": "FLAG{UNION-OBLIGATIONS-CONTROL-AND-COURTS}"
+    },
+    {
+      "offset": 13388,
+      "value": "FLAG{ARDUOUS-THE-THEM-PRACTICAL-AND}"
+    },
+    {
+      "offset": 13428,
+      "value": "FLAG{ALL-ARE-HOUSE-CONSTITUTION-REPUBLIC}"
+    },
+    {
+      "offset": 13472,
+      "value": "FLAG{VERIFY-BANNED-THE-MINISTRIES-THE}"
+    },
+    {
+      "offset": 13512,
+      "value": "FLAG{CULTURAL-USE-UNION-USSR-AND}"
+    },
+    {
+      "offset": 13548,
+      "value": "FLAG{CONSENT-THE-MAKE-FORMED-ACTIVE}"
+    },
+    {
+      "offset": 13588,
+      "value": "FLAG{LIFE-SUPERVISE-BODIES-CONTRAVENE-USSR}"
+    },
+    {
+      "offset": 13632,
+      "value": "FLAG{THE-INTERESTS-SHALL-THE-USSR}"
+    },
+    {
+      "offset": 13668,
+      "value": "FLAG{DIFFERENT-ITS-ALL-ARTICLE-PERSONAL}"
+    },
+    {
+      "offset": 13712,
+      "value": "FLAG{AND-AND-PRESCRIBED-LEVEL-ANY}"
+    },
+    {
+      "offset": 13748,
+      "value": "FLAG{SHALL-THE-PEOPLES-AND-LABOUR}"
+    },
+    {
+      "offset": 13784,
+      "value": "FLAG{WHOM-ARTICLE-ARTICLE-LODGE-REQUESTS}"
+    },
+    {
+      "offset": 13828,
+      "value": "FLAG{LARGE-COMBINING-ARTICLE-REGIONS-WITH}"
+    },
+    {
+      "offset": 13872,
+      "value": "FLAG{EXECUTION-NIGHT-AUTONOMOUS-SOVIET-THE}"
+    },
+    {
+      "offset": 13916,
+      "value": "FLAG{BEEN-COMMUNIST-AND-MANDATES-FREE}"
+    },
+    {
+      "offset": 13956,
+      "value": "FLAG{THE-WHEN-FIRST-SOVIET-USSR}"
+    },
+    {
+      "offset": 13992,
+      "value": "FLAG{AND-PROCEDURE-THE-REPUBLIC-NATIONWIDE}"
+    },
+    {
+      "offset": 14036,
+      "value": "FLAG{RATIFICATION-USSR-THE-AND-PRESIDE}"
+    },
+    {
+      "offset": 14076,
+      "value": "FLAG{PROPERTY-ORGANISATION-SOCIAL-MINISTERS-NUMBER}"
+    },
+    {
+      "offset": 14128,
+      "value": "FLAG{COMPRISING-DEPUTIES-LAW-INTO-UNION}"
+    },
+    {
+      "offset": 14172,
+      "value": "FLAG{THE-HEALTH-THE-FRIENDSHIP-WITHIN}"
+    },
+    {
+      "offset": 14212,
+      "value": "FLAG{DISCUSSION-RECEIVE-REGION-CITIZENS-LABOUR}"
+    },
+    {
+      "offset": 14260,
+      "value": "FLAG{ITS-SOVIET-REQUIREMENTS-FOR-USSR}"
+    },
+    {
+      "offset": 14300,
+      "value": "FLAG{EDUCATION-UNION-UNION-ITS-ARTICLE}"
+    },
+    {
+      "offset": 14340,
+      "value": "FLAG{AND-DEVELOPMENT-USSR-UNTIL-UNION}"
+    },
+    {
+      "offset": 14380,
+      "value": "FLAG{SUPREME-DEPUTIES-AND-RATIO-DECISIONS}"
+    },
+    {
+      "offset": 14424,
+      "value": "FLAG{AND-LAWS-CITIZENS-RIGHT-ASSISTANCE}"
+    },
+    {
+      "offset": 14468,
+      "value": "FLAG{SOCIALIST-THE-THE-SOCIAL-ARE}"
+    },
+    {
+      "offset": 14504,
+      "value": "FLAG{ORGANISATIONS-THEIR-AND-ACTS-SPOUSES}"
+    },
+    {
+      "offset": 14548,
+      "value": "FLAG{REPUBLIC-UNIVERSAL-THIS-SPORT-UNION}"
+    },
+    {
+      "offset": 14592,
+      "value": "FLAG{ENTERPRISES-THE-THE-DISCONTINUING-MADE}"
+    },
+    {
+      "offset": 14640,
+      "value": "FLAG{THE-THE-DURING-PERMANENT-FOR}"
+    },
+    {
+      "offset": 14676,
+      "value": "FLAG{THE-THE-THE-TRADE-ORDINATE}"
+    },
+    {
+      "offset": 14712,
+      "value": "FLAG{AND-UNIVERSAL-AND-AND-SUPREME}"
+    },
+    {
+      "offset": 14748,
+      "value": "FLAG{CAPACITY-DEVELOP-THESE-USE-AND}"
+    },
+    {
+      "offset": 14788,
+      "value": "FLAG{THE-ORGANISATIONS-CITIZENSHIP-USSR-SOVIET}"
+    },
+    {
+      "offset": 14836,
+      "value": "FLAG{MAY-AND-ASSESSORS-LAWS-SUBMISSION}"
+    },
+    {
+      "offset": 14876,
+      "value": "FLAG{PRINCIPLE-FUNCTIONING-USE-PROTECTION-APPROVAL}"
+    },
+    {
+      "offset": 14928,
+      "value": "FLAG{THE-USSR-AND-THE-SOVIET}"
+    },
+    {
+      "offset": 14960,
+      "value": "FLAG{HAVE-LABOUR-PROPERTY-COURT-INTERNATIONAL}"
+    },
+    {
+      "offset": 15008,
+      "value": "FLAG{THE-CONCERNED-SOVIETS-ECONOMIC-LABOUR}"
+    },
+    {
+      "offset": 15052,
+      "value": "FLAG{BODIES-DEPUTIES-PROGRESS-THE-INTELLIGENTSIA}"
+    },
+    {
+      "offset": 15104,
+      "value": "FLAG{THEIR-FROM-USSR-ARMED-THE}"
+    },
+    {
+      "offset": 15136,
+      "value": "FLAG{LAW-DEAL-THE-ENSURED-REPUBLICAN}"
+    },
+    {
+      "offset": 15176,
+      "value": "FLAG{THEIR-AND-BEING-UNION-ITS}"
+    },
+    {
+      "offset": 15208,
+      "value": "FLAG{LANGUAGES-WHICH-ARTICLE-SUBORDINATION-SPOUSES}"
+    },
+    {
+      "offset": 15260,
+      "value": "FLAG{SOVIET-AND-WITH-MEMBERS-LOWEST}"
+    },
+    {
+      "offset": 15300,
+      "value": "FLAG{SOCIALIST-GREAT-THE-ECONOMIC-RATIFY}"
+    },
+    {
+      "offset": 15344,
+      "value": "FLAG{THE-USSR-STATE-CITIZENS-ARE}"
+    },
+    {
+      "offset": 15380,
+      "value": "FLAG{ARTICLE-WORK-THE-THE-AND}"
+    },
+    {
+      "offset": 15412,
+      "value": "FLAG{DEVELOPMENT-REPUBLICS-ADOPTS-AND-TERRITORIES}"
+    },
+    {
+      "offset": 15464,
+      "value": "FLAG{DEFENCE-MILITARY-POPULAR-THE-COMMUNISM}"
+    },
+    {
+      "offset": 15512,
+      "value": "FLAG{ARTICLE-RESIDENCE-FROM-USSR-THE}"
+    },
+    {
+      "offset": 15552,
+      "value": "FLAG{ALSO-WHICH-HEREBY-CONSTITUTION-PROGRAMME}"
+    },
+    {
+      "offset": 15600,
+      "value": "FLAG{BEFORE-AND-CONSTRUCTIVE-AND-GOVERNMENT}"
+    },
+    {
+      "offset": 15648,
+      "value": "FLAG{OFFICIAL-REGIONS-ENTRUSTED-THE-THE}"
+    },
+    {
+      "offset": 15692,
+      "value": "FLAG{PUBLIC-INTER-STATE-RURAL-AND}"
+    },
+    {
+      "offset": 15728,
+      "value": "FLAG{ORGANISATIONS-AND-USSR-EVENT-RATIONAL}"
+    },
+    {
+      "offset": 15772,
+      "value": "FLAG{THE-ELECT-CITIZENS-AND-HIGHER}"
+    },
+    {
+      "offset": 15808,
+      "value": "FLAG{THE-AND-INTERNATIONAL-THE-CONSERVATION}"
+    },
+    {
+      "offset": 15856,
+      "value": "FLAG{THE-DYNAMIC-SECURITY-REPRESENTATIVES-THE}"
+    },
+    {
+      "offset": 15904,
+      "value": "FLAG{ARE-ARTICLE-ACTIVITY-AND-OFFICIALS}"
+    },
+    {
+      "offset": 15948,
+      "value": "FLAG{POWERS-IMPROVEMENT-MOULD-AND-STATE}"
+    },
+    {
+      "offset": 15992,
+      "value": "FLAG{THE-LIBERATION-WHERE-COMMITTEES-INCENTIVES}"
+    },
+    {
+      "offset": 16044,
+      "value": "FLAG{LEGISLATION-ITS-EXERCISE-PLACING-UNION}"
+    },
+    {
+      "offset": 16092,
+      "value": "FLAG{AND-THE-CITIZENS-CREATED-VICE}"
+    },
+    {
+      "offset": 16128,
+      "value": "FLAG{ITS-CONDUCTED-ORGANISATIONS-AND-MINISTER}"
+    },
+    {
+      "offset": 16176,
+      "value": "FLAG{OBSERVE-AUTHORITY-GAINS-USSR-AND}"
+    },
+    {
+      "offset": 16216,
+      "value": "FLAG{MEETINGS-PRINCIPLE-SOVIET-GREATER-AIMS}"
+    },
+    {
+      "offset": 16264,
+      "value": "FLAG{ALL-THEIR-USSR-USSR-THE}"
+    },
+    {
+      "offset": 16296,
+      "value": "FLAG{SHALL-SOVIET-THEIR-LETTERS-ARBITRATION}"
+    },
+    {
+      "offset": 16344,
+      "value": "FLAG{SUPREME-THIS-PROPOSALS-AND-AND}"
+    },
+    {
+      "offset": 16384,
+      "value": "FLAG{NATURAL-LAW-DECISIONS-THE-AND}"
+    },
+    {
+      "offset": 16420,
+      "value": "FLAG{THE-MORE-AND-THE-NEW}"
+    },
+    {
+      "offset": 16448,
+      "value": "FLAG{AGAINST-SHALL-THE-ARTICLE-AND}"
+    },
+    {
+      "offset": 16484,
+      "value": "FLAG{AND-UNION-STATELESS-USSR-SOCIAL}"
+    },
+    {
+      "offset": 16524,
+      "value": "FLAG{THE-ADMINISTRATION-AND-THE-PROVISION}"
+    },
+    {
+      "offset": 16568,
+      "value": "FLAG{THE-THE-FOR-MOTHERS-SCHOOL}"
+    },
+    {
+      "offset": 16604,
+      "value": "FLAG{REPUBLIC-LAWS-ENTERPRISES-CITY-AND}"
+    },
+    {
+      "offset": 16648,
+      "value": "FLAG{CREATIVE-COMMISSIONS-BECOMING-AUTONOMOUS-DISTRICTS}"
+    },
+    {
+      "offset": 16708,
+      "value": "FLAG{OTHER-THE-AND-WITH-PARTIAL}"
+    },
+    {
+      "offset": 16744,
+      "value": "FLAG{THEM-THE-IMPLEMENTATION-THE-MARRIAGE}"
+    },
+    {
+      "offset": 16788,
+      "value": "FLAG{FREEDOM-INSTITUTED-AND-ELECTION-CONCERN}"
+    },
+    {
+      "offset": 16836,
+      "value": "FLAG{SOCIAL-ACHIEVING-THE-GENERATIONS-CONSTITUTION}"
+    },
+    {
+      "offset": 16888,
+      "value": "FLAG{USSR-EACH-OTHER-THEIR-CORRESPONDING}"
+    },
+    {
+      "offset": 16932,
+      "value": "FLAG{THE-SOVIET-THE-UNION-THE}"
+    },
+    {
+      "offset": 16964,
+      "value": "FLAG{STRUCTURE-LABOUR-THE-THE-STATE}"
+    },
+    {
+      "offset": 17004,
+      "value": "FLAG{PROPERTY-AUTHORITY-AND-CONSTITUTION-STATE}"
+    },
+    {
+      "offset": 17052,
+      "value": "FLAG{PRESIDIUM-CONTROL-AND-RELATIONS-FAMILY}"
+    },
+    {
+      "offset": 17100,
+      "value": "FLAG{ORDINANCES-COURSES-ENSURE-OSSETIAN-COMMUNIST}"
+    },
+    {
+      "offset": 17152,
+      "value": "FLAG{CONTROL-SHALL-COURT-FOR-DETERMINATION}"
+    },
+    {
+      "offset": 17196,
+      "value": "FLAG{CONCERN-FORCES-ENJOY-PUBLIC-CHURCH}"
+    },
+    {
+      "offset": 17240,
+      "value": "FLAG{ATTITUDE-WORK-ENHANCE-REPUBLIC-THE}"
+    },
+    {
+      "offset": 17284,
+      "value": "FLAG{COUNCIL-ASSISTANCE-THE-CONSIDERING-COLLECTIVE}"
+    },
+    {
+      "offset": 17336,
+      "value": "FLAG{FOREIGN-CITIZENSHIP-WORK-DEPARTMENTAL-AND}"
+    },
+    {
+      "offset": 17384,
+      "value": "FLAG{INTERNATIONALIST-MINISTERS-THE-AND-SYSTEM}"
+    },
+    {
+      "offset": 17432,
+      "value": "FLAG{RECOMMENDATION-WITH-OTHER-AND-PUBLIC}"
+    },
+    {
+      "offset": 17476,
+      "value": "FLAG{REPUBLIC-CONSTITUTION-DECISIONS-HAVE-CHAPTER}"
+    },
+    {
+      "offset": 17528,
+      "value": "FLAG{REPUBLICAN-MULTINATIONAL-SOCIAL-AND-SYSTEM}"
+    },
+    {
+      "offset": 17580,
+      "value": "FLAG{AND-THAT-DISTRICT-FOR-LAW}"
+    },
+    {
+      "offset": 17612,
+      "value": "FLAG{THE-THE-EACH-PROCEDURE-CONSTITUTION}"
+    },
+    {
+      "offset": 17656,
+      "value": "FLAG{THE-UTILITY-ARTICLE-COMMISSIONS-BASIS}"
+    },
+    {
+      "offset": 17700,
+      "value": "FLAG{THE-MAKES-CHAIRMAN-CALLED-ACHIEVING}"
+    },
+    {
+      "offset": 17744,
+      "value": "FLAG{FREE-RESULTING-CREATIVE-STANDING-PRODUCTION}"
+    },
+    {
+      "offset": 17796,
+      "value": "FLAG{LOCAL-INDIVIDUAL-SHALL-WITHIN-THE}"
+    },
+    {
+      "offset": 17836,
+      "value": "FLAG{SUPREME-THE-SOVIET-SOCIALIST-THE}"
+    },
+    {
+      "offset": 17876,
+      "value": "FLAG{CITIZENS-REPUBLIC-DECISIONS-THE-VII}"
+    },
+    {
+      "offset": 17920,
+      "value": "FLAG{INTERNATIONAL-DETERMINE-THEIR-THE-DIRECTLY}"
+    },
+    {
+      "offset": 17972,
+      "value": "FLAG{ALL-GRANTING-MINISTRIES-ORGANISATIONS-WITH}"
+    },
+    {
+      "offset": 18024,
+      "value": "FLAG{USE-AND-USSR-STATE-PROVIDED}"
+    },
+    {
+      "offset": 18060,
+      "value": "FLAG{DENOUNCE-AND-DUTIES-DUTY-DEVELOP}"
+    },
+    {
+      "offset": 18100,
+      "value": "FLAG{SOCIALIST-THE-USSR-SOVIET-AUTONOMOUS}"
+    },
+    {
+      "offset": 18144,
+      "value": "FLAG{EARNINGS-ENSURE-CITIZENS-CITIZEN-BASED}"
+    },
+    {
+      "offset": 18192,
+      "value": "FLAG{USSR-THE-THE-THE-AND}"
+    },
+    {
+      "offset": 18220,
+      "value": "FLAG{USSR-BODY-THE-CONSENT-AND}"
+    },
+    {
+      "offset": 18252,
+      "value": "FLAG{UNION-COMPLETELY-AND-OPERATION-TERM}"
+    },
+    {
+      "offset": 18296,
+      "value": "FLAG{DECISIONS-PARTIAL-ASSESSORS-WITHIN-ITSELF}"
+    },
+    {
+      "offset": 18344,
+      "value": "FLAG{LOSS-AND-TRADE-RIGHTS-AND}"
+    },
+    {
+      "offset": 18376,
+      "value": "FLAG{PUBLIC-ARE-SOVIET-STATE-THE}"
+    },
+    {
+      "offset": 18412,
+      "value": "FLAG{HOME-AND-SOCIETY-HAVE-LESS}"
+    },
+    {
+      "offset": 18448,
+      "value": "FLAG{BROAD-WORK-WOMEN-USSR-OTHER}"
+    },
+    {
+      "offset": 18484,
+      "value": "FLAG{FARMS-USSR-THE-SOVIET-HIGHEST}"
+    },
+    {
+      "offset": 18520,
+      "value": "FLAG{PRODUCTION-USSR-AND-ORGANISATIONS-FUNDS}"
+    },
+    {
+      "offset": 18568,
+      "value": "FLAG{ECONOMIC-FOUNDATION-AND-THE-SYSTEMATIC}"
+    },
+    {
+      "offset": 18616,
+      "value": "FLAG{AND-THAT-EXPIRY-NOT-THE}"
+    },
+    {
+      "offset": 18648,
+      "value": "FLAG{WITH-SOVIET-THIRDS-AND-THE}"
+    },
+    {
+      "offset": 18684,
+      "value": "FLAG{SOVIET-BANNED-FOR-INTEGRAL-BUREAUCRACY}"
+    },
+    {
+      "offset": 18732,
+      "value": "FLAG{NATIONWIDE-ARE-SOCIAL-ADMINISTRATIVE-THE}"
+    },
+    {
+      "offset": 18780,
+      "value": "FLAG{AND-THE-THE-ORGANISATIONS-FREE}"
+    },
+    {
+      "offset": 18820,
+      "value": "FLAG{PROPERTY-MINISTERS-THE-ECONOMY-CONSTITUTION}"
+    },
+    {
+      "offset": 18872,
+      "value": "FLAG{SHALL-TYPE-THE-AND-MEETINGS}"
+    },
+    {
+      "offset": 18908,
+      "value": "FLAG{THE-HAVE-MANAGEMENT-RESPONSIBILITY-AND}"
+    },
+    {
+      "offset": 18956,
+      "value": "FLAG{THE-JOINT-NAKHICHEVAN-THE-AND}"
+    },
+    {
+      "offset": 18992,
+      "value": "FLAG{DETERMINE-STATE-ITS-THE-SHALL}"
+    },
+    {
+      "offset": 19028,
+      "value": "FLAG{WITH-SOVIET-ESTABLISHMENT-AND-THE}"
+    },
+    {
+      "offset": 19068,
+      "value": "FLAG{STATE-PRODUCTION-EXCEEDING-AND-PROPERTY}"
+    },
+    {
+      "offset": 19116,
+      "value": "FLAG{LEGISLATION-SOCIETY-OPERATIVES-THE-STATE}"
+    },
+    {
+      "offset": 19164,
+      "value": "FLAG{SOVIET-EQUALITY-OSSETIAN-SOVIET-FOR}"
+    },
+    {
+      "offset": 19208,
+      "value": "FLAG{ORGANISE-LENGTH-SOVIET-INSTITUTION-PROCURATORS}"
+    },
+    {
+      "offset": 19264,
+      "value": "FLAG{SYSTEM-ENTRUSTED-DISABILITY-THE-REPUBLIC}"
+    },
+    {
+      "offset": 19312,
+      "value": "FLAG{STRUCTURE-SCIENTIFIC-THE-DEMOCRACY-RACIAL}"
+    },
+    {
+      "offset": 19360,
+      "value": "FLAG{THE-USSRCHAPTER-THE-USSR-ARTICLE}"
+    },
+    {
+      "offset": 19400,
+      "value": "FLAG{THE-STATE-SPREAD-NOT-REPUBLIC}"
+    },
+    {
+      "offset": 19436,
+      "value": "FLAG{SOVIETS-REPUBLIC-USSR-USSR-ENSURE}"
+    },
+    {
+      "offset": 19476,
+      "value": "FLAG{CITIZENS-DIRECTLY-REPUBLICS-AND-VICTORY}"
+    },
+    {
+      "offset": 19524,
+      "value": "FLAG{PRODUCTION-SUPREME-THE-THE-CAUSE}"
+    },
+    {
+      "offset": 19564,
+      "value": "FLAG{SOCIALISM-TOGETHER-THE-THE-HAS}"
+    },
+    {
+      "offset": 19604,
+      "value": "FLAG{ADYGEI-SOVIET-AND-COMMUNAL-FREE}"
+    },
+    {
+      "offset": 19644,
+      "value": "FLAG{THE-REGARD-INCLUDE-CENTRALISM-INNOVATIONS}"
+    },
+    {
+      "offset": 19692,
+      "value": "FLAG{THE-PART-KALPAK-AND-AND}"
+    },
+    {
+      "offset": 19724,
+      "value": "FLAG{HAVE-SUPREME-COMBINING-THE-REPUBLIC}"
+    },
+    {
+      "offset": 19768,
+      "value": "FLAG{CONSOLIDATE-SOVIET-DEVELOPING-PRESIDIUM-DISTRICT}"
+    },
+    {
+      "offset": 19824,
+      "value": "FLAG{FOR-CIVIL-THE-THE-SOCIAL}"
+    },
+    {
+      "offset": 19856,
+      "value": "FLAG{THE-THE-OTHER-SHALL-DEVELOPMENT}"
+    },
+    {
+      "offset": 19896,
+      "value": "FLAG{USSR-ADMINISTRATIVE-CREATIVE-ACCOUNT-MATTERS}"
+    },
+    {
+      "offset": 19948,
+      "value": "FLAG{WORK-OVER-USSR-CITIZENS-DEVELOPING}"
+    },
+    {
+      "offset": 19992,
+      "value": "FLAG{EXECUTIVE-SOVIETS-INDUSTRIAL-STATE-THE}"
+    },
+    {
+      "offset": 20040,
+      "value": "FLAG{THE-STRUGGLE-OCTOBER-PRIVACY-ASSIGNMENTS}"
+    },
+    {
+      "offset": 20088,
+      "value": "FLAG{DRAFT-USSR-UNION-THEM-REPRESENTATIVES}"
+    },
+    {
+      "offset": 20132,
+      "value": "FLAG{THE-FORMS-THESE-PARITY-HOME}"
+    },
+    {
+      "offset": 20168,
+      "value": "FLAG{USSR-SOCIALIST-REGIONS-RECALL-HEARINGS}"
+    },
+    {
+      "offset": 20216,
+      "value": "FLAG{FOR-AGGRESSION-THE-THE-COURTS}"
+    },
+    {
+      "offset": 20252,
+      "value": "FLAG{USSR-MAY-REPUBLIC-INTERPRETER-TWO}"
+    },
+    {
+      "offset": 20292,
+      "value": "FLAG{SESSION-ELECTED-THEIR-THE-ARBITRATION}"
+    },
+    {
+      "offset": 20336,
+      "value": "FLAG{CERTIFIED-USSR-AUTONOMOUS-MOTHERLAND-HUMAN}"
+    },
+    {
+      "offset": 20388,
+      "value": "FLAG{COMPRISES-THE-AND-THEIR-INTERNATIONAL}"
+    },
+    {
+      "offset": 20432,
+      "value": "FLAG{THE-AND-RELEASED-SUPREME-AND}"
+    },
+    {
+      "offset": 20468,
+      "value": "FLAG{THE-SOCIALIST-USSR-PARTICIPATING-CITIZENS}"
+    },
+    {
+      "offset": 20516,
+      "value": "FLAG{CONCERN-TAKE-THE-LAWS-MEETINGS}"
+    },
+    {
+      "offset": 20556,
+      "value": "FLAG{ELECT-DEVELOPMENT-SOVIET-SCIENTIFIC-DEPUTIES}"
+    },
+    {
+      "offset": 20608,
+      "value": "FLAG{ARTICLE-FUNCTIONING-ENSURANCE-ORGANISATIONS-THE}"
+    },
+    {
+      "offset": 20664,
+      "value": "FLAG{CHAPTER-ADOPTED-PROPERTY-ASSOCIATE-ACCOUNTABLE}"
+    },
+    {
+      "offset": 20720,
+      "value": "FLAG{PUBLIC-OTHER-CHAPTER-MAY-SUBMIT}"
+    },
+    {
+      "offset": 20760,
+      "value": "FLAG{FRUITS-REPUBLIC-OTHER-ALL-THE}"
+    },
+    {
+      "offset": 20796,
+      "value": "FLAG{SOVIETS-AUTONOMOUS-STATE-WORK-AND}"
+    },
+    {
+      "offset": 20836,
+      "value": "FLAG{USSR-DETERMINATION-USSR-DISTRICT-AND}"
+    },
+    {
+      "offset": 20880,
+      "value": "FLAG{ELECTED-ARTICLE-THE-REPUBLIC-WITH}"
+    },
+    {
+      "offset": 20920,
+      "value": "FLAG{HAVE-ACCOUNTABLE-THE-SUPREME-CHAIRMEN}"
+    },
+    {
+      "offset": 20964,
+      "value": "FLAG{WORKING-WORK-ANY-CREATED-DEVELOPMENT}"
+    },
+    {
+      "offset": 21008,
+      "value": "FLAG{THE-CHILDRENS-UNION-THE-UNION}"
+    },
+    {
+      "offset": 21044,
+      "value": "FLAG{BETWEEN-ENSURED-DECISIONS-AND-THE}"
+    },
+    {
+      "offset": 21084,
+      "value": "FLAG{THE-EDUCATION-ALL-MINISTERS-DECISIONS}"
+    },
+    {
+      "offset": 21128,
+      "value": "FLAG{AND-GOOD-SUPREME-MANAGING-THE}"
+    },
+    {
+      "offset": 21164,
+      "value": "FLAG{REFERRED-INTO-EXECUTIVE-THESE-EVENT}"
+    },
+    {
+      "offset": 21208,
+      "value": "FLAG{WITH-USSR-COURTS-FOR-PLACE}"
+    },
+    {
+      "offset": 21244,
+      "value": "FLAG{WIDELY-AND-COMRADELY-THE-ALL}"
+    },
+    {
+      "offset": 21280,
+      "value": "FLAG{FINANCIAL-EMPLOYMENT-INSTITUTIONS-USSR-SOVIET}"
+    },
+    {
+      "offset": 21332,
+      "value": "FLAG{RIGHTS-AND-JOB-REPUBLIC-THEIR}"
+    },
+    {
+      "offset": 21368,
+      "value": "FLAG{INTRODUCTION-WORLD-PARTICIPATION-AND-CONSOLIDATED}"
+    },
+    {
+      "offset": 21424,
+      "value": "FLAG{THE-THE-AND-SOCIALIST-UNION}"
+    },
+    {
+      "offset": 21460,
+      "value": "FLAG{CONSTITUENCIES-COMMUNISM-THE-INITIATE-EITHER}"
+    },
+    {
+      "offset": 21512,
+      "value": "FLAG{PRESIDIUM-USSR-RESPECTIVE-BODIES-WITHIN}"
+    },
+    {
+      "offset": 21560,
+      "value": "FLAG{OTHER-GUARANTEED-THE-ALLOWED-THE}"
+    },
+    {
+      "offset": 21600,
+      "value": "FLAG{POWERFUL-THE-SUBMISSION-CULTURAL-UNION}"
+    },
+    {
+      "offset": 21648,
+      "value": "FLAG{AND-THE-VARIOUS-THE-CITIZENSHIP}"
+    },
+    {
+      "offset": 21688,
+      "value": "FLAG{WHICH-WITH-SOVIET-CREATIVE-SUPREME}"
+    },
+    {
+      "offset": 21732,
+      "value": "FLAG{MINISTERS-PEACE-SOVIET-GOVERNMENT-THE}"
+    },
+    {
+      "offset": 21776,
+      "value": "FLAG{INQUIRY-COMPULSORY-HIGHEST-TRADITIONS-FOR}"
+    },
+    {
+      "offset": 21824,
+      "value": "FLAG{INDEPENDENTLY-THE-CONCERNED-THE-DEPUTIES}"
+    },
+    {
+      "offset": 21872,
+      "value": "FLAG{COUNTRIES-JOINT-BODIES-PLANS-THE}"
+    },
+    {
+      "offset": 21912,
+      "value": "FLAG{CONSIDERING-ONE-PRODUCTION-ARTICLE-EXECUTIVE}"
+    },
+    {
+      "offset": 21964,
+      "value": "FLAG{PROPOSAL-SCHOOL-THE-THEY-POLICY}"
+    },
+    {
+      "offset": 22004,
+      "value": "FLAG{WITH-SPECIAL-USSR-THE-SOVIET}"
+    },
+    {
+      "offset": 22040,
+      "value": "FLAG{THE-FROM-ENSURE-THE-ELECTED}"
+    },
+    {
+      "offset": 22076,
+      "value": "FLAG{DEVELOPMENT-THEM-BASED-ORGANISATIONAL-THE}"
+    },
+    {
+      "offset": 22124,
+      "value": "FLAG{TRAINING-EQUALITY-LOCAL-DAYS-THAT}"
+    },
+    {
+      "offset": 22164,
+      "value": "FLAG{IMPLEMENT-PREROGATIVE-PEOPLES-THE-NATIONALITIES}"
+    },
+    {
+      "offset": 22220,
+      "value": "FLAG{DOMICILE-SHALL-THEM-THE-AND}"
+    },
+    {
+      "offset": 22256,
+      "value": "FLAG{STRENGTHEN-INSTITUTE-THE-CITIZENS-CONSENT}"
+    },
+    {
+      "offset": 22304,
+      "value": "FLAG{WORK-NEXT-AND-CONDITIONS-THE}"
+    },
+    {
+      "offset": 22340,
+      "value": "FLAG{NEWSPAPERS-ARTICLE-CARE-THE-THE}"
+    },
+    {
+      "offset": 22380,
+      "value": "FLAG{COMPETENCE-OPPORTUNITY-PLACES-WORSHIP-THE}"
+    },
+    {
+      "offset": 22428,
+      "value": "FLAG{ACTIVITY-ELECTED-THE-STATE-TRAINING}"
+    },
+    {
+      "offset": 22472,
+      "value": "FLAG{BODIES-RESPECT-TAKING-THEIR-PRESIDED}"
+    },
+    {
+      "offset": 22516,
+      "value": "FLAG{WITH-THE-THE-AND-DIRECTION}"
+    },
+    {
+      "offset": 22552,
+      "value": "FLAG{DAMAGE-THE-LAND-THEIR-USSR}"
+    },
+    {
+      "offset": 22588,
+      "value": "FLAG{AUTHORITY-THE-EACH-WITH-ORGANISED}"
+    },
+    {
+      "offset": 22628,
+      "value": "FLAG{THE-OBSERVE-AND-CONSCIOUSNESS-SATISFACTION}"
+    },
+    {
+      "offset": 22680,
+      "value": "FLAG{ECONOMY-THE-COUNCIL-THE-UNION}"
+    },
+    {
+      "offset": 22716,
+      "value": "FLAG{THE-TURN-CONSCIENCE-AUTHORITY-THE}"
+    },
+    {
+      "offset": 22756,
+      "value": "FLAG{BOUNDARIES-THE-THE-DECISION-AND}"
+    },
+    {
+      "offset": 22796,
+      "value": "FLAG{REPUBLIC-EXERCISE-INTO-PARTICIPATION-REPUBLIC}"
+    },
+    {
+      "offset": 22848,
+      "value": "FLAG{STATE-SOCIALISM-COURTS-RELEASED-HOUSE}"
+    },
+    {
+      "offset": 22892,
+      "value": "FLAG{ALL-SOCIALIST-DISCREPANCY-SOCIETY-FROM}"
+    },
+    {
+      "offset": 22940,
+      "value": "FLAG{THE-AND-PEOPLES-WORK-IMPROVED}"
+    },
+    {
+      "offset": 22976,
+      "value": "FLAG{MEASURES-WITH-THAT-THE-THE}"
+    },
+    {
+      "offset": 23012,
+      "value": "FLAG{THE-THE-THE-EVERY-PEOPLE}"
+    },
+    {
+      "offset": 23044,
+      "value": "FLAG{DUE-THE-NORMS-THE-SCHOOL}"
+    },
+    {
+      "offset": 23076,
+      "value": "FLAG{PROMOTE-WHICH-MAKE-SUPREME-SOVIET}"
+    },
+    {
+      "offset": 23116,
+      "value": "FLAG{REPUBLIC-DIPLOMATIC-THE-ACCORDANCE-THE}"
+    },
+    {
+      "offset": 23164,
+      "value": "FLAG{EXCLUSIVE-SOCIALIST-AND-SHALL-USSR}"
+    },
+    {
+      "offset": 23208,
+      "value": "FLAG{ECONOMIC-NATURAL-CITIZENS-THE-RELATIONS}"
+    },
+    {
+      "offset": 23256,
+      "value": "FLAG{CENTRALISED-THE-THE-RELATIONS-WARRANT}"
+    },
+    {
+      "offset": 23300,
+      "value": "FLAG{LOCAL-AUTONOMOUS-EVENT-THEIR-BUDGET}"
+    },
+    {
+      "offset": 23344,
+      "value": "FLAG{THE-REGIONS-FORMATION-ANNUAL-CITIZENS}"
+    },
+    {
+      "offset": 23388,
+      "value": "FLAG{DISPUTES-TERRITORY-THE-LIVING-MAINTAIN}"
+    },
+    {
+      "offset": 23436,
+      "value": "FLAG{STATE-SOCIETY-ADMINISTRATION-ENACTED-SAFEGUARDED}"
+    },
+    {
+      "offset": 23492,
+      "value": "FLAG{AND-THE-WILL-THE-LANDOWNER}"
+    },
+    {
+      "offset": 23528,
+      "value": "FLAG{EACH-AND-HOLDING-UNION-USSR}"
+    },
+    {
+      "offset": 23564,
+      "value": "FLAG{DEAL-PAID-PROVISION-STRENGTHEN-WITH}"
+    },
+    {
+      "offset": 23608,
+      "value": "FLAG{THE-SOVIET-AND-SOCIAL-SOCIAL}"
+    },
+    {
+      "offset": 23644,
+      "value": "FLAG{COUNCIL-PRICES-TAKE-ORDINANCES-ARTICLE}"
+    },
+    {
+      "offset": 23692,
+      "value": "FLAG{USSR-PROPERTY-DEVELOPMENT-THEIR-RIGHTS}"
+    },
+    {
+      "offset": 23740,
+      "value": "FLAG{PROCURATOR-AND-SHALL-THE-THE}"
+    },
+    {
+      "offset": 23776,
+      "value": "FLAG{THE-AUTONOMOUS-CITIZEN-THEM-EMULATION}"
+    },
+    {
+      "offset": 23820,
+      "value": "FLAG{USSR-SOVIET-REPUBLICS-ENTERPRISES-THEIR}"
+    },
+    {
+      "offset": 23868,
+      "value": "FLAG{THE-STATE-RESPECTIVELY-CHAPTER-PERSONAL}"
+    },
+    {
+      "offset": 23916,
+      "value": "FLAG{ACTIVITY-USSR-AND-ACCOUNT-AND}"
+    },
+    {
+      "offset": 23952,
+      "value": "FLAG{CONSTITUTION-COURTS-SUBMITTED-REFERENDUMS-USSR}"
+    },
+    {
+      "offset": 24008,
+      "value": "FLAG{REPUBLIC-JURISDICTION-REPUBLIC-DISTRICTS-MAY}"
+    },
+    {
+      "offset": 24060,
+      "value": "FLAG{THE-COUNTRYS-INSTITUTIONS-AND-MEASURES}"
+    },
+    {
+      "offset": 24108,
+      "value": "FLAG{RANKING-UNION-MATERIAL-THE-AUTONOMOUS}"
+    },
+    {
+      "offset": 24152,
+      "value": "FLAG{PARITY-PROMOTE-JURISDICTION-GROUNDS-PATRIOTIC}"
+    },
+    {
+      "offset": 24204,
+      "value": "FLAG{MANDATES-VOCATIONAL-THE-CLOSED-THE}"
+    },
+    {
+      "offset": 24248,
+      "value": "FLAG{AND-THE-FOR-GLOBE-AND}"
+    },
+    {
+      "offset": 24276,
+      "value": "FLAG{THE-REPUBLICS-SOCIAL-SATISFY-JURISDICTION}"
+    },
+    {
+      "offset": 24324,
+      "value": "FLAG{TENDER-THRIFTY-FOR-AND-DEPUTIES}"
+    },
+    {
+      "offset": 24364,
+      "value": "FLAG{THE-UNION-FORCES-USSR-SOCIALIST}"
+    },
+    {
+      "offset": 24404,
+      "value": "FLAG{THE-UNIFORM-USSR-PROFESS-THE}"
+    },
+    {
+      "offset": 24440,
+      "value": "FLAG{STAGE-WELL-OPERATIVES-THE-PRESTIGE}"
+    },
+    {
+      "offset": 24484,
+      "value": "FLAG{THEIR-THEIR-LEVEL-MEASURES-TRAINING}"
+    },
+    {
+      "offset": 24528,
+      "value": "FLAG{THEM-RULES-CONDUCT-AND-FIXES}"
+    },
+    {
+      "offset": 24564,
+      "value": "FLAG{AND-CITIZENS-AND-MORAL-IMPROVE}"
+    },
+    {
+      "offset": 24604,
+      "value": "FLAG{PARTY-SHALL-REPUBLIC-COMPLETE-PART}"
+    },
+    {
+      "offset": 24648,
+      "value": "FLAG{THE-DATE-UNION-BUILDING-OTHER}"
+    },
+    {
+      "offset": 24684,
+      "value": "FLAG{LAW-SOCIALIST-BUDGET-SOCIALIST-PUBLIC}"
+    },
+    {
+      "offset": 24728,
+      "value": "FLAG{INVIOLABILITY-ARRESTED-AND-FROM-SUBORDINATE}"
+    },
+    {
+      "offset": 24780,
+      "value": "FLAG{CHECK-RESPONSIBILITY-CITIZENSHIP-DISSEMINATION-AND}"
+    },
+    {
+      "offset": 24840,
+      "value": "FLAG{SPHERES-COMBAT-THE-PREROGATIVE-PROCURATORS}"
+    },
+    {
+      "offset": 24892,
+      "value": "FLAG{BEFORE-ORGANISE-THE-FUNCTIONS-LIFE}"
+    },
+    {
+      "offset": 24936,
+      "value": "FLAG{HAVE-SOVIET-RESPONSIBLE-PASSED-BODIES}"
+    },
+    {
+      "offset": 24980,
+      "value": "FLAG{PROTECTION-RULE-USSR-PRINCIPLE-DECISIONS}"
+    },
+    {
+      "offset": 25028,
+      "value": "FLAG{ACTIVE-WHOLE-LOCAL-ENJOYMENT-DEPUTIES}"
+    },
+    {
+      "offset": 25072,
+      "value": "FLAG{SERVICES-ENTRUSTED-AND-AND-RESPONSIBLE}"
+    },
+    {
+      "offset": 25120,
+      "value": "FLAG{LEGAL-THE-THE-SOVIET-CITIZENS}"
+    },
+    {
+      "offset": 25156,
+      "value": "FLAG{SHALL-THE-BODIES-THEIR-DUTY}"
+    },
+    {
+      "offset": 25192,
+      "value": "FLAG{INTRODUCTION-NECESSARY-NAKHICHEVAN-RELATIONSHIPS-THE}"
+    },
+    {
+      "offset": 25252,
+      "value": "FLAG{SHALL-DEVELOPMENT-BEING-THE-AND}"
+    },
+    {
+      "offset": 25292,
+      "value": "FLAG{SOVIET-FOR-AND-LIFE-THEM}"
+    },
+    {
+      "offset": 25324,
+      "value": "FLAG{SOCIALISM-ARISING-WORK-SOCIAL-HEREBY}"
+    },
+    {
+      "offset": 25368,
+      "value": "FLAG{WITHOUT-THE-AND-AND-SQUARES}"
+    },
+    {
+      "offset": 25404,
+      "value": "FLAG{CHAMBERS-MEASURES-FORMS-SOVIETS-FRIENDSHIP}"
+    },
+    {
+      "offset": 25456,
+      "value": "FLAG{PERSONS-ARTICLE-THE-AND-THE}"
+    },
+    {
+      "offset": 25492,
+      "value": "FLAG{SPIRIT-BOARDS-AND-AND-AND}"
+    },
+    {
+      "offset": 25524,
+      "value": "FLAG{CHAIRMAN-INSTITUTIONS-STATE-THE-EXCHANGE}"
+    },
+    {
+      "offset": 25572,
+      "value": "FLAG{ITS-ARE-RAISE-DEVELOPMENT-FRAMEWORK}"
+    },
+    {
+      "offset": 25616,
+      "value": "FLAG{AND-PUT-SOVIETS-NUCLEUS-TAKE}"
+    },
+    {
+      "offset": 25652,
+      "value": "FLAG{MATTER-ARTICLE-UNION-SOCIAL-STATE}"
+    },
+    {
+      "offset": 25692,
+      "value": "FLAG{POLICY-BASIS-FORESTS-ARTICLE-OTHER}"
+    },
+    {
+      "offset": 25736,
+      "value": "FLAG{CITIZENS-WORLD-ITS-ARE-EXTENDING}"
+    },
+    {
+      "offset": 25776,
+      "value": "FLAG{UNION-USSR-STATE-THE-RECOMMENDATIONS}"
+    },
+    {
+      "offset": 25820,
+      "value": "FLAG{STATE-JOINT-RESPONSIBILITY-BODY-STATES}"
+    },
+    {
+      "offset": 25868,
+      "value": "FLAG{ESTABLISHED-CHOSEN-MORE-SHALL-HIGHER}"
+    },
+    {
+      "offset": 25912,
+      "value": "FLAG{WITH-THEM-AMONG-OTHER-AND}"
+    },
+    {
+      "offset": 25944,
+      "value": "FLAG{THE-ARTICLE-NOT-THOSE-WILL}"
+    },
+    {
+      "offset": 25980,
+      "value": "FLAG{THE-STRICT-OPPORTUNITY-STATE-ACCORDANCE}"
+    },
+    {
+      "offset": 26028,
+      "value": "FLAG{USSR-ORGANISE-PUBLIC-WORTHY-AND}"
+    },
+    {
+      "offset": 26068,
+      "value": "FLAG{UNION-ACTIVITY-USE-THEIR-REVIEW}"
+    },
+    {
+      "offset": 26108,
+      "value": "FLAG{WITH-LAW-SOCIALIST-RISING-LOSS}"
+    },
+    {
+      "offset": 26148,
+      "value": "FLAG{UNION-FOR-SOVIETS-WITH-EARNED}"
+    },
+    {
+      "offset": 26184,
+      "value": "FLAG{USSR-MANAGERIAL-CONSERVATION-SOCIALIST-PRESIDIUM}"
+    },
+    {
+      "offset": 26240,
+      "value": "FLAG{TERRITORY-TWO-NATIONAL-PROMOTE-RIGHTS}"
+    },
+    {
+      "offset": 26284,
+      "value": "FLAG{THEIR-SHALL-THE-PERSONAL-STATE}"
+    },
+    {
+      "offset": 26324,
+      "value": "FLAG{ITS-THAT-THE-PROPERTY-GEORGIAN}"
+    },
+    {
+      "offset": 26364,
+      "value": "FLAG{THE-EXTENSION-AUTHORITY-ITS-SOVIET}"
+    },
+    {
+      "offset": 26408,
+      "value": "FLAG{ACTIVE-AND-REGIONS-MEASURE-THROUGHOUT}"
+    },
+    {
+      "offset": 26452,
+      "value": "FLAG{ARTICLE-THE-REGIONS-HELD-CITY}"
+    },
+    {
+      "offset": 26488,
+      "value": "FLAG{REPUBLIC-STATE-UNIONS-PREVENTING-BASIS}"
+    },
+    {
+      "offset": 26536,
+      "value": "FLAG{EACH-ALL-SPECIFIC-HAS-THE}"
+    },
+    {
+      "offset": 26568,
+      "value": "FLAG{AND-SOCIALIST-TAKE-TYPES-THE}"
+    },
+    {
+      "offset": 26604,
+      "value": "FLAG{CULTURAL-DEPUTIES-ELECTIONS-SOVIET-ARE}"
+    },
+    {
+      "offset": 26652,
+      "value": "FLAG{LODGE-EQUAL-DISPOSAL-THE-PROVISION}"
+    },
+    {
+      "offset": 26696,
+      "value": "FLAG{STRUGGLE-ONE-MANDATES-THE-CITIZENS}"
+    },
+    {
+      "offset": 26740,
+      "value": "FLAG{RIGHT-DEFENCE-WORK-CLASSLESS-THE}"
+    },
+    {
+      "offset": 26780,
+      "value": "FLAG{INCLUDING-THE-HAS-LANGUAGE-THE}"
+    },
+    {
+      "offset": 26820,
+      "value": "FLAG{THE-REGARDS-SOVIET-DEEMS-ALL}"
+    },
+    {
+      "offset": 26856,
+      "value": "FLAG{USSR-THE-THE-MINISTERS-REPUBLICAN}"
+    },
+    {
+      "offset": 26896,
+      "value": "FLAG{RISING-PERIODICALS-COLLECTIVE-THE-PROCEDURE}"
+    },
+    {
+      "offset": 26948,
+      "value": "FLAG{MORAL-SUPREME-REPUBLICS-AND-THE}"
+    },
+    {
+      "offset": 26988,
+      "value": "FLAG{SOVIET-AMENDMENT-THE-CONCERN-SOVIET}"
+    },
+    {
+      "offset": 27032,
+      "value": "FLAG{SCIENTIFIC-FOR-ARTICLE-ALL-WITHIN}"
+    },
+    {
+      "offset": 27072,
+      "value": "FLAG{AND-ACTIVE-SUPREME-ITS-REPUBLICS}"
+    },
+    {
+      "offset": 27112,
+      "value": "FLAG{SUPREME-OTHER-SOVIET-THE-AND}"
+    },
+    {
+      "offset": 27148,
+      "value": "FLAG{SOVIETS-USSR-AUTONOMOUS-THE-SOCIETY}"
+    },
+    {
+      "offset": 27192,
+      "value": "FLAG{RELIABLE-COMMISSIONS-THEM-DEVELOPMENT-YOUNG}"
+    },
+    {
+      "offset": 27244,
+      "value": "FLAG{THE-CREATED-THE-CITIZENS-TAKE}"
+    },
+    {
+      "offset": 27280,
+      "value": "FLAG{INITIATIVE-AND-VOTE-CONSTRUCTIVE-COMPREHENSIVE}"
+    },
+    {
+      "offset": 27336,
+      "value": "FLAG{JURISDICTION-SCIENTIFIC-THE-ARE-UNION}"
+    },
+    {
+      "offset": 27380,
+      "value": "FLAG{LIFE-APPROPRIATE-USSR-THE-HAVE}"
+    },
+    {
+      "offset": 27420,
+      "value": "FLAG{THE-THE-MINISTERS-VOCATIONAL-THE}"
+    },
+    {
+      "offset": 27460,
+      "value": "FLAG{USSR-SOCIALIST-THE-AND-AND}"
+    },
+    {
+      "offset": 27496,
+      "value": "FLAG{UNION-ECONOMIC-ARTICLE-EQUALITY-CPSU}"
+    },
+    {
+      "offset": 27540,
+      "value": "FLAG{PRESIDIUM-PURSUES-ARE-OTHER-AND}"
+    },
+    {
+      "offset": 27580,
+      "value": "FLAG{INDIVIDUAL-SUPREME-REPUBLIC-MINISTRIES-EXPIRY}"
+    },
+    {
+      "offset": 27632,
+      "value": "FLAG{HAS-REGIONS-ALL-STATE-CONSTANT}"
+    },
+    {
+      "offset": 27672,
+      "value": "FLAG{ARTICLE-OCTOBER-DUTY-INSTITUTIONS-RIGHTS}"
+    },
+    {
+      "offset": 27720,
+      "value": "FLAG{FRIENDSHIP-HEREBY-ENDORSEMENT-COLLECTIVE-LOCAL}"
+    },
+    {
+      "offset": 27776,
+      "value": "FLAG{TIME-EXTENSION-SHALL-THE-FIRST}"
+    },
+    {
+      "offset": 27816,
+      "value": "FLAG{USSR-MASS-ARE-BEFORE-SHALL}"
+    },
+    {
+      "offset": 27852,
+      "value": "FLAG{THE-AND-SESSIONS-THE-SHORTER}"
+    },
+    {
+      "offset": 27888,
+      "value": "FLAG{CHILDRENS-THE-FORMATION-THE-THAT}"
+    },
+    {
+      "offset": 27928,
+      "value": "FLAG{AND-DUTY-SOVIETS-OTHER-RESIDENCE}"
+    },
+    {
+      "offset": 27968,
+      "value": "FLAG{SOCIALIST-NOT-THE-ORGANISATION-FIVE}"
+    },
+    {
+      "offset": 28012,
+      "value": "FLAG{COEXISTENCE-AND-OTHER-FOR-EXECUTIVE}"
+    },
+    {
+      "offset": 28056,
+      "value": "FLAG{DEFINED-THROUGH-STATE-AND-STATE}"
+    },
+    {
+      "offset": 28096,
+      "value": "FLAG{ADMINISTRATION-AND-WITH-AND-UNION}"
+    },
+    {
+      "offset": 28136,
+      "value": "FLAG{AND-AND-FOR-AUTHORITY-UNION}"
+    },
+    {
+      "offset": 28172,
+      "value": "FLAG{PROGRESSIVE-THE-USSR-OCCUPATION-BODIES}"
+    },
+    {
+      "offset": 28220,
+      "value": "FLAG{DOCUMENTS-AND-SHALL-THROUGHOUT-THE}"
+    },
+    {
+      "offset": 28264,
+      "value": "FLAG{PURPOSES-OUTGOING-THE-SUPREME-SOCIETY}"
+    },
+    {
+      "offset": 28308,
+      "value": "FLAG{CONVERT-UNION-AUTONOMOUS-RULES-ANY}"
+    },
+    {
+      "offset": 28352,
+      "value": "FLAG{USSR-USSR-PEOPLES-TWO-WITH}"
+    },
+    {
+      "offset": 28388,
+      "value": "FLAG{PRESERVE-THE-AND-COME-FAMILY}"
+    },
+    {
+      "offset": 28424,
+      "value": "FLAG{SOCIALIST-PEASANTRY-SOCIAL-SHALL-GENERAL}"
+    },
+    {
+      "offset": 28472,
+      "value": "FLAG{FULFILMENT-SOVIET-FREE-DECIDING-RIGHT}"
+    },
+    {
+      "offset": 28516,
+      "value": "FLAG{FOR-THEIR-SHALL-SUPREME-HYGIENE}"
+    },
+    {
+      "offset": 28556,
+      "value": "FLAG{ACCREDITED-UNION-THE-ORGANISING-OFFICE}"
+    },
+    {
+      "offset": 28604,
+      "value": "FLAG{MAY-RELYING-IMPORTANT-PROPOSALS-ARTICLE}"
+    },
+    {
+      "offset": 28652,
+      "value": "FLAG{UNION-TAKEN-INTELLIGENTSIA-AND-SHALL}"
+    },
+    {
+      "offset": 28696,
+      "value": "FLAG{EACH-BODIES-PROCLAIM-AND-SHALL}"
+    },
+    {
+      "offset": 28736,
+      "value": "FLAG{AND-SOCIALIST-CITIZENS-PEOPLES-THE}"
+    },
+    {
+      "offset": 28780,
+      "value": "FLAG{THE-CONSIDERED-IMPROVING-ORGANISATIONS-THE}"
+    },
+    {
+      "offset": 28832,
+      "value": "FLAG{REPORT-BOTH-RIGHTS-RATIONAL-USSR}"
+    },
+    {
+      "offset": 28872,
+      "value": "FLAG{THE-RED-REPUBLIC-BALKAR-FOR}"
+    },
+    {
+      "offset": 28908,
+      "value": "FLAG{ACCOUNTABLE-AND-ENSURE-PRESIDIUM-PERIODICALS}"
+    },
+    {
+      "offset": 28960,
+      "value": "FLAG{RULE-SOVIET-BOOKS-ARTICLE-AND}"
+    },
+    {
+      "offset": 28996,
+      "value": "FLAG{AND-SUCH-AND-THE-FARMS}"
+    },
+    {
+      "offset": 29028,
+      "value": "FLAG{FOR-FORMED-NATIONALITIES-THE-THE}"
+    },
+    {
+      "offset": 29068,
+      "value": "FLAG{THE-AND-CONSTITUTIONS-PARTY-FOR}"
+    },
+    {
+      "offset": 29108,
+      "value": "FLAG{DEMOCRATIC-USSR-AND-ITS-ARTICLE}"
+    },
+    {
+      "offset": 29148,
+      "value": "FLAG{UNION-ENTERPRISES-CITIZENS-DECISIONS-BUILDING}"
+    },
+    {
+      "offset": 29200,
+      "value": "FLAG{THE-THE-ACCOUNTABLE-STATE-STATE}"
+    },
+    {
+      "offset": 29240,
+      "value": "FLAG{USSR-THAT-CONTINGENT-THE-GOOD}"
+    },
+    {
+      "offset": 29276,
+      "value": "FLAG{BETWEEN-PERSONS-CHAIRMAN-AND-QUANTITY}"
+    },
+    {
+      "offset": 29320,
+      "value": "FLAG{THE-ADMINISTRATION-COUNCILS-STATE-CHAPTER}"
+    },
+    {
+      "offset": 29368,
+      "value": "FLAG{AND-PEOPLE-THE-EVER-SHALL}"
+    },
+    {
+      "offset": 29400,
+      "value": "FLAG{THE-THE-AND-PARTY-PEOPLES}"
+    },
+    {
+      "offset": 29432,
+      "value": "FLAG{DISCUSSION-FOREIGNERS-UNION-THEIR-COUNCIL}"
+    },
+    {
+      "offset": 29480,
+      "value": "FLAG{STATE-THE-THE-THEIR-TRAINING}"
+    },
+    {
+      "offset": 29516,
+      "value": "FLAG{REPUBLICAN-THE-WORK-POLICY-CITIZENS}"
+    },
+    {
+      "offset": 29560,
+      "value": "FLAG{REPUBLIC-SOVIETS-SAFEGUARD-AND-PROMOTE}"
+    },
+    {
+      "offset": 29608,
+      "value": "FLAG{COUNCIL-COME-THE-DIRECT-USSR}"
+    },
+    {
+      "offset": 29644,
+      "value": "FLAG{PEOPLE-THEIR-FAMILIES-SOLELY-WORK}"
+    },
+    {
+      "offset": 29684,
+      "value": "FLAG{RELATIONS-ITS-PRODUCTIVITY-SOVIET-FRIENDSHIP}"
+    },
+    {
+      "offset": 29736,
+      "value": "FLAG{THE-NEW-ARE-THE-CONSTITUTION}"
+    },
+    {
+      "offset": 29772,
+      "value": "FLAG{RIGHT-APPOINTED-CHURCH-FORCES-THE}"
+    },
+    {
+      "offset": 29812,
+      "value": "FLAG{PROFESSIONAL-ARE-THE-THE-SHALL}"
+    },
+    {
+      "offset": 29852,
+      "value": "FLAG{THE-THEM-WORK-ACCOUNT-EPOCH}"
+    },
+    {
+      "offset": 29888,
+      "value": "FLAG{SHALL-AUTHORITY-COMMITTEES-ARE-CITIZENS}"
+    },
+    {
+      "offset": 29936,
+      "value": "FLAG{AND-AND-LABOUR-PUBLIC-ARTICLE}"
+    },
+    {
+      "offset": 29972,
+      "value": "FLAG{THE-UNION-MAN-DISTRICTS-BODY}"
+    },
+    {
+      "offset": 30008,
+      "value": "FLAG{SOCIAL-DENOUNCE-SYSTEM-AND-ARE}"
+    },
+    {
+      "offset": 30048,
+      "value": "FLAG{RESPECT-STATE-UNBREAKABLE-ALL-OWN}"
+    },
+    {
+      "offset": 30088,
+      "value": "FLAG{USSRCHAPTER-USSR-MINISTERS-PROCURATORS-BUILT}"
+    },
+    {
+      "offset": 30140,
+      "value": "FLAG{SOCIAL-THE-REPUBLIC-THE-SOCIETY}"
+    },
+    {
+      "offset": 30180,
+      "value": "FLAG{THEM-THE-THE-THE-ARTICLE}"
+    },
+    {
+      "offset": 30212,
+      "value": "FLAG{COURT-ARTICLE-THE-CITIZENS-INDUSTRIES}"
+    },
+    {
+      "offset": 30256,
+      "value": "FLAG{AND-PROCEDURE-EXERCISES-BINDING-SUPREME}"
+    },
+    {
+      "offset": 30304,
+      "value": "FLAG{DEFENCE-THE-THEIR-AND-LENINIST}"
+    },
+    {
+      "offset": 30344,
+      "value": "FLAG{REPUBLICS-EQUAL-THE-THE-PARTY}"
+    },
+    {
+      "offset": 30380,
+      "value": "FLAG{REVOLUTIONARY-REPUBLICS-WELL-LOSS-FOR}"
+    },
+    {
+      "offset": 30424,
+      "value": "FLAG{USSR-THEM-WORK-STAFF-THE}"
+    },
+    {
+      "offset": 30456,
+      "value": "FLAG{PROGRESS-AND-SOCIALIST-PLACES-THE}"
+    },
+    {
+      "offset": 30496,
+      "value": "FLAG{SOCIAL-AND-THAT-AGAINST-THE}"
+    },
+    {
+      "offset": 30532,
+      "value": "FLAG{BODIES-JURISDICTION-COURTS-HEADS-HIGHER}"
+    },
+    {
+      "offset": 30580,
+      "value": "FLAG{REGIONS-ARTICLE-BETWEEN-USSR-AND}"
+    },
+    {
+      "offset": 30620,
+      "value": "FLAG{THEIR-FROM-THE-SOVIET-ESTABLISHED}"
+    },
+    {
+      "offset": 30660,
+      "value": "FLAG{THE-TRAINING-THE-SOVIET-ENCOURAGING}"
+    },
+    {
+      "offset": 30704,
+      "value": "FLAG{COUNTRY-UNION-THE-CHAPTER-THE}"
+    },
+    {
+      "offset": 30740,
+      "value": "FLAG{MEMBERS-FULL-FUNDAMENTAL-ADMINISTRATION-THEIR}"
+    },
+    {
+      "offset": 30792,
+      "value": "FLAG{LEVERS-LIVESTOCK-ENACTED-INSURANCE-SOVIET}"
+    },
+    {
+      "offset": 30840,
+      "value": "FLAG{AREAS-EXPLOITATION-MORE-THE-THE}"
+    },
+    {
+      "offset": 30880,
+      "value": "FLAG{SUPREME-ECONOMIC-THE-THE-OBLIGED}"
+    },
+    {
+      "offset": 30920,
+      "value": "FLAG{LAWS-DETRIMENT-THE-EXERCISE-GRANTED}"
+    },
+    {
+      "offset": 30964,
+      "value": "FLAG{THE-THE-UNION-THE-NATIONALITIES}"
+    },
+    {
+      "offset": 31004,
+      "value": "FLAG{THEY-INSTITUTIONS-THE-AND-REPUBLIC}"
+    },
+    {
+      "offset": 31048,
+      "value": "FLAG{MAY-OTHER-AND-ROUND-REPUBLIC}"
+    },
+    {
+      "offset": 31084,
+      "value": "FLAG{THE-MAY-PATRIOTS-COURT-FURTHER}"
+    },
+    {
+      "offset": 31124,
+      "value": "FLAG{AND-WORK-COURT-RELATIONSHIPS-DEPUTIES}"
+    },
+    {
+      "offset": 31168,
+      "value": "FLAG{THAT-TERM-AND-DUTY-DEMOCRACY}"
+    },
+    {
+      "offset": 31204,
+      "value": "FLAG{AND-AND-USSR-THE-ORGANISATIONS}"
+    },
+    {
+      "offset": 31244,
+      "value": "FLAG{DIRECTION-WARS-USSR-REPUBLIC-SHALL}"
+    },
+    {
+      "offset": 31288,
+      "value": "FLAG{ONLY-RAISE-STATES-SOCIETY-PROPERTY}"
+    },
+    {
+      "offset": 31332,
+      "value": "FLAG{HISTORY-PROPERTY-THE-FROM-CONSTITUTION}"
+    },
+    {
+      "offset": 31380,
+      "value": "FLAG{AND-USSR-THE-ONLY-SOVIET}"
+    },
+    {
+      "offset": 31412,
+      "value": "FLAG{FRUITS-IMPLEMENT-INDEPENDENT-EXERCISES-SOVIET}"
+    },
+    {
+      "offset": 31464,
+      "value": "FLAG{SOVIET-OWN-AMALGAMATIONS-GUILTY-STANDING}"
+    },
+    {
+      "offset": 31512,
+      "value": "FLAG{III-THEM-EXTENSION-USE-DRAWING}"
+    },
+    {
+      "offset": 31552,
+      "value": "FLAG{ONE-THE-NATIONALITIES-COMMUNAL-PROCEDURE}"
+    },
+    {
+      "offset": 31600,
+      "value": "FLAG{OTHER-THE-LAWFUL-VOCATIONAL-THEIR}"
+    },
+    {
+      "offset": 31640,
+      "value": "FLAG{AND-CONSTITUTE-THIS-SOVIET-TERRITORIES}"
+    },
+    {
+      "offset": 31688,
+      "value": "FLAG{THE-SHALL-COURT-SUPREME-ENACTED}"
+    },
+    {
+      "offset": 31728,
+      "value": "FLAG{COURTS-USSR-UNION-LEGISLATIVE-REPUBLIC}"
+    },
+    {
+      "offset": 31776,
+      "value": "FLAG{VARIETY-BROAD-THE-USSR-CAPABILITY}"
+    },
+    {
+      "offset": 31816,
+      "value": "FLAG{AND-SHALL-PROPERTY-COURTS-DEVELOPMENT}"
+    },
+    {
+      "offset": 31860,
+      "value": "FLAG{ACCESS-GENERAL-ENDORSEMENT-PLANS-THE}"
+    },
+    {
+      "offset": 31904,
+      "value": "FLAG{AND-THE-THE-AND-ARTICLE}"
+    },
+    {
+      "offset": 31936,
+      "value": "FLAG{OTHER-TAKE-AVAILABLE-THE-THE}"
+    },
+    {
+      "offset": 31972,
+      "value": "FLAG{ARTICLE-AND-UNION-AND-COMBINING}"
+    },
+    {
+      "offset": 32012,
+      "value": "FLAG{THE-DISTRICT-CONCERN-AND-GENERAL}"
+    },
+    {
+      "offset": 32052,
+      "value": "FLAG{USSR-THE-PRELIMINARY-SUPREME-PROCURATORS}"
+    },
+    {
+      "offset": 32100,
+      "value": "FLAG{LEAGUE-PLANS-MILITARY-THE-WORK}"
+    },
+    {
+      "offset": 32140,
+      "value": "FLAG{FOR-DEVELOPMENT-AND-REPUBLIC-CULTURAL}"
+    },
+    {
+      "offset": 32184,
+      "value": "FLAG{WELL-LITERATURE-STATE-INTERNATIONAL-THE}"
+    },
+    {
+      "offset": 32232,
+      "value": "FLAG{NATIONALITIES-REVOLUTION-AND-PURSUE-COLLECTIVE}"
+    },
+    {
+      "offset": 32288,
+      "value": "FLAG{FUNCTION-LAW-DICTATORSHIP-SOVIET-THE}"
+    },
+    {
+      "offset": 32332,
+      "value": "FLAG{USSR-DIFFERENCES-STATE-POLITICAL-STATE}"
+    },
+    {
+      "offset": 32380,
+      "value": "FLAG{THE-DIPLOMATIC-BODIES-SOCIALIST-THE}"
+    },
+    {
+      "offset": 32424,
+      "value": "FLAG{TERRITORY-COUNCIL-HEADS-SHALL-OBLIGATIONS}"
+    },
+    {
+      "offset": 32472,
+      "value": "FLAG{SUCH-STAR-USSR-WHICH-USSR}"
+    },
+    {
+      "offset": 32504,
+      "value": "FLAG{SHALL-AMONG-THE-INCOMPATIBLE-LIFE}"
+    },
+    {
+      "offset": 32544,
+      "value": "FLAG{SAME-CULTURAL-REPUBLIC-DISTRICT-ADMINISTRATION}"
+    },
+    {
+      "offset": 32600,
+      "value": "FLAG{ENSURE-AND-THE-THE-MEETINGS}"
+    },
+    {
+      "offset": 32636,
+      "value": "FLAG{THEM-TERRITORIAL-DEVELOPMENT-AND-EPOCH}"
+    },
+    {
+      "offset": 32684,
+      "value": "FLAG{THE-ENDORSE-THE-WITHIN-INSTITUTION}"
+    },
+    {
+      "offset": 32728,
+      "value": "FLAG{FUTURE-THE-AWARD-AND-ACTIVITY}"
+    },
+    {
+      "offset": 32764,
+      "value": "FLAG{INSTITUTIONS-THE-ARE-FORCES-REPORTS}"
+    },
+    {
+      "offset": 32808,
+      "value": "FLAG{THE-OUTGOING-UNION-HAS-AUTONOMOUS}"
+    },
+    {
+      "offset": 32848,
+      "value": "FLAG{MINISTERS-DUTIES-THE-MANNER-GRANT}"
+    },
+    {
+      "offset": 32888,
+      "value": "FLAG{THE-REPUBLIC-PRESIDIUM-FREEDOM-ARTICLE}"
+    },
+    {
+      "offset": 32936,
+      "value": "FLAG{THEIR-CULTURAL-AMALGAMATIONS-ARE-ENDEAVORS}"
+    },
+    {
+      "offset": 32988,
+      "value": "FLAG{TRANSFORMATIONS-COUNTRY-AUTONOMOUS-LABOUR-ORGANISES}"
+    },
+    {
+      "offset": 33048,
+      "value": "FLAG{TERRITORIES-THROUGHOUT-CONVERT-RISING-JUDGES}"
+    },
+    {
+      "offset": 33100,
+      "value": "FLAG{AND-USSR-CONFER-USSR-THE}"
+    },
+    {
+      "offset": 33132,
+      "value": "FLAG{PROPOSAL-WITHIN-EXAMINED-THE-OBLIGATION}"
+    },
+    {
+      "offset": 33180,
+      "value": "FLAG{ARMED-THE-EXERCISE-TOTAL-CONTROL}"
+    },
+    {
+      "offset": 33220,
+      "value": "FLAG{SYSTEM-ELECTED-CONSTITUTION-COMMITTEES-THROUGH}"
+    },
+    {
+      "offset": 33276,
+      "value": "FLAG{TWO-TERM-DWELLING-PROCEEDINGS-REPUTATION}"
+    },
+    {
+      "offset": 33324,
+      "value": "FLAG{OPERATE-WITHIN-ECONOMIC-OFFICE-REPUBLIC}"
+    },
+    {
+      "offset": 33372,
+      "value": "FLAG{YEARS-HAS-STATE-THE-THEIR}"
+    },
+    {
+      "offset": 33404,
+      "value": "FLAG{ARE-ADOPTED-THEIR-THE-ACTIVITY}"
+    },
+    {
+      "offset": 33444,
+      "value": "FLAG{USSR-STATE-SUPREME-AUTONOMOUS-THE}"
+    },
+    {
+      "offset": 33484,
+      "value": "FLAG{PURPOSES-COMBINES-THE-SOVIET-SICKLE}"
+    },
+    {
+      "offset": 33528,
+      "value": "FLAG{STRENGTHENING-CATERING-EXTRAMURAL-STATE-UNION}"
+    },
+    {
+      "offset": 33580,
+      "value": "FLAG{SHALL-CITIZENS-SHALL-USSR-USSR}"
+    },
+    {
+      "offset": 33620,
+      "value": "FLAG{FOLLOWING-CITIZENS-BODIES-CITIZENS-PERSONS}"
+    },
+    {
+      "offset": 33672,
+      "value": "FLAG{PAY-USEFUL-PROPERTY-NATIONS-STATE}"
+    },
+    {
+      "offset": 33712,
+      "value": "FLAG{THE-QUESTIONS-SOVIET-SUBORDINATE-PROTECTION}"
+    },
+    {
+      "offset": 33764,
+      "value": "FLAG{INTELLIGENTSIA-SOVIET-SOVIET-THE-THE}"
+    },
+    {
+      "offset": 33808,
+      "value": "FLAG{THE-THE-AND-OTHER-CONSTITUTION}"
+    },
+    {
+      "offset": 33848,
+      "value": "FLAG{FOR-AND-DIRECT-EDUCATE-AND}"
+    },
+    {
+      "offset": 33884,
+      "value": "FLAG{INNOVATORS-THE-WORKING-OTHER-ENSURES}"
+    },
+    {
+      "offset": 33928,
+      "value": "FLAG{THEM-APPOINT-PRESIDIUM-THE-FOR}"
+    },
+    {
+      "offset": 33968,
+      "value": "FLAG{TERRITORY-THE-DEPUTY-FETTERS-BODIES}"
+    },
+    {
+      "offset": 34012,
+      "value": "FLAG{PASSED-MATTERS-SCHOLARSHIPS-ENHANCE-SOVEREIGNTY}"
+    },
+    {
+      "offset": 34068,
+      "value": "FLAG{INFRINGE-AND-GREATER-TERRITORY-THE}"
+    },
+    {
+      "offset": 34112,
+      "value": "FLAG{JURISDICTION-EVERY-THE-SOCIAL-ARTICLE}"
+    },
+    {
+      "offset": 34156,
+      "value": "FLAG{SOVIET-THE-THE-AND-DISTRIBUTION}"
+    },
+    {
+      "offset": 34196,
+      "value": "FLAG{SOCIALIST-COMPLETE-EXECUTIVE-USE-CULTURAL}"
+    },
+    {
+      "offset": 34244,
+      "value": "FLAG{EQUALITY-ITS-PRODUCTION-RESIDENCE-THE}"
+    },
+    {
+      "offset": 34288,
+      "value": "FLAG{COMMUNIST-DEFINED-SOVIET-USSR-RENUNCIATION}"
+    },
+    {
+      "offset": 34340,
+      "value": "FLAG{MANAGING-PURPOSES-RELIGIOUS-AND-THE}"
+    },
+    {
+      "offset": 34384,
+      "value": "FLAG{APPROACH-GRANT-IMPROVING-ACCORDANCE-LEGISLATION}"
+    },
+    {
+      "offset": 34440,
+      "value": "FLAG{SECRET-MEASURES-PROCEDURE-REPUBLIC-MANAGEMENT}"
+    },
+    {
+      "offset": 34492,
+      "value": "FLAG{REPUBLIC-THE-THE-BODIES-SUPREME}"
+    },
+    {
+      "offset": 34532,
+      "value": "FLAG{ACCOUNTABLE-TERRITORIES-DRAFTING-FORM-CITIZENS}"
+    },
+    {
+      "offset": 34588,
+      "value": "FLAG{AND-AFFIRM-COUNCIL-MAINTAINS-PRESS}"
+    },
+    {
+      "offset": 34632,
+      "value": "FLAG{REAL-STAR-THE-THE-THROUGHOUT}"
+    },
+    {
+      "offset": 34668,
+      "value": "FLAG{CHAMBERS-UNITS-AND-SOVIET-MATERIAL}"
+    },
+    {
+      "offset": 34712,
+      "value": "FLAG{HAS-THE-FARMS-ORGANISATIONS-INSTITUTIONS}"
+    },
+    {
+      "offset": 34760,
+      "value": "FLAG{NAGORNO-ITS-AUTONOMOUS-APPROVAL-USSR}"
+    },
+    {
+      "offset": 34804,
+      "value": "FLAG{ARTICLE-THE-AND-AND-CITIZENS}"
+    },
+    {
+      "offset": 34840,
+      "value": "FLAG{LAW-THE-DEVELOPMENT-COURTS-THE}"
+    },
+    {
+      "offset": 34880,
+      "value": "FLAG{THEIR-ENTRUSTED-AND-SUPREME-UNION}"
+    },
+    {
+      "offset": 34920,
+      "value": "FLAG{ACTIVE-SOCIALIST-CITIZENS-MILITARY-SUBORDINATE}"
+    },
+    {
+      "offset": 34976,
+      "value": "FLAG{BETWEEN-WITH-THE-INTELLIGENTSIA-ATTITUDE}"
+    },
+    {
+      "offset": 35024,
+      "value": "FLAG{NEWSPAPERS-DEFINED-CITIZENS-EDUCATIONAL-RIGHT}"
+    },
+    {
+      "offset": 35076,
+      "value": "FLAG{SUPERVISE-SOCIALIST-THROUGH-STATE-THEIR}"
+    },
+    {
+      "offset": 35124,
+      "value": "FLAG{CHAPTER-ARE-BODIES-REPUBLICS-THE}"
+    },
+    {
+      "offset": 35164,
+      "value": "FLAG{FEDERATIVE-OPINION-STANDARDS-THE-TERM}"
+    },
+    {
+      "offset": 35208,
+      "value": "FLAG{REGIONS-RETAIN-AND-WITHIN-WORKERS}"
+    },
+    {
+      "offset": 35248,
+      "value": "FLAG{BETWEEN-LABOUR-ARTICLE-EXCEEDING-THE}"
+    },
+    {
+      "offset": 35292,
+      "value": "FLAG{CONSTITUTION-AND-STATE-SYSTEM-CONSIST}"
+    },
+    {
+      "offset": 35336,
+      "value": "FLAG{STRENGTH-PEACE-PURPOSES-THE-SOVIET}"
+    },
+    {
+      "offset": 35380,
+      "value": "FLAG{AUTONOMOUS-MEMBERS-DEVELOPMENT-CONSTITUTION-UNION}"
+    },
+    {
+      "offset": 35436,
+      "value": "FLAG{ACTIVITY-RACIAL-SOVIET-PEOPLE-SUPREME}"
+    },
+    {
+      "offset": 35480,
+      "value": "FLAG{YOUNG-BODIES-AND-SOCIALISM-SPOUSES}"
+    },
+    {
+      "offset": 35524,
+      "value": "FLAG{THE-JUSTICE-THE-INTO-LAWS}"
+    },
+    {
+      "offset": 35556,
+      "value": "FLAG{EXECUTIVE-PROVISION-WITH-THE-UNION}"
+    },
+    {
+      "offset": 35600,
+      "value": "FLAG{RELATIONS-THE-PUBLIC-THE-USSR}"
+    },
+    {
+      "offset": 35636,
+      "value": "FLAG{USSR-CONSUMER-PROCURATORS-THE-STRICTLY}"
+    },
+    {
+      "offset": 35684,
+      "value": "FLAG{ARTICLE-CHECK-SOCIALIST-WORK-YEARS}"
+    },
+    {
+      "offset": 35728,
+      "value": "FLAG{OWN-THE-ECONOMIC-THE-INTERESTS}"
+    },
+    {
+      "offset": 35768,
+      "value": "FLAG{CITIZENS-PATRIOTISM-BEEN-AND-AND}"
+    },
+    {
+      "offset": 35808,
+      "value": "FLAG{INITIATIVE-SOCIALIST-THE-THE-THE}"
+    },
+    {
+      "offset": 35848,
+      "value": "FLAG{SOVIETS-AUTONOMOUS-FOR-ORGANISATIONS-LODGE}"
+    },
+    {
+      "offset": 35900,
+      "value": "FLAG{SUPREME-AND-THE-LAW-UNIVERSAL}"
+    },
+    {
+      "offset": 35936,
+      "value": "FLAG{MINISTRIES-EXECUTE-COURT-LOCAL-CITIZENS}"
+    },
+    {
+      "offset": 35984,
+      "value": "FLAG{POLICY-THERE-THE-THE-CHURCH}"
+    },
+    {
+      "offset": 36020,
+      "value": "FLAG{SOVIETS-DUE-LOCAL-THEM-THOSE}"
+    },
+    {
+      "offset": 36056,
+      "value": "FLAG{USSR-MAINTAIN-PUTTING-WITH-ADOPTED}"
+    },
+    {
+      "offset": 36100,
+      "value": "FLAG{THE-AND-THE-TERM-WEALTH}"
+    },
+    {
+      "offset": 36132,
+      "value": "FLAG{REPUBLICS-ARTICLE-USSR-LITERATURE-SOCIALIST}"
+    },
+    {
+      "offset": 36184,
+      "value": "FLAG{THEIR-MAKING-RED-REACHED-PROTECT}"
+    },
+    {
+      "offset": 36224,
+      "value": "FLAG{THE-ARTICLE-NOT-TREATIES-POLITICAL}"
+    },
+    {
+      "offset": 36268,
+      "value": "FLAG{CONSTITUENT-FUNCTIONING-CONSTITUTION-SOCIALIST-AGAINST}"
+    },
+    {
+      "offset": 36332,
+      "value": "FLAG{ACTS-EDUCATION-THE-UNCOMPROMISING-REPRODUCTION}"
+    },
+    {
+      "offset": 36388,
+      "value": "FLAG{THE-SIGNIFICANCE-ORIENTED-SITTING-SOVIET}"
+    },
+    {
+      "offset": 36436,
+      "value": "FLAG{PROCURATOR-USSR-UNION-REGION-THE}"
+    },
+    {
+      "offset": 36476,
+      "value": "FLAG{UNION-THE-ARTICLE-INCLUDING-AND}"
+    },
+    {
+      "offset": 36516,
+      "value": "FLAG{DECIDE-MOTHERLAND-COMPLY-ALLOWANCES-REPORTS}"
+    },
+    {
+      "offset": 36568,
+      "value": "FLAG{INCENTIVES-THE-BROAD-SOCIALIST-HIGHER}"
+    },
+    {
+      "offset": 36612,
+      "value": "FLAG{THE-COMPLETE-THE-DURING-THE}"
+    },
+    {
+      "offset": 36648,
+      "value": "FLAG{PART-FREE-THE-REPUBLIC-FOR}"
+    },
+    {
+      "offset": 36684,
+      "value": "FLAG{SOVIET-THE-THE-ACCORDANCE-SOVIET}"
+    },
+    {
+      "offset": 36724,
+      "value": "FLAG{THE-THE-USSR-PEOPLE-THE}"
+    },
+    {
+      "offset": 36756,
+      "value": "FLAG{RESIGNATION-OFFICIALS-APPOINT-LABOUR-USSR}"
+    },
+    {
+      "offset": 36804,
+      "value": "FLAG{AND-DEBATED-STATE-BROAD-SHALL}"
+    },
+    {
+      "offset": 36840,
+      "value": "FLAG{THE-USSR-THE-SOVIET-DAYS}"
+    },
+    {
+      "offset": 36872,
+      "value": "FLAG{INVIOLABILITY-AND-CONTROL-THE-THE}"
+    },
+    {
+      "offset": 36912,
+      "value": "FLAG{THEIR-APPROVAL-THE-USSR-USSR}"
+    },
+    {
+      "offset": 36948,
+      "value": "FLAG{JUDGE-STATE-THEIR-THE-THE}"
+    },
+    {
+      "offset": 36980,
+      "value": "FLAG{SOVIET-MATTERS-UNION-WORKING-WHOLE}"
+    },
+    {
+      "offset": 37024,
+      "value": "FLAG{ECONOMIC-THE-THE-RELATING-THE}"
+    },
+    {
+      "offset": 37060,
+      "value": "FLAG{AND-SOVIETS-THEM-AND-PRODUCTION}"
+    },
+    {
+      "offset": 37100,
+      "value": "FLAG{PERPETUITY-AND-ITS-MILITARY-SOCIALIST}"
+    },
+    {
+      "offset": 37144,
+      "value": "FLAG{TERRITORY-PERSONS-AND-JURIDICAL-AND}"
+    },
+    {
+      "offset": 37188,
+      "value": "FLAG{MATERIALS-THE-EACH-TERRITORY-LOCAL}"
+    },
+    {
+      "offset": 37232,
+      "value": "FLAG{USSR-ALL-ARTICLE-SOVIETS-AND}"
+    },
+    {
+      "offset": 37268,
+      "value": "FLAG{PROCLAIM-TREASURES-APPROVAL-FAIL-ELECTIONS}"
+    },
+    {
+      "offset": 37320,
+      "value": "FLAG{USE-SOVIETS-CANDIDATES-ALL-REPUBLIC}"
+    },
+    {
+      "offset": 37364,
+      "value": "FLAG{AND-PRODUCTION-UTILITY-RECALL-SOCIALIST}"
+    },
+    {
+      "offset": 37412,
+      "value": "FLAG{USSR-AND-POWERS-AUTHORITY-OBLIGED}"
+    },
+    {
+      "offset": 37452,
+      "value": "FLAG{UNION-PERFORMING-NARROW-CHILDREN-INTERESTS}"
+    },
+    {
+      "offset": 37504,
+      "value": "FLAG{HELP-COME-THE-WORK-EQUAL}"
+    },
+    {
+      "offset": 37536,
+      "value": "FLAG{STATUS-COUNTRYS-ELECTED-CONTROL-DECISIONS}"
+    },
+    {
+      "offset": 37584,
+      "value": "FLAG{THAT-MANNER-STATE-PROCLAIMED-COUNCIL}"
+    },
+    {
+      "offset": 37628,
+      "value": "FLAG{EXERCISE-POWERS-MEANS-MEASURES-CONTROL}"
+    },
+    {
+      "offset": 37676,
+      "value": "FLAG{LAW-COURT-LABOUR-TAKE-SOCIAL}"
+    },
+    {
+      "offset": 37712,
+      "value": "FLAG{WORK-REPUBLIC-LIMIT-BUILDING-RIGHT}"
+    },
+    {
+      "offset": 37756,
+      "value": "FLAG{THE-AND-ARE-IMPROVING-FARMS}"
+    },
+    {
+      "offset": 37792,
+      "value": "FLAG{PURPOSES-RADIO-DRAFTING-REPUBLIC-DIRECTLY}"
+    },
+    {
+      "offset": 37840,
+      "value": "FLAG{AUTONOMOUS-AIMS-THE-COURT-AND}"
+    },
+    {
+      "offset": 37876,
+      "value": "FLAG{DIRECTLY-RESPECT-CONTINGENT-COMMUNISM-INTERNATIONAL}"
+    },
+    {
+      "offset": 37936,
+      "value": "FLAG{SHALL-THEIR-THE-PART-USEFUL}"
+    },
+    {
+      "offset": 37972,
+      "value": "FLAG{THE-CITIZENS-ORDINANCES-STRIVE-SHALL}"
+    },
+    {
+      "offset": 38016,
+      "value": "FLAG{THE-ACCOUNT-PROTECT-SOVEREIGN-ARTICLE}"
+    },
+    {
+      "offset": 38060,
+      "value": "FLAG{AUTONOMOUS-UNION-ADMINISTRATIVE-ORGANISATIONS-THE}"
+    },
+    {
+      "offset": 38116,
+      "value": "FLAG{INDEPENDENTLY-YEARS-CORRESPONDENCE-INVIOLABILITY-AND}"
+    },
+    {
+      "offset": 38176,
+      "value": "FLAG{SUBORDINATE-THE-THE-THE-THE}"
+    },
+    {
+      "offset": 38212,
+      "value": "FLAG{SOCIALIST-ECONOMIC-CONDUCT-CONSISTENTLY-BODIES}"
+    },
+    {
+      "offset": 38268,
+      "value": "FLAG{SOCIAL-THE-CITIZENS-VOTERS-FORMED}"
+    },
+    {
+      "offset": 38308,
+      "value": "FLAG{AND-DEVELOPMENT-DEVELOPED-REPRESENTED-AND}"
+    },
+    {
+      "offset": 38356,
+      "value": "FLAG{CONSTITUTIONS-WORKING-PUBLIC-THE-AND}"
+    },
+    {
+      "offset": 38400,
+      "value": "FLAG{TAKING-REPUBLICAN-ESTABLISHED-STATELESS-THE}"
+    },
+    {
+      "offset": 38452,
+      "value": "FLAG{PRESIDIUM-THE-HELPS-NATIONAL-INSTITUTIONS}"
+    },
+    {
+      "offset": 38500,
+      "value": "FLAG{STATE-AND-THE-SESSION-LESS}"
+    },
+    {
+      "offset": 38536,
+      "value": "FLAG{EXAMINED-FOR-THE-THE-STATES}"
+    },
+    {
+      "offset": 38572,
+      "value": "FLAG{USSR-THE-BODY-RULE-EXECUTION}"
+    },
+    {
+      "offset": 38608,
+      "value": "FLAG{RIGHT-FEDERALISM-REPUBLICAN-BODIES-THE}"
+    },
+    {
+      "offset": 38656,
+      "value": "FLAG{OPPORTUNITIES-THE-AND-UNION-THE}"
+    },
+    {
+      "offset": 38696,
+      "value": "FLAG{SOCIALIST-WITH-DEPUTIES-USSR-RIGHT}"
+    },
+    {
+      "offset": 38740,
+      "value": "FLAG{SOVIET-ARTICLES-NOT-THE-THE}"
+    },
+    {
+      "offset": 38776,
+      "value": "FLAG{THEY-VILLAGES-EXECUTION-CITIZENS-AND}"
+    },
+    {
+      "offset": 38820,
+      "value": "FLAG{PART-PROMOTE-ARTICLE-TRANSFORM-BODIES}"
+    },
+    {
+      "offset": 38864,
+      "value": "FLAG{AND-THE-ELECTED-SUPREME-AND}"
+    },
+    {
+      "offset": 38900,
+      "value": "FLAG{USSR-SPORT-TYPE-SOCIAL-THE}"
+    },
+    {
+      "offset": 38936,
+      "value": "FLAG{WITH-REST-THE-AND-USSR}"
+    },
+    {
+      "offset": 38968,
+      "value": "FLAG{CONSCIOUSNESS-ASSESSORS-PRESS-THE-FORCES}"
+    },
+    {
+      "offset": 39016,
+      "value": "FLAG{USSR-BETWEEN-REAL-ORGANISATION-OTHER}"
+    },
+    {
+      "offset": 39060,
+      "value": "FLAG{APPOINTED-COMMITMENT-PEOPLE-CONCILIATION-DEPUTIES}"
+    },
+    {
+      "offset": 39116,
+      "value": "FLAG{PREVENTING-MASS-FROM-THE-APPROVE}"
+    },
+    {
+      "offset": 39156,
+      "value": "FLAG{STATE-PUBLIC-APPOINTED-THE-THE}"
+    },
+    {
+      "offset": 39196,
+      "value": "FLAG{DEVELOPMENT-ORGANISATIONS-USSR-SUPREME-AND}"
+    },
+    {
+      "offset": 39248,
+      "value": "FLAG{INSTITUTIONS-THE-LOWEST-PENSIONS-THE}"
+    },
+    {
+      "offset": 39292,
+      "value": "FLAG{CITY-THE-THE-HAMMER-ORGANISE}"
+    },
+    {
+      "offset": 39328,
+      "value": "FLAG{BUILDING-STATE-THE-LANGUAGES-ADOPTS}"
+    },
+    {
+      "offset": 39372,
+      "value": "FLAG{HEALTH-THE-EXECUTIVE-WORK-PROPERTY}"
+    },
+    {
+      "offset": 39416,
+      "value": "FLAG{FOR-FOR-THE-THE-ARTICLE}"
+    },
+    {
+      "offset": 39448,
+      "value": "FLAG{AUTHORITY-USSR-THE-USSR-SUPREME}"
+    },
+    {
+      "offset": 39488,
+      "value": "FLAG{DECISIONS-PREVENT-RAISE-SOVIETS-AND}"
+    },
+    {
+      "offset": 39532,
+      "value": "FLAG{WITHOUT-MOST-CARE-TRAINING-ACCOUNTABLE}"
+    },
+    {
+      "offset": 39580,
+      "value": "FLAG{ENDS-AND-SUBMIT-USSR-THE}"
+    },
+    {
+      "offset": 39612,
+      "value": "FLAG{GOVERNMENT-THEIR-AFFAIRS-OFFICE-MEASURES}"
+    },
+    {
+      "offset": 39660,
+      "value": "FLAG{USSR-MATTERS-AND-LAW-RACE}"
+    },
+    {
+      "offset": 39692,
+      "value": "FLAG{AND-AND-NOT-THE-DIRECTION}"
+    },
+    {
+      "offset": 39724,
+      "value": "FLAG{VALUES-AND-INDEPENDENT-ITS-RIGHT}"
+    },
+    {
+      "offset": 39764,
+      "value": "FLAG{AND-INTERNATIONAL-THE-THE-SHALL}"
+    },
+    {
+      "offset": 39804,
+      "value": "FLAG{THE-THE-YEARS-INVIOLABILITY-THE}"
+    },
+    {
+      "offset": 39848,
+      "value": "FLAG{PRINCIPLES-CONSISTING-IMPERIALIST-RECREATIONAL-COMPULSORY}"
+    },
+    {
+      "offset": 39912,
+      "value": "FLAG{THE-WITH-MINISTRIES-AND-ADOPTED}"
+    },
+    {
+      "offset": 39952,
+      "value": "FLAG{THE-DEPICTED-THE-THIS-RESOURCES}"
+    },
+    {
+      "offset": 39992,
+      "value": "FLAG{SOVIET-THE-STATE-DEVELOPMENT-AMENDMENT}"
+    },
+    {
+      "offset": 40040,
+      "value": "FLAG{ITS-PUBLIC-IMPARTS-EXERCISE-THE}"
+    },
+    {
+      "offset": 40080,
+      "value": "FLAG{USSR-POWERS-THE-ELECTED-REPUBLIC}"
+    },
+    {
+      "offset": 40120,
+      "value": "FLAG{PROVISION-COMRADELY-CHAIRMEN-GOODS-USSR}"
+    },
+    {
+      "offset": 40168,
+      "value": "FLAG{THE-PRESENT-MATTERS-ORGANISATION-RECTANGLE}"
+    },
+    {
+      "offset": 40220,
+      "value": "FLAG{USSR-THE-THE-MUTUAL-THE}"
+    },
+    {
+      "offset": 40252,
+      "value": "FLAG{YAKUT-SOCIALIST-THE-WORK-CAPITAL}"
+    },
+    {
+      "offset": 40292,
+      "value": "FLAG{LIFE-CAPACITY-BETWEEN-DRAWS-SYSTEM}"
+    },
+    {
+      "offset": 40336,
+      "value": "FLAG{STATE-CLOSED-DEVELOPMENT-COURT-SOVIETS}"
+    },
+    {
+      "offset": 40384,
+      "value": "FLAG{SOCIETY-SHALL-THE-SHALL-USSR}"
+    },
+    {
+      "offset": 40420,
+      "value": "FLAG{NINTH-ULTIMATELY-AND-REGIONS-INTER}"
+    },
+    {
+      "offset": 40464,
+      "value": "FLAG{PERSONNEL-RECALL-IDEAS-RUN-THE}"
+    },
+    {
+      "offset": 40504,
+      "value": "FLAG{MATTER-THE-SHALL-FEDERATIVE-LENGTH}"
+    },
+    {
+      "offset": 40548,
+      "value": "FLAG{OPPRESSION-UNION-THE-HOLDING-LAW}"
+    },
+    {
+      "offset": 40588,
+      "value": "FLAG{PROTECT-THEIR-THE-INCITEMENT-RATIFY}"
+    },
+    {
+      "offset": 40632,
+      "value": "FLAG{PEOPLES-UNDER-CHAIRMEN-THE-ARTICLE}"
+    },
+    {
+      "offset": 40676,
+      "value": "FLAG{REPUBLICS-TERRITORIAL-MINISTRIES-SESSION-RESOURCES}"
+    },
+    {
+      "offset": 40736,
+      "value": "FLAG{THE-FOR-WITH-THE-RAISING}"
+    },
+    {
+      "offset": 40768,
+      "value": "FLAG{THE-FOR-TERM-DOWN-THROUGH}"
+    },
+    {
+      "offset": 40800,
+      "value": "FLAG{PRINCIPLE-BEEN-MEANS-INTEGRATION-SOCIAL}"
+    },
+    {
+      "offset": 40848,
+      "value": "FLAG{THE-FORM-AND-CITIZENS-AND}"
+    },
+    {
+      "offset": 40880,
+      "value": "FLAG{SHALL-ECONOMIC-TAXES-AUTONOMOUS-OBSERVE}"
+    },
+    {
+      "offset": 40928,
+      "value": "FLAG{WITH-MEANS-COURT-RELIGION-ITS}"
+    },
+    {
+      "offset": 40964,
+      "value": "FLAG{DETERMINATION-REPUBLICS-SOVIETS-THE-STRIVING}"
+    },
+    {
+      "offset": 41016,
+      "value": "FLAG{WORKING-ACQUIRING-ARTICLE-HONORIFIC-MONETARY}"
+    },
+    {
+      "offset": 41068,
+      "value": "FLAG{CONSTITUTION-ADMINISTRATION-PUBLICLY-WEALTH-NATIONS}"
+    },
+    {
+      "offset": 41128,
+      "value": "FLAG{PROCURATORS-STRUCTURE-CONCERNED-ARTICLE-HAVE}"
+    },
+    {
+      "offset": 41180,
+      "value": "FLAG{WAS-THE-IMPLEMENT-MANAGEMENT-ARTICLE}"
+    },
+    {
+      "offset": 41224,
+      "value": "FLAG{DEPUTIES-GENERAL-STRUCTURE-SOCIALIST-CHAIRMEN}"
+    },
+    {
+      "offset": 41276,
+      "value": "FLAG{SERVICEMEN-SOCIALIST-THE-DEPUTIES-WITHIN}"
+    },
+    {
+      "offset": 41324,
+      "value": "FLAG{RULES-REPUBLIC-AND-SHALL-DEFENDING}"
+    },
+    {
+      "offset": 41368,
+      "value": "FLAG{SOVIET-ADMINISTRATION-AND-AND-TOGETHER}"
+    },
+    {
+      "offset": 41416,
+      "value": "FLAG{STATE-THE-ELECTED-THE-THE}"
+    },
+    {
+      "offset": 41448,
+      "value": "FLAG{AND-WITH-THE-THE-CAPITAL}"
+    },
+    {
+      "offset": 41480,
+      "value": "FLAG{PROPOSALS-BETWEEN-AND-MEASURES-MINISTERS}"
+    },
+    {
+      "offset": 41528,
+      "value": "FLAG{CHOSEN-RATIONAL-VERY-THE-THEORETICALLY}"
+    },
+    {
+      "offset": 41576,
+      "value": "FLAG{LOCAL-SESSION-THE-SHALL-STATE}"
+    },
+    {
+      "offset": 41612,
+      "value": "FLAG{SOVIET-SECURED-IMPLEMENTATION-POLICY-GUARANTEED}"
+    },
+    {
+      "offset": 41668,
+      "value": "FLAG{HAVE-RESOURCES-SOCIALISM-SHALL-THE}"
+    },
+    {
+      "offset": 41712,
+      "value": "FLAG{CHAIRMEN-WORKERS-APPROPRIATE-UNDER-AND}"
+    },
+    {
+      "offset": 41760,
+      "value": "FLAG{THE-ARTICLE-HATRED-STRENGTHENS-ELECTIONS}"
+    },
+    {
+      "offset": 41808,
+      "value": "FLAG{ADMINISTRATIVE-SOCIALIST-AND-AND-THE}"
+    },
+    {
+      "offset": 41852,
+      "value": "FLAG{AND-AND-SHALL-BUILDING-INTERNATIONAL}"
+    },
+    {
+      "offset": 41896,
+      "value": "FLAG{REQUISITE-PERSONAL-UNITS-THE-PROTECTS}"
+    },
+    {
+      "offset": 41940,
+      "value": "FLAG{THE-RULES-ORGANISATIONS-SOVIETS-LAWS}"
+    },
+    {
+      "offset": 41984,
+      "value": "FLAG{FEDERATIVE-UNION-PUBLIC-ONE-AND}"
+    },
+    {
+      "offset": 42024,
+      "value": "FLAG{REPUBLICS-WITHIN-UNION-AND-CONSTITUTION}"
+    },
+    {
+      "offset": 42072,
+      "value": "FLAG{THE-RIGHT-BOTH-CHAMBERS-HAVE}"
+    },
+    {
+      "offset": 42108,
+      "value": "FLAG{THE-EMPLOYMENT-DEPUTIES-AND-TAKES}"
+    },
+    {
+      "offset": 42148,
+      "value": "FLAG{SUPREME-AND-PUBLIC-THE-ARTICLE}"
+    },
+    {
+      "offset": 42188,
+      "value": "FLAG{AND-MORE-MEMBERS-AND-USSR}"
+    },
+    {
+      "offset": 42220,
+      "value": "FLAG{AND-TWO-AND-BODIES-ORGANISATIONS}"
+    },
+    {
+      "offset": 42260,
+      "value": "FLAG{TIME-PEOPLE-ACCORDANCE-UNION-JUST}"
+    },
+    {
+      "offset": 42300,
+      "value": "FLAG{TRADE-FOUNDATION-DEPUTIES-SOCIETIES-WITHIN}"
+    },
+    {
+      "offset": 42352,
+      "value": "FLAG{MAY-RAISING-PHYSICAL-PURSUE-ASSESSORS}"
+    },
+    {
+      "offset": 42396,
+      "value": "FLAG{INVIOLABILITY-POLITICAL-THEIR-ELECTED-FORCE}"
+    },
+    {
+      "offset": 42448,
+      "value": "FLAG{THE-HIGHER-COMPREHENSIVE-THE-AND}"
+    },
+    {
+      "offset": 42488,
+      "value": "FLAG{PEOPLE-WORKING-REPUBLICS-CHAPTER-MOST}"
+    },
+    {
+      "offset": 42532,
+      "value": "FLAG{MAY-AND-STANDING-MUTUAL-ELECTIONS}"
+    },
+    {
+      "offset": 42572,
+      "value": "FLAG{MINISTERS-INTERNATIONAL-THE-OVER-STRUCTURE}"
+    },
+    {
+      "offset": 42624,
+      "value": "FLAG{SOCIETYS-SUPPLIES-AND-FOR-SHALL}"
+    },
+    {
+      "offset": 42664,
+      "value": "FLAG{REPUBLICAN-THE-THE-LOCATED-AND}"
+    },
+    {
+      "offset": 42704,
+      "value": "FLAG{UNION-THE-DIRECT-TAKEN-BASIS}"
+    },
+    {
+      "offset": 42740,
+      "value": "FLAG{HEALTH-TAKEN-AND-EXPIRY-THE}"
+    },
+    {
+      "offset": 42776,
+      "value": "FLAG{AND-ARTICLE-MAKE-THE-THE}"
+    },
+    {
+      "offset": 42808,
+      "value": "FLAG{SHALL-DEVELOPMENT-PEOPLE-THE-LIFE}"
+    },
+    {
+      "offset": 42848,
+      "value": "FLAG{CONSIDER-SOCIAL-PEOPLE-STANDING-CITY}"
+    },
+    {
+      "offset": 42892,
+      "value": "FLAG{MEANS-PRESIDIUM-CHAIRMEN-GRAVEST-SIGNED}"
+    },
+    {
+      "offset": 42940,
+      "value": "FLAG{SOVIET-AND-LIFE-STATES-THEORETICALLY}"
+    },
+    {
+      "offset": 42984,
+      "value": "FLAG{ARTICLE-THE-GENERAL-THE-SOVIET}"
+    },
+    {
+      "offset": 43024,
+      "value": "FLAG{ORDERS-DUTY-REPUBLIC-STANDING-COUNCIL}"
+    },
+    {
+      "offset": 43068,
+      "value": "FLAG{BASIC-ELECTIVENESS-NEEDS-THE-BASIS}"
+    },
+    {
+      "offset": 43112,
+      "value": "FLAG{REGIONS-AND-AUTONOMOUS-AND-USSR}"
+    },
+    {
+      "offset": 43152,
+      "value": "FLAG{EMPLOYED-INCREASE-THE-SOVIET-THE}"
+    },
+    {
+      "offset": 43192,
+      "value": "FLAG{AND-THE-AND-SOCIALIST-CHAMBERS}"
+    },
+    {
+      "offset": 43232,
+      "value": "FLAG{OTHER-PLACING-OTHER-ORGANISATION-REPUBLIC}"
+    },
+    {
+      "offset": 43280,
+      "value": "FLAG{JUDGES-SUPREME-THE-AUDIT-JURISDICTION}"
+    },
+    {
+      "offset": 43324,
+      "value": "FLAG{THE-BODIES-THE-LEVELS-CITIZENS}"
+    },
+    {
+      "offset": 43364,
+      "value": "FLAG{MATTERS-ENDORSEMENT-BUILDING-THE-EXERCISES}"
+    },
+    {
+      "offset": 43416,
+      "value": "FLAG{USSR-ADMINISTRATIVE-REPUBLICAN-REPUBLIC-SOCIALIST}"
+    },
+    {
+      "offset": 43472,
+      "value": "FLAG{AUTHORITY-FREE-STANDS-SOVIET-OBLIGED}"
+    },
+    {
+      "offset": 43516,
+      "value": "FLAG{STATE-ARE-AND-UNIFORM-THE}"
+    },
+    {
+      "offset": 43548,
+      "value": "FLAG{BASIS-PROTECTION-HONOUR-CULTURAL-TOTAL}"
+    },
+    {
+      "offset": 43596,
+      "value": "FLAG{USSR-CHAMBERS-THEIR-PROVIDE-THE}"
+    },
+    {
+      "offset": 43636,
+      "value": "FLAG{MONTHS-REPUBLIC-THAN-OTHER-DECISIONS}"
+    },
+    {
+      "offset": 43680,
+      "value": "FLAG{REPUBLIC-LABOUR-PUBLIC-CONSUMPTION-USE}"
+    },
+    {
+      "offset": 43728,
+      "value": "FLAG{PERFORMANCE-AND-DISTRICTS-THE-PEOPLES}"
+    },
+    {
+      "offset": 43772,
+      "value": "FLAG{THE-ARISING-SHALL-CULTURAL-THE}"
+    },
+    {
+      "offset": 43812,
+      "value": "FLAG{USSRS-AND-SESSION-SHALL-SHALL}"
+    },
+    {
+      "offset": 43848,
+      "value": "FLAG{PROVIDE-THAT-BASIS-ALL-ACTS}"
+    },
+    {
+      "offset": 43884,
+      "value": "FLAG{OTHER-USSR-JURISDICTION-DIRECT-THE}"
+    },
+    {
+      "offset": 43928,
+      "value": "FLAG{OPERATE-THE-VITAL-PART-PLANS}"
+    },
+    {
+      "offset": 43964,
+      "value": "FLAG{PROCURATOR-MAKE-AND-DEVELOPMENT-THIS}"
+    },
+    {
+      "offset": 44008,
+      "value": "FLAG{OTHER-SOVIET-THE-UNITY-MISAPPROPRIATION}"
+    },
+    {
+      "offset": 44056,
+      "value": "FLAG{AND-SIGNED-REPUBLIC-THE-TERM}"
+    },
+    {
+      "offset": 44092,
+      "value": "FLAG{COMPOSITION-NATURE-ANIMAL-WORKING-MEMBERS}"
+    },
+    {
+      "offset": 44140,
+      "value": "FLAG{ARTICLE-ORGANISATIONS-RULE-AIM-AND}"
+    },
+    {
+      "offset": 44184,
+      "value": "FLAG{USSR-ABILITY-PROGRESSIVE-RETENTION-STRUCTURE}"
+    },
+    {
+      "offset": 44236,
+      "value": "FLAG{MINISTERS-DEAL-THE-AND-SUBSTANTIATED}"
+    },
+    {
+      "offset": 44280,
+      "value": "FLAG{CONSTITUTION-OTHER-NATIONALITIES-ROUND-STATE}"
+    },
+    {
+      "offset": 44332,
+      "value": "FLAG{INTERESTS-SOVIETS-MOTHERLAND-JURISDICTION-POLICY}"
+    },
+    {
+      "offset": 44388,
+      "value": "FLAG{SOVIETS-ARTICLE-WITHIN-PLOTS-PEOPLES}"
+    },
+    {
+      "offset": 44432,
+      "value": "FLAG{THE-THEIR-SCIENTIFIC-ORGANISING-CITIZENS}"
+    },
+    {
+      "offset": 44480,
+      "value": "FLAG{SUBMISSION-HEIGHTENING-USSR-FROM-AND}"
+    },
+    {
+      "offset": 44524,
+      "value": "FLAG{AND-THE-ELECTIONS-COUNCIL-RESPONSIBILITY}"
+    },
+    {
+      "offset": 44572,
+      "value": "FLAG{ARTICLE-TERRITORY-HEADS-THAT-THE}"
+    },
+    {
+      "offset": 44612,
+      "value": "FLAG{GUARANTEED-PEOPLES-SITTINGS-WITH-FROM}"
+    },
+    {
+      "offset": 44656,
+      "value": "FLAG{AND-USEFUL-USSR-COMMITTEES-UNION}"
+    },
+    {
+      "offset": 44696,
+      "value": "FLAG{AUTONOMOUS-URBAN-THE-COUNCIL-FOR}"
+    },
+    {
+      "offset": 44736,
+      "value": "FLAG{THE-AND-EDUCATION-ENCOURAGED-ROAD}"
+    },
+    {
+      "offset": 44776,
+      "value": "FLAG{SOVIET-TRANSFORMATIONS-LAND-THE-GOAL}"
+    },
+    {
+      "offset": 44820,
+      "value": "FLAG{ARE-THEIR-UNION-HOUSING-THE}"
+    },
+    {
+      "offset": 44856,
+      "value": "FLAG{USSR-WORKERS-PROPERTY-MINISTERS-THE}"
+    },
+    {
+      "offset": 44900,
+      "value": "FLAG{CONCERN-FOR-PRINCIPLE-CONDITIONS-BETWEEN}"
+    },
+    {
+      "offset": 44948,
+      "value": "FLAG{STATE-SHALL-GENERALLY-ENJOYMENT-ARTICLE}"
+    },
+    {
+      "offset": 44996,
+      "value": "FLAG{AND-REGARDS-AND-PAID-CONSTITUTION}"
+    },
+    {
+      "offset": 45036,
+      "value": "FLAG{MEMBERS-PEOPLES-PRINCIPLES-ATHEISTIC-MORE}"
+    },
+    {
+      "offset": 45084,
+      "value": "FLAG{THE-USSR-DISCREPANCY-SAFEGUARDING-WORLD}"
+    },
+    {
+      "offset": 45132,
+      "value": "FLAG{COLLECTIVE-THE-ARE-THE-AUTONOMOUS}"
+    },
+    {
+      "offset": 45172,
+      "value": "FLAG{INCLUDE-AND-THEIR-CORRESPONDENCE-UNION}"
+    },
+    {
+      "offset": 45220,
+      "value": "FLAG{THRIFTY-NOT-GEORGIAN-BOTH-BEEN}"
+    },
+    {
+      "offset": 45260,
+      "value": "FLAG{HAVE-ARBITRATION-DEPUTIES-WHEN-RENUNCIATION}"
+    },
+    {
+      "offset": 45312,
+      "value": "FLAG{DEFINED-USSR-COMMUNIST-BASIS-ACCOUNTABLE}"
+    },
+    {
+      "offset": 45360,
+      "value": "FLAG{ENSURE-INTO-MINISTRIES-INDIVIDUAL-SERVICES}"
+    },
+    {
+      "offset": 45412,
+      "value": "FLAG{USSR-HYGIENE-THE-CHAMBERS-SESSION}"
+    },
+    {
+      "offset": 45452,
+      "value": "FLAG{AND-THE-WORK-CONTINUING-CHAIRMAN}"
+    },
+    {
+      "offset": 45492,
+      "value": "FLAG{USSR-NATURE-ELECT-STATE-MEETINGS}"
+    },
+    {
+      "offset": 45532,
+      "value": "FLAG{ARE-DEPUTY-THE-BODIES-IMMORTAL}"
+    },
+    {
+      "offset": 45572,
+      "value": "FLAG{THE-DEVELOPED-PROTECT-REPUBLICS-WHO}"
+    },
+    {
+      "offset": 45616,
+      "value": "FLAG{MOTHERLAND-THE-AND-CHAPTER-UNION}"
+    },
+    {
+      "offset": 45656,
+      "value": "FLAG{CONDITIONS-TECHNICAL-AND-BILLS-VOID}"
+    },
+    {
+      "offset": 45700,
+      "value": "FLAG{BODIES-WORK-NUMBER-SOCIAL-PROPERTY}"
+    },
+    {
+      "offset": 45744,
+      "value": "FLAG{COLLECTIVE-RIGHT-IMPROVE-DEFENCE-MATTERS}"
+    },
+    {
+      "offset": 45792,
+      "value": "FLAG{CITIZEN-AND-REPUBLIC-SOVIET-BODIES}"
+    },
+    {
+      "offset": 45836,
+      "value": "FLAG{AUTONOMOUS-FIVE-SOCIALIST-OWN-THE}"
+    },
+    {
+      "offset": 45876,
+      "value": "FLAG{HOUSING-OPPORTUNITIES-UNION-ENSURE-AND}"
+    },
+    {
+      "offset": 45924,
+      "value": "FLAG{SUPREME-TIME-AND-SET-THEIR}"
+    },
+    {
+      "offset": 45960,
+      "value": "FLAG{FOR-FARMS-THE-THE-COMPLETELY}"
+    },
+    {
+      "offset": 45996,
+      "value": "FLAG{THE-ROUND-USSR-CITIZENS-AND}"
+    },
+    {
+      "offset": 46032,
+      "value": "FLAG{AND-THE-UNION-AND-SPECIFIC}"
+    },
+    {
+      "offset": 46068,
+      "value": "FLAG{THE-ECONOMIC-PERSECUTION-BODIES-SITTINGS}"
+    },
+    {
+      "offset": 46116,
+      "value": "FLAG{CHAPTER-SUPREME-ORGANISATIONS-UNION-TREATIES}"
+    },
+    {
+      "offset": 46168,
+      "value": "FLAG{THE-DEPUTIES-THE-THE-UNION}"
+    },
+    {
+      "offset": 46204,
+      "value": "FLAG{RIGHT-USSR-THE-THE-REPUBLIC}"
+    },
+    {
+      "offset": 46240,
+      "value": "FLAG{RATIONAL-NAME-THE-AND-FUNDS}"
+    },
+    {
+      "offset": 46276,
+      "value": "FLAG{THE-AND-LAW-ENACTED-FRATERNAL}"
+    },
+    {
+      "offset": 46312,
+      "value": "FLAG{THE-BAR-PROCURATORS-WHO-BUILT}"
+    },
+    {
+      "offset": 46348,
+      "value": "FLAG{THE-THE-REGIONS-ADOPTION-AIMS}"
+    },
+    {
+      "offset": 46384,
+      "value": "FLAG{STATE-WITH-THE-DEVELOPING-AND}"
+    },
+    {
+      "offset": 46420,
+      "value": "FLAG{NORTH-WITHIN-ACTIVE-KAZAKH-THE}"
+    },
+    {
+      "offset": 46460,
+      "value": "FLAG{SOVIET-USSR-AND-DECISION-THE}"
+    },
+    {
+      "offset": 46496,
+      "value": "FLAG{LAW-PARTICULAR-ONE-SPECIAL-SPECIFIC}"
+    },
+    {
+      "offset": 46540,
+      "value": "FLAG{ORDINANCES-PLACES-PRINCIPLE-SITTINGS-CITIZENS}"
+    },
+    {
+      "offset": 46592,
+      "value": "FLAG{SELF-SOVIET-THE-SEPARATE-ACCOUNTABLE}"
+    },
+    {
+      "offset": 46636,
+      "value": "FLAG{ELECTORS-REPUBLIC-SOCIETY-SUPREME-JURISDICTION}"
+    },
+    {
+      "offset": 46692,
+      "value": "FLAG{OPERATION-ARTICLE-MINERALS-TUVA-ANTHEM}"
+    },
+    {
+      "offset": 46740,
+      "value": "FLAG{LAW-SOVIET-LEADING-REGION-DEPUTIES}"
+    },
+    {
+      "offset": 46784,
+      "value": "FLAG{UNION-DEVELOPMENT-DICTATORSHIP-RIGHTS-THE}"
+    },
+    {
+      "offset": 46832,
+      "value": "FLAG{SITTINGS-SOVIETS-TAKEN-COLLECTIVES-PARTY}"
+    },
+    {
+      "offset": 46880,
+      "value": "FLAG{SOCIAL-THE-SYSTEM-PRODUCTION-AND}"
+    },
+    {
+      "offset": 46920,
+      "value": "FLAG{THE-PHYSICAL-THE-CONTROL-SPECIALISED}"
+    },
+    {
+      "offset": 46964,
+      "value": "FLAG{THE-PUBLIC-PEOPLES-PLANS-UNION}"
+    },
+    {
+      "offset": 47004,
+      "value": "FLAG{COURSES-SHALL-MINISTERS-EMPLOYMENT-CONCERNS}"
+    },
+    {
+      "offset": 47056,
+      "value": "FLAG{FORCES-STATE-AND-LAW-ARTICLE}"
+    },
+    {
+      "offset": 47092,
+      "value": "FLAG{UNION-THE-UNION-AND-THE}"
+    },
+    {
+      "offset": 47124,
+      "value": "FLAG{JUSTICE-THE-THE-RAYS-KARA}"
+    },
+    {
+      "offset": 47156,
+      "value": "FLAG{CULTURAL-RESULTS-REPUBLICAN-ARTICLE-ENSURE}"
+    },
+    {
+      "offset": 47208,
+      "value": "FLAG{POWERS-THE-SOVIET-GUARANTEED-AND}"
+    },
+    {
+      "offset": 47248,
+      "value": "FLAG{THAT-AND-DETERMINE-THE-AND}"
+    },
+    {
+      "offset": 47284,
+      "value": "FLAG{HOUSING-SESSIONS-LAW-REPUBLIC-CITIZEN}"
+    },
+    {
+      "offset": 47328,
+      "value": "FLAG{SUPREME-OWNS-COUNTRY-WITH-AUTONOMOUS}"
+    },
+    {
+      "offset": 47372,
+      "value": "FLAG{REPUBLICS-THIS-SOVIET-SHALL-BRANCH}"
+    },
+    {
+      "offset": 47416,
+      "value": "FLAG{THE-THE-FORCES-FORM-AND}"
+    },
+    {
+      "offset": 47448,
+      "value": "FLAG{CITIZEN-UNION-NATIONALITIES-UTILITIES-SOVIET}"
+    },
+    {
+      "offset": 47500,
+      "value": "FLAG{AUTONOMOUS-OPENED-LEGISLATIVE-THE-PEOPLE}"
+    },
+    {
+      "offset": 47548,
+      "value": "FLAG{END-ARE-USSR-INTERESTS-INTERPRET}"
+    },
+    {
+      "offset": 47588,
+      "value": "FLAG{SESSIONS-GRANTS-TUVA-GROUPS-PROCURATORS}"
+    },
+    {
+      "offset": 47636,
+      "value": "FLAG{AND-ABOLISH-THEIR-INDIVIDUAL-THE}"
+    },
+    {
+      "offset": 47676,
+      "value": "FLAG{AND-SUPREME-SUPREME-GOOD-STATE}"
+    },
+    {
+      "offset": 47716,
+      "value": "FLAG{WITH-COURT-CIRCASSIAN-COUNCIL-STATE}"
+    },
+    {
+      "offset": 47760,
+      "value": "FLAG{RENTS-ABOLISH-ENSURES-DEPUTIES-REPRESENTATIVES}"
+    },
+    {
+      "offset": 47816,
+      "value": "FLAG{ARMED-AND-THE-UNION-PEOPLE}"
+    },
+    {
+      "offset": 47852,
+      "value": "FLAG{SOCIALIST-UNION-YEARS-KARA-MAINTAIN}"
+    },
+    {
+      "offset": 47896,
+      "value": "FLAG{RESIGNATION-PROPOSAL-ASSIGNMENTS-ALL-USSR}"
+    },
+    {
+      "offset": 47944,
+      "value": "FLAG{THE-LIFE-ACCORDING-RACE-THE}"
+    },
+    {
+      "offset": 47980,
+      "value": "FLAG{UNDER-EVASION-AND-INDIVIDUAL-MINISTRIES}"
+    },
+    {
+      "offset": 48028,
+      "value": "FLAG{BROKE-VOCATIONAL-REPUBLICS-ARTICLE-THE}"
+    },
+    {
+      "offset": 48076,
+      "value": "FLAG{RELATIONS-USSR-USSR-ARTICLE-POLICY}"
+    },
+    {
+      "offset": 48120,
+      "value": "FLAG{THE-PARTICIPATION-HEALTH-THE-SUPREME}"
+    },
+    {
+      "offset": 48164,
+      "value": "FLAG{HOME-THE-INTELLECTUAL-IMPLEMENTED-ROUND}"
+    },
+    {
+      "offset": 48212,
+      "value": "FLAG{RETAIN-PEOPLES-ACTIVE-PERSONS-AND}"
+    },
+    {
+      "offset": 48252,
+      "value": "FLAG{ENCOURAGING-AND-ROUND-FOR-FOR}"
+    },
+    {
+      "offset": 48288,
+      "value": "FLAG{RESCIND-FORMING-REPUBLIC-SOVIET-HIGHER}"
+    },
+    {
+      "offset": 48336,
+      "value": "FLAG{EXTENSIVE-ITS-MAY-SOVIET-RESPONSIBLE}"
+    },
+    {
+      "offset": 48380,
+      "value": "FLAG{UNION-AND-ESSENTIAL-JOINT-OTHER}"
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Binary Intelligence Workbench</title>
+  <link rel="stylesheet" href="src/styles.css" />
+</head>
+<body>
+  <main id="app">
+    <aside>
+      <h1>BIW</h1>
+      <p id="health">API: checking…</p>
+      <button id="refresh">Refresh</button>
+      <ol id="cases"></ol>
+    </aside>
+    <section>
+      <header>
+        <h2 id="title">Select a case</h2>
+        <p id="meta"></p>
+      </header>
+      <nav id="tabs">
+        <button data-tab="summary">Summary</button>
+        <button data-tab="findings">Findings</button>
+        <button data-tab="skills">Skills</button>
+        <button data-tab="functions">Functions</button>
+        <button data-tab="artifacts">Artifacts</button>
+        <button data-tab="notes">Notes</button>
+      </nav>
+      <pre id="content">Start BIW with: python3 -m biw.cli serve --out .analysis/cases</pre>
+    </section>
+  </main>
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>

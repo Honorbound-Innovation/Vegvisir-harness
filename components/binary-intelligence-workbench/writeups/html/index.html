@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Vegvisir CTF Writeups</title><style>
+:root {
+  --bg: #080b10;
+  --panel: #101722;
+  --panel2: #0d131d;
+  --text: #e8eef7;
+  --muted: #9fb0c5;
+  --subtle: #6d7d91;
+  --accent: #67e8f9;
+  --accent2: #a78bfa;
+  --good: #34d399;
+  --warn: #fbbf24;
+  --bad: #fb7185;
+  --code: #07111d;
+  --border: #223044;
+  --shadow: rgba(0,0,0,.35);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  color: var(--text);
+  background:
+    radial-gradient(circle at top left, rgba(103,232,249,.16), transparent 34rem),
+    radial-gradient(circle at top right, rgba(167,139,250,.14), transparent 28rem),
+    linear-gradient(180deg, #070a0f 0%, #0a0f16 45%, #070a0f 100%);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1.6;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.container { width: min(1120px, calc(100% - 40px)); margin: 0 auto; }
+.hero {
+  padding: 56px 0 32px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+}
+.kicker {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--accent);
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  font-size: .78rem;
+}
+.kicker::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 20px var(--accent); }
+h1 { font-size: clamp(2.2rem, 5vw, 4.6rem); line-height: .95; margin: 18px 0 18px; letter-spacing: -.05em; }
+.subtitle { color: var(--muted); max-width: 860px; font-size: 1.08rem; }
+.meta-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-top: 28px; }
+.meta-card { background: rgba(16,23,34,.74); border: 1px solid var(--border); border-radius: 18px; padding: 16px; box-shadow: 0 12px 40px var(--shadow); backdrop-filter: blur(10px); }
+.meta-label { color: var(--subtle); font-size: .76rem; text-transform: uppercase; letter-spacing: .12em; }
+.meta-value { margin-top: 5px; font-weight: 800; overflow-wrap: anywhere; }
+.flag-card { margin-top: 24px; border: 1px solid rgba(52,211,153,.35); background: linear-gradient(135deg, rgba(52,211,153,.14), rgba(103,232,249,.08)); border-radius: 22px; padding: 20px; }
+.flag-label { color: var(--good); font-weight: 800; text-transform: uppercase; font-size: .8rem; letter-spacing: .12em; }
+.flag { margin-top: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: clamp(1rem, 2.4vw, 1.35rem); overflow-wrap: anywhere; }
+.layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 28px; padding: 34px 0 70px; }
+.toc { position: sticky; top: 18px; align-self: start; background: rgba(13,19,29,.76); border: 1px solid var(--border); border-radius: 20px; padding: 18px; }
+.toc-title { color: var(--muted); font-size: .78rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; margin-bottom: 10px; }
+.toc a { display: block; color: var(--muted); padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,.045); font-size: .92rem; }
+.toc a:last-child { border-bottom: 0; }
+.content { min-width: 0; }
+section { background: rgba(16,23,34,.68); border: 1px solid var(--border); border-radius: 22px; padding: 26px; margin-bottom: 22px; box-shadow: 0 18px 45px var(--shadow); }
+h2 { margin: 0 0 14px; font-size: 1.72rem; letter-spacing: -.03em; }
+h3 { margin: 24px 0 10px; color: #dce6f5; }
+p, li { color: #c8d4e4; }
+ul, ol { padding-left: 1.35rem; }
+hr { border: 0; border-top: 1px solid var(--border); margin: 22px 0; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+code { background: rgba(7,17,29,.8); color: #d8f8ff; padding: .14rem .34rem; border-radius: 7px; border: 1px solid rgba(103,232,249,.13); }
+pre { background: var(--code); color: #d6e9ff; padding: 18px; border-radius: 16px; overflow-x: auto; border: 1px solid rgba(103,232,249,.14); box-shadow: inset 0 0 0 1px rgba(255,255,255,.02); }
+.callout { border-left: 4px solid var(--accent); background: rgba(103,232,249,.08); padding: 14px 16px; border-radius: 12px; color: #d9f8ff; margin: 16px 0; }
+.callout.good { border-left-color: var(--good); background: rgba(52,211,153,.08); }
+.callout.warn { border-left-color: var(--warn); background: rgba(251,191,36,.08); }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; margin: 14px 0; }
+th, td { border-bottom: 1px solid var(--border); padding: 10px 10px; text-align: left; vertical-align: top; }
+th { color: #eef6ff; background: rgba(255,255,255,.035); font-size: .86rem; text-transform: uppercase; letter-spacing: .07em; }
+td { color: #c8d4e4; }
+.badge { display: inline-flex; align-items: center; gap: 6px; border: 1px solid rgba(103,232,249,.25); background: rgba(103,232,249,.08); color: var(--accent); border-radius: 999px; padding: 4px 10px; font-size: .82rem; font-weight: 700; }
+.footer { color: var(--subtle); font-size: .9rem; padding: 26px 0 46px; border-top: 1px solid rgba(255,255,255,.06); }
+@media (max-width: 900px) {
+  .meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .layout { grid-template-columns: 1fr; }
+  .toc { position: static; }
+}
+@media (max-width: 560px) { .meta-grid { grid-template-columns: 1fr; } .container { width: min(100% - 24px, 1120px); } section { padding: 20px; } }
+</style></head>
+<body><header class="hero"><div class="container"><div class="kicker">Vegvisir Validation Set</div><h1>CTF Writeups</h1><p class="subtitle">Four polished dark-mode writeups covering reversing, forensics, and crypto challenges solved during the Vegvisir/BIW validation run.</p><div class="meta-grid"><div class="meta-card"><div class="meta-label">Challenges</div><div class="meta-value">4</div></div><div class="meta-card"><div class="meta-label">Domains</div><div class="meta-value">Reversing · Forensics · Crypto</div></div><div class="meta-card"><div class="meta-label">Status</div><div class="meta-value">Solved</div></div><div class="meta-card"><div class="meta-label">Theme</div><div class="meta-value">Professional dark mode</div></div></div></div></header><main class="container" style="padding:34px 0 70px;"><section><span class="badge">Reversing</span><h2 style="margin-top:12px;"><a href="callfuscated.html">HTB Callfuscated</a></h2><p>Insane reversing: call-threaded VM reduction and flag recovery.</p><p><a href="callfuscated.html">Open writeup →</a></p></section><section><span class="badge">Reversing</span><h2 style="margin-top:12px;"><a href="spooky.html">HTB SpookyPass</a></h2><p>String/symbol triage of a compact password-checking ELF.</p><p><a href="spooky.html">Open writeup →</a></p></section><section><span class="badge">Forensics</span><h2 style="margin-top:12px;"><a href="red.html">HTB Red</a></h2><p>Redis forensic incident: PCAP, rogue module, AES-CBC command output, multipart flag.</p><p><a href="red.html">Open writeup →</a></p></section><section><span class="badge">Crypto</span><h2 style="margin-top:12px;"><a href="wonky-aes.html">HTB Wonky AES</a></h2><p>Insane crypto: AES Differential Fault Analysis against a live service.</p><p><a href="wonky-aes.html">Open writeup →</a></p></section></main><footer class="container footer">Standalone index for the generated HTML writeups.</footer></body></html>

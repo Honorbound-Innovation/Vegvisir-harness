@@ -1,0 +1,130 @@
+id: skill-forensics-image-stego-chain
+title: forensics.image_stego_chain
+summary: Analyze image artifacts with metadata clues, appended data, stego payloads,
+  nested archives, and follow-on ciphers
+skill_type: Procedure
+scope: TaskLevel
+status: Approved
+maturity: Level4HumanApproved
+domain: artifact-analysis
+source_section_ids:
+- skill-forensics-image-stego-chain
+procedure:
+- Preserve the original image and compute hashes.
+- Identify image type, dimensions, metadata, comments, thumbnails, and unusual fields.
+- Search for trailing data after normal image terminators and carve embedded file
+  signatures.
+- Decode obvious clue encodings such as Morse, base64, hex, ROT, or human-readable
+  comments.
+- Build a candidate passphrase ledger from metadata, carved files, and visible clues.
+- Use stego tools only on copied artifacts and only with candidate passphrases tied
+  to evidence.
+- Inspect extracted archives/files and route nested binaries, PCAPs, ciphers, or scripts
+  to specialized skills.
+- Summarize provenance from image clue to extracted evidence and final result.
+inputs:
+- Image file or image set.
+- Optional hints and candidate passphrases.
+- Available stego/carving/metadata tools.
+outputs:
+- image metadata report
+- trailing-data carve report
+- stego candidate ledger
+- extracted artifact inventory
+- image evidence chain report
+guardrails:
+- Do not modify originals.
+- Do not execute embedded payloads during extraction.
+- Respect licensed/private images and authorization scope.
+- Treat found passwords/flags as sensitive and avoid durable memory writes.
+anti_patterns:
+- Jumping to LSB/stego before checking metadata and appended data.
+- Trusting a decoy extracted text file as final without chain verification.
+- Ignoring challenge correction notes or password casing hints.
+evals:
+- id: eval-skill-forensics-image-stego-chain-routing
+  prompt: Which skill handles this? Analyze image artifacts with metadata clues, appended
+    data, stego payloads, nested archives, and follow-on ciphers
+  expected_behavior: Routes to forensics.image_stego_chain and applies its generalized
+    workflow without task-specific assumptions.
+  eval_type: Routing
+  safety_notes:
+  - Keep work within authorized scope and preserve evidence provenance.
+- id: eval-skill-forensics-image-stego-chain-source-grounding
+  prompt: Summarize the generalized workflow for forensics.image_stego_chain with
+    source grounding.
+  expected_behavior: Cites generalized source section skill-forensics-image-stego-chain,
+    names required checkpoints, and avoids storing secret-like material.
+  eval_type: SourceGrounding
+  safety_notes: []
+- id: eval-skill-forensics-image-stego-chain-tool-planning
+  prompt: Plan read-only or reversible tool use for forensics.image_stego_chain.
+  expected_behavior: Plans inspection, extraction, verification, and reporting steps
+    with backups or copied artifacts before mutations.
+  eval_type: ToolUsePlanning
+  safety_notes:
+  - Use read-only checks first; do not execute recovered payloads without explicit
+    authorization.
+citations:
+- citation_id: cite-skill-forensics-image-stego-chain
+  source_id: generalized-biw-session
+  section_id: skill-forensics-image-stego-chain
+  excerpt: Generalized workflow for forensics.image_stego_chain derived from validated
+    multi-stage artifact analysis patterns; no task-specific secrets included.
+confidence:
+  raw: 0.84
+  extraction: 0.78
+  inference: 0.68
+  procedure: 0.88
+  guardrail: 0.9
+  eval: 0.72
+  routing: 0.8
+  source_quality: 0.82
+  human_review: 1.0
+  runtime: 0.0
+evidence_breakdown:
+  direct_extraction: 0.18
+  supporting_inference: 0.28
+  operational_synthesis: 0.49
+  speculative_candidate: 0.0
+  community_derived: 0.0
+  internal_policy_derived: 0.05
+inference_records: []
+role_suitability:
+- role: Artifact Intelligence Analyst
+  suitability: 0.9
+  rationale: Applies to authorized artifact-analysis workflows with layered evidence
+    and verification.
+- role: Incident Responder
+  suitability: 0.78
+  rationale: Supports evidence preservation and staged analysis of recovered artifacts.
+- role: Reverse Engineer
+  suitability: 0.74
+  rationale: Supports static/dynamic follow-up when payloads or binaries are recovered.
+tool_requirements:
+- name: Direct
+  requirement_type: Optional
+  permission_level: ReadOnly
+  dry_run_available: true
+  rollback_required: false
+runtime_policy:
+  conceptual_answer: true
+  recommend_commands: true
+  run_read_only_commands: true
+  modify_files: false
+  modify_external_systems: false
+  requires_user_approval: false
+  requires_backup_or_rollback: false
+  handles_secrets: false
+  handles_licensed_source: false
+version_applicability:
+  supported_versions: []
+  unsupported_versions: []
+  version_source_refs: []
+  version_confidence: 0.0
+  migration_notes: []
+  deprecated_flags: []
+metadata:
+  interface_kind: workflow
+  source_trust: ValidatedSessionGeneralization
+  extended_context: skills/forensics_image_stego_chain.md

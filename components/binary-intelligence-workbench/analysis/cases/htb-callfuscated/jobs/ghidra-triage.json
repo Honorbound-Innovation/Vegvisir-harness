@@ -1,0 +1,112 @@
+{
+  "commands": [
+    {
+      "cmd": [
+        "/mnt/storage/Vegvisir-Projects/GhidraHeadlessMCP/bin/ghidra-headless",
+        "import",
+        "--binary",
+        "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench/samples/htb-callfuscated/crackme",
+        "--overwrite",
+        "--project-dir",
+        "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench/analysis/cases/htb-callfuscated/ghidra-project",
+        "--project-name",
+        "htb-callfuscated"
+      ],
+      "name": "import",
+      "returncode": 0,
+      "stderr_tail": []
+    },
+    {
+      "cmd": [
+        "/mnt/storage/Vegvisir-Projects/GhidraHeadlessMCP/bin/ghidra-headless",
+        "list-strings",
+        "--program",
+        "crackme",
+        "--limit",
+        "1000",
+        "--project-dir",
+        "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench/analysis/cases/htb-callfuscated/ghidra-project",
+        "--project-name",
+        "htb-callfuscated"
+      ],
+      "name": "list-strings",
+      "returncode": 0,
+      "stderr_tail": []
+    },
+    {
+      "cmd": [
+        "/mnt/storage/Vegvisir-Projects/GhidraHeadlessMCP/bin/ghidra-headless",
+        "list-imports",
+        "--program",
+        "crackme",
+        "--limit",
+        "1000",
+        "--project-dir",
+        "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench/analysis/cases/htb-callfuscated/ghidra-project",
+        "--project-name",
+        "htb-callfuscated"
+      ],
+      "name": "list-imports",
+      "returncode": 0,
+      "stderr_tail": []
+    },
+    {
+      "cmd": [
+        "/mnt/storage/Vegvisir-Projects/GhidraHeadlessMCP/bin/ghidra-headless",
+        "list-exports",
+        "--program",
+        "crackme",
+        "--limit",
+        "1000",
+        "--project-dir",
+        "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench/analysis/cases/htb-callfuscated/ghidra-project",
+        "--project-name",
+        "htb-callfuscated"
+      ],
+      "name": "list-exports",
+      "returncode": 0,
+      "stderr_tail": []
+    },
+    {
+      "cmd": [
+        "/mnt/storage/Vegvisir-Projects/GhidraHeadlessMCP/bin/ghidra-headless",
+        "list-functions",
+        "--program",
+        "crackme",
+        "--limit",
+        "1000",
+        "--project-dir",
+        "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench/analysis/cases/htb-callfuscated/ghidra-project",
+        "--project-name",
+        "htb-callfuscated"
+      ],
+      "name": "list-functions",
+      "returncode": 0,
+      "stderr_tail": []
+    },
+    {
+      "cmd": [
+        "/mnt/storage/Vegvisir-Projects/GhidraHeadlessMCP/bin/ghidra-headless",
+        "callgraph",
+        "--program",
+        "crackme",
+        "--mode",
+        "edges",
+        "--limit",
+        "1000",
+        "--project-dir",
+        "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench/analysis/cases/htb-callfuscated/ghidra-project",
+        "--project-name",
+        "htb-callfuscated"
+      ],
+      "name": "callgraph",
+      "returncode": 0,
+      "stderr_tail": []
+    }
+  ],
+  "mode": "ghidra",
+  "program": "crackme",
+  "project_dir": "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench/analysis/cases/htb-callfuscated/ghidra-project",
+  "project_name": "htb-callfuscated",
+  "wrapper": "/mnt/storage/Vegvisir-Projects/GhidraHeadlessMCP/bin/ghidra-headless"
+}

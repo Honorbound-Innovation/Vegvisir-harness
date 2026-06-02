@@ -1,0 +1,447 @@
+- section_id: skill-forensics-pcap-triage
+  source_id: generalized-biw-session
+  heading: forensics.network_capture_triage
+  breadcrumbs:
+  - Artifact Intelligence
+  - forensics.network_capture_triage
+  line_start: 1
+  line_end: 1
+  text_excerpt: 'Triage packet captures
+
+
+    Generalized workflow extracted from authorized BIW reversing, forensics, cryptanalysis,
+    safe artifact handling, and reporting validations. No flags, credentials, keys,
+    or secret-like values are included.
+
+    '
+  code_blocks: []
+  links: []
+  detected_commands: []
+  detected_api_operations: []
+  detected_warnings:
+  - Authorized scope required.
+  detected_examples: []
+  detected_normative_language:
+  - Preserve original evidence and do not store secret-like material in durable memory.
+- section_id: skill-artifact-safe-extract
+  source_id: generalized-biw-session
+  heading: artifact.safe_extract_inventory
+  breadcrumbs:
+  - Artifact Intelligence
+  - artifact.safe_extract_inventory
+  line_start: 1
+  line_end: 1
+  text_excerpt: 'Safely extract and inventory archives
+
+
+    Generalized workflow extracted from authorized BIW reversing, forensics, cryptanalysis,
+    safe artifact handling, and reporting validations. No flags, credentials, keys,
+    or secret-like values are included.
+
+    '
+  code_blocks: []
+  links: []
+  detected_commands: []
+  detected_api_operations: []
+  detected_warnings:
+  - Authorized scope required.
+  detected_examples: []
+  detected_normative_language:
+  - Preserve original evidence and do not store secret-like material in durable memory.
+- section_id: skill-binary-vm-lift-reduce
+  source_id: generalized-biw-session
+  heading: binary.vm_lift_and_reduce
+  breadcrumbs:
+  - Artifact Intelligence
+  - binary.vm_lift_and_reduce
+  line_start: 1
+  line_end: 1
+  text_excerpt: 'Lift and reduce custom binary VMs
+
+
+    Generalized workflow extracted from authorized BIW reversing, forensics, cryptanalysis,
+    safe artifact handling, and reporting validations. No flags, credentials, keys,
+    or secret-like values are included.
+
+    '
+  code_blocks: []
+  links: []
+  detected_commands: []
+  detected_api_operations: []
+  detected_warnings:
+  - Authorized scope required.
+  detected_examples: []
+  detected_normative_language:
+  - Preserve original evidence and do not store secret-like material in durable memory.
+- section_id: skill-crypto-aes-dfa
+  source_id: generalized-biw-session
+  heading: crypto.aes_dfa_key_recovery
+  breadcrumbs:
+  - Artifact Intelligence
+  - crypto.aes_dfa_key_recovery
+  line_start: 1
+  line_end: 1
+  text_excerpt: 'Recover AES keys using DFA
+
+
+    Generalized workflow extracted from authorized BIW reversing, forensics, cryptanalysis,
+    safe artifact handling, and reporting validations. No flags, credentials, keys,
+    or secret-like values are included.
+
+    '
+  code_blocks: []
+  links: []
+  detected_commands: []
+  detected_api_operations: []
+  detected_warnings:
+  - Authorized scope required.
+  detected_examples: []
+  detected_normative_language:
+  - Preserve original evidence and do not store secret-like material in durable memory.
+- section_id: skill-artifact-triage-route
+  source_id: generalized-biw-session
+  heading: artifact.triage_and_route
+  breadcrumbs:
+  - Artifact Intelligence
+  - artifact.triage_and_route
+  line_start: 1
+  line_end: 1
+  text_excerpt: 'Triage and route unknown artifacts
+
+
+    Generalized workflow extracted from authorized BIW reversing, forensics, cryptanalysis,
+    safe artifact handling, and reporting validations. No flags, credentials, keys,
+    or secret-like values are included.
+
+    '
+  code_blocks: []
+  links: []
+  detected_commands: []
+  detected_api_operations: []
+  detected_warnings:
+  - Authorized scope required.
+  detected_examples: []
+  detected_normative_language:
+  - Preserve original evidence and do not store secret-like material in durable memory.
+- section_id: skill-binary-static-triage
+  source_id: generalized-biw-session
+  heading: binary.static_triage
+  breadcrumbs:
+  - Artifact Intelligence
+  - binary.static_triage
+  line_start: 1
+  line_end: 1
+  text_excerpt: 'Perform static binary triage
+
+
+    Generalized workflow extracted from authorized BIW reversing, forensics, cryptanalysis,
+    safe artifact handling, and reporting validations. No flags, credentials, keys,
+    or secret-like values are included.
+
+    '
+  code_blocks: []
+  links: []
+  detected_commands: []
+  detected_api_operations: []
+  detected_warnings:
+  - Authorized scope required.
+  detected_examples: []
+  detected_normative_language:
+  - Preserve original evidence and do not store secret-like material in durable memory.
+- section_id: skill-forensics-payload-carve
+  source_id: generalized-biw-session
+  heading: forensics.payload_carve_and_decode
+  breadcrumbs:
+  - Artifact Intelligence
+  - forensics.payload_carve_and_decode
+  line_start: 1
+  line_end: 1
+  text_excerpt: 'Carve and decode forensic payloads
+
+
+    Generalized workflow extracted from authorized BIW reversing, forensics, cryptanalysis,
+    safe artifact handling, and reporting validations. No flags, credentials, keys,
+    or secret-like values are included.
+
+    '
+  code_blocks: []
+  links: []
+  detected_commands: []
+  detected_api_operations: []
+  detected_warnings:
+  - Authorized scope required.
+  detected_examples: []
+  detected_normative_language:
+  - Preserve original evidence and do not store secret-like material in durable memory.
+- section_id: skill-incident-redis-abuse
+  source_id: generalized-biw-session
+  heading: incident.redis_protocol_abuse
+  breadcrumbs:
+  - Artifact Intelligence
+  - incident.redis_protocol_abuse
+  line_start: 1
+  line_end: 1
+  text_excerpt: 'Reconstruct Redis protocol abuse
+
+
+    Generalized workflow extracted from authorized BIW reversing, forensics, cryptanalysis,
+    safe artifact handling, and reporting validations. No flags, credentials, keys,
+    or secret-like values are included.
+
+    '
+  code_blocks: []
+  links: []
+  detected_commands: []
+  detected_api_operations: []
+  detected_warnings:
+  - Authorized scope required.
+  detected_examples: []
+  detected_normative_language:
+  - Preserve original evidence and do not store secret-like material in durable memory.
+- section_id: skill-binary-cfg-deobfuscation
+  source_id: generalized-biw-session
+  heading: binary.control_flow_deobfuscation
+  breadcrumbs:
+  - Artifact Intelligence
+  - binary.control_flow_deobfuscation
+  line_start: 1
+  line_end: 1
+  text_excerpt: 'Reduce obfuscated binary control flow
+
+
+    Generalized workflow extracted from authorized BIW reversing, forensics, cryptanalysis,
+    safe artifact handling, and reporting validations. No flags, credentials, keys,
+    or secret-like values are included.
+
+    '
+  code_blocks: []
+  links: []
+  detected_commands: []
+  detected_api_operations: []
+  detected_warnings:
+  - Authorized scope required.
+  detected_examples: []
+  detected_normative_language:
+  - Preserve original evidence and do not store secret-like material in durable memory.
+- section_id: skill-binary-validation-recovery
+  source_id: generalized-biw-session
+  heading: binary.validation_logic_recovery
+  breadcrumbs:
+  - Artifact Intelligence
+  - binary.validation_logic_recovery
+  line_start: 1
+  line_end: 1
+  text_excerpt: 'Recover binary validation logic
+
+
+    Generalized workflow extracted from authorized BIW reversing, forensics, cryptanalysis,
+    safe artifact handling, and reporting validations. No flags, credentials, keys,
+    or secret-like values are included.
+
+    '
+  code_blocks: []
+  links: []
+  detected_commands: []
+  detected_api_operations: []
+  detected_warnings:
+  - Authorized scope required.
+  detected_examples: []
+  detected_normative_language:
+  - Preserve original evidence and do not store secret-like material in durable memory.
+- section_id: skill-crypto-fault-oracle
+  source_id: generalized-biw-session
+  heading: crypto.fault_oracle_analysis
+  breadcrumbs:
+  - Artifact Intelligence
+  - crypto.fault_oracle_analysis
+  line_start: 1
+  line_end: 1
+  text_excerpt: 'Analyze crypto fault and error oracles
+
+
+    Generalized workflow extracted from authorized BIW reversing, forensics, cryptanalysis,
+    safe artifact handling, and reporting validations. No flags, credentials, keys,
+    or secret-like values are included.
+
+    '
+  code_blocks: []
+  links: []
+  detected_commands: []
+  detected_api_operations: []
+  detected_warnings:
+  - Authorized scope required.
+  detected_examples: []
+  detected_normative_language:
+  - Preserve original evidence and do not store secret-like material in durable memory.
+- section_id: skill-report-pro-writeup
+  source_id: generalized-biw-session
+  heading: report.professional_writeup_generate
+  breadcrumbs:
+  - Artifact Intelligence
+  - report.professional_writeup_generate
+  line_start: 1
+  line_end: 1
+  text_excerpt: 'Generate professional technical writeups
+
+
+    Generalized workflow extracted from authorized BIW reversing, forensics, cryptanalysis,
+    safe artifact handling, and reporting validations. No flags, credentials, keys,
+    or secret-like values are included.
+
+    '
+  code_blocks: []
+  links: []
+  detected_commands: []
+  detected_api_operations: []
+  detected_warnings:
+  - Authorized scope required.
+  detected_examples: []
+  detected_normative_language:
+  - Preserve original evidence and do not store secret-like material in durable memory.
+- section_id: skill-analysis-hypothesis-evidence-control
+  source_id: generalized-biw-session
+  heading: analysis.hypothesis_evidence_control
+  breadcrumbs:
+  - Artifact Intelligence
+  - analysis.hypothesis_evidence_control
+  line_start: 1
+  line_end: 1
+  text_excerpt: 'Manage competing hypotheses and keep hints, assumptions, tool output,
+    and verified artifact evidence distinct during technical analysis. Generalized
+    evidence discipline; no task-specific secrets included.
+
+    '
+  code_blocks: []
+  links: []
+  detected_commands: []
+  detected_api_operations: []
+  detected_warnings:
+  - Authorized scope required.
+  - Do not treat hints as verified facts without artifact evidence.
+  detected_examples: []
+  detected_normative_language:
+  - Promote conclusions only after reproducible artifact-backed verification.
+- section_id: skill-analysis-multi-stage-artifact-chain
+  source_id: generalized-biw-session
+  heading: analysis.multi_stage_artifact_chain
+  breadcrumbs:
+  - Artifact Intelligence
+  - analysis.multi_stage_artifact_chain
+  line_start: 1
+  line_end: 1
+  text_excerpt: 'Manage verified multi-stage artifact chains across clues, passwords,
+    archives, ciphers, payloads, and final reports. Generalized workflow derived from
+    authorized artifact-analysis exercises. No flags, credentials, keys, or secret-like
+    values are included.
+
+    '
+  code_blocks: []
+  links: []
+  detected_commands: []
+  detected_api_operations: []
+  detected_warnings:
+  - Authorized scope required.
+  - Preserve provenance and verify each transition.
+  detected_examples: []
+  detected_normative_language:
+  - Use copies for extraction and promote conclusions only after reproducible artifact-backed
+    verification.
+- section_id: skill-forensics-image-stego-chain
+  source_id: generalized-biw-session
+  heading: forensics.image_stego_chain
+  breadcrumbs:
+  - Artifact Intelligence
+  - forensics.image_stego_chain
+  line_start: 1
+  line_end: 1
+  text_excerpt: 'Analyze image artifacts with metadata clues, appended data, stego
+    payloads, nested archives, and follow-on ciphers. Generalized workflow derived
+    from authorized artifact-analysis exercises. No flags, credentials, keys, or secret-like
+    values are included.
+
+    '
+  code_blocks: []
+  links: []
+  detected_commands: []
+  detected_api_operations: []
+  detected_warnings:
+  - Authorized scope required.
+  - Preserve provenance and verify each transition.
+  detected_examples: []
+  detected_normative_language:
+  - Use copies for extraction and promote conclusions only after reproducible artifact-backed
+    verification.
+- section_id: skill-crypto-classical-cipher-chain
+  source_id: generalized-biw-session
+  heading: crypto.classical_cipher_chain
+  breadcrumbs:
+  - Artifact Intelligence
+  - crypto.classical_cipher_chain
+  line_start: 1
+  line_end: 1
+  text_excerpt: 'Solve chained classical-cipher and encoding workflows with systematic
+    key recovery and verification. Generalized workflow derived from authorized artifact-analysis
+    exercises. No flags, credentials, keys, or secret-like values are included.
+
+    '
+  code_blocks: []
+  links: []
+  detected_commands: []
+  detected_api_operations: []
+  detected_warnings:
+  - Authorized scope required.
+  - Preserve provenance and verify each transition.
+  detected_examples: []
+  detected_normative_language:
+  - Use copies for extraction and promote conclusions only after reproducible artifact-backed
+    verification.
+- section_id: skill-binary-dotnet-gui-constraint-recovery
+  source_id: generalized-biw-session
+  heading: binary.dotnet_gui_constraint_recovery
+  breadcrumbs:
+  - Artifact Intelligence
+  - binary.dotnet_gui_constraint_recovery
+  line_start: 1
+  line_end: 1
+  text_excerpt: 'Recover keys from .NET GUI validation logic by extracting constraints
+    and success-path transforms without needing the GUI. Generalized workflow derived
+    from authorized artifact-analysis exercises. No flags, credentials, keys, or secret-like
+    values are included.
+
+    '
+  code_blocks: []
+  links: []
+  detected_commands: []
+  detected_api_operations: []
+  detected_warnings:
+  - Authorized scope required.
+  - Preserve provenance and verify each transition.
+  detected_examples: []
+  detected_normative_language:
+  - Use copies for extraction and promote conclusions only after reproducible artifact-backed
+    verification.
+- section_id: skill-forensics-pcap-embedded-artifact-chain
+  source_id: generalized-biw-session
+  heading: forensics.pcap_embedded_artifact_chain
+  breadcrumbs:
+  - Artifact Intelligence
+  - forensics.pcap_embedded_artifact_chain
+  line_start: 1
+  line_end: 1
+  text_excerpt: 'Recover and analyze embedded artifacts from PCAP/PCAPNG captures
+    through verified extraction, covert channels, encrypted streams, and payload follow-up.
+    Generalized workflow derived from authorized artifact-analysis exercises. No flags,
+    credentials, keys, or secret-like values are included.
+
+    '
+  code_blocks: []
+  links: []
+  detected_commands: []
+  detected_api_operations: []
+  detected_warnings:
+  - Authorized scope required.
+  - Preserve provenance and verify each transition.
+  detected_examples: []
+  detected_normative_language:
+  - Use copies for extraction and promote conclusions only after reproducible artifact-backed
+    verification.

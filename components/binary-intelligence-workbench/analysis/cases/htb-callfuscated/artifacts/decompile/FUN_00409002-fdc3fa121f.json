@@ -1,0 +1,47 @@
+{
+  "created_at": "2026-05-31T02:18:52Z",
+  "explanation": {
+    "case_id": "htb-callfuscated",
+    "confidence": "low",
+    "function": {
+      "selector": "FUN_00409002"
+    },
+    "function_selector": "FUN_00409002",
+    "generated_at": "2026-05-31T02:18:52Z",
+    "limitations": [
+      "This MVP explanation is deterministic and evidence-oriented; it is not a full semantic proof.",
+      "Decompiler output may be incomplete or misleading for optimized/obfuscated binaries."
+    ],
+    "notable_terms": [],
+    "observed_calls_or_tokens": [],
+    "schema_version": "biw.function_explanation.v1",
+    "summary": "No decompiled code was available; explanation is based on function metadata only."
+  },
+  "function": {
+    "selector": "FUN_00409002"
+  },
+  "mode": "ghidra",
+  "ok": false,
+  "payload": {
+    "command": [
+      "/mnt/storage/Vegvisir-Projects/GhidraHeadlessMCP/bin/ghidra-headless",
+      "decompile",
+      "--project-dir",
+      "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench/analysis/cases/htb-callfuscated/ghidra-project",
+      "--project-name",
+      "htb-callfuscated",
+      "--program",
+      "crackme",
+      "--timeout-seconds",
+      "900",
+      "--max-chars",
+      "50000",
+      "--function",
+      "FUN_00409002"
+    ],
+    "error": "function not found",
+    "ok": false,
+    "returncode": 0
+  },
+  "schema_version": "biw.decompile.v1"
+}

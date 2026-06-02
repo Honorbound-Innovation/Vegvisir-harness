@@ -1,0 +1,1306 @@
+{
+  "schema_version": "biw.strings.v1",
+  "source": "basic",
+  "strings": [
+    {
+      "offset": 792,
+      "value": "/lib64/ld-linux-x86-64.so.2"
+    },
+    {
+      "offset": 1153,
+      "value": "__libc_start_main"
+    },
+    {
+      "offset": 1171,
+      "value": "srand"
+    },
+    {
+      "offset": 1177,
+      "value": "puts"
+    },
+    {
+      "offset": 1182,
+      "value": "__isoc99_scanf"
+    },
+    {
+      "offset": 1197,
+      "value": "printf"
+    },
+    {
+      "offset": 1204,
+      "value": "libc.so.6"
+    },
+    {
+      "offset": 1214,
+      "value": "GLIBC_2.7"
+    },
+    {
+      "offset": 1224,
+      "value": "GLIBC_2.2.5"
+    },
+    {
+      "offset": 1236,
+      "value": "GLIBC_2.34"
+    },
+    {
+      "offset": 1247,
+      "value": "__gmon_start__"
+    },
+    {
+      "offset": 4241,
+      "value": "PTE1"
+    },
+    {
+      "offset": 4458,
+      "value": "PAXU"
+    },
+    {
+      "offset": 4563,
+      "value": "AX3E"
+    },
+    {
+      "offset": 4583,
+      "value": "AX#E"
+    },
+    {
+      "offset": 4646,
+      "value": "AX3E"
+    },
+    {
+      "offset": 4656,
+      "value": "AX3E"
+    },
+    {
+      "offset": 4704,
+      "value": "AX3E"
+    },
+    {
+      "offset": 4771,
+      "value": "AX3E"
+    },
+    {
+      "offset": 4791,
+      "value": "AX#E"
+    },
+    {
+      "offset": 4801,
+      "value": "AX#E"
+    },
+    {
+      "offset": 4823,
+      "value": "AX#E"
+    },
+    {
+      "offset": 4894,
+      "value": "AX#E"
+    },
+    {
+      "offset": 5053,
+      "value": "AX#E"
+    },
+    {
+      "offset": 5063,
+      "value": "AX3E"
+    },
+    {
+      "offset": 5092,
+      "value": "AX#E"
+    },
+    {
+      "offset": 5436,
+      "value": "AX#E"
+    },
+    {
+      "offset": 5747,
+      "value": "AX#E"
+    },
+    {
+      "offset": 5848,
+      "value": "AX3E"
+    },
+    {
+      "offset": 5858,
+      "value": "AX#E"
+    },
+    {
+      "offset": 5957,
+      "value": "AX3E"
+    },
+    {
+      "offset": 6039,
+      "value": "AX#E"
+    },
+    {
+      "offset": 6081,
+      "value": "AX#E"
+    },
+    {
+      "offset": 6103,
+      "value": "AX#E"
+    },
+    {
+      "offset": 6122,
+      "value": "AX#E"
+    },
+    {
+      "offset": 6260,
+      "value": "AX#E"
+    },
+    {
+      "offset": 6280,
+      "value": "AX3E"
+    },
+    {
+      "offset": 6359,
+      "value": "AX3E"
+    },
+    {
+      "offset": 6466,
+      "value": "AX#E"
+    },
+    {
+      "offset": 6476,
+      "value": "AX3E"
+    },
+    {
+      "offset": 6559,
+      "value": "AX#E"
+    },
+    {
+      "offset": 6610,
+      "value": "AX3E"
+    },
+    {
+      "offset": 6630,
+      "value": "AX3E"
+    },
+    {
+      "offset": 6710,
+      "value": "AX#E"
+    },
+    {
+      "offset": 6927,
+      "value": "AX3E"
+    },
+    {
+      "offset": 7001,
+      "value": "AX#E"
+    },
+    {
+      "offset": 7011,
+      "value": "AX3E"
+    },
+    {
+      "offset": 7083,
+      "value": "AX#E"
+    },
+    {
+      "offset": 7167,
+      "value": "AX#E"
+    },
+    {
+      "offset": 7187,
+      "value": "AX#E"
+    },
+    {
+      "offset": 7329,
+      "value": "AX#E"
+    },
+    {
+      "offset": 7348,
+      "value": "AX#E"
+    },
+    {
+      "offset": 7399,
+      "value": "AX3E"
+    },
+    {
+      "offset": 7553,
+      "value": "AX#E"
+    },
+    {
+      "offset": 7594,
+      "value": "AX3E"
+    },
+    {
+      "offset": 7626,
+      "value": "Wiv3"
+    },
+    {
+      "offset": 7672,
+      "value": "AX#E"
+    },
+    {
+      "offset": 7964,
+      "value": "PAXU"
+    },
+    {
+      "offset": 8104,
+      "value": "AX#E"
+    },
+    {
+      "offset": 8234,
+      "value": "AX3E"
+    },
+    {
+      "offset": 8353,
+      "value": "AX3E"
+    },
+    {
+      "offset": 8383,
+      "value": "AX#E"
+    },
+    {
+      "offset": 8556,
+      "value": "AX3E"
+    },
+    {
+      "offset": 9102,
+      "value": "AX#E"
+    },
+    {
+      "offset": 9247,
+      "value": "AX3E"
+    },
+    {
+      "offset": 9277,
+      "value": "AX#E"
+    },
+    {
+      "offset": 9308,
+      "value": "AX#E"
+    },
+    {
+      "offset": 9318,
+      "value": "AX3E"
+    },
+    {
+      "offset": 9447,
+      "value": "AX3E"
+    },
+    {
+      "offset": 9467,
+      "value": "AX#E"
+    },
+    {
+      "offset": 9515,
+      "value": "AX#E"
+    },
+    {
+      "offset": 9568,
+      "value": "AX#E"
+    },
+    {
+      "offset": 9692,
+      "value": "PAXU"
+    },
+    {
+      "offset": 9794,
+      "value": "AX#E"
+    },
+    {
+      "offset": 9835,
+      "value": "AX#E"
+    },
+    {
+      "offset": 10218,
+      "value": "AX3E"
+    },
+    {
+      "offset": 10337,
+      "value": "AX3E"
+    },
+    {
+      "offset": 10840,
+      "value": "AX3E"
+    },
+    {
+      "offset": 11047,
+      "value": "AX3E"
+    },
+    {
+      "offset": 11215,
+      "value": "fc**"
+    },
+    {
+      "offset": 11270,
+      "value": "AX#E"
+    },
+    {
+      "offset": 11528,
+      "value": "AX#E"
+    },
+    {
+      "offset": 11543,
+      "value": "$#zs"
+    },
+    {
+      "offset": 11672,
+      "value": "PAXU"
+    },
+    {
+      "offset": 11681,
+      "value": "AX#E"
+    },
+    {
+      "offset": 11721,
+      "value": "AX#E"
+    },
+    {
+      "offset": 11894,
+      "value": "AX3E"
+    },
+    {
+      "offset": 12002,
+      "value": "AX#E"
+    },
+    {
+      "offset": 12022,
+      "value": "AX#E"
+    },
+    {
+      "offset": 12065,
+      "value": "AX#E"
+    },
+    {
+      "offset": 12613,
+      "value": "AX#E"
+    },
+    {
+      "offset": 12623,
+      "value": "AX#E"
+    },
+    {
+      "offset": 12770,
+      "value": "AX3E"
+    },
+    {
+      "offset": 12849,
+      "value": "AX3E"
+    },
+    {
+      "offset": 12898,
+      "value": "AX#E"
+    },
+    {
+      "offset": 12946,
+      "value": "AX3E"
+    },
+    {
+      "offset": 12981,
+      "value": "h>x#"
+    },
+    {
+      "offset": 13043,
+      "value": "AX#E"
+    },
+    {
+      "offset": 13053,
+      "value": "AX#E"
+    },
+    {
+      "offset": 13102,
+      "value": "AX3E"
+    },
+    {
+      "offset": 13112,
+      "value": "AX#E"
+    },
+    {
+      "offset": 13134,
+      "value": "AX3E"
+    },
+    {
+      "offset": 13167,
+      "value": "3_>I"
+    },
+    {
+      "offset": 13498,
+      "value": "AX3E"
+    },
+    {
+      "offset": 13731,
+      "value": "AX3E"
+    },
+    {
+      "offset": 14198,
+      "value": "AX#E"
+    },
+    {
+      "offset": 14228,
+      "value": "AX#E"
+    },
+    {
+      "offset": 14305,
+      "value": "AX#E"
+    },
+    {
+      "offset": 14392,
+      "value": "AX#E"
+    },
+    {
+      "offset": 14402,
+      "value": "AX3E"
+    },
+    {
+      "offset": 14486,
+      "value": "AX#E"
+    },
+    {
+      "offset": 14496,
+      "value": "AX#E"
+    },
+    {
+      "offset": 14679,
+      "value": "AX#E"
+    },
+    {
+      "offset": 14699,
+      "value": "AX#E"
+    },
+    {
+      "offset": 14899,
+      "value": "AX#E"
+    },
+    {
+      "offset": 14922,
+      "value": "AX3E"
+    },
+    {
+      "offset": 14943,
+      "value": "AX#E"
+    },
+    {
+      "offset": 14963,
+      "value": "AX#E"
+    },
+    {
+      "offset": 15172,
+      "value": "AX3E"
+    },
+    {
+      "offset": 15263,
+      "value": "AX3E"
+    },
+    {
+      "offset": 15696,
+      "value": "AX3E"
+    },
+    {
+      "offset": 15921,
+      "value": "AX#E"
+    },
+    {
+      "offset": 16000,
+      "value": "AX3E"
+    },
+    {
+      "offset": 16179,
+      "value": "pGt~"
+    },
+    {
+      "offset": 16247,
+      "value": "AX#E"
+    },
+    {
+      "offset": 16450,
+      "value": "AX#E"
+    },
+    {
+      "offset": 16478,
+      "value": "AX#E"
+    },
+    {
+      "offset": 16488,
+      "value": "AX#E"
+    },
+    {
+      "offset": 16758,
+      "value": "AX#E"
+    },
+    {
+      "offset": 16869,
+      "value": "AX3E"
+    },
+    {
+      "offset": 17099,
+      "value": "AX#E"
+    },
+    {
+      "offset": 17123,
+      "value": "i7S0"
+    },
+    {
+      "offset": 17276,
+      "value": "AX3E"
+    },
+    {
+      "offset": 17420,
+      "value": "AX3E"
+    },
+    {
+      "offset": 17809,
+      "value": "AX#E"
+    },
+    {
+      "offset": 17890,
+      "value": "AX#E"
+    },
+    {
+      "offset": 18150,
+      "value": "AX#E"
+    },
+    {
+      "offset": 18243,
+      "value": "AX#E"
+    },
+    {
+      "offset": 18415,
+      "value": "AX#E"
+    },
+    {
+      "offset": 18552,
+      "value": "AX#E"
+    },
+    {
+      "offset": 18752,
+      "value": "AX3E"
+    },
+    {
+      "offset": 18951,
+      "value": "AX#E"
+    },
+    {
+      "offset": 18985,
+      "value": "AX#E"
+    },
+    {
+      "offset": 19039,
+      "value": "AX3E"
+    },
+    {
+      "offset": 19081,
+      "value": "AX#E"
+    },
+    {
+      "offset": 19222,
+      "value": "AX#E"
+    },
+    {
+      "offset": 19273,
+      "value": "AX#E"
+    },
+    {
+      "offset": 19314,
+      "value": "AX3E"
+    },
+    {
+      "offset": 19373,
+      "value": "AX#E"
+    },
+    {
+      "offset": 19419,
+      "value": "AX#E"
+    },
+    {
+      "offset": 19441,
+      "value": "AX#E"
+    },
+    {
+      "offset": 19484,
+      "value": "AX3E"
+    },
+    {
+      "offset": 19575,
+      "value": "AX#E"
+    },
+    {
+      "offset": 20206,
+      "value": "AX#E"
+    },
+    {
+      "offset": 20300,
+      "value": "AX#E"
+    },
+    {
+      "offset": 20565,
+      "value": "AX3E"
+    },
+    {
+      "offset": 20627,
+      "value": "AX3E"
+    },
+    {
+      "offset": 20654,
+      "value": "PAXU"
+    },
+    {
+      "offset": 20672,
+      "value": "AX#E"
+    },
+    {
+      "offset": 20759,
+      "value": "AX#E"
+    },
+    {
+      "offset": 20912,
+      "value": "AX3E"
+    },
+    {
+      "offset": 20961,
+      "value": "AX3E"
+    },
+    {
+      "offset": 21400,
+      "value": "AX#E"
+    },
+    {
+      "offset": 21468,
+      "value": "AX#E"
+    },
+    {
+      "offset": 21671,
+      "value": "AX#E"
+    },
+    {
+      "offset": 21967,
+      "value": "AX#E"
+    },
+    {
+      "offset": 22070,
+      "value": "AX#E"
+    },
+    {
+      "offset": 22327,
+      "value": "AX3E"
+    },
+    {
+      "offset": 22442,
+      "value": "AX3E"
+    },
+    {
+      "offset": 22894,
+      "value": "AX#E"
+    },
+    {
+      "offset": 22984,
+      "value": "AX#E"
+    },
+    {
+      "offset": 23058,
+      "value": "AX3E"
+    },
+    {
+      "offset": 23120,
+      "value": "AX3E"
+    },
+    {
+      "offset": 23465,
+      "value": "AX#E"
+    },
+    {
+      "offset": 23587,
+      "value": "PAXU"
+    },
+    {
+      "offset": 23842,
+      "value": "AX#E"
+    },
+    {
+      "offset": 23874,
+      "value": "AX#E"
+    },
+    {
+      "offset": 24114,
+      "value": "AX#E"
+    },
+    {
+      "offset": 24278,
+      "value": "AX3E"
+    },
+    {
+      "offset": 24487,
+      "value": "AX#E"
+    },
+    {
+      "offset": 24569,
+      "value": "AX#E"
+    },
+    {
+      "offset": 24661,
+      "value": "AX3E"
+    },
+    {
+      "offset": 24941,
+      "value": "AX3E"
+    },
+    {
+      "offset": 25047,
+      "value": "AX3E"
+    },
+    {
+      "offset": 25098,
+      "value": "AX#E"
+    },
+    {
+      "offset": 25119,
+      "value": "AX3E"
+    },
+    {
+      "offset": 25129,
+      "value": "AX#E"
+    },
+    {
+      "offset": 25423,
+      "value": "AX#E"
+    },
+    {
+      "offset": 25726,
+      "value": "AX#E"
+    },
+    {
+      "offset": 26070,
+      "value": "'u:r"
+    },
+    {
+      "offset": 26220,
+      "value": "AX#E"
+    },
+    {
+      "offset": 26404,
+      "value": "AX#E"
+    },
+    {
+      "offset": 26600,
+      "value": "AX#E"
+    },
+    {
+      "offset": 26699,
+      "value": "EvEW"
+    },
+    {
+      "offset": 26738,
+      "value": "AX#E"
+    },
+    {
+      "offset": 26776,
+      "value": "AX#E"
+    },
+    {
+      "offset": 26873,
+      "value": "AX#E"
+    },
+    {
+      "offset": 26901,
+      "value": "AX3E"
+    },
+    {
+      "offset": 27050,
+      "value": "AX#E"
+    },
+    {
+      "offset": 27098,
+      "value": "AX#E"
+    },
+    {
+      "offset": 27190,
+      "value": "AX#E"
+    },
+    {
+      "offset": 27337,
+      "value": "AX#E"
+    },
+    {
+      "offset": 27375,
+      "value": "AX3E"
+    },
+    {
+      "offset": 27416,
+      "value": "AX#E"
+    },
+    {
+      "offset": 27538,
+      "value": "AX#E"
+    },
+    {
+      "offset": 27626,
+      "value": "AX3E"
+    },
+    {
+      "offset": 27814,
+      "value": "AX#E"
+    },
+    {
+      "offset": 27824,
+      "value": "AX3E"
+    },
+    {
+      "offset": 27873,
+      "value": "AX#E"
+    },
+    {
+      "offset": 27981,
+      "value": "AX#E"
+    },
+    {
+      "offset": 27991,
+      "value": "AX3E"
+    },
+    {
+      "offset": 28021,
+      "value": "AX3E"
+    },
+    {
+      "offset": 28175,
+      "value": "AX#E"
+    },
+    {
+      "offset": 28235,
+      "value": "PAXU"
+    },
+    {
+      "offset": 28244,
+      "value": "AX#E"
+    },
+    {
+      "offset": 28450,
+      "value": "AX3E"
+    },
+    {
+      "offset": 28490,
+      "value": "AX3E"
+    },
+    {
+      "offset": 28543,
+      "value": "AX#E"
+    },
+    {
+      "offset": 28678,
+      "value": "AX#E"
+    },
+    {
+      "offset": 28886,
+      "value": "AX3E"
+    },
+    {
+      "offset": 28896,
+      "value": "AX#E"
+    },
+    {
+      "offset": 28915,
+      "value": "AX3E"
+    },
+    {
+      "offset": 29090,
+      "value": "AX#E"
+    },
+    {
+      "offset": 29119,
+      "value": "AX#E"
+    },
+    {
+      "offset": 29283,
+      "value": "AX#E"
+    },
+    {
+      "offset": 29327,
+      "value": "LRlm"
+    },
+    {
+      "offset": 29428,
+      "value": "AX3E"
+    },
+    {
+      "offset": 29459,
+      "value": "AX3E"
+    },
+    {
+      "offset": 29490,
+      "value": "AX#E"
+    },
+    {
+      "offset": 29500,
+      "value": "AX#E"
+    },
+    {
+      "offset": 29567,
+      "value": "AX3E"
+    },
+    {
+      "offset": 29587,
+      "value": "AX#E"
+    },
+    {
+      "offset": 29851,
+      "value": "AX3E"
+    },
+    {
+      "offset": 29929,
+      "value": "AX#E"
+    },
+    {
+      "offset": 30142,
+      "value": "AX3E"
+    },
+    {
+      "offset": 30180,
+      "value": "AX#E"
+    },
+    {
+      "offset": 30303,
+      "value": "AX3E"
+    },
+    {
+      "offset": 30339,
+      "value": "AX#E"
+    },
+    {
+      "offset": 30374,
+      "value": "AX3E"
+    },
+    {
+      "offset": 30523,
+      "value": "AX3E"
+    },
+    {
+      "offset": 30602,
+      "value": "AX#E"
+    },
+    {
+      "offset": 31206,
+      "value": "AX#E"
+    },
+    {
+      "offset": 31216,
+      "value": "AX#E"
+    },
+    {
+      "offset": 31329,
+      "value": "AX#E"
+    },
+    {
+      "offset": 31401,
+      "value": "AX#E"
+    },
+    {
+      "offset": 31706,
+      "value": "AX#E"
+    },
+    {
+      "offset": 31763,
+      "value": "AX#E"
+    },
+    {
+      "offset": 31842,
+      "value": "AX3E"
+    },
+    {
+      "offset": 31862,
+      "value": "AX#E"
+    },
+    {
+      "offset": 31872,
+      "value": "AX#E"
+    },
+    {
+      "offset": 32133,
+      "value": "AX3E"
+    },
+    {
+      "offset": 32221,
+      "value": "AX3E"
+    },
+    {
+      "offset": 32308,
+      "value": "AX#E"
+    },
+    {
+      "offset": 32583,
+      "value": "AX3E"
+    },
+    {
+      "offset": 32877,
+      "value": "AX#E"
+    },
+    {
+      "offset": 32959,
+      "value": "AX3E"
+    },
+    {
+      "offset": 32986,
+      "value": "PAXU"
+    },
+    {
+      "offset": 33055,
+      "value": "AX#E"
+    },
+    {
+      "offset": 33154,
+      "value": "AX#E"
+    },
+    {
+      "offset": 33293,
+      "value": "AX#E"
+    },
+    {
+      "offset": 33457,
+      "value": "AX#E"
+    },
+    {
+      "offset": 33489,
+      "value": "AX3E"
+    },
+    {
+      "offset": 33585,
+      "value": "AX#E"
+    },
+    {
+      "offset": 33671,
+      "value": "AX#E"
+    },
+    {
+      "offset": 33691,
+      "value": "AX#E"
+    },
+    {
+      "offset": 33839,
+      "value": "AX#E"
+    },
+    {
+      "offset": 33859,
+      "value": "AX#E"
+    },
+    {
+      "offset": 34047,
+      "value": "AX3E"
+    },
+    {
+      "offset": 34449,
+      "value": "AX#E"
+    },
+    {
+      "offset": 34520,
+      "value": "AX#E"
+    },
+    {
+      "offset": 34652,
+      "value": "AX#E"
+    },
+    {
+      "offset": 34819,
+      "value": "AX#E"
+    },
+    {
+      "offset": 34880,
+      "value": "AX#E"
+    },
+    {
+      "offset": 35286,
+      "value": "AX#E"
+    },
+    {
+      "offset": 35309,
+      "value": "AX#E"
+    },
+    {
+      "offset": 35652,
+      "value": "AX3E"
+    },
+    {
+      "offset": 35692,
+      "value": "AX#E"
+    },
+    {
+      "offset": 35843,
+      "value": "AX3E"
+    },
+    {
+      "offset": 36144,
+      "value": "AX3E"
+    },
+    {
+      "offset": 36176,
+      "value": "AX3E"
+    },
+    {
+      "offset": 36335,
+      "value": "AX#E"
+    },
+    {
+      "offset": 36497,
+      "value": "AX#E"
+    },
+    {
+      "offset": 36507,
+      "value": "AX#E"
+    },
+    {
+      "offset": 36870,
+      "value": "PAXU"
+    },
+    {
+      "offset": 40052,
+      "value": "AAAA"
+    },
+    {
+      "offset": 41273,
+      "value": "NRjl"
+    },
+    {
+      "offset": 42336,
+      "value": "3333"
+    },
+    {
+      "offset": 46449,
+      "value": "ZZZZ"
+    },
+    {
+      "offset": 46709,
+      "value": "wwww"
+    },
+    {
+      "offset": 48095,
+      "value": "rx}B"
+    },
+    {
+      "offset": 49880,
+      "value": "AX;E"
+    },
+    {
+      "offset": 50498,
+      "value": "UUUU"
+    },
+    {
+      "offset": 53256,
+      "value": "Welcome to callfuscated crackme."
+    },
+    {
+      "offset": 53289,
+      "value": "To register enter your password: "
+    },
+    {
+      "offset": 53323,
+      "value": "%63s"
+    },
+    {
+      "offset": 53328,
+      "value": "Correct. Validate the challenge using the flag: %s"
+    },
+    {
+      "offset": 53380,
+      "value": "Incorrect flag. Try again"
+    },
+    {
+      "offset": 53543,
+      "value": ";*3$\""
+    },
+    {
+      "offset": 57424,
+      "value": "GCC: (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0"
+    },
+    {
+      "offset": 57468,
+      "value": ".shstrtab"
+    },
+    {
+      "offset": 57478,
+      "value": ".interp"
+    },
+    {
+      "offset": 57486,
+      "value": ".note.gnu.property"
+    },
+    {
+      "offset": 57505,
+      "value": ".note.gnu.build-id"
+    },
+    {
+      "offset": 57524,
+      "value": ".note.ABI-tag"
+    },
+    {
+      "offset": 57538,
+      "value": ".gnu.hash"
+    },
+    {
+      "offset": 57548,
+      "value": ".dynsym"
+    },
+    {
+      "offset": 57556,
+      "value": ".dynstr"
+    },
+    {
+      "offset": 57564,
+      "value": ".gnu.version"
+    },
+    {
+      "offset": 57577,
+      "value": ".gnu.version_r"
+    },
+    {
+      "offset": 57592,
+      "value": ".rela.dyn"
+    },
+    {
+      "offset": 57602,
+      "value": ".rela.plt"
+    },
+    {
+      "offset": 57612,
+      "value": ".init"
+    },
+    {
+      "offset": 57618,
+      "value": ".text"
+    },
+    {
+      "offset": 57624,
+      "value": ".fini"
+    },
+    {
+      "offset": 57630,
+      "value": ".rodata"
+    },
+    {
+      "offset": 57638,
+      "value": ".eh_frame_hdr"
+    },
+    {
+      "offset": 57652,
+      "value": ".eh_frame"
+    },
+    {
+      "offset": 57662,
+      "value": ".init_array"
+    },
+    {
+      "offset": 57674,
+      "value": ".fini_array"
+    },
+    {
+      "offset": 57686,
+      "value": ".dynamic"
+    },
+    {
+      "offset": 57695,
+      "value": ".got"
+    },
+    {
+      "offset": 57700,
+      "value": ".got.plt"
+    },
+    {
+      "offset": 57709,
+      "value": ".data"
+    },
+    {
+      "offset": 57715,
+      "value": ".bss"
+    },
+    {
+      "offset": 57720,
+      "value": ".comment"
+    }
+  ]
+}

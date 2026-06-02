@@ -1,0 +1,27 @@
+{
+  "imports": [
+    {
+      "name": "__gmon_start__"
+    },
+    {
+      "name": "__isoc99_scanf@GLIBC_2.7"
+    },
+    {
+      "name": "__libc_start_main@GLIBC_2.34"
+    },
+    {
+      "name": "printf@GLIBC_2.2.5"
+    },
+    {
+      "name": "puts@GLIBC_2.2.5"
+    },
+    {
+      "name": "rand@GLIBC_2.2.5"
+    },
+    {
+      "name": "srand@GLIBC_2.2.5"
+    }
+  ],
+  "schema_version": "biw.imports.v1",
+  "source": "basic-nm"
+}

@@ -1,0 +1,129 @@
+id: skill-binary-dotnet-gui-constraint-recovery
+title: binary.dotnet_gui_constraint_recovery
+summary: Recover keys from .NET GUI validation logic by extracting constraints and
+  success-path transforms without needing the GUI
+skill_type: Procedure
+scope: TaskLevel
+status: Approved
+maturity: Level4HumanApproved
+domain: artifact-analysis
+source_section_ids:
+- skill-binary-dotnet-gui-constraint-recovery
+procedure:
+- Identify whether the binary is .NET/Mono and preserve hashes.
+- Extract metadata, strings, resources, forms, event handlers, and embedded arrays
+  with available .NET tools or static parsing.
+- Locate UI event handlers for buttons, scrollbars, textboxes, or validation actions.
+- Recover numeric/string constraints and solve them with algebra, brute force, or
+  a small script.
+- Trace success-path output generation separately from failure-path decoys.
+- Reimplement the success transform in a deterministic script and validate output
+  shape/format.
+- Document required UI values and recovered key without needing to run the GUI.
+inputs:
+- .NET/Mono executable or assembly.
+- Optional UI screenshot/instructions.
+- Available decompiler/metadata/strings tools.
+outputs:
+- UI control map
+- validation constraints
+- constraint solver script
+- success transform model
+- recovered key or license blob
+- verification notes
+guardrails:
+- Do not run unknown GUI binaries outside authorized/sandboxed context.
+- Do not patch binaries unless explicitly requested and backed up.
+- Keep recovered secret-like values out of durable memory/examples.
+anti_patterns:
+- Assuming displayed failure text is the key.
+- Running the GUI when static constraints are enough.
+- Ignoring embedded arrays/resources because symbols are obfuscated.
+evals:
+- id: eval-skill-binary-dotnet-gui-constraint-recovery-routing
+  prompt: Which skill handles this? Recover keys from .NET GUI validation logic by
+    extracting constraints and success-path transforms without needing the GUI
+  expected_behavior: Routes to binary.dotnet_gui_constraint_recovery and applies its
+    generalized workflow without task-specific assumptions.
+  eval_type: Routing
+  safety_notes:
+  - Keep work within authorized scope and preserve evidence provenance.
+- id: eval-skill-binary-dotnet-gui-constraint-recovery-source-grounding
+  prompt: Summarize the generalized workflow for binary.dotnet_gui_constraint_recovery
+    with source grounding.
+  expected_behavior: Cites generalized source section skill-binary-dotnet-gui-constraint-recovery,
+    names required checkpoints, and avoids storing secret-like material.
+  eval_type: SourceGrounding
+  safety_notes: []
+- id: eval-skill-binary-dotnet-gui-constraint-recovery-tool-planning
+  prompt: Plan read-only or reversible tool use for binary.dotnet_gui_constraint_recovery.
+  expected_behavior: Plans inspection, extraction, verification, and reporting steps
+    with backups or copied artifacts before mutations.
+  eval_type: ToolUsePlanning
+  safety_notes:
+  - Use read-only checks first; do not execute recovered payloads without explicit
+    authorization.
+citations:
+- citation_id: cite-skill-binary-dotnet-gui-constraint-recovery
+  source_id: generalized-biw-session
+  section_id: skill-binary-dotnet-gui-constraint-recovery
+  excerpt: Generalized workflow for binary.dotnet_gui_constraint_recovery derived
+    from validated multi-stage artifact analysis patterns; no task-specific secrets
+    included.
+confidence:
+  raw: 0.84
+  extraction: 0.78
+  inference: 0.68
+  procedure: 0.88
+  guardrail: 0.9
+  eval: 0.72
+  routing: 0.8
+  source_quality: 0.82
+  human_review: 1.0
+  runtime: 0.0
+evidence_breakdown:
+  direct_extraction: 0.18
+  supporting_inference: 0.28
+  operational_synthesis: 0.49
+  speculative_candidate: 0.0
+  community_derived: 0.0
+  internal_policy_derived: 0.05
+inference_records: []
+role_suitability:
+- role: Artifact Intelligence Analyst
+  suitability: 0.9
+  rationale: Applies to authorized artifact-analysis workflows with layered evidence
+    and verification.
+- role: Incident Responder
+  suitability: 0.78
+  rationale: Supports evidence preservation and staged analysis of recovered artifacts.
+- role: Reverse Engineer
+  suitability: 0.74
+  rationale: Supports static/dynamic follow-up when payloads or binaries are recovered.
+tool_requirements:
+- name: Direct
+  requirement_type: Optional
+  permission_level: ReadOnly
+  dry_run_available: true
+  rollback_required: false
+runtime_policy:
+  conceptual_answer: true
+  recommend_commands: true
+  run_read_only_commands: true
+  modify_files: false
+  modify_external_systems: false
+  requires_user_approval: false
+  requires_backup_or_rollback: false
+  handles_secrets: false
+  handles_licensed_source: false
+version_applicability:
+  supported_versions: []
+  unsupported_versions: []
+  version_source_refs: []
+  version_confidence: 0.0
+  migration_notes: []
+  deprecated_flags: []
+metadata:
+  interface_kind: workflow
+  source_trust: ValidatedSessionGeneralization
+  extended_context: skills/binary_dotnet_gui_constraint_recovery.md
