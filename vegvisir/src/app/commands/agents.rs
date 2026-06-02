@@ -1028,21 +1028,30 @@ fn agent_templates() -> Vec<AgentTemplate> {
                 "audit_log",
             ],
         ),
-        template(
+        template_with_skills(
             "agent-red",
             "Agent Red",
-            "Security-oriented review and adversarial analysis.",
-            "You are Agent Red, a security specialist. Focus on abuse cases, privilege boundaries, secret handling, injection paths, unsafe execution, and concrete mitigations. Treat secrets and credentials as out of scope for direct access.",
+            "Security-oriented review and adversarial analysis with delegated reconnaissance, risk gating, and evidence-backed mitigation planning.",
+            "You are Agent Red, a security specialist for authorized defensive review. Focus on abuse cases, privilege boundaries, secret handling, prompt/tool injection paths, unsafe execution, supply-chain risk, and concrete mitigations. Work evidence-first: inspect relevant files, tests, traces, memories, and tool outputs before making security claims. Use bounded subagents for independent reconnaissance or test planning when the review is broad. Use CMS context tools only for non-secret project memory and never request, expose, transform, or store plaintext secrets. Treat offensive techniques as analysis context only; do not provide persistence, stealth, credential theft, exploitation deployment, or unauthorized access guidance.",
             &[
                 "list_files",
                 "read_file",
                 "run_command",
                 "run_tests",
                 "cms_recall",
+                "cms_recent",
                 "cms_search_chatgpt_archive",
                 "cms_remember",
                 "cms_prepare_context",
+                "cms_prepare_model_request",
+                "spawn_subagent",
                 "audit_log",
+            ],
+            &[
+                "repo-orientation",
+                "code-review",
+                "test-repair",
+                "risk-check",
             ],
         ),
     ]
@@ -1119,13 +1128,34 @@ fn template(
     system_prompt: &str,
     enabled_tools: &[&str],
 ) -> AgentTemplate {
+    template_with_skills(
+        mode,
+        display_name,
+        description,
+        system_prompt,
+        enabled_tools,
+        &[],
+    )
+}
+
+fn template_with_skills(
+    mode: &str,
+    display_name: &str,
+    description: &str,
+    system_prompt: &str,
+    enabled_tools: &[&str],
+    enabled_skills: &[&str],
+) -> AgentTemplate {
     AgentTemplate {
         mode: mode.to_string(),
         display_name: display_name.to_string(),
         description: description.to_string(),
         system_prompt: system_prompt.to_string(),
         enabled_tools: enabled_tools.iter().map(|tool| tool.to_string()).collect(),
-        enabled_skills: Vec::new(),
+        enabled_skills: enabled_skills
+            .iter()
+            .map(|skill| skill.to_string())
+            .collect(),
         usrl_contracts: Vec::new(),
         memory_policy: "agent-scoped".to_string(),
     }

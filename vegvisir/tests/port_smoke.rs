@@ -4880,7 +4880,11 @@ fn application_creates_specialized_agents_from_templates() -> anyhow::Result<()>
     assert!(shown.contains("name: Red Team"));
     assert!(shown.contains("Security-oriented review"));
     assert!(shown.contains("tools: list_files, read_file, run_command"));
+    assert!(shown.contains("cms_prepare_model_request"));
+    assert!(shown.contains("spawn_subagent"));
+    assert!(shown.contains("skills: repo-orientation, code-review, test-repair, risk-check"));
     assert!(shown.contains("You are Agent Red"));
+    assert!(shown.contains("prompt/tool injection paths"));
 
     app.execute_command("/agent use red-team")?.unwrap();
     assert_eq!(app.session.active_agent_id.as_deref(), Some("red-team"));
@@ -4893,9 +4897,12 @@ fn application_creates_specialized_agents_from_templates() -> anyhow::Result<()>
             "run_command",
             "run_tests",
             "cms_recall",
+            "cms_recent",
             "cms_search_chatgpt_archive",
             "cms_remember",
             "cms_prepare_context",
+            "cms_prepare_model_request",
+            "spawn_subagent",
             "audit_log"
         ]
         .into_iter()
