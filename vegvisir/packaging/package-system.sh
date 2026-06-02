@@ -112,7 +112,7 @@ perl -0pi -e 's#cms-v2\s*=\s*\{\s*path\s*=\s*"[^"]+"\s*\}#cms-v2 = { path = "../
 cat >"$package_dir/README-INSTALL.md" <<'README'
 # Vegvisir System Install Bundle
 
-This bundle contains Vegvisir, CMS-v2, HBSE Rust, USRL, and optional vendored Cargo dependencies.
+This bundle contains Vegvisir, CMS-v2, HBSE Rust, USRL, Binary Intelligence Workbench, and optional vendored Cargo dependencies.
 
 Install:
 
@@ -156,6 +156,7 @@ Vegvisir source: app
 CMS-v2 source: third_party/CMS-v2
 HBSE Rust source: third_party/HBSE/rust
 USRL source: third_party/USRL
+Binary Intelligence Workbench source: app/components/binary-intelligence-workbench
 Cargo vendor: $([[ "$vendor" -eq 1 ]] && echo vendor || echo not included)
 Installer: install.sh
 Uninstaller: uninstall.sh

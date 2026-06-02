@@ -16,15 +16,26 @@ class GhidraUnavailable(RuntimeError):
 def default_wrapper() -> Path | None:
     env = os.environ.get("BIW_GHIDRA_WRAPPER")
     if env:
-        p = Path(env)
+        p = Path(env).expanduser()
         return p if p.exists() else None
+
     here = Path(__file__).resolve()
-    candidate = here.parents[2] / "GhidraHeadlessMCP" / "bin" / "ghidra-headless"
-    if candidate.exists():
-        return candidate
-    candidate = here.parents[3] / "GhidraHeadlessMCP" / "bin" / "ghidra-headless"
-    if candidate.exists():
-        return candidate
+    candidates = [
+        # Source-tree layouts used by the imported Vegvisir component sources.
+        here.parents[2] / "GhidraHeadlessMCP" / "bin" / "ghidra-headless",
+        here.parents[3] / "GhidraHeadlessMCP" / "bin" / "ghidra-headless",
+        here.parents[2] / "ghidra-headless-mcp" / "bin" / "ghidra-headless",
+        # Vegvisir runtime tool layout.
+        Path.home() / ".vegvisir" / "tools" / "bin" / "ghidra-headless",
+    ]
+
+    vegvisir_tools = os.environ.get("VEGVISIR_TOOLS")
+    if vegvisir_tools:
+        candidates.append(Path(vegvisir_tools).expanduser() / "bin" / "ghidra-headless")
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
     return None
 
 

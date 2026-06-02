@@ -149,6 +149,7 @@ app_dir="$bundle_root/app"
 cms_dir="$bundle_root/third_party/CMS-v2"
 hbse_rust_dir="$bundle_root/third_party/HBSE/rust"
 usrl_dir="$bundle_root/third_party/USRL"
+biw_dir="$app_dir/components/binary-intelligence-workbench"
 bin_dir="$prefix/bin"
 etc_dir="$prefix/etc/vegvisir"
 share_dir="$prefix/share/vegvisir"
@@ -167,6 +168,10 @@ if [[ "$install_hbse" -eq 1 && ! -f "$hbse_rust_dir/Cargo.toml" ]]; then
 fi
 if [[ "$install_usrl" -eq 1 && ! -f "$usrl_dir/package.json" ]]; then
   echo "missing bundled USRL source at $usrl_dir" >&2
+  exit 1
+fi
+if [[ ! -f "$biw_dir/pyproject.toml" ]]; then
+  echo "missing bundled Binary Intelligence Workbench source at $biw_dir" >&2
   exit 1
 fi
 
@@ -259,6 +264,26 @@ fi
 if [[ "$install_cms_cli" -eq 1 ]]; then
   install -m 0755 "$cms_dir/target/release/cms" "$bin_dir/cms-v2"
 fi
+
+biw_share_dir="$share_dir/binary-intelligence-workbench"
+rm -rf "$biw_share_dir"
+mkdir -p "$biw_share_dir"
+tar -C "$biw_dir" \
+  --exclude='.git' \
+  --exclude='__pycache__' \
+  --exclude='*.pyc' \
+  --exclude='.pytest_cache' \
+  --exclude='.vegvisir' \
+  -cf - . | tar -C "$biw_share_dir" -xf -
+cat >"$bin_dir/biw" <<EOF
+#!/usr/bin/env bash
+export PYTHONPATH="$biw_share_dir:\${PYTHONPATH:-}"
+if [[ -z "\${BIW_GHIDRA_WRAPPER:-}" && -x "\${HOME}/.vegvisir/tools/bin/ghidra-headless" ]]; then
+  export BIW_GHIDRA_WRAPPER="\${HOME}/.vegvisir/tools/bin/ghidra-headless"
+fi
+exec python3 -m biw.cli "\$@"
+EOF
+chmod 0755 "$bin_dir/biw"
 
 if [[ "$install_usrl" -eq 1 ]]; then
   if ! command -v node >/dev/null 2>&1; then
@@ -400,6 +425,7 @@ if [[ "$install_hbse" -eq 1 ]]; then
     echo "  $bin_dir/vegvisir-hbse-provider-onboard"
   fi
 fi
+echo "  $bin_dir/biw"
 if [[ "$install_usrl" -eq 1 ]]; then
   echo "  $bin_dir/usrl"
   echo "  $share_dir/usrl"

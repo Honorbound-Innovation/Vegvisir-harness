@@ -57,6 +57,6 @@ kind = "python"
 path = "components/binary-intelligence-workbench"
 source_snapshot = "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench"
 runtime_root = "~/.vegvisir/tools/src/binary-intelligence-workbench"
-wrappers = ["biw-cli"]
+wrappers = ["biw"]
 excluded = [".git", "__pycache__", "*.pyc", ".pytest_cache", ".vegvisir"]
 

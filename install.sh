@@ -212,6 +212,7 @@ require_file "$repo_root/vegvisir/Cargo.toml"
 require_file "$repo_root/components/cms-v2/Cargo.toml"
 require_file "$repo_root/components/HBSE/Cargo.toml"
 require_file "$repo_root/components/usrl/package.json"
+require_file "$repo_root/components/binary-intelligence-workbench/pyproject.toml"
 
 if [[ "$install_system_deps" -eq 1 ]]; then
   install_debian_deps
@@ -281,6 +282,26 @@ if [[ "$install_hbse" -eq 1 ]]; then
     "${hbse_cmd[@]}" "${service_args[@]}"
   fi
 fi
+
+biw_share_dir="$share_dir/binary-intelligence-workbench"
+rm -rf "$biw_share_dir"
+mkdir -p "$biw_share_dir"
+tar -C "$repo_root/components/binary-intelligence-workbench" \
+  --exclude='.git' \
+  --exclude='__pycache__' \
+  --exclude='*.pyc' \
+  --exclude='.pytest_cache' \
+  --exclude='.vegvisir' \
+  -cf - . | tar -C "$biw_share_dir" -xf -
+cat >"$bin_dir/biw" <<EOF
+#!/usr/bin/env bash
+export PYTHONPATH="$biw_share_dir:\${PYTHONPATH:-}"
+if [[ -z "\${BIW_GHIDRA_WRAPPER:-}" && -x "\${HOME}/.vegvisir/tools/bin/ghidra-headless" ]]; then
+  export BIW_GHIDRA_WRAPPER="\${HOME}/.vegvisir/tools/bin/ghidra-headless"
+fi
+exec python3 -m biw.cli "\$@"
+EOF
+chmod 0755 "$bin_dir/biw"
 
 if [[ "$install_usrl" -eq 1 ]]; then
   if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
@@ -355,6 +376,7 @@ if [[ "$install_hbse" -eq 1 ]]; then
   echo "  $bin_dir/hbse"
   echo "  $bin_dir/hbse-broker"
 fi
+echo "  $bin_dir/biw"
 if [[ "$install_usrl" -eq 1 ]]; then
   echo "  $bin_dir/usrl"
 fi
