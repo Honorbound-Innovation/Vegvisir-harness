@@ -183,9 +183,23 @@ Tool behavior should be evidence-forward: important reads, writes, commands, err
 
 ## Command And Filesystem Safety
 
-Filesystem tools are workspace-scoped. Shell commands are allow-listed and bounded by timeout/output limits. Risky operations may require approval. Dangerous bypass mode exists for trusted high-risk sessions but can only be selected at startup.
+Filesystem tools are workspace-scoped and hardened against path traversal and unsafe symlink escapes. Shell commands are executable allow-listed, timeout-bound, output-limited, and optionally wrapped by the command OS sandbox. Risky operations, non-allow-listed commands, and network-like command requests may require approval.
+
+Command sandbox environment controls:
+
+```bash
+VEGVISIR_COMMAND_SANDBOX=path|none|bwrap|strict-bwrap
+VEGVISIR_COMMAND_NETWORK=inherit|disable|require-approval
+VEGVISIR_COMMAND_WRITABLE_PATHS=/path/a:/path/b
+VEGVISIR_COMMAND_READONLY_PATHS=/path/a:/path/b
+VEGVISIR_COMMAND_HIDDEN_PATHS=/path/a:/path/b
+```
+
+Dangerous bypass mode exists for trusted high-risk sessions but can only be selected at startup. It bypasses approvals, command allow-lists, active-agent tool allow-lists, USRL tool gates, workspace file sandboxing, and command sandbox wrapping.
 
 Preserve-user-work rule: do not revert, delete, overwrite, reset, or discard unrelated user changes unless explicitly instructed.
+
+See [Command sandboxing and approvals](command-sandboxing-and-approvals.md) for operator-level details.
 
 ## Memory Flow
 
@@ -224,7 +238,7 @@ Compiled artifacts live under `.vegvisir/compiled` in the workspace. LSL source 
 
 ## Subagent Runtime
 
-The subagent supervisor supports child task records and a board file. Subagent records include identity, workspace, goal, file scope, work budget, status, timestamps, checkpoint, final answer, and error.
+The subagent supervisor supports child task records and a board file. Subagent records include identity, workspace, goal, file scope, work budget, status, timestamps, checkpoint, final answer, and error. Active file scopes are checked so parallel workers do not own overlapping file sets.
 
 Subagent events include:
 
@@ -234,7 +248,7 @@ Subagent events include:
 - `subagent.failed`
 - `subagent.cancelled`
 
-Subagents are best for bounded independent tasks. Do not delegate credential handling, destructive actions, ambiguous external side effects, or broad unsupervised implementation across overlapping files.
+Subagents are best for bounded independent tasks. Do not delegate credential handling, destructive actions, ambiguous external side effects, or broad unsupervised implementation across overlapping files. Use `/subagents list`, `/subagents show <id-or-name>`, `/subagents cancel <id-or-name>`, and `/subagents policy` to inspect and manage the board. See [Subagent delegation](subagent-delegation.md).
 
 ## Verification Surfaces
 

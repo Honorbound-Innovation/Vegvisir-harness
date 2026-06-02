@@ -6,8 +6,10 @@ Vegvisir separates capability from authorization. The model may be able to ask f
 
 Vegvisir uses several layers together:
 
-- workspace sandboxing for filesystem tools
-- command allow-lists and output limits
+- workspace sandboxing for filesystem tools, including path/symlink escape rejection
+- command allow-lists, timeouts, and output limits
+- optional Bubblewrap command OS sandboxing
+- command approvals for non-allow-listed executables and network-like command requests
 - risky-tool approval queues
 - USRL contracts for regulated workflows
 - HBSE for secrets and brokered provider/service access
@@ -38,9 +40,9 @@ Avoid putting secrets in:
 - workspace files
 - screenshots or copied transcripts
 
-## Risky Tools
+## Risky Tools And Commands
 
-Risky tools are controlled by runtime policy and approvals.
+Risky tools and shell commands are controlled by runtime policy and approvals.
 
 ```text
 /tools status
@@ -49,6 +51,10 @@ Risky tools are controlled by runtime policy and approvals.
 /tools no-approval
 /tools allow-risky
 /tools deny-risky
+/tools commands list
+/tools commands add <cmd...>
+/tools commands remove <cmd...>
+/tool-limit <rounds|unlimited>
 ```
 
 Recommended normal mode:
@@ -57,7 +63,17 @@ Recommended normal mode:
 /tools require-approval
 ```
 
-That keeps tools available while making destructive or high-risk calls visible to the user first.
+That keeps tools available while making destructive or high-risk calls visible to the user first. Non-allow-listed commands and network-like command requests may also enter the approval queue. The default tool-call round limit is unlimited unless configured with `VEGVISIR_MAX_TOOL_ROUNDS` or `/tool-limit`.
+
+For command OS sandboxing, launch Vegvisir with one of:
+
+```bash
+VEGVISIR_COMMAND_SANDBOX=path
+VEGVISIR_COMMAND_SANDBOX=bwrap
+VEGVISIR_COMMAND_SANDBOX=strict-bwrap
+```
+
+See [Command sandboxing and approvals](command-sandboxing-and-approvals.md).
 
 ## Approval Queue
 

@@ -445,8 +445,9 @@ Run `/help` inside the TUI to print the live command reference. The current tree
 /agent [list|templates|create|design|create-template|clone|import|export|use|show|delete|mode|provider|model|prompt|describe|allow-tool|revoke-tool|enable-skill|disable-skill|bind-usrl|unbind-usrl|allow-mcp|revoke-mcp|clear] [id]
 /attach [path|clear]
 /help
-/tools [status|allow-risky|deny-risky|require-approval|no-approval|commands]
+/tools [status|allow-risky|deny-risky|require-approval|no-approval|commands|max-rounds]
 /tools commands [list|add <cmd...>|remove <cmd...>|reset]
+/tool-limit [show|<rounds>|unlimited|default]
 /approvals [list|show <id>|approve <id>|session <id>|edit <id> <json-args>|deny <id>]
 /skills
 /recall [--limit N] [--global] <query>
@@ -582,6 +583,12 @@ CMS-v2 is scoped by user, project/workspace, session, and active agent. Vegvisir
 /tools deny-risky
 /tools require-approval
 /tools no-approval
+/tools max-rounds <rounds|unlimited>
+/tools commands list
+/tools commands add <cmd...>
+/tools commands remove <cmd...>
+/tools commands reset
+/tool-limit [show|<rounds>|unlimited|default]
 /approvals
 /approvals list
 /approvals show <id>
@@ -596,13 +603,16 @@ Examples:
 ```text
 /tools require-approval
 /tools inventory
+/tools commands list
+/tools commands add jq
+/tool-limit 24
 /approvals
 /approvals show 01HV...
 /approvals edit 01HV... {"path":"./safe-target"}
 /approvals approve 01HV...
 ```
 
-`allow-risky` enables risky tools for the running session. `require-approval` keeps risky actions gated behind the approval queue.
+`allow-risky` enables risky tools for the running session. `require-approval` keeps risky actions gated behind the approval queue. Non-allow-listed shell executables and network-like command requests can also enter the approval queue. `/tool-limit` controls the maximum number of model/tool-call rounds for the current session; the default is unlimited unless `VEGVISIR_MAX_TOOL_ROUNDS` is set. See [Command sandboxing and approvals](command-sandboxing-and-approvals.md) for the full policy model.
 
 ## Custom Agent Commands
 
@@ -723,9 +733,10 @@ These commands print or register HBSE setup references. Plaintext secrets still 
 /subagents list
 /subagents show <id-or-name>
 /subagents cancel <id-or-name>
+/subagents policy
 ```
 
-Use these after changing providers, tools, memory, approval behavior, USRL contracts, MCP servers, or agent definitions.
+Use these after changing providers, tools, memory, approval behavior, USRL contracts, MCP servers, subagent behavior, or agent definitions. See [New runtime features](new-runtime-features.md), [Command sandboxing and approvals](command-sandboxing-and-approvals.md), and [Subagent delegation](subagent-delegation.md) for deeper operational guidance.
 
 ## Input And Scrolling
 

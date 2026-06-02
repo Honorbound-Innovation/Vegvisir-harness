@@ -51,16 +51,16 @@ The Rust workspace currently includes the Vegvisir harness, CMS-v2, HBSE, and Sk
 - Runs as a full terminal UI, a bounded headless CLI, a JSONL app-server bridge, or an OpenAI-compatible local server surface.
 - Connects model providers to a real engineering runtime instead of leaving them as detached text generators.
 - Supports configured providers including OpenAI/OpenAI-compatible flows, OpenAI SSO, HBSE-brokered provider access, Anthropic, Google, Azure OpenAI, and local/demo providers.
-- Exposes workspace-scoped tools for file IO, command execution, tests, git/diff inspection, memory recall, MCP calls, Skiller helpers, verification, evals, and runtime plugins.
+- Exposes workspace-scoped tools for file IO, command execution, tests, git/diff inspection, memory recall, MCP calls, Skiller helpers, verification, evals, runtime plugins, and bounded subagent delegation.
 - Uses CMS-v2 for durable scoped memory and ECM-style context exposure so relevant project facts can survive sessions without dumping the entire attic into every prompt.
 - Uses HBSE as the secret boundary so provider and service credentials can be brokered through secret references instead of pasted into chat or stored in memory.
 - Supports persistent custom agents with their own prompts, modes, memory scopes, tool permissions, skills, USRL bindings, MCP access, and provider/model defaults.
 - Supports Skiller as a first-class governed skill compiler for turning docs, repos, APIs, CLI help, and technical evidence into source-grounded skill bundles, Forge workflows, lifecycle reports, registry artifacts, and Agent Builder handoffs.
 - Supports Linked Skill Libraries and USRL contracts for routeable workflows, policy-bound behavior, eval hooks, approvals, and reusable skill execution.
-- Supports bounded subagents for reconnaissance, documentation review, test investigation, compatibility checks, security review, and design critique.
+- Supports bounded subagents for reconnaissance, documentation review, test investigation, compatibility checks, security review, and design critique, with durable board records, explicit file scopes, work budgets, status inspection, cancellation, and active scope-conflict protection.
 - Integrates Solarium as the first-party browser automation/evidence runtime for screenshots, observations, scoped crawls, audits, GraphQL audit workflows, profiles, auth-session references, replay, and workflow seed generation.
 - Carries Ghidra and Ghidra MCP components for binary-intelligence and reverse-engineering workflows.
-- Includes verification, eval, trace, audit, approval, and tool-inventory surfaces for keeping high-capability sessions inspectable.
+- Includes verification, eval, trace, audit, approval, sandbox-status, subagent-board, and tool-inventory surfaces for keeping high-capability sessions inspectable.
 
 ## Runtime Model
 
@@ -127,6 +127,22 @@ Useful TUI commands:
 /context              inspect prepared context and memory behavior
 /agent                create, select, and inspect persistent custom agents
 ```
+
+### Autonomy, Sandboxing, And Delegation Controls
+
+Recent Vegvisir builds make high-capability sessions more controllable and easier to audit:
+
+- Tool-call rounds are unlimited by default, with `/tool-limit <rounds>` and `VEGVISIR_MAX_TOOL_ROUNDS` available when a session needs a hard cap. If a cap is reached, Vegvisir reports a recoverable cutoff instead of silently losing the turn.
+- `run_command` is executable allow-listed, timeout-bound, output-limited, and can route non-allow-listed commands through the approval queue.
+- Obvious network-like command requests can require explicit approval even when the executable itself is allowed.
+- Filesystem tools are workspace-scoped and hardened against path traversal and unsafe symlink escapes.
+- Optional command OS sandboxing is configured with `VEGVISIR_COMMAND_SANDBOX=path|none|bwrap|strict-bwrap`, with network and mount controls for hardened local sessions.
+- `--dangerously-bypass-approvals-and-sandbox` remains startup-only and is reported in `/tools status`, `/verify runtime`, and app-server status payloads.
+- Subagents are tracked as bounded workers with durable board records. Use `/subagents list`, `/subagents show <id-or-name>`, `/subagents cancel <id-or-name>`, and `/subagents policy`.
+- Provider reasoning summaries, when surfaced by a provider/model, are fenced as a visible thinking/audit block before the assistant answer so they do not blur into the final response.
+- STDIO MCP calls are timeout-bound and can restart once after an initial failure, making local MCP integrations less fragile.
+
+See [New runtime features](docs/new-runtime-features.md), [Command sandboxing and approvals](docs/command-sandboxing-and-approvals.md), and [Subagent delegation](docs/subagent-delegation.md) for the detailed operator guidance.
 
 ## Install
 
@@ -252,6 +268,18 @@ Verify the installation/runtime:
 vegvisir verify all --workspace /path/to/project
 ```
 
+Run with a stricter command sandbox:
+
+```bash
+VEGVISIR_COMMAND_SANDBOX=strict-bwrap vegvisir --workspace /path/to/project
+```
+
+Run with an explicit tool-round cap for deterministic automation:
+
+```bash
+VEGVISIR_MAX_TOOL_ROUNDS=24 vegvisir --workspace /path/to/project run "Inspect and summarize the repo"
+```
+
 Run evals:
 
 ```bash
@@ -319,6 +347,9 @@ Start with the system docs when you need the real architecture, then use the usa
 - [Skiller system](docs/skiller-system.md)
 - [Solarium system](docs/solarium-system.md)
 - [Vegvisir usage](docs/vegvisir-usage.md)
+- [New runtime features](docs/new-runtime-features.md)
+- [Command sandboxing and approvals](docs/command-sandboxing-and-approvals.md)
+- [Subagent delegation](docs/subagent-delegation.md)
 - [CMS-v2 usage](docs/cms-v2-usage.md)
 - [HBSE usage](docs/hbse-usage.md)
 - [USRL usage](docs/usrl-usage.md)
