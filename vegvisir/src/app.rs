@@ -845,12 +845,8 @@ impl TuiApplication {
     }
 
     fn rebuild_tooling_for_cms(&mut self) -> anyhow::Result<()> {
-        let allow_risky_tools = self.tool_executor.guardrails.policy.allow_risky_tools;
-        let bypass = self
-            .tool_executor
-            .guardrails
-            .policy
-            .bypass_approvals_and_sandbox;
+        let policy = self.tool_executor.guardrails.policy.clone();
+        let bypass = policy.bypass_approvals_and_sandbox;
         let mut tool_registry =
             build_builtin_registry_with_cms_and_mode(&self.cwd, self.cms.config.clone(), bypass)?;
         let mcp_servers = self.active_mcp_servers();
@@ -861,12 +857,7 @@ impl TuiApplication {
         )?;
         self.tool_registry = tool_registry.clone();
         self.tool_executor.registry = tool_registry;
-        self.tool_executor.guardrails.policy.allow_risky_tools = allow_risky_tools;
-        self.tool_executor.guardrails.policy.require_human_approval = !bypass;
-        self.tool_executor
-            .guardrails
-            .policy
-            .bypass_approvals_and_sandbox = bypass;
+        self.tool_executor.guardrails.policy = policy;
         if bypass {
             self.tool_executor.guardrails.approvals.clear_pending();
         }
@@ -1519,6 +1510,43 @@ mod tests {
         );
         assert!(!app.tool_executor.guardrails.policy.require_human_approval);
         assert_eq!(app.tool_executor.guardrails.approvals.pending_len(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn rebuild_tooling_preserves_tool_policy() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace)?;
+        let data_root = tmp.path().join("home");
+        let mut app = TuiApplication::with_data_root(&workspace, &data_root)?;
+
+        app.tool_executor.guardrails.policy.allow_risky_tools = true;
+        app.tool_executor.guardrails.policy.require_human_approval = false;
+        app.tool_executor
+            .guardrails
+            .policy
+            .allowed_commands
+            .insert("make".to_string());
+
+        app.rebuild_tooling_for_cms()?;
+
+        assert!(app.tool_executor.guardrails.policy.allow_risky_tools);
+        assert!(!app.tool_executor.guardrails.policy.require_human_approval);
+        assert!(
+            app.tool_executor
+                .guardrails
+                .policy
+                .allowed_commands
+                .contains("make")
+        );
+        assert!(
+            !app
+                .tool_executor
+                .guardrails
+                .policy
+                .bypass_approvals_and_sandbox
+        );
         Ok(())
     }
 
