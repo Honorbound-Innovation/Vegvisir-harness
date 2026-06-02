@@ -19,6 +19,7 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 
 use crate::{
+    command_sandbox::{CommandSandboxConfig, build_sandboxed_command},
     guardrails::GuardrailEngine,
     memory::{ContextPrepareOptions, VegvisirCms, VegvisirCmsConfig},
     observability::EventLogger,
@@ -389,6 +390,95 @@ fn terminate_child_process_group(child: &mut Child) {
     let _ = child.kill();
 }
 
+fn execute_bounded_command(
+    parts: &[&str],
+    sandbox_config: &CommandSandboxConfig,
+    timeout: u64,
+    output_limit: usize,
+    failure_error: &str,
+    include_command_in_data: bool,
+) -> Observation {
+    let sandboxed_command = match build_sandboxed_command(parts, sandbox_config) {
+        Ok(command) => command,
+        Err(error) => return Observation::err(error.to_string(), "CommandError"),
+    };
+    let mut command = Command::new(&sandboxed_command.program);
+    command
+        .args(&sandboxed_command.args)
+        .current_dir(&sandboxed_command.current_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = match spawn_command_in_own_process_group(&mut command) {
+        Ok(child) => child,
+        Err(error) => return Observation::err(error.to_string(), "CommandError"),
+    };
+    let started = Instant::now();
+    let mut timed_out = false;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if started.elapsed() >= Duration::from_secs(timeout) {
+                    timed_out = true;
+                    terminate_child_process_group(&mut child);
+                    break;
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(error) => return Observation::err(error.to_string(), "CommandError"),
+        }
+    }
+    match child.wait_with_output() {
+        Ok(output) => {
+            let mut content = String::new();
+            content.push_str(&String::from_utf8_lossy(&output.stdout));
+            content.push_str(&String::from_utf8_lossy(&output.stderr));
+            let truncated = content.len() > output_limit;
+            if truncated {
+                content = compact_text_middle(&content, output_limit, "output");
+            }
+            let mut data = Map::new();
+            if include_command_in_data {
+                data.insert("command".to_string(), json!(parts));
+            }
+            data.insert(
+                "command_sandboxed".to_string(),
+                json!(sandboxed_command.sandboxed),
+            );
+            data.insert(
+                "command_sandbox".to_string(),
+                json!(sandboxed_command.sandbox_kind),
+            );
+            data.insert(
+                "command_network_policy".to_string(),
+                json!(sandboxed_command.network_policy),
+            );
+            data.insert(
+                "returncode".to_string(),
+                json!(if timed_out {
+                    -1
+                } else {
+                    output.status.code().unwrap_or(-1)
+                }),
+            );
+            data.insert("timed_out".to_string(), json!(timed_out));
+            data.insert("timeout_seconds".to_string(), json!(timeout));
+            data.insert("output_truncated".to_string(), json!(truncated));
+            Observation {
+                ok: !timed_out && output.status.success(),
+                content,
+                data,
+                error: if timed_out {
+                    Some("CommandTimeout".to_string())
+                } else {
+                    (!output.status.success()).then(|| failure_error.to_string())
+                },
+            }
+        }
+        Err(error) => Observation::err(error.to_string(), "CommandError"),
+    }
+}
+
 pub fn build_builtin_registry(workspace: impl AsRef<Path>) -> anyhow::Result<ToolRegistry> {
     build_builtin_registry_with_cms(
         workspace.as_ref(),
@@ -548,7 +638,9 @@ pub fn build_builtin_registry_with_cms_and_mode(
         true,
     ))?;
 
-    let run_root = sandbox.root.clone();
+    let command_sandbox_config =
+        CommandSandboxConfig::from_env(sandbox.root.clone(), bypass_sandbox)?;
+    let run_sandbox_config = command_sandbox_config.clone();
     registry.register(Tool::new(
         "run_command",
         "Run an allow-listed command in the workspace.",
@@ -570,72 +662,21 @@ pub fn build_builtin_registry_with_cms_and_mode(
                 .and_then(Value::as_u64)
                 .unwrap_or(20000)
                 .clamp(1024, 1_000_000) as usize;
-            let mut command = Command::new(parts[0]);
-            command
-                .args(&parts[1..])
-                .current_dir(&run_root)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
-            let mut child = match spawn_command_in_own_process_group(&mut command) {
-                Ok(child) => child,
-                Err(error) => return Observation::err(error.to_string(), "CommandError"),
-            };
-            let started = Instant::now();
-            let mut timed_out = false;
-            loop {
-                match child.try_wait() {
-                    Ok(Some(_)) => break,
-                    Ok(None) => {
-                        if started.elapsed() >= Duration::from_secs(timeout) {
-                            timed_out = true;
-                            terminate_child_process_group(&mut child);
-                            break;
-                        }
-                        thread::sleep(Duration::from_millis(20));
-                    }
-                    Err(error) => return Observation::err(error.to_string(), "CommandError"),
-                }
-            }
-            match child.wait_with_output() {
-                Ok(output) => {
-                    let mut content = String::new();
-                    content.push_str(&String::from_utf8_lossy(&output.stdout));
-                    content.push_str(&String::from_utf8_lossy(&output.stderr));
-                    let truncated = content.len() > output_limit;
-                    if truncated {
-                        content = compact_text_middle(&content, output_limit, "output");
-                    }
-                    let mut data = Map::new();
-                    data.insert(
-                        "returncode".to_string(),
-                        json!(if timed_out {
-                            -1
-                        } else {
-                            output.status.code().unwrap_or(-1)
-                        }),
-                    );
-                    data.insert("timed_out".to_string(), json!(timed_out));
-                    data.insert("timeout_seconds".to_string(), json!(timeout));
-                    data.insert("output_truncated".to_string(), json!(truncated));
-                    Observation {
-                        ok: !timed_out && output.status.success(),
-                        content,
-                        data,
-                        error: if timed_out {
-                            Some("CommandTimeout".to_string())
-                        } else {
-                            (!output.status.success()).then(|| "CommandFailed".to_string())
-                        },
-                    }
-                }
-                Err(error) => Observation::err(error.to_string(), "CommandError"),
-            }
+            execute_bounded_command(
+                &parts,
+                &run_sandbox_config,
+                timeout,
+                output_limit,
+                "CommandFailed",
+                false,
+            )
         }),
         json!({"required": ["command"], "properties": {"command": "array", "timeout": "integer", "output_limit": "integer"}}),
         true,
     ))?;
 
     let test_root = sandbox.root.clone();
+    let test_sandbox_config = command_sandbox_config.clone();
     registry.register(Tool::new(
         "run_tests",
         "Run the workspace test suite with a bounded command.",
@@ -670,67 +711,14 @@ pub fn build_builtin_registry_with_cms_and_mode(
                 .and_then(Value::as_u64)
                 .unwrap_or(40000)
                 .clamp(1024, 1_000_000) as usize;
-            let mut command = Command::new(parts[0]);
-            command
-                .args(&parts[1..])
-                .current_dir(&test_root)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
-            let mut child = match spawn_command_in_own_process_group(&mut command) {
-                Ok(child) => child,
-                Err(error) => return Observation::err(error.to_string(), "CommandError"),
-            };
-            let started = Instant::now();
-            let mut timed_out = false;
-            loop {
-                match child.try_wait() {
-                    Ok(Some(_)) => break,
-                    Ok(None) => {
-                        if started.elapsed() >= Duration::from_secs(timeout) {
-                            timed_out = true;
-                            terminate_child_process_group(&mut child);
-                            break;
-                        }
-                        thread::sleep(Duration::from_millis(20));
-                    }
-                    Err(error) => return Observation::err(error.to_string(), "CommandError"),
-                }
-            }
-            match child.wait_with_output() {
-                Ok(output) => {
-                    let mut content = String::new();
-                    content.push_str(&String::from_utf8_lossy(&output.stdout));
-                    content.push_str(&String::from_utf8_lossy(&output.stderr));
-                    let truncated = content.len() > output_limit;
-                    if truncated {
-                        content = compact_text_middle(&content, output_limit, "output");
-                    }
-                    let mut data = Map::new();
-                    data.insert("command".to_string(), json!(parts));
-                    data.insert(
-                        "returncode".to_string(),
-                        json!(if timed_out {
-                            -1
-                        } else {
-                            output.status.code().unwrap_or(-1)
-                        }),
-                    );
-                    data.insert("timed_out".to_string(), json!(timed_out));
-                    data.insert("timeout_seconds".to_string(), json!(timeout));
-                    data.insert("output_truncated".to_string(), json!(truncated));
-                    Observation {
-                        ok: !timed_out && output.status.success(),
-                        content,
-                        data,
-                        error: if timed_out {
-                            Some("CommandTimeout".to_string())
-                        } else {
-                            (!output.status.success()).then(|| "TestsFailed".to_string())
-                        },
-                    }
-                }
-                Err(error) => Observation::err(error.to_string(), "CommandError"),
-            }
+            execute_bounded_command(
+                &parts,
+                &test_sandbox_config,
+                timeout,
+                output_limit,
+                "TestsFailed",
+                true,
+            )
         }),
         json!({"properties": {"command": "array", "timeout": "integer", "output_limit": "integer"}}),
         true,

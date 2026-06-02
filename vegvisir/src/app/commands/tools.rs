@@ -47,8 +47,16 @@ impl TuiApplication {
                         .cloned()
                         .collect::<Vec<_>>();
                     commands.sort();
+                    let sandbox_status = crate::sandbox::CommandSandboxStatus::current(
+                        self.tool_executor
+                            .guardrails
+                            .policy
+                            .bypass_approvals_and_sandbox,
+                        self.cwd.clone(),
+                    )
+                    .tools_status_lines();
                     return format!(
-                        "Risky tools: {}\nHuman approval: {}\nDangerous bypass: {}\nPending approvals: {}\nAllowed shell commands: {}",
+                        "Risky tools: {}\nHuman approval: {}\nDangerous bypass: {}\nPending approvals: {}\nAllowed shell commands: {}\n\n{}",
                         if self.tool_executor.guardrails.policy.allow_risky_tools {
                             "enabled"
                         } else {
@@ -70,7 +78,8 @@ impl TuiApplication {
                             "disabled"
                         },
                         self.tool_executor.guardrails.approvals.pending_len(),
-                        commands.join(", ")
+                        commands.join(", "),
+                        sandbox_status
                     );
                 }
                 "require-approval" | "approval" => {

@@ -78,6 +78,12 @@ Install with a user HBSE broker service:
 ./install.sh --hbse-service user --enable-hbse-service --start-hbse-service
 ```
 
+Prepare an optional low-privilege runtime account and workspace root for hardened headless deployments:
+
+```bash
+sudo ./install.sh --install-vegvisir-user --workspace-root /srv/vegvisir-workspaces
+```
+
 Uninstall:
 
 ```bash

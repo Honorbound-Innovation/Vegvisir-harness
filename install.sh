@@ -22,12 +22,16 @@ Options:
   --hbse-socket <path>               HBSE broker socket path for service install.
   --hbse-idle-timeout-seconds <n>    HBSE broker idle timeout. Default: 900
   --hbse-service-user <user>         User for system HBSE service.
+  --install-vegvisir-user            Create a low-privilege Vegvisir runtime user and workspace root.
+  --vegvisir-service-user <user>     User for hardened Vegvisir deployments. Default: vegvisir-agent
+  --workspace-root <path>            Workspace root for hardened deployments. Default: /srv/vegvisir-workspaces
   -h, --help                         Show this help.
 
 Examples:
   ./install.sh
   ./install.sh --prefix "$HOME/.local" --hbse-service user --enable-hbse-service --start-hbse-service
   sudo ./install.sh --install-system-deps --prefix /usr/local --hbse-service system --hbse-service-user hbse --enable-hbse-service
+  sudo ./install.sh --install-vegvisir-user --workspace-root /srv/vegvisir-workspaces
 USAGE
 }
 
@@ -45,6 +49,9 @@ hbse_vault=""
 hbse_socket=""
 hbse_idle_timeout_seconds="900"
 hbse_service_user=""
+install_vegvisir_user=0
+vegvisir_service_user="vegvisir-agent"
+workspace_root="/srv/vegvisir-workspaces"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -100,6 +107,18 @@ while [[ $# -gt 0 ]]; do
       hbse_service_user="${2:?--hbse-service-user requires a user}"
       shift 2
       ;;
+    --install-vegvisir-user)
+      install_vegvisir_user=1
+      shift
+      ;;
+    --vegvisir-service-user)
+      vegvisir_service_user="${2:?--vegvisir-service-user requires a user}"
+      shift 2
+      ;;
+    --workspace-root)
+      workspace_root="${2:?--workspace-root requires a path}"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -138,11 +157,46 @@ install_debian_deps() {
   "${apt[@]}" install -y \
     build-essential \
     ca-certificates \
+    bubblewrap \
     curl \
     nodejs \
     npm \
     pkg-config \
     libtss2-dev
+}
+
+run_as_root() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+  else
+    echo "root privileges or sudo are required for: $*" >&2
+    exit 1
+  fi
+}
+
+install_vegvisir_service_user() {
+  if [[ ! "$vegvisir_service_user" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+    echo "--vegvisir-service-user must be a valid Unix user name" >&2
+    exit 2
+  fi
+  if [[ "$workspace_root" != /* ]]; then
+    echo "--workspace-root must be an absolute path" >&2
+    exit 2
+  fi
+  if id -u "$vegvisir_service_user" >/dev/null 2>&1; then
+    echo "Vegvisir runtime user already exists: $vegvisir_service_user"
+  else
+    run_as_root useradd \
+      --system \
+      --create-home \
+      --home-dir "$workspace_root" \
+      --shell /usr/sbin/nologin \
+      "$vegvisir_service_user"
+  fi
+  run_as_root install -d -m 0750 "$workspace_root"
+  run_as_root chown "$vegvisir_service_user:" "$workspace_root"
 }
 
 require_file() {
@@ -161,6 +215,10 @@ require_file "$repo_root/components/usrl/package.json"
 
 if [[ "$install_system_deps" -eq 1 ]]; then
   install_debian_deps
+fi
+
+if [[ "$install_vegvisir_user" -eq 1 ]]; then
+  install_vegvisir_service_user
 fi
 
 if ! command -v cargo >/dev/null 2>&1; then
@@ -257,6 +315,15 @@ export VEGVISIR_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/vegvisir"
 export VEGVISIR_PRODUCTION=1
 ENV
 
+if [[ "$install_vegvisir_user" -eq 1 ]]; then
+  cat >>"$etc_dir/vegvisir.env.example" <<EOF
+
+# Hardened deployment account and workspace root.
+# Run headless workers as $vegvisir_service_user and keep workspaces below this path.
+export VEGVISIR_WORKSPACE_ROOT="$workspace_root"
+EOF
+fi
+
 if [[ "$install_hbse" -eq 1 ]]; then
   cat >>"$etc_dir/vegvisir.env.example" <<'ENV'
 
@@ -290,6 +357,10 @@ if [[ "$install_hbse" -eq 1 ]]; then
 fi
 if [[ "$install_usrl" -eq 1 ]]; then
   echo "  $bin_dir/usrl"
+fi
+if [[ "$install_vegvisir_user" -eq 1 ]]; then
+  echo "  runtime user: $vegvisir_service_user"
+  echo "  workspace root: $workspace_root"
 fi
 cat <<EOF
 

@@ -12,13 +12,16 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::Utc;
 use serde_json::{Map, Value, json};
-use tempfile::tempdir;
+use tempfile::{NamedTempFile, tempdir};
 use vegvisir_rust::{
     app::TuiApplication,
     attachments::extract_attachments,
     bridge::{BridgeOptions, run_app_server_with_io},
     checkpoints::CheckpointStore,
     command_registry::CommandRegistry,
+    command_sandbox::{
+        COMMAND_SANDBOX_ENV, COMMAND_SANDBOX_HIDDEN_PATHS_ENV, COMMAND_SANDBOX_NETWORK_ENV,
+    },
     context::ContextManager,
     core::{
         Attachment, AuditEvent, AuditLog, ChatMessage, ConfigStore, ModelInfo, ModelRegistry,
@@ -285,6 +288,14 @@ impl Drop for EnvVarGuard {
             }
         }
     }
+}
+
+fn bwrap_available() -> bool {
+    std::process::Command::new("bwrap")
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
 }
 
 fn unsigned_jwt(claims: Value) -> String {
@@ -684,6 +695,11 @@ fn startup_dangerous_bypass_authorizes_tools_commands_and_sandbox_escape() -> an
 
     let status = app.execute_command("/tools status")?.unwrap();
     assert!(status.contains("Dangerous bypass: enabled at startup"));
+    assert!(status.contains("Workspace file containment: disabled by dangerous bypass"));
+    assert!(status.contains("File access hardening: disabled by dangerous bypass"));
+    assert!(status.contains("Command OS sandbox: disabled by dangerous bypass"));
+    assert!(status.contains("Bubblewrap available: "));
+    assert!(status.contains("Command network policy: inherit"));
     assert_eq!(
         app.execute_command("/tools deny-risky")?.unwrap(),
         "Dangerous bypass was enabled at startup and cannot be changed from the TUI."
@@ -1052,6 +1068,345 @@ fn run_tests_executes_bounded_test_command() -> anyhow::Result<()> {
     assert_eq!(
         observed.data.get("command"),
         Some(&json!(["printf", "tests-ok"]))
+    );
+    Ok(())
+}
+
+#[test]
+fn run_command_reports_bubblewrap_sandbox_metadata_when_enabled() -> anyhow::Result<()> {
+    if !bwrap_available() {
+        return Ok(());
+    }
+    let _guard = env_lock().lock().unwrap();
+    let _sandbox_env = EnvVarGuard::set(COMMAND_SANDBOX_ENV, "bwrap");
+    let tmp = tempdir()?;
+    let registry = build_builtin_registry(tmp.path())?;
+    let mut allowed_commands = PermissionPolicy::default().allowed_commands;
+    allowed_commands.insert("printf".to_string());
+    let mut executor = vegvisir_rust::tools::ToolExecutor {
+        registry,
+        guardrails: GuardrailEngine {
+            policy: PermissionPolicy {
+                allow_risky_tools: true,
+                allowed_commands,
+                ..PermissionPolicy::default()
+            },
+            ..GuardrailEngine::default()
+        },
+        runtime_policy: vegvisir_rust::policy::RuntimePolicy::default(),
+        logger: vegvisir_rust::observability::EventLogger::default(),
+    };
+
+    let observed = executor.execute(vegvisir_rust::types::ToolCall {
+        name: "run_command".to_string(),
+        args: json!({"command": ["printf", "bwrap-ok"], "timeout": 1})
+            .as_object()
+            .unwrap()
+            .clone(),
+    });
+
+    assert!(observed.ok, "{}", observed.content);
+    assert!(observed.content.contains("bwrap-ok"));
+    assert_eq!(observed.data.get("command_sandboxed"), Some(&json!(true)));
+    assert_eq!(
+        observed.data.get("command_sandbox"),
+        Some(&json!("bubblewrap"))
+    );
+    Ok(())
+}
+
+#[test]
+fn bubblewrap_unsets_secret_env_but_keeps_nonsecret_env() -> anyhow::Result<()> {
+    if !bwrap_available() {
+        return Ok(());
+    }
+    let _guard = env_lock().lock().unwrap();
+    let _sandbox_env = EnvVarGuard::set(COMMAND_SANDBOX_ENV, "bwrap");
+    let _secret_env = EnvVarGuard::set("VEGVISIR_TEST_API_KEY", "host-secret");
+    let _visible_env = EnvVarGuard::set("VEGVISIR_TEST_VISIBLE_SETTING", "host-visible");
+    let tmp = tempdir()?;
+    let registry = build_builtin_registry(tmp.path())?;
+    let mut allowed_commands = PermissionPolicy::default().allowed_commands;
+    allowed_commands.insert("sh".to_string());
+    let mut executor = vegvisir_rust::tools::ToolExecutor {
+        registry,
+        guardrails: GuardrailEngine {
+            policy: PermissionPolicy {
+                allow_risky_tools: true,
+                allowed_commands,
+                ..PermissionPolicy::default()
+            },
+            ..GuardrailEngine::default()
+        },
+        runtime_policy: vegvisir_rust::policy::RuntimePolicy::default(),
+        logger: vegvisir_rust::observability::EventLogger::default(),
+    };
+
+    let observed = executor.execute(vegvisir_rust::types::ToolCall {
+        name: "run_command".to_string(),
+        args: json!({
+            "command": [
+                "sh",
+                "-c",
+                "test -z \"${VEGVISIR_TEST_API_KEY+x}\" && test \"$VEGVISIR_TEST_VISIBLE_SETTING\" = host-visible && printf env-ok"
+            ],
+            "timeout": 1
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    });
+
+    assert!(observed.ok, "{}", observed.content);
+    assert!(observed.content.contains("env-ok"));
+    assert_eq!(observed.data.get("command_sandboxed"), Some(&json!(true)));
+    assert_eq!(
+        observed.data.get("command_sandbox"),
+        Some(&json!("bubblewrap"))
+    );
+    Ok(())
+}
+
+#[test]
+fn bubblewrap_network_disable_is_reported_and_enforced() -> anyhow::Result<()> {
+    if !bwrap_available() {
+        return Ok(());
+    }
+    let _guard = env_lock().lock().unwrap();
+    let _sandbox_env = EnvVarGuard::set(COMMAND_SANDBOX_ENV, "bwrap");
+    let _network_env = EnvVarGuard::set(COMMAND_SANDBOX_NETWORK_ENV, "disable");
+    let tmp = tempdir()?;
+    let home = tmp.path().join("home");
+    fs::create_dir_all(&home)?;
+    let mut app = TuiApplication::with_data_root_and_dangerous_bypass(tmp.path(), &home, false)?;
+
+    let status = app.execute_command("/tools status")?.unwrap();
+    assert!(status.contains("Command OS sandbox: configured: bubblewrap"));
+    assert!(status.contains("Command network policy: disabled"));
+    let runtime = app.execute_command("/verify runtime")?.unwrap();
+    assert!(runtime.contains("ok runtime/command_network_policy disabled"));
+
+    let registry = build_builtin_registry(tmp.path())?;
+    let mut allowed_commands = PermissionPolicy::default().allowed_commands;
+    allowed_commands.insert("printf".to_string());
+    let mut executor = vegvisir_rust::tools::ToolExecutor {
+        registry,
+        guardrails: GuardrailEngine {
+            policy: PermissionPolicy {
+                allow_risky_tools: true,
+                allowed_commands,
+                ..PermissionPolicy::default()
+            },
+            ..GuardrailEngine::default()
+        },
+        runtime_policy: vegvisir_rust::policy::RuntimePolicy::default(),
+        logger: vegvisir_rust::observability::EventLogger::default(),
+    };
+
+    let observed = executor.execute(vegvisir_rust::types::ToolCall {
+        name: "run_command".to_string(),
+        args: json!({"command": ["printf", "network-policy-ok"], "timeout": 1})
+            .as_object()
+            .unwrap()
+            .clone(),
+    });
+
+    assert!(observed.ok, "{}", observed.content);
+    assert!(observed.content.contains("network-policy-ok"));
+    assert_eq!(
+        observed.data.get("command_network_policy"),
+        Some(&json!("disabled"))
+    );
+    Ok(())
+}
+
+#[test]
+fn network_require_approval_enqueues_network_command_approval() -> anyhow::Result<()> {
+    let _guard = env_lock().lock().unwrap();
+    let _network_env = EnvVarGuard::set(COMMAND_SANDBOX_NETWORK_ENV, "require-approval");
+    let tmp = tempdir()?;
+    let registry = build_builtin_registry(tmp.path())?;
+    let mut executor = vegvisir_rust::tools::ToolExecutor {
+        registry,
+        guardrails: GuardrailEngine {
+            policy: PermissionPolicy {
+                allow_risky_tools: true,
+                ..PermissionPolicy::default()
+            },
+            ..GuardrailEngine::default()
+        },
+        runtime_policy: vegvisir_rust::policy::RuntimePolicy::default(),
+        logger: vegvisir_rust::observability::EventLogger::default(),
+    };
+
+    let blocked = executor.execute(vegvisir_rust::types::ToolCall {
+        name: "run_command".to_string(),
+        args: json!({"command": ["git", "fetch"], "timeout": 1})
+            .as_object()
+            .unwrap()
+            .clone(),
+    });
+
+    assert!(!blocked.ok);
+    assert!(
+        blocked
+            .content
+            .contains("Command network access requires human approval")
+    );
+    assert!(blocked.content.contains("approval_id="));
+    let pending = executor.guardrails.approvals.pending();
+    assert_eq!(pending.len(), 1);
+    let request = pending.values().next().expect("pending network approval");
+    assert_eq!(request.risk_label, "command-network");
+    assert!(request.reason.contains("git fetch"));
+
+    let safe_local = executor.execute(vegvisir_rust::types::ToolCall {
+        name: "run_command".to_string(),
+        args: json!({"command": ["git", "status"], "timeout": 1})
+            .as_object()
+            .unwrap()
+            .clone(),
+    });
+    assert!(
+        !safe_local
+            .content
+            .contains("Command network access requires human approval"),
+        "{}",
+        safe_local.content
+    );
+    Ok(())
+}
+
+#[test]
+fn bubblewrap_hidden_paths_env_hides_host_file() -> anyhow::Result<()> {
+    if !bwrap_available() {
+        return Ok(());
+    }
+    let _guard = env_lock().lock().unwrap();
+    let _sandbox_env = EnvVarGuard::set(COMMAND_SANDBOX_ENV, "bwrap");
+    let mut hidden_file = NamedTempFile::new()?;
+    hidden_file.write_all(b"host-secret")?;
+    let _hidden_env = EnvVarGuard::set(COMMAND_SANDBOX_HIDDEN_PATHS_ENV, hidden_file.path());
+    let tmp = tempdir()?;
+    let registry = build_builtin_registry(tmp.path())?;
+    let mut allowed_commands = PermissionPolicy::default().allowed_commands;
+    allowed_commands.insert("sh".to_string());
+    let mut executor = vegvisir_rust::tools::ToolExecutor {
+        registry,
+        guardrails: GuardrailEngine {
+            policy: PermissionPolicy {
+                allow_risky_tools: true,
+                allowed_commands,
+                ..PermissionPolicy::default()
+            },
+            ..GuardrailEngine::default()
+        },
+        runtime_policy: vegvisir_rust::policy::RuntimePolicy::default(),
+        logger: vegvisir_rust::observability::EventLogger::default(),
+    };
+
+    let script = format!(
+        "test ! -s '{}' && printf hidden-ok",
+        hidden_file.path().display()
+    );
+    let observed = executor.execute(vegvisir_rust::types::ToolCall {
+        name: "run_command".to_string(),
+        args: json!({"command": ["sh", "-c", script], "timeout": 1})
+            .as_object()
+            .unwrap()
+            .clone(),
+    });
+
+    assert!(observed.ok, "{}", observed.content);
+    assert!(observed.content.contains("hidden-ok"));
+    assert_eq!(observed.data.get("command_sandboxed"), Some(&json!(true)));
+    Ok(())
+}
+
+#[test]
+fn tools_status_reports_strict_bubblewrap_mode_when_enabled() -> anyhow::Result<()> {
+    let _guard = env_lock().lock().unwrap();
+    let _sandbox_env = EnvVarGuard::set(COMMAND_SANDBOX_ENV, "strict-bwrap");
+    let tmp = tempdir()?;
+    let home = tmp.path().join("home");
+    fs::create_dir_all(&home)?;
+    let mut app = TuiApplication::with_data_root_and_dangerous_bypass(tmp.path(), &home, false)?;
+
+    let status = app.execute_command("/tools status")?.unwrap();
+    if bwrap_available() {
+        assert!(status.contains("Command OS sandbox: configured: strict-bubblewrap"));
+    } else {
+        assert!(status.contains("Command OS sandbox: configured but bubblewrap unavailable"));
+    }
+    assert!(status.contains("Command network policy: disabled"));
+    assert!(status.contains("Writable mount policy: workspace writable"));
+    assert!(status.contains("Read-only mount policy: system mounts read-only"));
+
+    let runtime = app.execute_command("/verify runtime")?.unwrap();
+    if bwrap_available() {
+        assert!(runtime.contains("ok runtime/command_os_sandbox configured:_strict-bubblewrap"));
+    } else {
+        assert!(
+            runtime.contains("ok runtime/command_os_sandbox configured_but_bubblewrap_unavailable")
+        );
+    }
+    assert!(runtime.contains("ok runtime/command_network_policy disabled"));
+    assert!(runtime.contains("ok runtime/command_mount_policy writable=workspace_writable"));
+    assert!(runtime.contains("readonly=system_mounts_read-only"));
+    Ok(())
+}
+
+#[test]
+fn strict_bubblewrap_allows_workspace_write_and_hides_host_tmp() -> anyhow::Result<()> {
+    if !bwrap_available() {
+        return Ok(());
+    }
+    let _guard = env_lock().lock().unwrap();
+    let _sandbox_env = EnvVarGuard::set(COMMAND_SANDBOX_ENV, "strict-bwrap");
+    let _secret_env = EnvVarGuard::set("VEGVISIR_TEST_STRICT_SECRET", "host-secret");
+    let tmp = tempdir()?;
+    let mut host_tmp_marker = NamedTempFile::new()?;
+    host_tmp_marker.write_all(b"host-only")?;
+    let registry = build_builtin_registry(tmp.path())?;
+    let mut allowed_commands = PermissionPolicy::default().allowed_commands;
+    allowed_commands.insert("sh".to_string());
+    let mut executor = vegvisir_rust::tools::ToolExecutor {
+        registry,
+        guardrails: GuardrailEngine {
+            policy: PermissionPolicy {
+                allow_risky_tools: true,
+                allowed_commands,
+                ..PermissionPolicy::default()
+            },
+            ..GuardrailEngine::default()
+        },
+        runtime_policy: vegvisir_rust::policy::RuntimePolicy::default(),
+        logger: vegvisir_rust::observability::EventLogger::default(),
+    };
+    let host_tmp_marker_path = host_tmp_marker.path().display().to_string();
+
+    let script = format!(
+        "test \"$HOME\" = /home/vegvisir && test -z \"${{VEGVISIR_TEST_STRICT_SECRET+x}}\" && test ! -e '{}' && printf strict-ok > strict.txt && printf strict-ran",
+        host_tmp_marker_path
+    );
+    let observed = executor.execute(vegvisir_rust::types::ToolCall {
+        name: "run_command".to_string(),
+        args: json!({"command": ["sh", "-c", script], "timeout": 1})
+            .as_object()
+            .unwrap()
+            .clone(),
+    });
+
+    assert!(observed.ok, "{}", observed.content);
+    assert!(observed.content.contains("strict-ran"));
+    assert_eq!(
+        fs::read_to_string(tmp.path().join("strict.txt"))?,
+        "strict-ok"
+    );
+    assert_eq!(observed.data.get("command_sandboxed"), Some(&json!(true)));
+    assert_eq!(
+        observed.data.get("command_sandbox"),
+        Some(&json!("strict-bubblewrap"))
     );
     Ok(())
 }
@@ -3030,6 +3385,18 @@ fn verify_command_reports_auth_mcp_agent_and_memory_readiness() -> anyhow::Resul
     assert!(output.contains("ok runtime/subagents"));
     assert!(output.contains("ok runtime/cancel command=/cancel"));
     assert!(output.contains("ok runtime/dangerous_bypass disabled startup_only=true"));
+    assert!(output.contains("ok runtime/workspace_file_containment active"));
+    assert!(output.contains("ok runtime/file_access_hardening "));
+    #[cfg(target_os = "linux")]
+    assert!(output.contains(
+        "ok runtime/file_access_hardening openat2_existing_paths_plus_symlink_rejection"
+    ));
+    assert!(output.contains("ok runtime/command_os_sandbox unavailable/not_configured"));
+    assert!(output.contains("ok runtime/bubblewrap_available "));
+    assert!(output.contains("ok runtime/command_network_policy inherit"));
+    assert!(output.contains(
+        "ok runtime/command_mount_policy writable=not_applicable readonly=not_applicable"
+    ));
     assert!(output.contains("ok runtime/user default=local-user active=agent:red"));
     assert!(output.contains("ok evals/golden passed=3 total=3"));
     Ok(())
@@ -3044,6 +3411,9 @@ fn verify_runtime_reports_dangerous_bypass_startup_mode() -> anyhow::Result<()> 
 
     let output = app.execute_command("/verify runtime")?.unwrap();
     assert!(output.contains("ok runtime/dangerous_bypass enabled startup_only=true"));
+    assert!(output.contains("ok runtime/workspace_file_containment disabled_by_dangerous_bypass"));
+    assert!(output.contains("ok runtime/file_access_hardening disabled_by_dangerous_bypass"));
+    assert!(output.contains("ok runtime/command_os_sandbox disabled_by_dangerous_bypass"));
     assert!(output.contains("ok runtime/approvals"));
     assert!(output.contains("ok runtime/user default=local-user active=local-user"));
     Ok(())

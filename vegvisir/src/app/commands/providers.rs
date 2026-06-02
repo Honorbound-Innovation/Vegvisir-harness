@@ -587,7 +587,11 @@ impl TuiApplication {
         let trace_path = self.data_root.join("traces").join("tui.jsonl");
         let subagent_path = self.subagent_board_path();
         let subagents = self.load_subagent_records().unwrap_or_default();
-        vec![
+        let sandbox_status = crate::sandbox::CommandSandboxStatus::current(
+            self.dangerously_bypass_approvals_and_sandbox,
+            self.cwd.clone(),
+        );
+        let mut checks = vec![
             format!(
                 "ok runtime/approvals path={} pending={}",
                 approval_path.display(),
@@ -618,7 +622,9 @@ impl TuiApplication {
                 self.cms.config.user_id,
                 self.sessions.store.root.display()
             ),
-        ]
+        ];
+        checks.extend(sandbox_status.verify_runtime_lines());
+        checks
     }
 
     fn verify_eval_checks(&self) -> Vec<String> {

@@ -9,7 +9,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::tools::Tool;
+use crate::{command_sandbox::command_requires_network_approval, tools::Tool};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ApprovalRequest {
@@ -334,6 +334,37 @@ impl GuardrailEngine {
                 let reason = request.reason.clone();
                 self.approvals.enqueue(request);
                 anyhow::bail!("{reason}; approval_id={id}");
+            }
+        }
+        if tool.name == "run_command" && !approval_granted {
+            let parts = args
+                .get("command")
+                .and_then(Value::as_array)
+                .map(|items| items.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+                .unwrap_or_default();
+            if command_requires_network_approval(&parts)? {
+                let request_id = approval_request_id(&tool.name, args);
+                if self
+                    .approvals
+                    .consume_approval(&request_id, &tool.name, args)
+                {
+                    approval_granted = true;
+                } else {
+                    let command_display = parts.join(" ");
+                    let request = ApprovalRequest {
+                        id: request_id,
+                        reason: format!(
+                            "Command network access requires human approval: {command_display}"
+                        ),
+                        tool_name: tool.name.clone(),
+                        args: args.clone(),
+                        risk_label: "command-network".to_string(),
+                    };
+                    let id = request.id.clone();
+                    let reason = request.reason.clone();
+                    self.approvals.enqueue(request);
+                    anyhow::bail!("{reason}; approval_id={id}");
+                }
             }
         }
         if self.policy.require_human_approval && tool.risky && !self.policy.allow_risky_tools {

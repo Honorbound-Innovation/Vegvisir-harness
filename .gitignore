@@ -33,6 +33,7 @@ components/t3code-overlay/
 !licenses/
 !licenses/**
 plan.md
+hardend-plan.md
 
 # Tauri-generated schema/cache output.
 components/desktop/src-tauri/gen/

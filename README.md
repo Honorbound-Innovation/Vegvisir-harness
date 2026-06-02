@@ -154,6 +154,12 @@ Install into a specific prefix:
 ./install.sh --prefix "$HOME/.local"
 ```
 
+Prepare an optional low-privilege runtime account and workspace root for hardened headless deployments:
+
+```bash
+sudo ./install.sh --install-vegvisir-user --workspace-root /srv/vegvisir-workspaces
+```
+
 Upgrade an existing local install:
 
 ```bash
