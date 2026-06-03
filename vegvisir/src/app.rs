@@ -126,6 +126,7 @@ pub struct TuiApplication {
     pub chat_area_height: u16,
     pub chat_render_scroll: usize,
     pub chat_rendered_lines: Vec<String>,
+    pub chat_render_cache: ChatTranscriptRenderCache,
     pub drag_anchor: Option<(u16, u16)>,
     pub drag_current: Option<(u16, u16)>,
     pub autonomy: AutonomyState,
@@ -175,6 +176,38 @@ impl DiffRenderer {
             DiffRenderer::Difftastic => "difftastic",
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChatTranscriptRenderCache {
+    pub width: usize,
+    pub search_query: String,
+    pub message_lines: Vec<Option<ChatMessageRenderCacheEntry>>,
+}
+
+impl Default for ChatTranscriptRenderCache {
+    fn default() -> Self {
+        Self {
+            width: 0,
+            search_query: String::new(),
+            message_lines: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChatMessageRenderCacheEntry {
+    pub key: ChatMessageRenderCacheKey,
+    pub lines: Vec<ratatui::text::Line<'static>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChatMessageRenderCacheKey {
+    pub role: String,
+    pub created_at_millis: i64,
+    pub content_len: usize,
+    pub content_hash: u64,
+    pub thinking_trace_visible: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -715,6 +748,7 @@ impl TuiApplication {
             chat_area_height: 0,
             chat_render_scroll: 0,
             chat_rendered_lines: Vec::new(),
+            chat_render_cache: ChatTranscriptRenderCache::default(),
             drag_anchor: None,
             drag_current: None,
             autonomy: AutonomyState::default(),
@@ -1892,9 +1926,11 @@ mod tests {
         app.chat_area_y = 3;
         app.chat_area_height = 4;
         app.chat_render_scroll = 10;
-        app.chat_rendered_lines = vec![String::new(); 12];
-        app.chat_rendered_lines
-            .push("  hello selectable world".to_string());
+        app.chat_rendered_lines = vec![
+            String::new(),
+            String::new(),
+            "  hello selectable world".to_string(),
+        ];
 
         let selected = app.extract_chat_drag_selection((10, 5), (20, 5));
 

@@ -11,8 +11,9 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::{
     app::{
-        DiffOverlay, DiffOverlayRenderCache, DiffRenderer, InfoOverlay, ProfileOverlay,
-        TuiApplication, is_turn_failure_summary,
+        ChatMessageRenderCacheEntry, ChatMessageRenderCacheKey, DiffOverlay,
+        DiffOverlayRenderCache, DiffRenderer, InfoOverlay, ProfileOverlay, TuiApplication,
+        is_turn_failure_summary,
     },
     core::{Attachment, ChatMessage},
     guardrails::ApprovalRequest,
@@ -200,8 +201,12 @@ fn draw_chat_transcript(f: &mut Frame<'_>, app: &mut TuiApplication, area: Rect)
     app.chat_area_width = area.width;
     app.chat_area_height = area.height;
     app.chat_render_scroll = start;
-    app.chat_rendered_lines = lines.iter().map(line_to_plain_text).collect();
+
     let mut visible = lines[start..end].to_vec();
+    // Selection/copy only needs the currently rendered viewport. Keeping only
+    // visible plain-text rows avoids rebuilding and retaining a plain-text copy
+    // of the entire transcript on every redraw.
+    app.chat_rendered_lines = visible.iter().map(line_to_plain_text).collect();
     apply_chat_drag_highlight(app, &mut visible, start);
     apply_scroll_indicators(&mut visible, offset, max_offset, area.width as usize);
     let paragraph = Paragraph::new(visible).style(Style::default().fg(FG).bg(BG));
@@ -234,6 +239,7 @@ fn is_tool_log_message(message: &ChatMessage) -> bool {
     )
 }
 
+#[cfg(test)]
 fn chat_transcript_messages(app: &TuiApplication) -> impl Iterator<Item = &ChatMessage> {
     app.session
         .messages
@@ -410,11 +416,8 @@ fn highlight_line_columns(
     Line::from(spans)
 }
 
-fn visual_chat_lines(app: &TuiApplication, width: usize) -> Vec<Line<'static>> {
-    chat_lines(app, width)
-        .into_iter()
-        .flat_map(|line| wrap_line_for_viewport(line, width))
-        .collect()
+fn visual_chat_lines(app: &mut TuiApplication, width: usize) -> Vec<Line<'static>> {
+    cached_chat_lines(app, width)
 }
 
 fn wrap_line_for_viewport(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
@@ -424,6 +427,109 @@ fn wrap_line_for_viewport(line: Line<'static>, width: usize) -> Vec<Line<'static
     wrap_spans(line.spans, width.max(1), "")
 }
 
+fn cached_chat_lines(app: &mut TuiApplication, width: usize) -> Vec<Line<'static>> {
+    if app.session.messages.is_empty() {
+        app.chat_render_cache.message_lines.clear();
+        let mut lines = vec![Line::from(Span::styled(
+            "Ready. Type a request, paste context, or use /help.",
+            Style::default().fg(DIM),
+        ))];
+        append_streaming_activity_lines(app, &mut lines);
+        return lines;
+    }
+
+    if app.chat_render_cache.width != width
+        || app.chat_render_cache.search_query != app.search_query
+    {
+        app.chat_render_cache.width = width;
+        app.chat_render_cache.search_query = app.search_query.clone();
+        app.chat_render_cache.message_lines.clear();
+    }
+    if app.chat_render_cache.message_lines.len() != app.session.messages.len() {
+        app.chat_render_cache
+            .message_lines
+            .resize_with(app.session.messages.len(), || None);
+    }
+
+    let mut lines = Vec::new();
+    let mut rendered_messages = 0usize;
+    let mut last_transcript_role = None::<&str>;
+    let mut last_transcript_content_empty = true;
+
+    for index in 0..app.session.messages.len() {
+        let message = &app.session.messages[index];
+        if is_tool_log_message(message) {
+            app.chat_render_cache.message_lines[index] = None;
+            continue;
+        }
+
+        if rendered_messages > 0 {
+            lines.push(Line::from(""));
+        }
+        rendered_messages += 1;
+        last_transcript_role = Some(message.role.as_str());
+        last_transcript_content_empty = message.content.is_empty();
+
+        let key = chat_message_render_cache_key(message);
+        let needs_render = app.chat_render_cache.message_lines[index]
+            .as_ref()
+            .is_none_or(|entry| entry.key != key);
+        if needs_render {
+            let rendered = message_lines(message, width, &app.search_query)
+                .into_iter()
+                .flat_map(|line| wrap_line_for_viewport(line, width))
+                .collect();
+            app.chat_render_cache.message_lines[index] = Some(ChatMessageRenderCacheEntry {
+                key,
+                lines: rendered,
+            });
+        }
+        if let Some(entry) = app.chat_render_cache.message_lines[index].as_ref() {
+            lines.extend(entry.lines.iter().cloned());
+        }
+    }
+
+    if last_transcript_role == Some("assistant") && !last_transcript_content_empty {
+        // Keep one rendered spacer row after completed assistant output so the
+        // final line breathes above the chat/input border. This is a
+        // presentation-only pad; stored transcript content is unchanged.
+        lines.push(Line::from(""));
+    }
+    append_streaming_activity_lines(app, &mut lines);
+    lines
+}
+
+fn chat_message_render_cache_key(message: &ChatMessage) -> ChatMessageRenderCacheKey {
+    ChatMessageRenderCacheKey {
+        role: message.role.clone(),
+        created_at_millis: message.created_at.timestamp_millis(),
+        content_len: message.content.len(),
+        content_hash: stable_hash(&message.content),
+        thinking_trace_visible: thinking_trace_visible(message),
+    }
+}
+
+fn thinking_trace_visible(message: &ChatMessage) -> bool {
+    if message.role != "assistant" || !contains_thinking_trace(&message.content) {
+        return false;
+    }
+    chrono::Utc::now()
+        .signed_duration_since(message.created_at)
+        .num_milliseconds()
+        < THINKING_TRACE_VISIBLE_MILLIS
+}
+
+fn append_streaming_activity_lines(app: &TuiApplication, lines: &mut Vec<Line<'static>>) {
+    if app.session.status == "streaming" && !app.session.activity.trim().is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("● ", Style::default().fg(CYAN)),
+            Span::styled(app.session.activity.clone(), Style::default().fg(DIM)),
+        ]));
+    }
+}
+
+#[cfg(test)]
 fn chat_lines(app: &TuiApplication, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     if app.session.messages.is_empty() {
@@ -452,13 +558,7 @@ fn chat_lines(app: &TuiApplication, width: usize) -> Vec<Line<'static>> {
             lines.push(Line::from(""));
         }
     }
-    if app.session.status == "streaming" && !app.session.activity.trim().is_empty() {
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("● ", Style::default().fg(CYAN)),
-            Span::styled(app.session.activity.clone(), Style::default().fg(DIM)),
-        ]));
-    }
+    append_streaming_activity_lines(app, &mut lines);
     lines
 }
 
@@ -3282,6 +3382,53 @@ mod tests {
         assert!(chat.contains("fn visible_in_chat()"));
         assert!(!chat.contains("Tool finished: run_command"));
         assert!(tool_log.contains("Tool finished: run_command"));
+        Ok(())
+    }
+
+    #[test]
+    fn ratatui_chat_render_cache_reuses_unchanged_message_lines() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app =
+            crate::app::TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "please inspect the renderer".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        app.session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: "initial response".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+
+        let first_render = cached_chat_lines(&mut app, 80);
+        let first_user_entry = app.chat_render_cache.message_lines[0]
+            .as_ref()
+            .expect("user message should be cached")
+            .clone();
+        let first_assistant_key = app.chat_render_cache.message_lines[1]
+            .as_ref()
+            .expect("assistant message should be cached")
+            .key
+            .clone();
+
+        app.session.messages[1]
+            .content
+            .push_str(" with more streamed text");
+        let second_render = cached_chat_lines(&mut app, 80);
+        let second_user_entry = app.chat_render_cache.message_lines[0]
+            .as_ref()
+            .expect("user message should remain cached");
+        let second_assistant_key = &app.chat_render_cache.message_lines[1]
+            .as_ref()
+            .expect("assistant message should be cached again")
+            .key;
+
+        assert_eq!(first_user_entry, *second_user_entry);
+        assert_ne!(&first_assistant_key, second_assistant_key);
+        assert!(second_render.len() >= first_render.len());
         Ok(())
     }
 

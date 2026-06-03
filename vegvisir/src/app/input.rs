@@ -729,7 +729,10 @@ impl TuiApplication {
         };
         let mut out = Vec::new();
         for line_index in start_line..=end_line {
-            let Some(line) = self.chat_rendered_lines.get(line_index) else {
+            let Some(viewport_index) = line_index.checked_sub(self.chat_render_scroll) else {
+                continue;
+            };
+            let Some(line) = self.chat_rendered_lines.get(viewport_index) else {
                 continue;
             };
             let from = if line_index == start_line {
