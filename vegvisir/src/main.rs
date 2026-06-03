@@ -391,13 +391,13 @@ fn run_headless_provider(
     if let Some(agent) = agent {
         apply_cli_command(&mut app, &format!("/agent use {agent}"), "agent")?;
     }
-    let response = app.send_headless(&prompt)?;
     if json_output {
+        let observed = app.send_headless_observed(&prompt)?;
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "status": "completed",
-                "answer": response,
+                "answer": observed.response,
                 "workspace": app.cwd.display().to_string(),
                 "session_id": app.session.session_id,
                 "provider": app.session.current_provider,
@@ -407,10 +407,12 @@ fn run_headless_provider(
                 "tokens_used": app.session.tokens_used,
                 "latency_ms": app.session.last_latency_ms,
                 "prompt_cache_key": app.session.last_prompt_cache_key,
+                "events": observed.events,
                 "mode": "provider_runtime",
             }))?
         );
     } else {
+        let response = app.send_headless(&prompt)?;
         println!("{response}");
     }
     Ok(())

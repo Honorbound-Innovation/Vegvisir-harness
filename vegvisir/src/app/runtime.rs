@@ -839,13 +839,14 @@ Next step: I should retry or continue from the last successful step instead of l
 
 fn subagent_transcript_signature(record: &SubAgentTaskRecord) -> String {
     format!(
-        "{:?}|started={:?}|finished={:?}|checkpoint={:?}|final_len={}|error={}",
+        "{:?}|started={:?}|finished={:?}|checkpoint={:?}|final_len={}|error={}|observability={}",
         record.status,
         record.started_at,
         record.finished_at,
         record.checkpoint,
         record.final_answer.as_deref().map(str::len).unwrap_or(0),
-        record.error.as_deref().unwrap_or("")
+        record.error.as_deref().unwrap_or(""),
+        serde_json::to_string(&record.observability).unwrap_or_default()
     )
 }
 
@@ -875,6 +876,57 @@ fn format_subagent_transcript_update(record: &SubAgentTaskRecord) -> String {
     if let Some(checkpoint) = &record.checkpoint {
         message.push_str("\n- checkpoint: ");
         message.push_str(&checkpoint.display().to_string());
+    }
+    if !record.observability.launch_argv.is_empty() {
+        message.push_str("\n\nSubagent launch argv:\n```text\n");
+        message.push_str(&record.observability.launch_argv.join(" "));
+        message.push_str("\n```");
+    }
+    if !record.observability.launch_env_keys.is_empty() {
+        message.push_str("\n- launch_env_keys: ");
+        message.push_str(&record.observability.launch_env_keys.join(", "));
+    }
+    if !record.observability.events.is_empty() {
+        message.push_str("\n\nSubagent observed actions:");
+        for event in &record.observability.events {
+            message.push_str(&format!("\n- {:?}", event.kind));
+            if let Some(name) = &event.name {
+                message.push_str(&format!(": {name}"));
+            }
+            if let Some(args) = &event.args {
+                message.push_str(&format!(" args={args}"));
+            }
+            if let Some(ok) = event.ok {
+                message.push_str(&format!(" ok={ok}"));
+            }
+            if let Some(summary) = &event.summary {
+                message.push_str(&format!(" summary={summary}"));
+            }
+        }
+    }
+    if !record.observability.file_changes.is_empty() {
+        message.push_str("\n\nSubagent file changes:");
+        for change in &record.observability.file_changes {
+            message.push_str(&format!(
+                "\n- {:?}: {} (before_bytes={:?}, after_bytes={:?})",
+                change.change,
+                change.path.display(),
+                change.before_bytes,
+                change.after_bytes
+            ));
+            if let Some(diff) = &change.diff {
+                message.push_str("\n```diff\n");
+                message.push_str(diff.trim());
+                message.push_str("\n```");
+            }
+        }
+    }
+    if !record.observability.notes.is_empty() {
+        message.push_str("\n\nSubagent observability notes:");
+        for note in &record.observability.notes {
+            message.push_str("\n- ");
+            message.push_str(note.trim());
+        }
     }
     if let Some(error) = &record.error {
         message.push_str("\n\nSubagent error:\n```text\n");

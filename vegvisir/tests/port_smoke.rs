@@ -8923,6 +8923,7 @@ fn application_exposes_subagent_task_board_commands() -> anyhow::Result<()> {
         checkpoint: None,
         final_answer: None,
         error: None,
+        observability: vegvisir_rust::subagents::SubAgentObservability::default(),
     }];
     fs::create_dir_all(&home)?;
     fs::write(
@@ -8982,6 +8983,7 @@ fn spawn_subagent_enforces_three_active_task_limit() -> anyhow::Result<()> {
             checkpoint: None,
             final_answer: None,
             error: None,
+            observability: vegvisir_rust::subagents::SubAgentObservability::default(),
         })
         .collect::<Vec<_>>();
     fs::write(
@@ -9047,6 +9049,7 @@ fn spawn_subagent_rejects_overlapping_active_file_scope() -> anyhow::Result<()> 
         checkpoint: None,
         final_answer: None,
         error: None,
+        observability: vegvisir_rust::subagents::SubAgentObservability::default(),
     }];
     fs::write(
         home.join("subagents.json"),

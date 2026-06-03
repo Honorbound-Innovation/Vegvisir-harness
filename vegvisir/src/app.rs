@@ -134,6 +134,12 @@ pub struct TuiApplication {
     pub last_subagent_board_poll: Option<std::time::Instant>,
 }
 
+#[derive(Clone, Debug)]
+pub struct HeadlessObservedRun {
+    pub response: String,
+    pub events: Vec<ProviderRunEvent>,
+}
+
 enum StreamEvent {
     Delta(String),
     Activity(String),
@@ -797,10 +803,38 @@ impl TuiApplication {
         self.send_headless_streaming(content, &mut |_| {})
     }
 
+    pub fn send_headless_observed(&mut self, content: &str) -> anyhow::Result<HeadlessObservedRun> {
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured_events = Arc::clone(&events);
+        let response = self.send_headless_streaming_with_event_sink(
+            content,
+            &mut |_| {},
+            Some(Arc::new(move |event| {
+                if let Ok(mut events) = captured_events.lock() {
+                    events.push(event);
+                }
+            })),
+        )?;
+        let events = events
+            .lock()
+            .map(|events| events.clone())
+            .unwrap_or_default();
+        Ok(HeadlessObservedRun { response, events })
+    }
+
     pub fn send_headless_streaming(
         &mut self,
         content: &str,
         on_delta: &mut dyn FnMut(&str),
+    ) -> anyhow::Result<String> {
+        self.send_headless_streaming_with_event_sink(content, on_delta, None)
+    }
+
+    fn send_headless_streaming_with_event_sink(
+        &mut self,
+        content: &str,
+        on_delta: &mut dyn FnMut(&str),
+        event_sink: Option<Arc<dyn Fn(ProviderRunEvent) + Send + Sync>>,
     ) -> anyhow::Result<String> {
         let mut runner = ConversationRunner {
             provider: ProviderRouter::from_registry(&self.provider_registry)
@@ -812,7 +846,7 @@ impl TuiApplication {
             models: self.models.clone(),
             tools: Some(self.tool_registry.clone()),
             tool_executor: Some(self.tool_executor.clone()),
-            event_sink: None,
+            event_sink,
             cancel_token: None,
             steering_rx: None,
         };
@@ -1897,6 +1931,29 @@ mod tests {
             checkpoint: None,
             final_answer: Some("child trace and final answer".to_string()),
             error: None,
+            observability: crate::subagents::SubAgentObservability {
+                launch_argv: vec!["vegvisir".to_string(), "run".to_string()],
+                launch_env_keys: vec!["VEGVISIR_MAX_TOOL_ROUNDS".to_string()],
+                events: vec![crate::subagents::SubAgentObservedEvent {
+                    kind: crate::subagents::SubAgentObservedEventKind::ToolStart,
+                    name: Some("write_file".to_string()),
+                    args: Some("{\"path\":\"src/lib.rs\"}".to_string()),
+                    ok: None,
+                    summary: None,
+                    detail: None,
+                }],
+                file_changes: vec![crate::subagents::SubAgentFileChange {
+                    path: std::path::PathBuf::from("src/lib.rs"),
+                    change: crate::subagents::SubAgentFileChangeKind::Modified,
+                    before_bytes: Some(4),
+                    after_bytes: Some(4),
+                    diff: Some(
+                        "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@\n-old\n+new\n"
+                            .to_string(),
+                    ),
+                }],
+                notes: vec!["snapshot ok".to_string()],
+            },
         };
         std::fs::write(
             app.subagent_board_path(),
@@ -1915,6 +1972,15 @@ mod tests {
         assert!(transcript.contains("subagent-1"));
         assert!(transcript.contains("inspect transcript logging"));
         assert!(transcript.contains("child trace and final answer"));
+        assert!(transcript.contains("Subagent launch argv:"));
+        assert!(transcript.contains("VEGVISIR_MAX_TOOL_ROUNDS"));
+        assert!(transcript.contains("Subagent observed actions:"));
+        assert!(transcript.contains("write_file"));
+        assert!(transcript.contains("Subagent file changes:"));
+        assert!(transcript.contains("Modified: src/lib.rs"));
+        assert!(transcript.contains("```diff"));
+        assert!(transcript.contains("+new"));
+        assert!(transcript.contains("snapshot ok"));
         Ok(())
     }
 

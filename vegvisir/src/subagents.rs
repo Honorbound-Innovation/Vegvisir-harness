@@ -55,6 +55,71 @@ impl SubAgentWorkBudget {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubAgentObservability {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub launch_argv: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub launch_env_keys: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub events: Vec<SubAgentObservedEvent>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file_changes: Vec<SubAgentFileChange>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+impl SubAgentObservability {
+    pub fn is_empty(&self) -> bool {
+        self.launch_argv.is_empty()
+            && self.launch_env_keys.is_empty()
+            && self.events.is_empty()
+            && self.file_changes.is_empty()
+            && self.notes.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubAgentObservedEventKind {
+    Activity,
+    ToolStart,
+    ToolEnd,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubAgentObservedEvent {
+    pub kind: SubAgentObservedEventKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ok: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubAgentFileChangeKind {
+    Created,
+    Modified,
+    Deleted,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubAgentFileChange {
+    pub path: PathBuf,
+    pub change: SubAgentFileChangeKind,
+    pub before_bytes: Option<u64>,
+    pub after_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SubAgentTaskRecord {
     pub id: String,
@@ -72,6 +137,8 @@ pub struct SubAgentTaskRecord {
     pub checkpoint: Option<PathBuf>,
     pub final_answer: Option<String>,
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "SubAgentObservability::is_empty")]
+    pub observability: SubAgentObservability,
 }
 
 impl SubAgentTaskRecord {
@@ -90,6 +157,7 @@ impl SubAgentTaskRecord {
             checkpoint: None,
             final_answer: None,
             error: None,
+            observability: SubAgentObservability::default(),
         }
     }
 }

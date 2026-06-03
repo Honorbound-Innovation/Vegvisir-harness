@@ -1,5 +1,8 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap, hash_map::DefaultHasher},
+    fs::File,
+    hash::{Hash, Hasher},
+    io::Read,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::Arc,
@@ -25,13 +28,17 @@ use crate::{
     observability::EventLogger,
     policy::RuntimePolicy,
     sandbox::WorkspaceSandbox,
-    subagents::{SubAgentStatus, SubAgentTaskRecord, SubAgentWorkBudget},
+    subagents::{
+        SubAgentFileChange, SubAgentFileChangeKind, SubAgentObservability, SubAgentObservedEvent,
+        SubAgentObservedEventKind, SubAgentStatus, SubAgentTaskRecord, SubAgentWorkBudget,
+    },
     types::{Observation, ToolCall},
 };
 
 const LIST_FILES_DEFAULT_LIMIT: usize = 500;
 const LIST_FILES_MAX_LIMIT: usize = 2_000;
 const CHATGPT_ARCHIVE_EXCERPT_CHARS: usize = 1_800;
+const SUBAGENT_DIFF_TEXT_MAX_BYTES: u64 = 1024 * 1024;
 pub const DEFAULT_ACTIVE_SUBAGENT_LIMIT: usize = 3;
 
 fn parse_skiller_forge_pass(value: Option<&str>) -> anyhow::Result<ForgePassType> {
@@ -1536,6 +1543,7 @@ pub fn build_builtin_registry_with_cms_mode_and_subagent_limit(
                 checkpoint: None,
                 final_answer: None,
                 error: None,
+                observability: SubAgentObservability::default(),
             };
             if let Err(error) = upsert_subagent_record(&board_path, record.clone()) {
                 return Observation::err(error.to_string(), "SubagentBoardError");
@@ -2000,6 +2008,7 @@ fn run_spawned_subagent(
 ) {
     record.status = SubAgentStatus::Running;
     record.started_at = Some(Utc::now());
+    let before_snapshot = snapshot_workspace_files(&workspace);
     let _ = upsert_subagent_record(&board_path, record.clone());
 
     let result = (|| -> anyhow::Result<String> {
@@ -2016,6 +2025,11 @@ fn run_spawned_subagent(
         };
         let env = subagent_child_env(&launch);
         let argv = subagent_child_argv(launch);
+        record.observability.launch_argv = std::iter::once(executable.display().to_string())
+            .chain(argv.iter().cloned())
+            .collect();
+        record.observability.launch_env_keys = env.iter().map(|(key, _)| key.clone()).collect();
+        let _ = upsert_subagent_record(&board_path, record.clone());
         let output = Command::new(&executable)
             .args(&argv)
             .envs(env.iter().map(|(key, value)| (key, value)))
@@ -2030,11 +2044,32 @@ fn run_spawned_subagent(
         let mut text = String::new();
         text.push_str(&String::from_utf8_lossy(&output.stdout));
         text.push_str(&String::from_utf8_lossy(&output.stderr));
+        record
+            .observability
+            .events
+            .extend(parse_subagent_json_observability(&text));
         if !output.status.success() {
             anyhow::bail!("{}", text.trim());
         }
         Ok(text)
     })();
+
+    let after_snapshot = snapshot_workspace_files(&workspace);
+    record.observability.file_changes = diff_workspace_snapshots(
+        &workspace,
+        before_snapshot.as_ref().ok(),
+        after_snapshot.as_ref().ok(),
+    );
+    if let Err(error) = before_snapshot {
+        record.observability.notes.push(format!(
+            "Could not snapshot workspace before subagent run: {error}"
+        ));
+    }
+    if let Err(error) = after_snapshot {
+        record.observability.notes.push(format!(
+            "Could not snapshot workspace after subagent run: {error}"
+        ));
+    }
 
     match result {
         Ok(output) => {
@@ -2050,6 +2085,190 @@ fn run_spawned_subagent(
         }
     }
     let _ = upsert_subagent_record(&board_path, record);
+}
+
+fn parse_subagent_json_observability(output: &str) -> Vec<SubAgentObservedEvent> {
+    let Ok(value) = serde_json::from_str::<Value>(output.trim()) else {
+        return Vec::new();
+    };
+    value
+        .get("events")
+        .and_then(Value::as_array)
+        .map(|events| {
+            events
+                .iter()
+                .filter_map(parse_subagent_event)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_subagent_event(event: &Value) -> Option<SubAgentObservedEvent> {
+    let kind = event.get("kind").and_then(Value::as_str)?;
+    match kind {
+        "tool_start" => Some(SubAgentObservedEvent {
+            kind: SubAgentObservedEventKind::ToolStart,
+            name: event
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            args: event
+                .get("args")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            ok: None,
+            summary: None,
+            detail: None,
+        }),
+        "tool_end" => Some(SubAgentObservedEvent {
+            kind: SubAgentObservedEventKind::ToolEnd,
+            name: event
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            args: None,
+            ok: event.get("ok").and_then(Value::as_bool),
+            summary: event
+                .get("summary")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            detail: event
+                .get("detail")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        }),
+        "activity" => Some(SubAgentObservedEvent {
+            kind: SubAgentObservedEventKind::Activity,
+            name: None,
+            args: None,
+            ok: None,
+            summary: event
+                .get("activity")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            detail: None,
+        }),
+        _ => None,
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WorkspaceFileSnapshot {
+    bytes: u64,
+    hash: u64,
+    content: Option<String>,
+}
+
+fn snapshot_workspace_files(
+    workspace: &Path,
+) -> anyhow::Result<BTreeMap<PathBuf, WorkspaceFileSnapshot>> {
+    let mut snapshot = BTreeMap::new();
+    if !workspace.exists() {
+        return Ok(snapshot);
+    }
+    for entry in WalkDir::new(workspace).into_iter().filter_map(Result::ok) {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let path = entry.path();
+        if path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::Normal(name)
+                    if name == ".git" || name == "target" || name == ".vegvisir"
+            )
+        }) {
+            continue;
+        }
+        let relative = path.strip_prefix(workspace).unwrap_or(path).to_path_buf();
+        let metadata = entry.metadata()?;
+        let bytes = metadata.len();
+        let hash = hash_file(path)?;
+        let content = if bytes <= SUBAGENT_DIFF_TEXT_MAX_BYTES {
+            std::fs::read(path)
+                .ok()
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+        } else {
+            None
+        };
+        snapshot.insert(
+            relative,
+            WorkspaceFileSnapshot {
+                bytes,
+                hash,
+                content,
+            },
+        );
+    }
+    Ok(snapshot)
+}
+
+fn hash_file(path: &Path) -> anyhow::Result<u64> {
+    let mut file = File::open(path)?;
+    let mut hasher = DefaultHasher::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        buffer[..read].hash(&mut hasher);
+    }
+    Ok(hasher.finish())
+}
+
+fn diff_workspace_snapshots(
+    _workspace: &Path,
+    before: Option<&BTreeMap<PathBuf, WorkspaceFileSnapshot>>,
+    after: Option<&BTreeMap<PathBuf, WorkspaceFileSnapshot>>,
+) -> Vec<SubAgentFileChange> {
+    let (Some(before), Some(after)) = (before, after) else {
+        return Vec::new();
+    };
+    let mut changes = Vec::new();
+    for (path, after_file) in after {
+        match before.get(path) {
+            None => changes.push(SubAgentFileChange {
+                path: path.clone(),
+                change: SubAgentFileChangeKind::Created,
+                before_bytes: None,
+                after_bytes: Some(after_file.bytes),
+                diff: after_file
+                    .content
+                    .as_ref()
+                    .map(|content| simple_unified_diff(&path.display().to_string(), "", content)),
+            }),
+            Some(before_file) if before_file != after_file => changes.push(SubAgentFileChange {
+                path: path.clone(),
+                change: SubAgentFileChangeKind::Modified,
+                before_bytes: Some(before_file.bytes),
+                after_bytes: Some(after_file.bytes),
+                diff: before_file
+                    .content
+                    .as_ref()
+                    .zip(after_file.content.as_ref())
+                    .map(|(before, after)| {
+                        simple_unified_diff(&path.display().to_string(), before, after)
+                    }),
+            }),
+            _ => {}
+        }
+    }
+    for (path, before_file) in before {
+        if !after.contains_key(path) {
+            changes.push(SubAgentFileChange {
+                path: path.clone(),
+                change: SubAgentFileChangeKind::Deleted,
+                before_bytes: Some(before_file.bytes),
+                after_bytes: None,
+                diff: before_file
+                    .content
+                    .as_ref()
+                    .map(|content| simple_unified_diff(&path.display().to_string(), content, "")),
+            });
+        }
+    }
+    changes
 }
 
 fn parse_subagent_file_scope(
@@ -2604,6 +2823,7 @@ mod skiller_tool_tests {
             checkpoint: None,
             final_answer: None,
             error: None,
+            observability: SubAgentObservability::default(),
         }];
         std::fs::write(&board_path, serde_json::to_string_pretty(&records)?)?;
         let registry =
@@ -2725,6 +2945,7 @@ mod skiller_tool_tests {
             checkpoint: None,
             final_answer: None,
             error: None,
+            observability: SubAgentObservability::default(),
         }];
         std::fs::write(&board_path, serde_json::to_string_pretty(&records)?)?;
         let registry = build_builtin_registry_with_cms_mode_and_subagent_limit(

@@ -4207,6 +4207,44 @@ pub enum ProviderRunEvent {
     },
 }
 
+impl serde::Serialize for ProviderRunEvent {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        match self {
+            ProviderRunEvent::Activity(activity) => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("kind", "activity")?;
+                map.serialize_entry("activity", activity)?;
+                map.end()
+            }
+            ProviderRunEvent::ToolStart { name, args } => {
+                let mut map = serializer.serialize_map(Some(3))?;
+                map.serialize_entry("kind", "tool_start")?;
+                map.serialize_entry("name", name)?;
+                map.serialize_entry("args", args)?;
+                map.end()
+            }
+            ProviderRunEvent::ToolEnd {
+                name,
+                ok,
+                summary,
+                detail,
+            } => {
+                let mut map = serializer.serialize_map(Some(5))?;
+                map.serialize_entry("kind", "tool_end")?;
+                map.serialize_entry("name", name)?;
+                map.serialize_entry("ok", ok)?;
+                map.serialize_entry("summary", summary)?;
+                map.serialize_entry("detail", detail)?;
+                map.end()
+            }
+        }
+    }
+}
+
 fn session_conversation_messages(session: &SessionState) -> Vec<ChatMessage> {
     let messages = session
         .messages
