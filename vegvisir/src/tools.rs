@@ -1836,20 +1836,43 @@ fn optional_nonempty_string(value: Option<&Value>) -> Option<String> {
         .map(str::to_string)
 }
 
+fn executable_exists(path: &Path) -> bool {
+    path.is_file() || path.exists()
+}
+
+fn path_lookup_executable(name: &str) -> Option<PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    std::env::split_paths(&path_var)
+        .map(|dir| dir.join(name))
+        .find(|candidate| executable_exists(candidate))
+}
+
+fn is_vegvisir_executable_name(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some("vegvisir") | Some("vegvisir-rust")
+    )
+}
+
 fn resolve_vegvisir_executable(workspace: &Path) -> anyhow::Result<PathBuf> {
-    if let Some(path) = std::env::var_os("VEGVISIR_BIN").map(PathBuf::from)
-        && path.exists()
-    {
-        return Ok(path);
+    let mut checked = Vec::<PathBuf>::new();
+
+    if let Some(path) = std::env::var_os("VEGVISIR_BIN").map(PathBuf::from) {
+        checked.push(path.clone());
+        if executable_exists(&path) {
+            return Ok(path);
+        }
     }
 
     if let Ok(current) = std::env::current_exe() {
-        if current.exists() {
+        checked.push(current.clone());
+        if executable_exists(&current) && is_vegvisir_executable_name(&current) {
             return Ok(current);
         }
         if let Some(parent) = current.parent() {
             for candidate in [parent.join("vegvisir"), parent.join("vegvisir-rust")] {
-                if candidate.exists() {
+                checked.push(candidate.clone());
+                if executable_exists(&candidate) {
                     return Ok(candidate);
                 }
             }
@@ -1858,16 +1881,49 @@ fn resolve_vegvisir_executable(workspace: &Path) -> anyhow::Result<PathBuf> {
 
     for candidate in [
         workspace.join("target/debug/vegvisir"),
-        workspace.join("vegvisir/target/debug/vegvisir"),
+        workspace.join("target/debug/vegvisir-rust"),
         workspace.join("target/release/vegvisir"),
+        workspace.join("target/release/vegvisir-rust"),
+        workspace.join("vegvisir/target/debug/vegvisir"),
+        workspace.join("vegvisir/target/debug/vegvisir-rust"),
         workspace.join("vegvisir/target/release/vegvisir"),
+        workspace.join("vegvisir/target/release/vegvisir-rust"),
     ] {
-        if candidate.exists() {
+        checked.push(candidate.clone());
+        if executable_exists(&candidate) {
             return Ok(candidate);
         }
     }
 
-    Ok(PathBuf::from("vegvisir"))
+    for name in ["vegvisir", "vegvisir-rust"] {
+        if let Some(candidate) = path_lookup_executable(name) {
+            checked.push(candidate.clone());
+            return Ok(candidate);
+        }
+    }
+
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        for candidate in [
+            home.join(".local/bin/vegvisir"),
+            home.join(".local/bin/vegvisir-rust"),
+            home.join(".cargo/bin/vegvisir"),
+            home.join(".cargo/bin/vegvisir-rust"),
+        ] {
+            checked.push(candidate.clone());
+            if executable_exists(&candidate) {
+                return Ok(candidate);
+            }
+        }
+    }
+
+    anyhow::bail!(
+        "could not resolve Vegvisir executable for subagent launch; set VEGVISIR_BIN to the vegvisir/vegvisir-rust binary. Checked: {}",
+        checked
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2223,7 +2279,43 @@ mod skiller_tool_tests {
     use super::*;
     use crate::memory::VegvisirCmsConfig;
     use serde_json::json;
+    use std::ffi::{OsStr, OsString};
     use tempfile::TempDir;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe {
+                std::env::remove_var(key);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            unsafe {
+                if let Some(previous) = &self.previous {
+                    std::env::set_var(self.key, previous);
+                } else {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
 
     #[test]
     fn skiller_tools_compile_validate_route_and_load_cli_help() -> anyhow::Result<()> {
@@ -2378,6 +2470,49 @@ mod skiller_tool_tests {
             optional_nonempty_string(Some(&json!("openai-sso"))),
             Some("openai-sso".to_string())
         );
+    }
+
+    #[test]
+    fn resolve_vegvisir_executable_honors_explicit_env() -> anyhow::Result<()> {
+        let workspace = TempDir::new()?;
+        let bin = workspace.path().join("custom-vegvisir");
+        std::fs::write(&bin, "#!/bin/sh\n")?;
+        let guard = EnvVarGuard::set("VEGVISIR_BIN", &bin);
+
+        assert_eq!(resolve_vegvisir_executable(workspace.path())?, bin);
+        drop(guard);
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_vegvisir_executable_finds_workspace_release_binary() -> anyhow::Result<()> {
+        let workspace = TempDir::new()?;
+        let bin = workspace.path().join("target/release/vegvisir-rust");
+        std::fs::create_dir_all(bin.parent().expect("bin parent"))?;
+        std::fs::write(&bin, "#!/bin/sh\n")?;
+        let _bin_guard = EnvVarGuard::remove("VEGVISIR_BIN");
+        let _path_guard = EnvVarGuard::set("PATH", "");
+
+        assert_eq!(resolve_vegvisir_executable(workspace.path())?, bin);
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_vegvisir_executable_reports_checked_paths_when_missing() -> anyhow::Result<()> {
+        let workspace = TempDir::new()?;
+        let fake_home = workspace.path().join("home-without-vegvisir");
+        std::fs::create_dir_all(&fake_home)?;
+        let _bin_guard = EnvVarGuard::set("VEGVISIR_BIN", workspace.path().join("missing-bin"));
+        let _path_guard = EnvVarGuard::set("PATH", "");
+        let _home_guard = EnvVarGuard::set("HOME", &fake_home);
+
+        let error = resolve_vegvisir_executable(workspace.path()).expect_err("missing binary");
+        let message = error.to_string();
+        assert!(message.contains("could not resolve Vegvisir executable"));
+        assert!(message.contains("VEGVISIR_BIN"));
+        assert!(message.contains("missing-bin"));
+        assert!(message.contains("target/release/vegvisir-rust"));
+        Ok(())
     }
 
     #[test]
