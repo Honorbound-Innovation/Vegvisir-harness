@@ -49,6 +49,22 @@ use vegvisir_rust::{
     ui::layout::visible_width,
 };
 
+fn test_model_with_metadata(
+    provider: &str,
+    name: &str,
+    metadata: BTreeMap<String, Value>,
+) -> ModelInfo {
+    ModelInfo {
+        name: name.to_string(),
+        provider: provider.to_string(),
+        display_name: None,
+        context_window: Some(8192),
+        supports_streaming: true,
+        enabled: true,
+        metadata,
+    }
+}
+
 #[derive(Clone, Debug)]
 struct TestToolCallingProvider {
     config: ProviderConfig,
@@ -109,6 +125,28 @@ impl ProviderAdapter for RecordingProvider {
         selected_provider: &str,
     ) -> anyhow::Result<String> {
         *self.selected_provider.lock().unwrap() = Some(selected_provider.to_string());
+        Ok("ok".to_string())
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ModelRecordingProvider {
+    config: ProviderConfig,
+    models: Arc<Mutex<Vec<ModelInfo>>>,
+}
+
+impl ProviderAdapter for ModelRecordingProvider {
+    fn config(&self) -> &ProviderConfig {
+        &self.config
+    }
+
+    fn complete(
+        &self,
+        _messages: &[ChatMessage],
+        model: &ModelInfo,
+        _selected_provider: &str,
+    ) -> anyhow::Result<String> {
+        self.models.lock().unwrap().push(model.clone());
         Ok("ok".to_string())
     }
 }
@@ -6735,8 +6773,9 @@ ECM memory: blue lantern"
     );
     assert!(responses.get("cache_control").is_none());
 
-    let google =
-        vegvisir_rust::provider::test_support::google_generate_content_payload_for_test(&messages);
+    let google = vegvisir_rust::provider::test_support::google_generate_content_payload_for_test(
+        &messages, &model,
+    );
     assert!(
         google["systemInstruction"]["parts"][0]["text"]
             .as_str()
@@ -6814,8 +6853,9 @@ fn provider_payloads_preserve_image_attachments_across_wire_formats() -> anyhow:
             })
     );
 
-    let google =
-        vegvisir_rust::provider::test_support::google_generate_content_payload_for_test(&messages);
+    let google = vegvisir_rust::provider::test_support::google_generate_content_payload_for_test(
+        &messages, &model,
+    );
     assert!(
         google["contents"][0]["parts"]
             .as_array()
@@ -7969,14 +8009,16 @@ fn openai_tool_loop_returns_last_observations_on_round_limit() -> anyhow::Result
     })];
     let mut execute_tool = |_: &str, _: Map<String, Value>| "alpha.txt".to_string();
 
-    let result = openai_tool_loop(
-        "gpt-test",
-        &messages,
-        &tools,
-        &mut execute_tool,
-        &mut post,
-        2,
-    )?;
+    let model = ModelInfo {
+        name: "gpt-test".to_string(),
+        provider: "openai".to_string(),
+        display_name: None,
+        context_window: Some(8192),
+        supports_streaming: true,
+        enabled: true,
+        metadata: Default::default(),
+    };
+    let result = openai_tool_loop(&model, &messages, &tools, &mut execute_tool, &mut post, 2)?;
 
     assert!(result.contains("Tool-call round limit reached"));
     assert!(result.contains("alpha.txt"));
@@ -8042,14 +8084,16 @@ fn openai_tool_loop_defers_sibling_tool_calls_until_completion_is_observed() -> 
         "file contents".to_string()
     };
 
-    let result = openai_tool_loop(
-        "gpt-test",
-        &messages,
-        &tools,
-        &mut execute_tool,
-        &mut post,
-        4,
-    )?;
+    let model = ModelInfo {
+        name: "gpt-test".to_string(),
+        provider: "openai".to_string(),
+        display_name: None,
+        context_window: Some(8192),
+        supports_streaming: true,
+        enabled: true,
+        metadata: Default::default(),
+    };
+    let result = openai_tool_loop(&model, &messages, &tools, &mut execute_tool, &mut post, 4)?;
 
     assert_eq!(result, "done");
     assert_eq!(executed, vec!["read_file".to_string()]);
@@ -8157,14 +8201,16 @@ fn openai_tool_loop_truncates_tool_observation_before_resend() -> anyhow::Result
     })];
     let mut execute_tool = |_: &str, _: Map<String, Value>| "z".repeat(200 * 1024);
 
-    let result = openai_tool_loop(
-        "gpt-test",
-        &messages,
-        &tools,
-        &mut execute_tool,
-        &mut post,
-        2,
-    )?;
+    let model = ModelInfo {
+        name: "gpt-test".to_string(),
+        provider: "openai".to_string(),
+        display_name: None,
+        context_window: Some(8192),
+        supports_streaming: true,
+        enabled: true,
+        metadata: Default::default(),
+    };
+    let result = openai_tool_loop(&model, &messages, &tools, &mut execute_tool, &mut post, 2)?;
 
     assert_eq!(result, "done");
     let captured = payloads.lock().unwrap();
@@ -8257,14 +8303,16 @@ fn openai_tool_loop_repairs_markdown_wrapped_tool_arguments_and_compacts_observa
         format!("{}ERROR: important tail", "z".repeat(80 * 1024))
     };
 
-    let result = openai_tool_loop(
-        "gpt-test",
-        &messages,
-        &tools,
-        &mut execute_tool,
-        &mut post,
-        2,
-    )?;
+    let model = ModelInfo {
+        name: "gpt-test".to_string(),
+        provider: "openai".to_string(),
+        display_name: None,
+        context_window: Some(8192),
+        supports_streaming: true,
+        enabled: true,
+        metadata: Default::default(),
+    };
+    let result = openai_tool_loop(&model, &messages, &tools, &mut execute_tool, &mut post, 2)?;
 
     assert_eq!(result, "done");
     assert_eq!(seen_args.get("path"), Some(&json!("alpha.txt")));
@@ -9474,5 +9522,189 @@ fn bridge_models_list_filters_requested_provider_aliases() -> anyhow::Result<()>
         .unwrap_or_else(|| panic!("model/list response missing data array: {response:?}"));
     assert!(data.iter().any(|model| model["id"] == "openai/gpt-5.4"));
     assert!(!data.iter().any(|model| model["id"] == "demo-local"));
+    Ok(())
+}
+
+#[test]
+fn fast_command_toggles_supported_openai_and_rejects_unsupported_models() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+    app.session.current_provider = "openai".to_string();
+    app.session.current_model = "gpt-5.5".to_string();
+
+    let status = app.execute_command("/fast")?.unwrap();
+    assert!(status.contains("Fast mode: off"));
+    assert!(status.contains("Supported for active model: yes"));
+
+    let enabled = app.execute_command("/fast on")?.unwrap();
+    assert!(enabled.contains("Fast mode enabled"));
+    assert!(app.session.fast_mode);
+
+    let disabled = app.execute_command("/fast off")?.unwrap();
+    assert!(disabled.contains("Fast mode disabled"));
+    assert!(!app.session.fast_mode);
+
+    app.session.current_provider = "demo".to_string();
+    app.session.current_model = "demo-local".to_string();
+    let rejected = app.execute_command("/fast on")?.unwrap();
+    assert!(rejected.contains("Fast mode is not supported"));
+    assert!(!app.session.fast_mode);
+    Ok(())
+}
+
+#[test]
+fn effort_command_sets_selectable_reasoning_override() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+    app.session.current_provider = "openai".to_string();
+    app.session.current_model = "gpt-5.5".to_string();
+
+    let status = app.execute_command("/effort")?.unwrap();
+    assert!(status.contains("Selectable values: minimal, low, medium, high"));
+
+    let selected = app.execute_command("/effort low")?.unwrap();
+    assert!(selected.contains("Reasoning effort set to low"));
+    assert_eq!(app.session.current_reasoning_level.as_deref(), Some("low"));
+
+    let models = app.execute_command("/models")?.unwrap();
+    assert!(models.contains("reasoning=low"));
+
+    let invalid = app.execute_command("/effort extreme")?.unwrap();
+    assert!(invalid.contains("Unknown reasoning effort"));
+
+    let reset = app.execute_command("/effort default")?.unwrap();
+    assert!(reset.contains("Reasoning effort reset to model default"));
+    assert_eq!(app.session.current_reasoning_level, None);
+    Ok(())
+}
+
+#[test]
+fn conversation_runner_applies_session_reasoning_override_to_provider_model() -> anyhow::Result<()>
+{
+    let recorded_models = Arc::new(Mutex::new(Vec::new()));
+    let mut runner = ConversationRunner {
+        provider: ModelRecordingProvider {
+            config: ProviderConfig {
+                name: "openai".to_string(),
+                display_name: None,
+                kind: "test".to_string(),
+                api_key_env: None,
+                base_url: None,
+                auth_type: "none".to_string(),
+                enabled: true,
+                metadata: Default::default(),
+            },
+            models: recorded_models.clone(),
+        },
+        models: ModelRegistry::default_catalog()?,
+        tools: None,
+        tool_executor: None,
+        event_sink: None,
+        cancel_token: None,
+        steering_rx: None,
+    };
+    let workspace = tempdir()?;
+    let mut session =
+        vegvisir_rust::core::SessionState::new(workspace.path(), Vec::new(), Vec::new());
+    session.current_provider = "openai".to_string();
+    session.current_model = "gpt-5.5".to_string();
+    session.current_reasoning_level = Some("minimal".to_string());
+
+    runner.send(&mut session, "hello")?;
+
+    let models = recorded_models.lock().unwrap();
+    assert_eq!(
+        models[0]
+            .metadata
+            .get("reasoning_level")
+            .and_then(Value::as_str),
+        Some("minimal")
+    );
+    Ok(())
+}
+
+#[test]
+fn provider_payloads_apply_model_reasoning_settings_across_wire_formats() -> anyhow::Result<()> {
+    let messages = vec![ChatMessage {
+        role: "user".to_string(),
+        content: "solve carefully".to_string(),
+        attachments: Vec::new(),
+        created_at: Utc::now(),
+    }];
+
+    let openai_model = test_model_with_metadata(
+        "openai",
+        "gpt-test",
+        BTreeMap::from([
+            ("reasoning_level".to_string(), json!("high")),
+            ("reasoning_summary".to_string(), json!(true)),
+        ]),
+    );
+    let responses =
+        vegvisir_rust::provider::test_support::responses_payload_for_test(&messages, &openai_model);
+    assert_eq!(responses.pointer("/reasoning/effort"), Some(&json!("high")));
+    assert_eq!(
+        responses.pointer("/reasoning/summary"),
+        Some(&json!("auto"))
+    );
+
+    let anthropic_model = test_model_with_metadata(
+        "anthropic",
+        "claude-test",
+        BTreeMap::from([("reasoning_level".to_string(), json!("medium"))]),
+    );
+    let anthropic = vegvisir_rust::provider::test_support::anthropic_messages_payload_for_test(
+        &messages,
+        &anthropic_model,
+    );
+    assert_eq!(anthropic.pointer("/thinking/type"), Some(&json!("enabled")));
+    assert_eq!(
+        anthropic.pointer("/thinking/budget_tokens"),
+        Some(&json!(8192))
+    );
+
+    let google_model = test_model_with_metadata(
+        "google",
+        "gemini-test",
+        BTreeMap::from([("reasoning_level".to_string(), json!("low"))]),
+    );
+    let google = vegvisir_rust::provider::test_support::google_generate_content_payload_for_test(
+        &messages,
+        &google_model,
+    );
+    assert_eq!(
+        google.pointer("/generationConfig/thinkingConfig/thinkingBudget"),
+        Some(&json!(1024))
+    );
+
+    Ok(())
+}
+
+#[test]
+fn openai_tool_loop_applies_model_reasoning_effort() -> anyhow::Result<()> {
+    let payloads = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let payloads_for_post = Arc::clone(&payloads);
+    let mut post = move |payload: Value| -> anyhow::Result<Value> {
+        payloads_for_post.lock().unwrap().push(payload);
+        Ok(json!({"choices": [{"message": {"content": "done"}}]}))
+    };
+    let messages = vec![ChatMessage {
+        role: "user".to_string(),
+        content: "inspect".to_string(),
+        attachments: Vec::new(),
+        created_at: Utc::now(),
+    }];
+    let model = test_model_with_metadata(
+        "openai",
+        "gpt-test",
+        BTreeMap::from([("reasoning_effort".to_string(), json!("minimal"))]),
+    );
+    let mut execute_tool = |_: &str, _: Map<String, Value>| "unused".to_string();
+
+    let result = openai_tool_loop(&model, &messages, &[], &mut execute_tool, &mut post, 1)?;
+
+    assert_eq!(result, "done");
+    let captured = payloads.lock().unwrap();
+    assert_eq!(captured[0].get("reasoning_effort"), Some(&json!("minimal")));
     Ok(())
 }

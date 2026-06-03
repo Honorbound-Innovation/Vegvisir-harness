@@ -506,7 +506,7 @@ impl ProviderAdapter for OpenAICompatibleProviderAdapter {
             Ok(send_provider_json(request, payload, &self.config.name)?.into_string()?)
         };
         openai_tool_loop_streaming(
-            model.name.as_str(),
+            model,
             messages,
             tools,
             execute_tool,
@@ -575,6 +575,7 @@ impl OpenAICompatibleProviderAdapter {
             "messages": messages,
             "stream": true
         });
+        apply_chat_reasoning_settings(&mut payload, model);
         let store = provider_store_enabled(&self.config);
         if store {
             payload["store"] = json!(true);
@@ -616,6 +617,7 @@ impl OpenAICompatibleProviderAdapter {
             "messages": messages,
             "stream": stream
         });
+        apply_chat_reasoning_settings(&mut payload, model);
         let store = provider_store_enabled(&self.config);
         if store {
             payload["store"] = json!(true);
@@ -668,6 +670,7 @@ impl OpenAICompatibleProviderAdapter {
             "messages": messages,
             "stream": false
         });
+        apply_chat_reasoning_settings(&mut payload, model);
         let store = provider_store_enabled(&self.config);
         if store {
             payload["store"] = json!(true);
@@ -843,7 +846,7 @@ impl ProviderAdapter for HBSEOpenAICompatibleProviderAdapter {
             Ok(body)
         };
         openai_tool_loop_streaming(
-            model.name.as_str(),
+            model,
             messages,
             tools,
             execute_tool,
@@ -924,6 +927,7 @@ impl HBSEOpenAICompatibleProviderAdapter {
             "messages": messages,
             "stream": true,
         });
+        apply_chat_reasoning_settings(&mut payload, model);
         let store = provider_store_enabled(&self.config);
         if store {
             payload["store"] = json!(true);
@@ -979,6 +983,7 @@ impl HBSEOpenAICompatibleProviderAdapter {
             "messages": messages,
             "stream": stream,
         });
+        apply_chat_reasoning_settings(&mut payload, model);
         let store = provider_store_enabled(&self.config);
         if store {
             payload["store"] = json!(true);
@@ -1042,6 +1047,7 @@ impl HBSEOpenAICompatibleProviderAdapter {
             "messages": messages,
             "stream": false,
         });
+        apply_chat_reasoning_settings(&mut payload, model);
         let store = provider_store_enabled(&self.config);
         if store {
             payload["store"] = json!(true);
@@ -1188,7 +1194,7 @@ impl ProviderAdapter for HBSEAzureOpenAIProviderAdapter {
             Ok(body)
         };
         openai_tool_loop_streaming(
-            model.name.as_str(),
+            model,
             messages,
             tools,
             execute_tool,
@@ -1216,6 +1222,7 @@ impl HBSEAzureOpenAIProviderAdapter {
             "messages": messages,
             "stream": stream,
         });
+        apply_chat_reasoning_settings(&mut payload, model);
         let store = provider_store_enabled(&self.config);
         if store {
             payload["store"] = json!(true);
@@ -1400,6 +1407,7 @@ fn anthropic_messages_payload(messages: &[ChatMessage], model: &ModelInfo) -> Va
     if !system_prompt.is_empty() {
         payload["system"] = anthropic_cached_text_blocks(&system_prompt);
     }
+    apply_anthropic_reasoning_settings(&mut payload, model);
     payload
 }
 
@@ -1493,6 +1501,7 @@ fn anthropic_tool_loop(
             "tools": anthropic_tools.clone(),
             "tool_choice": {"type": "auto"},
         });
+        apply_anthropic_reasoning_settings(&mut payload, model);
         if !system_prompt.is_empty() {
             payload["system"] = anthropic_cached_text_blocks(&system_prompt);
         }
@@ -1715,7 +1724,7 @@ impl ProviderAdapter for GoogleProviderAdapter {
             .base_url
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("Provider {} has no base_url", self.config.name))?;
-        let payload = google_generate_content_payload(messages);
+        let payload = google_generate_content_payload(messages, model);
         let url = format!(
             "{}/models/{}:streamGenerateContent?alt=sse&key={}",
             base_url.trim_end_matches('/'),
@@ -1759,7 +1768,14 @@ impl ProviderAdapter for GoogleProviderAdapter {
                 .set("Accept", "application/json");
             Ok(send_provider_json(request, payload, &self.config.name)?.into_json()?)
         };
-        google_tool_loop(messages, tools, execute_tool, &mut post, max_tool_rounds())
+        google_tool_loop(
+            messages,
+            model,
+            tools,
+            execute_tool,
+            &mut post,
+            max_tool_rounds(),
+        )
     }
 }
 
@@ -1827,7 +1843,14 @@ impl ProviderAdapter for HBSEGoogleProviderAdapter {
             )?;
             provider_http_json_body(&self.config.name, response)
         };
-        google_tool_loop(messages, tools, execute_tool, &mut post, max_tool_rounds())
+        google_tool_loop(
+            messages,
+            model,
+            tools,
+            execute_tool,
+            &mut post,
+            max_tool_rounds(),
+        )
     }
 }
 
@@ -1850,7 +1873,7 @@ impl HBSEGoogleProviderAdapter {
                 model.name
             ),
             "text/event-stream",
-            serde_json::to_string(&google_generate_content_payload(messages))?,
+            serde_json::to_string(&google_generate_content_payload(messages, model))?,
             json!({"Content-Type": "application/json", "Accept": "text/event-stream"}),
         )?;
         let status = response
@@ -1874,7 +1897,7 @@ impl HBSEGoogleProviderAdapter {
     }
 }
 
-fn google_generate_content_payload(messages: &[ChatMessage]) -> Value {
+fn google_generate_content_payload(messages: &[ChatMessage], model: &ModelInfo) -> Value {
     let system_prompt = messages
         .iter()
         .filter(|message| message.role == "system")
@@ -1900,6 +1923,7 @@ fn google_generate_content_payload(messages: &[ChatMessage]) -> Value {
     if !system_prompt.is_empty() {
         payload["systemInstruction"] = json!({"parts": [{"text": system_prompt}]});
     }
+    apply_google_reasoning_settings(&mut payload, model);
     payload
 }
 
@@ -1926,12 +1950,13 @@ fn google_message_parts(message: &ChatMessage) -> Vec<Value> {
 
 fn google_tool_loop(
     messages: &[ChatMessage],
+    model: &ModelInfo,
     tools: &[Value],
     execute_tool: &mut dyn FnMut(&str, Map<String, Value>) -> String,
     post: &mut dyn FnMut(Value) -> anyhow::Result<Value>,
     max_tool_rounds: usize,
 ) -> anyhow::Result<String> {
-    let base_payload = google_generate_content_payload(messages);
+    let base_payload = google_generate_content_payload(messages, model);
     let system_instruction = base_payload.get("systemInstruction").cloned();
     let mut contents = base_payload
         .get("contents")
@@ -2885,12 +2910,97 @@ fn responses_payload(messages: &[ChatMessage], model: &ModelInfo) -> Value {
         "stream": true,
         "include": [],
     });
-    if should_request_reasoning_summary(model) {
-        payload["reasoning"] = json!({
-            "summary": "auto"
+    apply_responses_reasoning_settings(&mut payload, model);
+    payload
+}
+
+fn model_reasoning_level(model: &ModelInfo) -> Option<&str> {
+    model
+        .metadata
+        .get("reasoning_level")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn model_reasoning_effort(model: &ModelInfo) -> Option<&str> {
+    model
+        .metadata
+        .get("reasoning_effort")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| match model_reasoning_level(model) {
+            Some("minimal") | Some("low") | Some("medium") | Some("high") => {
+                model_reasoning_level(model)
+            }
+            _ => None,
+        })
+}
+
+fn apply_responses_reasoning_settings(payload: &mut Value, model: &ModelInfo) {
+    let summary = should_request_reasoning_summary(model);
+    let effort = model_reasoning_effort(model);
+    if !summary && effort.is_none() {
+        return;
+    }
+    let mut reasoning = Map::new();
+    if summary {
+        reasoning.insert("summary".to_string(), json!("auto"));
+    }
+    if let Some(effort) = effort {
+        reasoning.insert("effort".to_string(), json!(effort));
+    }
+    payload["reasoning"] = Value::Object(reasoning);
+}
+
+fn apply_chat_reasoning_settings(payload: &mut Value, model: &ModelInfo) {
+    if let Some(effort) = model_reasoning_effort(model) {
+        payload["reasoning_effort"] = json!(effort);
+    }
+}
+
+fn anthropic_thinking_budget_tokens(model: &ModelInfo) -> Option<u64> {
+    model
+        .metadata
+        .get("thinking_budget_tokens")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+        .or_else(|| match model_reasoning_level(model) {
+            Some("low") => Some(4_096),
+            Some("medium") => Some(8_192),
+            Some("high") => Some(16_384),
+            _ => None,
+        })
+}
+
+fn apply_anthropic_reasoning_settings(payload: &mut Value, model: &ModelInfo) {
+    if let Some(budget) = anthropic_thinking_budget_tokens(model) {
+        payload["thinking"] = json!({
+            "type": "enabled",
+            "budget_tokens": budget,
         });
     }
-    payload
+}
+
+fn google_thinking_budget(model: &ModelInfo) -> Option<i64> {
+    model
+        .metadata
+        .get("thinking_budget")
+        .and_then(Value::as_i64)
+        .or_else(|| match model_reasoning_level(model) {
+            Some("minimal") => Some(0),
+            Some("low") => Some(1_024),
+            Some("medium") => Some(8_192),
+            Some("high") => Some(32_768),
+            _ => None,
+        })
+}
+
+fn apply_google_reasoning_settings(payload: &mut Value, model: &ModelInfo) {
+    if let Some(budget) = google_thinking_budget(model) {
+        payload["generationConfig"]["thinkingConfig"]["thinkingBudget"] = json!(budget);
+    }
 }
 
 fn parse_response_sse_text_reader<R: BufRead>(
@@ -3734,7 +3844,7 @@ fn normalize_json_schema(value: &Value) -> Value {
 }
 
 pub fn openai_tool_loop(
-    model_name: &str,
+    model: &ModelInfo,
     messages: &[ChatMessage],
     tools: &[Value],
     execute_tool: &mut dyn FnMut(&str, Map<String, Value>) -> String,
@@ -3745,14 +3855,15 @@ pub fn openai_tool_loop(
     let payload_tools = tools.iter().map(openai_tool_schema).collect::<Vec<_>>();
     let mut observations = Vec::<(String, String)>::new();
     for _ in 0..max_tool_rounds {
-        let payload = json!({
-            "model": model_name,
+        let mut payload = json!({
+            "model": model.name,
             "messages": wire_messages,
             "stream": false,
             "tools": payload_tools,
             "tool_choice": "auto",
             "parallel_tool_calls": false,
         });
+        apply_chat_reasoning_settings(&mut payload, model);
         enforce_openai_payload_budget(&payload)?;
         let data = post(payload)?;
         let message = data
@@ -3804,7 +3915,7 @@ pub fn openai_tool_loop(
 }
 
 pub fn openai_tool_loop_streaming(
-    model_name: &str,
+    model: &ModelInfo,
     messages: &[ChatMessage],
     tools: &[Value],
     execute_tool: &mut dyn FnMut(&str, Map<String, Value>) -> String,
@@ -3816,14 +3927,15 @@ pub fn openai_tool_loop_streaming(
     let payload_tools = tools.iter().map(openai_tool_schema).collect::<Vec<_>>();
     let mut observations = Vec::<(String, String)>::new();
     for _ in 0..max_tool_rounds {
-        let payload = json!({
-            "model": model_name,
+        let mut payload = json!({
+            "model": model.name,
             "messages": wire_messages,
             "stream": true,
             "tools": payload_tools,
             "tool_choice": "auto",
             "parallel_tool_calls": false,
         });
+        apply_chat_reasoning_settings(&mut payload, model);
         enforce_openai_payload_budget(&payload)?;
         let body = post_stream(payload)?;
         let (content, tool_calls) = parse_openai_tool_sse_with_callback(&body, on_delta)?;
@@ -4277,6 +4389,59 @@ fn inject_steering_into_observation(
     )
 }
 
+fn model_with_session_reasoning(model: &ModelInfo, session: &SessionState) -> ModelInfo {
+    let mut model = model.clone();
+    if let Some(level) = session
+        .current_reasoning_level
+        .as_deref()
+        .map(str::trim)
+        .filter(|level| !level.is_empty())
+    {
+        model
+            .metadata
+            .insert("reasoning_level".to_string(), json!(level));
+        model.metadata.remove("reasoning_effort");
+        model.metadata.remove("thinking_budget_tokens");
+        model.metadata.remove("thinking_budget");
+    }
+    if session.fast_mode && model_supports_fast_mode(&model) {
+        apply_fast_mode_to_model(&mut model);
+    }
+    model
+}
+
+fn model_supports_fast_mode(model: &ModelInfo) -> bool {
+    model
+        .metadata
+        .get("fast_capable")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        && matches!(model.provider.as_str(), "openai" | "anthropic")
+}
+
+fn apply_fast_mode_to_model(model: &mut ModelInfo) {
+    model.metadata.insert("fast_mode".to_string(), json!(true));
+    match model.provider.as_str() {
+        "openai" => {
+            model
+                .metadata
+                .insert("reasoning_level".to_string(), json!("minimal"));
+            model
+                .metadata
+                .insert("reasoning_effort".to_string(), json!("minimal"));
+            model.metadata.remove("thinking_budget_tokens");
+            model.metadata.remove("thinking_budget");
+        }
+        "anthropic" => {
+            model.metadata.remove("reasoning_level");
+            model.metadata.remove("reasoning_effort");
+            model.metadata.remove("thinking_budget_tokens");
+            model.metadata.remove("thinking_budget");
+        }
+        _ => {}
+    }
+}
+
 impl<P: ProviderAdapter> ConversationRunner<P> {
     pub fn send(&mut self, session: &mut SessionState, content: &str) -> anyhow::Result<String> {
         self.send_with_context(session, content, None)
@@ -4296,19 +4461,21 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
         });
         session.status = "streaming".to_string();
         session.activity = "thinking through the request".to_string();
-        let model = self
+        let catalog_model = self
             .models
             .get(&session.current_model)
             .ok_or_else(|| anyhow::anyhow!("Unknown model: {}", session.current_model))?;
         if !self
             .models
-            .is_model_allowed_for_provider(model, &session.current_provider)
+            .is_model_allowed_for_provider(catalog_model, &session.current_provider)
         {
-            session.current_provider = model.provider.clone();
+            session.current_provider = catalog_model.provider.clone();
         }
-        if let Some(limit) = model.context_window {
+        if let Some(limit) = catalog_model.context_window {
             session.context_limit = limit;
         }
+        let model = model_with_session_reasoning(catalog_model, session);
+        let model = &model;
         let mut provider_messages = session_conversation_messages(session);
         if !session.system_prompt.is_empty() {
             provider_messages.insert(
@@ -4466,19 +4633,21 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
         });
         session.status = "streaming".to_string();
         session.activity = "using CMS-v2 prepared model request".to_string();
-        let model = self
+        let catalog_model = self
             .models
             .get(&session.current_model)
             .ok_or_else(|| anyhow::anyhow!("Unknown model: {}", session.current_model))?;
         if !self
             .models
-            .is_model_allowed_for_provider(model, &session.current_provider)
+            .is_model_allowed_for_provider(catalog_model, &session.current_provider)
         {
-            session.current_provider = model.provider.clone();
+            session.current_provider = catalog_model.provider.clone();
         }
-        if let Some(limit) = model.context_window {
+        if let Some(limit) = catalog_model.context_window {
             session.context_limit = limit;
         }
+        let model = model_with_session_reasoning(catalog_model, session);
+        let model = &model;
         self.emit_event(ProviderRunEvent::Activity(
             "using CMS-v2 prepared model request".to_string(),
         ));
@@ -4777,8 +4946,11 @@ pub mod test_support {
         anthropic_messages_payload(messages, model)
     }
 
-    pub fn google_generate_content_payload_for_test(messages: &[ChatMessage]) -> Value {
-        google_generate_content_payload(messages)
+    pub fn google_generate_content_payload_for_test(
+        messages: &[ChatMessage],
+        model: &ModelInfo,
+    ) -> Value {
+        google_generate_content_payload(messages, model)
     }
 
     pub fn parse_tool_arguments_for_test(value: Option<&Value>) -> Map<String, Value> {
@@ -4823,6 +4995,8 @@ pub mod test_support {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
     use std::sync::Mutex;
 
@@ -4973,6 +5147,59 @@ mod tests {
         );
         let responses = responses_payload(&messages, &model);
         assert!(responses.get("cache_control").is_none());
+    }
+
+    #[test]
+    fn session_fast_mode_minimizes_supported_openai_reasoning() {
+        let model = ModelInfo {
+            name: "gpt-fast".to_string(),
+            provider: "openai".to_string(),
+            display_name: None,
+            context_window: Some(400000),
+            supports_streaming: true,
+            enabled: true,
+            metadata: BTreeMap::from([
+                ("fast_capable".to_string(), json!(true)),
+                ("reasoning_level".to_string(), json!("high")),
+                ("reasoning_summary".to_string(), json!(true)),
+            ]),
+        };
+        let mut session = SessionState::new("/tmp/workspace", Vec::new(), Vec::new());
+        session.fast_mode = true;
+
+        let fast_model = model_with_session_reasoning(&model, &session);
+
+        assert_eq!(
+            fast_model
+                .metadata
+                .get("reasoning_effort")
+                .and_then(Value::as_str),
+            Some("minimal")
+        );
+        assert_eq!(fast_model.metadata.get("fast_mode"), Some(&json!(true)));
+    }
+
+    #[test]
+    fn session_fast_mode_disables_supported_anthropic_thinking() {
+        let model = ModelInfo {
+            name: "claude-fast".to_string(),
+            provider: "anthropic".to_string(),
+            display_name: None,
+            context_window: Some(200000),
+            supports_streaming: true,
+            enabled: true,
+            metadata: BTreeMap::from([
+                ("fast_capable".to_string(), json!(true)),
+                ("reasoning_level".to_string(), json!("high")),
+            ]),
+        };
+        let mut session = SessionState::new("/tmp/workspace", Vec::new(), Vec::new());
+        session.fast_mode = true;
+
+        let fast_model = model_with_session_reasoning(&model, &session);
+
+        assert!(anthropic_thinking_budget_tokens(&fast_model).is_none());
+        assert_eq!(fast_model.metadata.get("fast_mode"), Some(&json!(true)));
     }
 
     #[test]

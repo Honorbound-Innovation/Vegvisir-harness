@@ -21,6 +21,10 @@ pub(crate) struct WorkspaceIndex {
 pub(crate) struct ProviderSelection {
     pub(crate) provider: String,
     pub(crate) model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) reasoning_level: Option<String>,
+    #[serde(default)]
+    pub(crate) fast_mode: bool,
 }
 
 impl TuiApplication {
@@ -67,6 +71,14 @@ impl TuiApplication {
                 .and_then(Value::as_str)
                 .unwrap_or("demo-local")
                 .to_string(),
+            reasoning_level: defaults
+                .get("current_reasoning_level")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            fast_mode: defaults
+                .get("fast_mode")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         }
     }
 
@@ -75,6 +87,8 @@ impl TuiApplication {
         if self.provider_registry.get(&selection.provider).is_some() {
             self.session.current_provider = selection.provider;
         }
+        self.session.current_reasoning_level = selection.reasoning_level.clone();
+        self.session.fast_mode = selection.fast_mode;
         match self.models.get(&selection.model) {
             Some(model)
                 if self
@@ -121,6 +135,8 @@ impl TuiApplication {
             ProviderSelection {
                 provider: self.session.current_provider.clone(),
                 model: self.session.current_model.clone(),
+                reasoning_level: self.session.current_reasoning_level.clone(),
+                fast_mode: self.session.fast_mode,
             },
         );
         self.save_workspace_index(&index)

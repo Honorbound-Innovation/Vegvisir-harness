@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::core::ModelInfo;
 
 impl TuiApplication {
     pub(crate) fn model_request_command(&mut self, args: &[String]) -> anyhow::Result<String> {
@@ -63,7 +64,25 @@ impl TuiApplication {
                 .context_window
                 .map(|value| format!("{value} ctx"))
                 .unwrap_or_else(|| "ctx unknown".to_string());
-            lines.push(format!("  {active} {:<34} {context}", model.name));
+            let reasoning = effective_reasoning_level_for_model(
+                model,
+                self.session.current_reasoning_level.as_deref(),
+            )
+            .map(|level| format!(" reasoning={level}"))
+            .unwrap_or_default();
+            let fast = if supports_fast_mode(model, &self.session.current_provider) {
+                if self.session.fast_mode {
+                    " fast=on"
+                } else {
+                    " fast=supported"
+                }
+            } else {
+                ""
+            };
+            lines.push(format!(
+                "  {active} {:<34} {context}{reasoning}{fast}",
+                model.name
+            ));
         }
         lines.push(
             "Use /provider <name> to switch provider. Use /model <name> to switch model."
@@ -77,7 +96,21 @@ impl TuiApplication {
 
     pub(crate) fn select_model(&mut self, args: &[String]) -> anyhow::Result<String> {
         if args.is_empty() {
-            return Ok(format!("Current model: {}", self.session.current_model));
+            let reasoning = self
+                .models
+                .get(&self.session.current_model)
+                .and_then(|model| {
+                    effective_reasoning_level_for_model(
+                        model,
+                        self.session.current_reasoning_level.as_deref(),
+                    )
+                })
+                .map(|level| format!("\nReasoning level: {level}"))
+                .unwrap_or_default();
+            return Ok(format!(
+                "Current model: {}{}",
+                self.session.current_model, reasoning
+            ));
         }
         let global = args
             .iter()
@@ -138,6 +171,108 @@ impl TuiApplication {
                 "project override"
             }
         ))
+    }
+
+    pub(crate) fn effort_command(&mut self, args: &[String]) -> anyhow::Result<String> {
+        const LEVELS: [&str; 4] = ["minimal", "low", "medium", "high"];
+        if args.is_empty() || matches!(args[0].as_str(), "show" | "status") {
+            let Some(model) = self.models.get(&self.session.current_model) else {
+                return Ok(format!(
+                    "Current model {} is not in the model registry. Usage: /effort <minimal|low|medium|high|default>",
+                    self.session.current_model
+                ));
+            };
+            let catalog = model
+                .metadata
+                .get("reasoning_level")
+                .and_then(Value::as_str);
+            let effective = effective_reasoning_level_for_model(
+                model,
+                self.session.current_reasoning_level.as_deref(),
+            )
+            .unwrap_or("unset");
+            let override_label = self
+                .session
+                .current_reasoning_level
+                .as_deref()
+                .unwrap_or("none");
+            return Ok(format!(
+                "Reasoning effort for {}: {effective}\nSession override: {override_label}\nCatalog default: {}\nSelectable values: {}\nUsage: /effort <minimal|low|medium|high|default>",
+                self.session.current_model,
+                catalog.unwrap_or("unset"),
+                LEVELS.join(", ")
+            ));
+        }
+        let requested = args[0].trim().to_ascii_lowercase();
+        if matches!(requested.as_str(), "default" | "reset" | "clear" | "unset") {
+            self.session.current_reasoning_level = None;
+            self.save_workspace_provider_override()?;
+            let effective = self
+                .models
+                .get(&self.session.current_model)
+                .and_then(|model| effective_reasoning_level_for_model(model, None))
+                .unwrap_or("unset");
+            return Ok(format!(
+                "Reasoning effort reset to model default for {}. Effective effort: {effective}.",
+                self.session.current_model
+            ));
+        }
+        if !LEVELS.contains(&requested.as_str()) {
+            return Ok(format!(
+                "Unknown reasoning effort: {requested}\nSelectable values: {}\nUsage: /effort <minimal|low|medium|high|default>",
+                LEVELS.join(", ")
+            ));
+        }
+        self.session.current_reasoning_level = Some(requested.clone());
+        self.save_workspace_provider_override()?;
+        Ok(format!(
+            "Reasoning effort set to {requested} for this workspace/session. Active model: {}.",
+            self.session.current_model
+        ))
+    }
+
+    pub(crate) fn fast_command(&mut self, args: &[String]) -> anyhow::Result<String> {
+        let Some(model) = self.models.get(&self.session.current_model) else {
+            return Ok(format!(
+                "Current model {} is not in the model registry. Usage: /fast [on|off|status]",
+                self.session.current_model
+            ));
+        };
+        let supported = supports_fast_mode(model, &self.session.current_provider);
+        if args.is_empty() || matches!(args[0].as_str(), "show" | "status") {
+            return Ok(format!(
+                "Fast mode: {}\nActive provider: {}\nActive model: {}\nSupported for active model: {}\nUsage: /fast [on|off|status]",
+                if self.session.fast_mode { "on" } else { "off" },
+                self.session.current_provider,
+                self.session.current_model,
+                if supported { "yes" } else { "no" }
+            ));
+        }
+        let requested = args[0].trim().to_ascii_lowercase();
+        match requested.as_str() {
+            "on" | "enable" | "enabled" | "true" => {
+                if !supported {
+                    return Ok(format!(
+                        "Fast mode is not supported for provider {} model {}. Supported fast mode providers are OpenAI and Anthropic models marked fast_capable in the model catalog.",
+                        self.session.current_provider, self.session.current_model
+                    ));
+                }
+                self.session.fast_mode = true;
+                self.save_workspace_provider_override()?;
+                Ok(format!(
+                    "Fast mode enabled for this workspace/session. Active model: {} via {}.",
+                    self.session.current_model, self.session.current_provider
+                ))
+            }
+            "off" | "disable" | "disabled" | "false" => {
+                self.session.fast_mode = false;
+                self.save_workspace_provider_override()?;
+                Ok("Fast mode disabled for this workspace/session.".to_string())
+            }
+            _ => Ok(format!(
+                "Unknown fast mode setting: {requested}\nUsage: /fast [on|off|status]"
+            )),
+        }
     }
 
     pub(crate) fn provider_command(&mut self, args: &[String]) -> anyhow::Result<String> {
@@ -641,6 +776,36 @@ impl TuiApplication {
             Err(error) => vec![format!("fail evals/golden error={error}")],
         }
     }
+}
+
+fn supports_fast_mode(model: &ModelInfo, selected_provider: &str) -> bool {
+    model
+        .metadata
+        .get("fast_capable")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        && matches!(model.provider.as_str(), "openai" | "anthropic")
+        && matches!(
+            selected_provider,
+            "openai" | "anthropic" | "openai-sso" | "openai-hbse" | "anthropic-hbse"
+        )
+}
+
+fn effective_reasoning_level_for_model<'a>(
+    model: &'a ModelInfo,
+    override_level: Option<&'a str>,
+) -> Option<&'a str> {
+    override_level
+        .map(str::trim)
+        .filter(|level| !level.is_empty())
+        .or_else(|| {
+            model
+                .metadata
+                .get("reasoning_level")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|level| !level.is_empty())
+        })
 }
 
 fn api_key_notice(provider: &ProviderConfig) -> String {

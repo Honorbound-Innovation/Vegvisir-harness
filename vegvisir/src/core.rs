@@ -459,6 +459,10 @@ pub struct SessionState {
     pub title: String,
     pub current_provider: String,
     pub current_model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_reasoning_level: Option<String>,
+    #[serde(default)]
+    pub fast_mode: bool,
     pub system_prompt: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_agent_id: Option<String>,
@@ -512,6 +516,8 @@ impl SessionState {
             title: "untitled".to_string(),
             current_provider: "demo".to_string(),
             current_model: "demo-local".to_string(),
+            current_reasoning_level: None,
+            fast_mode: false,
             system_prompt: String::new(),
             active_agent_id: None,
             active_agent_name: None,

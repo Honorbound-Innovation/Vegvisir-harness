@@ -472,6 +472,8 @@ fn should_show_info_overlay(command: &str, response: &str) -> bool {
             | "/skills"
             | "/context"
             | "/models"
+            | "/effort"
+            | "/fast"
             | "/providers"
             | "/sessions"
             | "/projects"
@@ -605,6 +607,16 @@ impl TuiApplication {
         if let Some(model) = defaults.get("current_model").and_then(Value::as_str) {
             session.current_model = model.to_string();
         }
+        if let Some(level) = defaults
+            .get("current_reasoning_level")
+            .and_then(Value::as_str)
+        {
+            session.current_reasoning_level = Some(level.to_string());
+        }
+        session.fast_mode = defaults
+            .get("fast_mode")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         if let Some(prompt) = defaults.get("system_prompt").and_then(Value::as_str) {
             session.system_prompt = prompt.to_string();
         }
@@ -945,6 +957,12 @@ impl TuiApplication {
             "current_model".to_string(),
             json!(self.session.current_model),
         );
+        if let Some(level) = &self.session.current_reasoning_level {
+            data.insert("current_reasoning_level".to_string(), json!(level));
+        } else {
+            data.remove("current_reasoning_level");
+        }
+        data.insert("fast_mode".to_string(), json!(self.session.fast_mode));
         data.insert(
             "system_prompt".to_string(),
             json!(strip_persona_from_system_prompt(

@@ -530,6 +530,8 @@ Examples:
 /provider [name]
 /models
 /model [name]
+/effort [minimal|low|medium|high|default]
+/fast [on|off|status]
 /auth [provider]
 /config status
 /config user <id>
@@ -543,10 +545,12 @@ Examples:
 /provider openai-hbse
 /models
 /model gpt-5.5
+/effort high
+/fast on
 /config status
 ```
 
-Provider and model choices can be global defaults or agent-specific defaults depending on whether an agent profile is active.
+Provider and model choices can be global defaults or agent-specific defaults depending on whether an agent profile is active. `/models` shows the effective reasoning level when the catalog defines one or a session override is active. Use `/effort` to show or set a workspace/session reasoning-effort override. Selectable values are `minimal`, `low`, `medium`, and `high`; `/effort default` clears the override and returns to the model catalog default. Use `/fast on` or `/fast off` to toggle workspace/session fast mode for supported OpenAI and Anthropic catalog models; `/fast status` reports whether the active model supports it. Fast mode minimizes OpenAI reasoning effort and disables Anthropic extended thinking for `fast_capable` models. Model metadata can define provider-specific reasoning controls: `reasoning_level` as the portable setting, `reasoning_effort` for OpenAI-compatible chat payloads, `thinking_budget_tokens` for Anthropic thinking payloads, `thinking_budget` for Google Gemini thinking payloads, and `fast_capable` for `/fast`.
 
 ## Memory Commands
 

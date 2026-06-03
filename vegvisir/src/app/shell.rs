@@ -104,6 +104,54 @@ impl TuiApplication {
                 })
                 .collect();
         }
+        if raw.starts_with("/fast ") || raw == "/fast " {
+            if trailing_space && parts.len() >= 2 {
+                return Vec::new();
+            }
+            let prefix = if trailing_space {
+                ""
+            } else {
+                parts.get(1).copied().unwrap_or("")
+            };
+            return ["on", "off", "status"]
+                .into_iter()
+                .filter(|mode| mode.starts_with(prefix))
+                .map(|mode| {
+                    let description = match mode {
+                        "on" => "enable fast mode for supported models".to_string(),
+                        "off" => "disable fast mode".to_string(),
+                        _ => "show fast mode status".to_string(),
+                    };
+                    Suggestion::new(mode.to_string(), description, Some(format!("/fast {mode}")))
+                })
+                .collect();
+        }
+        if raw.starts_with("/effort ") || raw == "/effort " {
+            if trailing_space && parts.len() >= 2 {
+                return Vec::new();
+            }
+            let prefix = if trailing_space {
+                ""
+            } else {
+                parts.get(1).copied().unwrap_or("")
+            };
+            return ["minimal", "low", "medium", "high", "default"]
+                .into_iter()
+                .filter(|level| level.starts_with(prefix))
+                .map(|level| {
+                    let description = if level == "default" {
+                        "use model catalog default".to_string()
+                    } else {
+                        format!("set reasoning effort to {level}")
+                    };
+                    Suggestion::new(
+                        level.to_string(),
+                        description,
+                        Some(format!("/effort {level}")),
+                    )
+                })
+                .collect();
+        }
         if raw.starts_with("/model ")
             || raw == "/model "
             || raw.starts_with("/models ")
@@ -250,6 +298,8 @@ impl TuiApplication {
             "/model-request" => self.model_request_command(&args)?,
             "/models" => self.models_command(&args)?,
             "/model" => self.select_model(&args)?,
+            "/effort" => self.effort_command(&args)?,
+            "/fast" => self.fast_command(&args)?,
             "/provider" => self.provider_command(&args)?,
             "/providers" => self.providers_command(),
             "/auth" => self.auth_command(&args),

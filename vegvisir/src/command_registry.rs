@@ -267,6 +267,18 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
         cmd("/models", "show available models", "/models", &[]),
         cmd("/model", "select active model", "/model [name]", &[]),
         cmd(
+            "/effort",
+            "show or set model reasoning effort",
+            "/effort [minimal|low|medium|high|default]",
+            &["/reasoning", "/reasoning-effort"],
+        ),
+        cmd(
+            "/fast",
+            "enable or disable fast mode for supported OpenAI/Anthropic models",
+            "/fast [on|off|status]",
+            &[],
+        ),
+        cmd(
             "/provider",
             "select active provider",
             "/provider [name]",
