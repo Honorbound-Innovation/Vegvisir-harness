@@ -1456,8 +1456,10 @@ pub fn build_builtin_registry_with_cms_mode_and_subagent_limit(
         false,
     ))?;
 
+    let subagent_board_path = subagent_data_root.join("subagents.json");
     let subagent_root = sandbox.root.clone();
     let subagent_sandbox = sandbox.clone();
+    let spawn_subagent_board_path = subagent_board_path.clone();
     registry.register(Tool::new(
         "spawn_subagent",
         "Delegate a bounded task to a background Vegvisir child agent and record it on the subagent board.",
@@ -1504,7 +1506,7 @@ pub fn build_builtin_registry_with_cms_mode_and_subagent_limit(
                 );
             }
 
-            let board_path = subagent_data_root.join("subagents.json");
+            let board_path = spawn_subagent_board_path.clone();
             match active_subagent_count(&board_path) {
                 Ok(active) if active >= active_subagent_limit => {
                     return Observation::err(
@@ -1588,6 +1590,163 @@ pub fn build_builtin_registry_with_cms_mode_and_subagent_limit(
                 "work_budget": "object"
             }
         }),
+        false,
+    ))?;
+
+    let subagents_list_board_path = subagent_board_path.clone();
+    registry.register(Tool::new(
+        "subagents_list",
+        "List subagent task board records visible to the current Vegvisir session.",
+        Arc::new(move |args| {
+            let status_filter = optional_nonempty_string(args.get("status"))
+                .map(|value| value.to_ascii_lowercase());
+            let limit = args
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|value| value as usize)
+                .unwrap_or(50)
+                .clamp(1, 500);
+            let mut records = match load_subagent_board_records(&subagents_list_board_path) {
+                Ok(records) => records,
+                Err(error) => return Observation::err(error.to_string(), "SubagentBoardError"),
+            };
+            records.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+            if let Some(status_filter) = status_filter {
+                records.retain(|record| subagent_status_label(&record.status) == status_filter);
+            }
+            let total_records = records.len();
+            let truncated = total_records > limit;
+            records.truncate(limit);
+            let mut data = Map::new();
+            data.insert("board_path".to_string(), json!(subagents_list_board_path));
+            data.insert("records".to_string(), json!(records));
+            data.insert("total_records".to_string(), json!(total_records));
+            data.insert("output_truncated".to_string(), json!(truncated));
+            let content = if records.is_empty() {
+                "No subagent task records.".to_string()
+            } else {
+                records
+                    .iter()
+                    .map(format_subagent_record_summary)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            Observation {
+                ok: true,
+                content,
+                data,
+                error: None,
+            }
+        }),
+        json!({"properties": {"status": "string", "limit": "integer"}}),
+        false,
+    ))?;
+
+    let subagents_show_board_path = subagent_board_path.clone();
+    registry.register(Tool::new(
+        "subagents_show",
+        "Show one subagent task board record by id or name.",
+        Arc::new(move |args| {
+            let Some(id_or_name) = args
+                .get("id_or_name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+            else {
+                return Observation::err("Missing id_or_name", "ValueError");
+            };
+            if id_or_name.is_empty() {
+                return Observation::err("id_or_name must not be empty", "ValueError");
+            }
+            let records = match load_subagent_board_records(&subagents_show_board_path) {
+                Ok(records) => records,
+                Err(error) => return Observation::err(error.to_string(), "SubagentBoardError"),
+            };
+            let Some(record) = find_subagent_record_in(records, id_or_name) else {
+                return Observation::err(
+                    format!("Unknown subagent task: {id_or_name}"),
+                    "NotFound",
+                );
+            };
+            let mut data = Map::new();
+            data.insert("board_path".to_string(), json!(subagents_show_board_path));
+            data.insert("record".to_string(), json!(record));
+            Observation {
+                ok: true,
+                content: match serde_json::to_string_pretty(&record) {
+                    Ok(content) => content,
+                    Err(error) => return Observation::err(error.to_string(), "SerializationError"),
+                },
+                data,
+                error: None,
+            }
+        }),
+        json!({"required": ["id_or_name"], "properties": {"id_or_name": "string"}}),
+        false,
+    ))?;
+
+    let subagents_cancel_board_path = subagent_board_path;
+    registry.register(Tool::new(
+        "subagents_cancel",
+        "Cancel one queued or running subagent task by id or name on the subagent board.",
+        Arc::new(move |args| {
+            let Some(id_or_name) = args
+                .get("id_or_name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+            else {
+                return Observation::err("Missing id_or_name", "ValueError");
+            };
+            if id_or_name.is_empty() {
+                return Observation::err("id_or_name must not be empty", "ValueError");
+            }
+            let mut records = match load_subagent_board_records(&subagents_cancel_board_path) {
+                Ok(records) => records,
+                Err(error) => return Observation::err(error.to_string(), "SubagentBoardError"),
+            };
+            let Some(record) = records
+                .iter_mut()
+                .find(|record| record.id == id_or_name || record.name == id_or_name)
+            else {
+                return Observation::err(
+                    format!("Unknown subagent task: {id_or_name}"),
+                    "NotFound",
+                );
+            };
+            if matches!(
+                record.status,
+                SubAgentStatus::Completed | SubAgentStatus::Failed | SubAgentStatus::Cancelled
+            ) {
+                let mut data = Map::new();
+                data.insert("board_path".to_string(), json!(subagents_cancel_board_path));
+                data.insert("record".to_string(), json!(record.clone()));
+                return Observation {
+                    ok: true,
+                    content: format!(
+                        "Subagent task {} is already {:?}.",
+                        record.id, record.status
+                    ),
+                    data,
+                    error: None,
+                };
+            }
+            record.status = SubAgentStatus::Cancelled;
+            record.finished_at = Some(Utc::now());
+            let cancelled = record.clone();
+            if let Err(error) = save_subagent_board_records(&subagents_cancel_board_path, &records)
+            {
+                return Observation::err(error.to_string(), "SubagentBoardError");
+            }
+            let mut data = Map::new();
+            data.insert("board_path".to_string(), json!(subagents_cancel_board_path));
+            data.insert("record".to_string(), json!(cancelled.clone()));
+            Observation {
+                ok: true,
+                content: format!("Cancelled subagent task {}.", cancelled.id),
+                data,
+                error: None,
+            }
+        }),
+        json!({"required": ["id_or_name"], "properties": {"id_or_name": "string"}}),
         false,
     ))?;
 
@@ -1868,6 +2027,59 @@ fn parse_subagent_file_scope(
         }
     }
     Ok(scope)
+}
+
+fn load_subagent_board_records(path: &Path) -> anyhow::Result<Vec<SubAgentTaskRecord>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    Ok(serde_json::from_str::<Vec<SubAgentTaskRecord>>(
+        &std::fs::read_to_string(path)?,
+    )?)
+}
+
+fn save_subagent_board_records(path: &Path, records: &[SubAgentTaskRecord]) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, serde_json::to_string_pretty(records)?)?;
+    Ok(())
+}
+
+fn find_subagent_record_in(
+    records: Vec<SubAgentTaskRecord>,
+    id_or_name: &str,
+) -> Option<SubAgentTaskRecord> {
+    records
+        .into_iter()
+        .find(|record| record.id == id_or_name || record.name == id_or_name)
+}
+
+fn subagent_status_label(status: &SubAgentStatus) -> &'static str {
+    match status {
+        SubAgentStatus::Queued => "queued",
+        SubAgentStatus::Running => "running",
+        SubAgentStatus::Completed => "completed",
+        SubAgentStatus::Failed => "failed",
+        SubAgentStatus::Cancelled => "cancelled",
+    }
+}
+
+fn format_subagent_record_summary(record: &SubAgentTaskRecord) -> String {
+    format!(
+        "{}  name={} status={} workspace={} scope={} goal={}",
+        record.id,
+        record.name,
+        subagent_status_label(&record.status),
+        record.workspace.display(),
+        record
+            .file_scope
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(","),
+        record.goal
+    )
 }
 
 fn validate_subagent_file_scope_available(
@@ -2230,6 +2442,91 @@ mod skiller_tool_tests {
         );
         assert_eq!(yolo[0], "--json");
         assert_eq!(yolo[1], "--dangerously-bypass-approvals-and-sandbox");
+    }
+
+    #[test]
+    fn subagent_board_tools_list_show_and_cancel_records() -> anyhow::Result<()> {
+        let workspace = TempDir::new()?;
+        let cms_config = VegvisirCmsConfig::for_workspace(workspace.path());
+        let board_path = cms_config
+            .db_path
+            .parent()
+            .expect("cms db parent")
+            .join("subagents.json");
+        std::fs::create_dir_all(board_path.parent().expect("board parent"))?;
+        let now = Utc::now();
+        let records = vec![SubAgentTaskRecord {
+            id: "task-1".to_string(),
+            name: "planner".to_string(),
+            workspace: workspace.path().to_path_buf(),
+            goal: "Inspect subagent visibility".to_string(),
+            file_scope: vec![workspace.path().join("vegvisir/src/subagents.rs")],
+            work_budget: SubAgentWorkBudget::default(),
+            status: SubAgentStatus::Running,
+            created_at: now,
+            started_at: Some(now),
+            finished_at: None,
+            checkpoint: None,
+            final_answer: None,
+            error: None,
+        }];
+        std::fs::write(&board_path, serde_json::to_string_pretty(&records)?)?;
+        let registry =
+            build_builtin_registry_with_cms_and_mode(workspace.path(), cms_config, true)?;
+        let mut executor = ToolExecutor {
+            registry,
+            guardrails: GuardrailEngine {
+                policy: crate::guardrails::PermissionPolicy {
+                    allow_risky_tools: true,
+                    require_human_approval: false,
+                    bypass_approvals_and_sandbox: true,
+                    ..crate::guardrails::PermissionPolicy::default()
+                },
+                approvals: crate::guardrails::ApprovalLedger::default(),
+            },
+            runtime_policy: RuntimePolicy::default(),
+            logger: EventLogger::new(None),
+        };
+
+        for name in ["subagents_list", "subagents_show", "subagents_cancel"] {
+            let tool = executor.registry.get(name)?;
+            assert!(!tool.risky, "{name} should be inspect/control, not risky");
+        }
+
+        let listed = executor.execute(ToolCall {
+            name: "subagents_list".to_string(),
+            args: serde_json::from_value(json!({"status": "running"}))?,
+        });
+        assert!(listed.ok, "{}", listed.content);
+        assert!(listed.content.contains("task-1"));
+        assert!(listed.content.contains("status=running"));
+        assert_eq!(listed.data.get("total_records"), Some(&json!(1)));
+
+        let shown = executor.execute(ToolCall {
+            name: "subagents_show".to_string(),
+            args: serde_json::from_value(json!({"id_or_name": "planner"}))?,
+        });
+        assert!(shown.ok, "{}", shown.content);
+        assert!(shown.content.contains("Inspect subagent visibility"));
+        assert_eq!(
+            shown.data.get("record").and_then(|record| record.get("id")),
+            Some(&json!("task-1"))
+        );
+
+        let cancelled = executor.execute(ToolCall {
+            name: "subagents_cancel".to_string(),
+            args: serde_json::from_value(json!({"id_or_name": "task-1"}))?,
+        });
+        assert!(cancelled.ok, "{}", cancelled.content);
+        assert!(cancelled.content.contains("Cancelled subagent task task-1"));
+
+        let shown_after = executor.execute(ToolCall {
+            name: "subagents_show".to_string(),
+            args: serde_json::from_value(json!({"id_or_name": "planner"}))?,
+        });
+        assert!(shown_after.ok, "{}", shown_after.content);
+        assert!(shown_after.content.contains("\"status\": \"cancelled\""));
+        Ok(())
     }
 
     #[test]
