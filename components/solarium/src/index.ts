@@ -12,7 +12,7 @@ export {
 } from "./browser/profile-store.js";
 export { browse, type BrowseOptions } from "./agent/actions.js";
 export { AgentSession, runActions, type RunActionsOptions } from "./agent/session.js";
-export { ObservationRecorder } from "./agent/observations.js";
+export { ObservationRecorder, redactSensitiveObservedFormInputs, redactSensitiveObservedInputs } from "./agent/observations.js";
 export { inspectPage } from "./agent/inspect.js";
 export { planActionsFromInspectResult, type PlanActionsOptions } from "./agent/plan.js";
 export { crawl } from "./security/crawler.js";

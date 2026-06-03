@@ -82,7 +82,7 @@ function validateJobShape(value: unknown, issues: SolariumValidationIssue[]): vo
     issues.push({ path: "$.scopePath", message: "crawl jobs require scope or scopePath" });
   }
 
-  if (mode === "owasp-audit" && job.options && typeof job.options === "object" && "owaspProfile" in job.options && !["passive", "strict-headers", "active-authorized", "top10-passive", "top10-active-authorized", "top10-passive", "top10-active-authorized"].includes(String((job.options as Record<string, unknown>).owaspProfile))) {
+  if (mode === "owasp-audit" && job.options && typeof job.options === "object" && "owaspProfile" in job.options && !["passive", "strict-headers", "active-authorized", "top10-passive", "top10-active-authorized"].includes(String((job.options as Record<string, unknown>).owaspProfile))) {
     issues.push({ path: "$.options.owaspProfile", message: "owaspProfile must be passive, strict-headers, active-authorized, top10-passive, or top10-active-authorized" });
   }
 

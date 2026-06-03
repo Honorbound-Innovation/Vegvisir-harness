@@ -9,13 +9,15 @@ import {
   validateActions,
   summarizeAgentAction,
   renderSessionMarkdownReport,
+  renderSessionHtmlReport,
   renderAuditMarkdownReport,
   renderAuditHtmlReport,
   renderGraphqlAuditMarkdownReport,
   renderGraphqlAuditHtmlReport,
   renderOwaspAuditMarkdownReport,
   renderOwaspAuditHtmlReport,
-  owaspAudit
+  owaspAudit,
+  redactSensitiveObservedInputs
 } from "../dist/index.js";
 
 test("hostMatches supports exact hosts case-insensitively", () => {
@@ -48,6 +50,22 @@ test("validateScopePolicy rejects malformed scope policies", () => {
   assert.throws(() => validateScopePolicy({ allowedHosts: ["https://example.com"] }), /not a full URL/);
   assert.throws(() => validateScopePolicy({ allowedHosts: ["example.com"], maxRequestsPerMinute: 0 }), /positive number/);
   assert.deepEqual(validateScopePolicy({ allowedHosts: ["EXAMPLE.com"] }).allowedHosts, ["example.com"]);
+});
+
+
+test("redactSensitiveObservedInputs redacts sensitive fields by default", () => {
+  const inputs = redactSensitiveObservedInputs([
+    { name: "username", id: "user", type: "text", placeholder: "User", value: "malice", required: false, disabled: false },
+    { name: "password", id: "password", type: "password", placeholder: "Password", value: "not-for-logs", required: true, disabled: false },
+    { name: "apiToken", id: "token", type: "text", placeholder: "API token", value: "token-value", required: false, disabled: false }
+  ]);
+
+  assert.equal(inputs[0].value, "malice");
+  assert.equal(inputs[0].valueRedacted, undefined);
+  assert.equal(inputs[1].value, "[redacted]");
+  assert.equal(inputs[1].valueRedacted, true);
+  assert.equal(inputs[2].value, "[redacted]");
+  assert.equal(inputs[2].valueRedacted, true);
 });
 
 test("validateActions accepts all current action primitives", () => {
@@ -91,6 +109,18 @@ test("validateSolariumConfig infers actions and scope kinds", () => {
   const scopeResult = validateSolariumConfig({ allowedHosts: ["example.com"] });
   assert.equal(scopeResult.ok, true);
   assert.equal(scopeResult.kind, "scope");
+});
+
+
+test("validateSolariumConfig accepts OWASP Top 10 job profiles", () => {
+  const result = validateSolariumConfig({
+    mode: "owasp-audit",
+    url: "https://example.com",
+    scope: { allowedHosts: ["example.com"], authorizationNote: "Authorized test" },
+    options: { owaspProfile: "top10-active-authorized" }
+  });
+
+  assert.equal(result.ok, true);
 });
 
 test("summarizeAgentAction redacts typed text length and includes new waits", () => {
@@ -138,6 +168,40 @@ test("renderSessionMarkdownReport describes new action types", () => {
   assert.match(report, /Step 2: waitForSelector/);
 });
 
+
+
+test("session reports include failed-action evidence paths", () => {
+  const result = {
+    sessionId: "failure-evidence-session",
+    startedAt: "2025-01-01T00:00:00.000Z",
+    finishedAt: "2025-01-01T00:00:01.000Z",
+    ok: false,
+    steps: [
+      {
+        index: 0,
+        action: { type: "click", selector: "#missing" },
+        startedAt: "2025-01-01T00:00:00.000Z",
+        finishedAt: "2025-01-01T00:00:01.000Z",
+        ok: false,
+        url: "https://example.com",
+        failureEvidence: {
+          screenshotPath: ".solarium/sessions/test/step-0-failure.png",
+          observationPath: ".solarium/sessions/test/step-0-failure.observation.json",
+          htmlPath: ".solarium/sessions/test/step-0-failure.html"
+        },
+        error: "selector not found"
+      }
+    ]
+  };
+
+  const markdown = renderSessionMarkdownReport(result);
+  assert.match(markdown, /Failure screenshot/);
+  assert.match(markdown, /step-0-failure\.observation\.json/);
+
+  const html = renderSessionHtmlReport(result);
+  assert.match(html, /Failure screenshot/);
+  assert.match(html, /step-0-failure\.html/);
+});
 
 test("audit and GraphQL audit render Markdown and HTML reports", () => {
   const baseFinding = {

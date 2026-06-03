@@ -17,7 +17,7 @@ import { createWorkflowSeedFromFiles } from "../skills/workflow-seed.js";
 import { replayEvents } from "../reporting/replay.js";
 import { getBuiltInProfile, listBuiltInProfiles } from "../browser/profile-store.js";
 import { validateSolariumConfig } from "../config/validate.js";
-import type { AgentAction, BrowserEngine, BrowserProfileName, InspectResult } from "../types.js";
+import type { AgentAction, BrowserEngine, BrowserProfileName, InspectResult, LaunchOptions, ObservationOptions } from "../types.js";
 
 export interface JsonRpcServerOptions {
   input?: Readable;
@@ -71,11 +71,14 @@ const tools: ToolDefinition[] = [
       engine: engineSchema(),
       profile: profileSchema(),
       headless: { type: "boolean", default: true },
+      ...launchOptionSchemaProperties(),
       screenshotPath: { type: "string" },
       extractText: { type: "boolean" },
       observe: { type: "boolean" },
       maxTextChars: { type: "number", minimum: 0 },
-      maxElements: { type: "number", minimum: 0 }
+      maxElements: { type: "number", minimum: 0 },
+      redactInputValues: { type: "boolean", default: true },
+      sensitiveSelectors: { type: "array", items: { type: "string" } }
     }, ["url"])
   },
   {
@@ -87,10 +90,14 @@ const tools: ToolDefinition[] = [
       engine: engineSchema(),
       profile: profileSchema(),
       headless: { type: "boolean", default: true },
+      ...launchOptionSchemaProperties(),
+      screenshotPath: { type: "string" },
       includeObservation: { type: "boolean" },
       maxCandidates: { type: "number", minimum: 0 },
       maxTextChars: { type: "number", minimum: 0 },
-      maxElements: { type: "number", minimum: 0 }
+      maxElements: { type: "number", minimum: 0 },
+      redactInputValues: { type: "boolean", default: true },
+      sensitiveSelectors: { type: "array", items: { type: "string" } }
     }, ["url"])
   },
   {
@@ -113,12 +120,18 @@ const tools: ToolDefinition[] = [
       engine: engineSchema(),
       profile: profileSchema(),
       headless: { type: "boolean", default: true },
+      ...launchOptionSchemaProperties(),
       sessionId: { type: "string" },
       evidenceDir: { type: "string" },
       observeAfterEachAction: { type: "boolean" },
       continueOnError: { type: "boolean" },
+      captureFailureScreenshot: { type: "boolean" },
+      captureFailureObservation: { type: "boolean" },
+      captureFailureHtml: { type: "boolean" },
       maxTextChars: { type: "number", minimum: 0 },
-      maxElements: { type: "number", minimum: 0 }
+      maxElements: { type: "number", minimum: 0 },
+      redactInputValues: { type: "boolean", default: true },
+      sensitiveSelectors: { type: "array", items: { type: "string" } }
     }, ["actions"])
   },
   {
@@ -131,6 +144,7 @@ const tools: ToolDefinition[] = [
       engine: engineSchema(),
       profile: profileSchema(),
       headless: { type: "boolean", default: true },
+      ...launchOptionSchemaProperties(),
       maxIterations: { type: "number", minimum: 0 },
       actionsPerIteration: { type: "number", minimum: 0 },
       evidenceDir: { type: "string" },
@@ -151,6 +165,7 @@ const tools: ToolDefinition[] = [
       engine: engineSchema(),
       profile: profileSchema(),
       headless: { type: "boolean", default: true },
+      ...launchOptionSchemaProperties(),
       maxPages: { type: "number", minimum: 0 },
       maxDepth: { type: "number", minimum: 0 },
       includeObservations: { type: "boolean" },
@@ -167,9 +182,12 @@ const tools: ToolDefinition[] = [
       engine: engineSchema(),
       profile: profileSchema(),
       headless: { type: "boolean", default: true },
+      ...launchOptionSchemaProperties(),
       includeObservation: { type: "boolean" },
       maxTextChars: { type: "number", minimum: 0 },
-      maxElements: { type: "number", minimum: 0 }
+      maxElements: { type: "number", minimum: 0 },
+      redactInputValues: { type: "boolean", default: true },
+      sensitiveSelectors: { type: "array", items: { type: "string" } }
     }, ["url"])
   },
   {
@@ -178,16 +196,19 @@ const tools: ToolDefinition[] = [
     inputSchema: objectSchema({
       url: { type: "string" },
       scope: scopeSchema(),
-      owaspProfile: { type: "string", enum: ["passive", "strict-headers", "active-authorized", "top10-passive", "top10-active-authorized", "top10-passive", "top10-active-authorized"], default: "passive" },
+      owaspProfile: { type: "string", enum: ["passive", "strict-headers", "active-authorized", "top10-passive", "top10-active-authorized"], default: "passive" },
       maxActiveRequests: { type: "number", minimum: 0, maximum: 25 },
       activeDelayMs: { type: "number", minimum: 0 },
       activeRequestTimeoutMs: { type: "number", minimum: 1000 },
       engine: engineSchema(),
       profile: profileSchema(),
       headless: { type: "boolean", default: true },
+      ...launchOptionSchemaProperties(),
       outputPath: { type: "string" },
       maxTextChars: { type: "number", minimum: 0 },
-      maxElements: { type: "number", minimum: 0 }
+      maxElements: { type: "number", minimum: 0 },
+      redactInputValues: { type: "boolean", default: true },
+      sensitiveSelectors: { type: "array", items: { type: "string" } }
     }, ["url"])
   },
   {
@@ -340,9 +361,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
       return browse({
         url: requireString(args.url, "url"),
         scope: optionalScope(args.scope),
-        engine: optionalEngine(args.engine),
-        profile: optionalProfile(args.profile),
-        headless: optionalBoolean(args.headless, true),
+        ...launchOptions(args),
         screenshotPath: optionalString(args.screenshotPath),
         extractText: optionalBoolean(args.extractText, false),
         observe: optionalBoolean(args.observe, false),
@@ -352,9 +371,8 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
       return inspectPage({
         url: requireString(args.url, "url"),
         scope: optionalScope(args.scope),
-        engine: optionalEngine(args.engine),
-        profile: optionalProfile(args.profile),
-        headless: optionalBoolean(args.headless, true),
+        ...launchOptions(args),
+        screenshotPath: optionalString(args.screenshotPath),
         maxCandidates: optionalNumber(args.maxCandidates),
         includeObservation: optionalBoolean(args.includeObservation, false),
         observationOptions: observationOptions(args)
@@ -370,12 +388,13 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
       return runActions({
         actions: requireActions(args.actions),
         scope: optionalScope(args.scope),
-        engine: optionalEngine(args.engine),
-        profile: optionalProfile(args.profile),
-        headless: optionalBoolean(args.headless, true),
+        ...launchOptions(args),
         sessionId: optionalString(args.sessionId),
         evidenceDir: optionalString(args.evidenceDir),
         observeAfterEachAction: optionalBooleanOrUndefined(args.observeAfterEachAction),
+        captureFailureScreenshot: optionalBoolean(args.captureFailureScreenshot, false),
+        captureFailureObservation: optionalBoolean(args.captureFailureObservation, false),
+        captureFailureHtml: optionalBoolean(args.captureFailureHtml, false),
         continueOnError: optionalBoolean(args.continueOnError, false),
         observationOptions: observationOptions(args)
       });
@@ -384,9 +403,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
         url: requireString(args.url, "url"),
         scope: optionalScope(args.scope),
         goal: optionalString(args.goal),
-        engine: optionalEngine(args.engine),
-        profile: optionalProfile(args.profile),
-        headless: optionalBoolean(args.headless, true),
+        ...launchOptions(args),
         maxIterations: optionalNumber(args.maxIterations),
         actionsPerIteration: optionalNumber(args.actionsPerIteration),
         evidenceDir: optionalString(args.evidenceDir),
@@ -401,9 +418,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
       return crawl({
         startUrl: requireString(args.startUrl, "startUrl"),
         scope: requiredScope(args.scope),
-        engine: optionalEngine(args.engine),
-        profile: optionalProfile(args.profile),
-        headless: optionalBoolean(args.headless, true),
+        ...launchOptions(args),
         maxPages: optionalNumber(args.maxPages),
         maxDepth: optionalNumber(args.maxDepth),
         includeObservations: optionalBoolean(args.includeObservations, false),
@@ -414,9 +429,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
       return audit({
         url: requireString(args.url, "url"),
         scope: optionalScope(args.scope),
-        engine: optionalEngine(args.engine),
-        profile: optionalProfile(args.profile),
-        headless: optionalBoolean(args.headless, true),
+        ...launchOptions(args),
         includeObservation: optionalBoolean(args.includeObservation, false),
         observationOptions: observationOptions(args)
       });
@@ -425,9 +438,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
         url: requireString(args.url, "url"),
         scope: optionalScope(args.scope),
         owaspProfile: optionalOwaspProfile(args.owaspProfile),
-        engine: optionalEngine(args.engine),
-        profile: optionalProfile(args.profile),
-        headless: optionalBoolean(args.headless, true),
+        ...launchOptions(args),
         outputPath: optionalString(args.outputPath),
         maxActiveRequests: optionalNumber(args.maxActiveRequests),
         activeDelayMs: optionalNumber(args.activeDelayMs),
@@ -638,10 +649,33 @@ function requireStringArray(value: unknown, label: string): string[] {
   return value.map((item, index) => requireString(item, `${label}[${index}]`));
 }
 
-function observationOptions(args: Record<string, unknown>): { maxTextChars?: number; maxElements?: number } {
+function launchOptionSchemaProperties(): Record<string, unknown> {
+  return {
+    storageState: { type: "string" },
+    saveStorageState: { type: "string" },
+    downloadsDir: { type: "string" },
+    trace: { type: "boolean" }
+  };
+}
+
+function launchOptions(args: Record<string, unknown>): LaunchOptions {
+  return {
+    engine: optionalEngine(args.engine),
+    profile: optionalProfile(args.profile),
+    headless: optionalBoolean(args.headless, true),
+    storageState: optionalString(args.storageState),
+    saveStorageState: optionalString(args.saveStorageState),
+    downloadsDir: optionalString(args.downloadsDir),
+    trace: optionalBoolean(args.trace, false)
+  };
+}
+
+function observationOptions(args: Record<string, unknown>): ObservationOptions {
   return {
     maxTextChars: optionalNumber(args.maxTextChars),
-    maxElements: optionalNumber(args.maxElements)
+    maxElements: optionalNumber(args.maxElements),
+    redactInputValues: optionalBooleanOrUndefined(args.redactInputValues),
+    sensitiveSelectors: optionalStringArray(args.sensitiveSelectors)
   };
 }
 

@@ -118,6 +118,7 @@ export function summarizeAgentStep(step: AgentStepResult): Record<string, unknow
     url: step.url,
     title: step.title,
     screenshotPath: step.screenshotPath,
+    failureEvidence: step.failureEvidence,
     extracted: step.extracted
       ? {
           format: step.extracted.format,

@@ -186,6 +186,9 @@ export async function runJob(job: SolariumJob, options: RunJobOptions = {}): Pro
         sessionId: optionalString(opt.sessionId),
         evidenceDir: resolveOptionalPath(baseDir, optionalString(opt.evidenceDir)),
         observeAfterEachAction: optionalBooleanOrUndefined(opt.observeAfterEachAction),
+        captureFailureScreenshot: optionalBoolean(opt.captureFailureScreenshot),
+        captureFailureObservation: optionalBoolean(opt.captureFailureObservation),
+        captureFailureHtml: optionalBoolean(opt.captureFailureHtml),
         continueOnError: optionalBoolean(opt.continueOnError),
         observationOptions: observationOptions(opt),
         eventLogger: createJsonlEventLogger(resolveOptionalPath(baseDir, job.events))
@@ -384,7 +387,9 @@ function observationOptions(value: Record<string, unknown>): ObservationOptions 
     maxTextChars: optionalNumber(value.maxTextChars),
     maxElements: optionalNumber(value.maxElements),
     maxConsoleEvents: optionalNumber(value.maxConsoleEvents),
-    maxNetworkEvents: optionalNumber(value.maxNetworkEvents)
+    maxNetworkEvents: optionalNumber(value.maxNetworkEvents),
+    redactInputValues: optionalBooleanOrUndefined(value.redactInputValues),
+    sensitiveSelectors: optionalStringArray(value.sensitiveSelectors)
   };
 }
 
@@ -415,6 +420,12 @@ function optionalBooleanOrUndefined(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
+function optionalStringArray(value: unknown): string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (Array.isArray(value)) return value.map((item) => String(item));
+  return String(value).split(",").map((item) => item.trim()).filter(Boolean);
+}
+
 function resolveOptionalPath(baseDir: string, path?: string): string | undefined {
   return path ? resolve(baseDir, path) : undefined;
 }
@@ -431,8 +442,16 @@ async function writeTextFile(path: string, content: string): Promise<void> {
   await writeFile(path, content, "utf8");
 }
 
-function parseOwaspProfile(value?: string): "passive" | "strict-headers" | "active-authorized" | undefined {
+function parseOwaspProfile(value?: string): "passive" | "strict-headers" | "active-authorized" | "top10-passive" | "top10-active-authorized" | undefined {
   if (value === undefined) return undefined;
-  if (value !== "passive" && value !== "strict-headers" && value !== "active-authorized") throw new Error(`Unsupported OWASP audit profile: ${value}`);
+  if (
+    value !== "passive" &&
+    value !== "strict-headers" &&
+    value !== "active-authorized" &&
+    value !== "top10-passive" &&
+    value !== "top10-active-authorized"
+  ) {
+    throw new Error(`Unsupported OWASP audit profile: ${value}`);
+  }
   return value;
 }

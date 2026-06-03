@@ -28,6 +28,29 @@ test("handleJsonRpcRequest initializes and lists Solarium tools", async () => {
   assert.ok(names.includes("solarium.owaspAudit"));
 });
 
+
+test("tools/list exposes storage, redaction, failure evidence, and deduplicated OWASP schema options", async () => {
+  const listed = await handleJsonRpcRequest({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+  const byName = new Map(listed.tools.map((tool) => [tool.name, tool]));
+
+  const browseProps = byName.get("solarium.browse").inputSchema.properties;
+  assert.ok("storageState" in browseProps);
+  assert.ok("saveStorageState" in browseProps);
+  assert.ok("downloadsDir" in browseProps);
+  assert.ok("trace" in browseProps);
+  assert.ok("redactInputValues" in browseProps);
+  assert.ok("sensitiveSelectors" in browseProps);
+
+  const sessionProps = byName.get("solarium.session").inputSchema.properties;
+  assert.ok("captureFailureScreenshot" in sessionProps);
+  assert.ok("captureFailureObservation" in sessionProps);
+  assert.ok("captureFailureHtml" in sessionProps);
+
+  const owaspValues = byName.get("solarium.owaspAudit").inputSchema.properties.owaspProfile.enum;
+  assert.deepEqual(owaspValues, [...new Set(owaspValues)]);
+  assert.ok(owaspValues.includes("top10-active-authorized"));
+});
+
 test("handleJsonRpcRequest supports MCP-style tools/call", async () => {
   const result = await handleJsonRpcRequest({
     jsonrpc: "2.0",

@@ -7,7 +7,7 @@
   "required": ["mode"],
   "properties": {
     "mode": {
-      "enum": ["browse", "inspect", "plan", "session", "crawl", "audit", "graphql-audit", "loop", "replay"]
+      "enum": ["browse", "inspect", "plan", "session", "crawl", "audit", "owasp-audit", "graphql-audit", "loop", "replay"]
     },
     "url": { "type": "string", "minLength": 1 },
     "startUrl": { "type": "string", "minLength": 1 },
@@ -39,7 +39,7 @@
   },
   "allOf": [
     {
-      "if": { "properties": { "mode": { "enum": ["browse", "inspect", "audit", "graphql-audit", "loop"] } }, "required": ["mode"] },
+      "if": { "properties": { "mode": { "enum": ["browse", "inspect", "audit", "owasp-audit", "graphql-audit", "loop"] } }, "required": ["mode"] },
       "then": { "required": ["url"] }
     },
     {

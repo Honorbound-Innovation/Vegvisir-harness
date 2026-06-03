@@ -276,6 +276,10 @@ export function renderSessionMarkdownReport(result: AgentSessionResult, options:
     lines.push(`- **Started:** ${step.startedAt}`);
     lines.push(`- **Finished:** ${step.finishedAt}`);
     if (step.screenshotPath) lines.push(`- **Screenshot:** ${step.screenshotPath}`);
+    if (step.failureEvidence?.screenshotPath) lines.push(`- **Failure screenshot:** ${step.failureEvidence.screenshotPath}`);
+    if (step.failureEvidence?.observationPath) lines.push(`- **Failure observation:** ${step.failureEvidence.observationPath}`);
+    if (step.failureEvidence?.htmlPath) lines.push(`- **Failure HTML:** ${step.failureEvidence.htmlPath}`);
+    if (step.failureEvidence?.errors?.length) lines.push(`- **Failure evidence errors:** ${step.failureEvidence.errors.map(escapeMarkdown).join("; ")}`);
     if (step.extracted) lines.push(`- **Extracted:** ${step.extracted.format}, ${step.extracted.content.length} characters`);
     if (step.download) lines.push(`- **Downloaded:** ${step.download.suggestedFilename} → ${step.download.path}`);
     if (step.observation) {

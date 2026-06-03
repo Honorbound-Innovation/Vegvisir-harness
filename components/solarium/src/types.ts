@@ -80,6 +80,7 @@ export interface PageInputObservation {
   type?: string | null;
   placeholder?: string | null;
   value?: string | null;
+  valueRedacted?: boolean;
   required: boolean;
   disabled: boolean;
 }
@@ -135,6 +136,10 @@ export interface ObservationOptions {
   maxElements?: number;
   maxConsoleEvents?: number;
   maxNetworkEvents?: number;
+  /** Redact sensitive input values from observations. Defaults to true. */
+  redactInputValues?: boolean;
+  /** Additional CSS selectors whose input values should be redacted from observations. */
+  sensitiveSelectors?: string[];
 }
 
 
@@ -232,6 +237,13 @@ export interface DownloadResult {
   failure?: string | null;
 }
 
+export interface AgentFailureEvidence {
+  screenshotPath?: string;
+  observationPath?: string;
+  htmlPath?: string;
+  errors?: string[];
+}
+
 export interface AgentStepResult {
   index: number;
   action: AgentAction;
@@ -244,6 +256,7 @@ export interface AgentStepResult {
   extracted?: ExtractResult;
   download?: DownloadResult;
   observation?: PageObservation;
+  failureEvidence?: AgentFailureEvidence;
   error?: string;
 }
 
@@ -261,6 +274,12 @@ export interface AgentSessionOptions extends LaunchOptions {
   observeAfterEachAction?: boolean;
   observationOptions?: ObservationOptions;
   evidenceDir?: string;
+  /** Capture a failure screenshot into evidenceDir when an action fails. */
+  captureFailureScreenshot?: boolean;
+  /** Capture a redacted observation JSON into evidenceDir when an action fails. */
+  captureFailureObservation?: boolean;
+  /** Capture page HTML into evidenceDir when an action fails. Treat as sensitive local evidence. */
+  captureFailureHtml?: boolean;
 }
 
 

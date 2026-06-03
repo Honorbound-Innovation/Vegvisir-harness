@@ -1,10 +1,11 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { SolariumBrowser, type SolariumPage } from "../browser/engine.js";
 import { assertUrlInScope, type ScopePolicy } from "../security/scope.js";
 import { attachScopedNetworkPolicy, type NetworkPolicyController } from "../security/network-policy.js";
 import type {
   AgentAction,
+  AgentFailureEvidence,
   AgentSessionOptions,
   AgentSessionResult,
   AgentStepResult,
@@ -248,9 +249,68 @@ export class AgentSession {
         ok: false,
         url: page.url(),
         title: await safeTitle(page),
+        failureEvidence: await this.captureFailureEvidence(index, page, recorder),
         error: error instanceof Error ? error.message : String(error)
       };
     }
+  }
+
+
+  private async captureFailureEvidence(
+    index: number,
+    page: SolariumPage,
+    recorder: ObservationRecorder
+  ): Promise<AgentFailureEvidence | undefined> {
+    if (
+      !this.options.captureFailureScreenshot &&
+      !this.options.captureFailureObservation &&
+      !this.options.captureFailureHtml
+    ) {
+      return undefined;
+    }
+
+    const evidence: AgentFailureEvidence = {};
+    const errors: string[] = [];
+
+    if (this.options.captureFailureScreenshot) {
+      const screenshotPath = join(this.evidenceDir, `step-${index}-failure.png`);
+      try {
+        await mkdir(dirnameForFile(screenshotPath), { recursive: true });
+        await page.screenshot({ path: screenshotPath, fullPage: true });
+        evidence.screenshotPath = screenshotPath;
+      } catch (error) {
+        errors.push(`screenshot: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    if (this.options.captureFailureObservation) {
+      const observationPath = join(this.evidenceDir, `step-${index}-failure.observation.json`);
+      try {
+        const observation = await recorder.observe({
+          ...this.observationOptions,
+          redactInputValues: this.observationOptions?.redactInputValues ?? true
+        });
+        await mkdir(dirnameForFile(observationPath), { recursive: true });
+        await writeFile(observationPath, JSON.stringify(observation, null, 2), "utf8");
+        evidence.observationPath = observationPath;
+      } catch (error) {
+        errors.push(`observation: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    if (this.options.captureFailureHtml) {
+      const htmlPath = join(this.evidenceDir, `step-${index}-failure.html`);
+      try {
+        await mkdir(dirnameForFile(htmlPath), { recursive: true });
+        await writeFile(htmlPath, await page.raw().content(), "utf8");
+        evidence.htmlPath = htmlPath;
+      } catch (error) {
+        errors.push(`html: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    if (errors.length > 0) evidence.errors = errors;
+    return Object.keys(evidence).length > 0 ? evidence : undefined;
   }
 
   private result(): AgentSessionResult {

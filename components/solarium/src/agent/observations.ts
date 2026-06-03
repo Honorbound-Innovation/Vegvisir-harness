@@ -3,6 +3,8 @@ import type {
   ConsoleLogObservation,
   NetworkObservation,
   ObservationOptions,
+  PageFormObservation,
+  PageInputObservation,
   PageObservation
 } from "../types.js";
 
@@ -10,6 +12,7 @@ const DEFAULT_MAX_TEXT_CHARS = 20_000;
 const DEFAULT_MAX_ELEMENTS = 100;
 const DEFAULT_MAX_CONSOLE_EVENTS = 100;
 const DEFAULT_MAX_NETWORK_EVENTS = 200;
+const REDACTED_VALUE = "[redacted]";
 
 export class ObservationRecorder {
   private readonly consoleEvents: ConsoleLogObservation[] = [];
@@ -33,6 +36,8 @@ export class ObservationRecorder {
     const maxElements = options.maxElements ?? DEFAULT_MAX_ELEMENTS;
     const maxConsoleEvents = options.maxConsoleEvents ?? DEFAULT_MAX_CONSOLE_EVENTS;
     const maxNetworkEvents = options.maxNetworkEvents ?? DEFAULT_MAX_NETWORK_EVENTS;
+    const redactInputValues = options.redactInputValues ?? true;
+    const sensitiveSelectors = options.sensitiveSelectors ?? [];
 
     // Use a string expression instead of passing a function object here.
     // tsx/esbuild can wrap function literals with helper symbols such as
@@ -42,7 +47,36 @@ export class ObservationRecorder {
     const domObservation = (await this.page.evaluate(`(() => {
       const maxTextChars = ${JSON.stringify(maxTextChars)};
       const maxElements = ${JSON.stringify(maxElements)};
+      const redactInputValues = ${JSON.stringify(redactInputValues)};
+      const sensitiveSelectors = ${JSON.stringify(sensitiveSelectors)};
+      const redactedValue = ${JSON.stringify(REDACTED_VALUE)};
+      const sensitiveNamePattern = /(password|passwd|token|secret|credential|api[_-]?key|auth|session|csrf|xsrf|otp|mfa)/i;
+      const sensitiveAutocompleteValues = new Set(["current-password", "new-password", "one-time-code"]);
       const cleanText = (value) => (value ?? "").replace(/\s+/g, " ").trim();
+      const attrText = (input) => [
+        input.getAttribute("name"),
+        input.getAttribute("id"),
+        input.getAttribute("autocomplete"),
+        input.getAttribute("aria-label"),
+        input.getAttribute("placeholder")
+      ].filter(Boolean).join(" ");
+      const matchesAnySensitiveSelector = (input) => sensitiveSelectors.some((selector) => {
+        try {
+          return input.matches(selector);
+        } catch {
+          return false;
+        }
+      });
+      const shouldRedactInput = (input) => {
+        if (!redactInputValues) return false;
+        if (matchesAnySensitiveSelector(input)) return true;
+        if (input instanceof HTMLInputElement) {
+          const type = input.type.toLowerCase();
+          if (["password", "hidden"].includes(type)) return true;
+          if (sensitiveAutocompleteValues.has((input.autocomplete || "").toLowerCase())) return true;
+        }
+        return sensitiveNamePattern.test(attrText(input));
+      };
 
       const visibleText = cleanText(document.body?.innerText ?? "").slice(0, maxTextChars);
 
@@ -70,18 +104,20 @@ export class ObservationRecorder {
           selectorHint: button.id ? "#" + CSS.escape(button.id) : "button-or-input:" + index
         }));
 
-      const mapInput = (input) => ({
-        name: input.getAttribute("name"),
-        id: input.getAttribute("id"),
-        type: input instanceof HTMLInputElement ? input.type : input.tagName.toLowerCase(),
-        placeholder:
-          input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement
-            ? input.placeholder
-            : null,
-        value: input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement ? input.value : null,
-        required: input.required,
-        disabled: input.disabled
-      });
+      const mapInput = (input) => {
+        const canHaveValue = input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement;
+        const valueRedacted = canHaveValue && shouldRedactInput(input);
+        return {
+          name: input.getAttribute("name"),
+          id: input.getAttribute("id"),
+          type: input instanceof HTMLInputElement ? input.type : input.tagName.toLowerCase(),
+          placeholder: canHaveValue ? input.placeholder : null,
+          value: canHaveValue ? (valueRedacted ? redactedValue : input.value) : null,
+          valueRedacted,
+          required: input.required,
+          disabled: input.disabled
+        };
+      };
 
       const inputs = Array.from(document.querySelectorAll("input, textarea, select"))
         .slice(0, maxElements)
@@ -109,8 +145,8 @@ export class ObservationRecorder {
       visibleText: domObservation.visibleText,
       links: domObservation.links,
       buttons: domObservation.buttons,
-      inputs: domObservation.inputs,
-      forms: domObservation.forms,
+      inputs: redactInputValues ? redactSensitiveObservedInputs(domObservation.inputs) : domObservation.inputs,
+      forms: redactInputValues ? redactSensitiveObservedFormInputs(domObservation.forms) : domObservation.forms,
       console: this.consoleEvents.slice(-maxConsoleEvents),
       network: Array.from(this.networkEvents.values()).slice(-maxNetworkEvents)
     };
@@ -156,6 +192,28 @@ export class ObservationRecorder {
       failureText: request.failure()?.errorText ?? existing?.failureText ?? "request failed"
     });
   }
+}
+
+export function redactSensitiveObservedInputs(inputs: PageInputObservation[]): PageInputObservation[] {
+  return inputs.map((input) => {
+    if (!isSensitiveObservedInput(input)) return input;
+    return { ...input, value: REDACTED_VALUE, valueRedacted: true };
+  });
+}
+
+export function redactSensitiveObservedFormInputs(forms: PageFormObservation[]): PageFormObservation[] {
+  return forms.map((form) => ({
+    ...form,
+    fields: redactSensitiveObservedInputs(form.fields)
+  }));
+}
+
+function isSensitiveObservedInput(input: PageInputObservation): boolean {
+  if (input.valueRedacted) return true;
+  const type = input.type?.toLowerCase();
+  if (type === "password" || type === "hidden") return true;
+  const combined = [input.name, input.id, input.placeholder].filter(Boolean).join(" ");
+  return /(password|passwd|token|secret|credential|api[_-]?key|auth|session|csrf|xsrf|otp|mfa)/i.test(combined);
 }
 
 function requestKey(request: Request): string {
