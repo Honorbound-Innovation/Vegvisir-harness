@@ -57,7 +57,9 @@ test("redactSensitiveObservedInputs redacts sensitive fields by default", () => 
   const inputs = redactSensitiveObservedInputs([
     { name: "username", id: "user", type: "text", placeholder: "User", value: "malice", required: false, disabled: false },
     { name: "password", id: "password", type: "password", placeholder: "Password", value: "not-for-logs", required: true, disabled: false },
-    { name: "apiToken", id: "token", type: "text", placeholder: "API token", value: "token-value", required: false, disabled: false }
+    { name: "apiToken", id: "token", type: "text", placeholder: "API token", value: "token-value", required: false, disabled: false },
+    { name: "backup", id: "backup", type: "text", placeholder: "Code", label: "Recovery secret", value: "backup-secret", required: false, disabled: false },
+    { name: "session", id: "session", type: "text", placeholder: "Session", accessibleName: "Session token", value: "session-secret", required: false, disabled: false }
   ]);
 
   assert.equal(inputs[0].value, "malice");
@@ -66,6 +68,10 @@ test("redactSensitiveObservedInputs redacts sensitive fields by default", () => 
   assert.equal(inputs[1].valueRedacted, true);
   assert.equal(inputs[2].value, "[redacted]");
   assert.equal(inputs[2].valueRedacted, true);
+  assert.equal(inputs[3].value, "[redacted]");
+  assert.equal(inputs[3].valueRedacted, true);
+  assert.equal(inputs[4].value, "[redacted]");
+  assert.equal(inputs[4].valueRedacted, true);
 });
 
 test("validateActions accepts all current action primitives", () => {

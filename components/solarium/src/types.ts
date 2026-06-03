@@ -60,37 +60,95 @@ export interface ExtractResult {
   format: "text" | "html" | "markdown";
 }
 
-export interface PageLinkObservation {
+export type SelectorHintKind =
+  | "test-id"
+  | "id"
+  | "role"
+  | "label"
+  | "placeholder"
+  | "name"
+  | "text"
+  | "aria"
+  | "css";
+
+export type SelectorHintConfidence = "high" | "medium" | "low";
+
+export type SelectorHintStrategy = "css" | "playwright";
+
+export interface SelectorHint {
+  kind: SelectorHintKind;
+  strategy: SelectorHintStrategy;
+  value: string;
+  confidence: SelectorHintConfidence;
+  reason: string;
+}
+
+export interface ElementBoundingBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface ObservedElementMetadata {
+  role?: string | null;
+  accessibleName?: string | null;
+  selectorHint?: string;
+  selectorHints?: SelectorHint[];
+  visible?: boolean;
+  boundingBox?: ElementBoundingBox | null;
+}
+
+export interface PageLinkObservation extends ObservedElementMetadata {
   text: string;
   href: string;
   target?: string | null;
   rel?: string | null;
 }
 
-export interface PageButtonObservation {
+export interface PageButtonObservation extends ObservedElementMetadata {
   text: string;
   type?: string | null;
   disabled: boolean;
-  selectorHint?: string;
 }
 
-export interface PageInputObservation {
+export interface PageInputObservation extends ObservedElementMetadata {
   name?: string | null;
   id?: string | null;
   type?: string | null;
   placeholder?: string | null;
+  label?: string | null;
   value?: string | null;
   valueRedacted?: boolean;
   required: boolean;
   disabled: boolean;
 }
 
-export interface PageFormObservation {
+export interface PageFormObservation extends ObservedElementMetadata {
   action: string;
   method: string;
   id?: string | null;
   name?: string | null;
   fields: PageInputObservation[];
+}
+
+export interface PageElementObservation extends ObservedElementMetadata {
+  kind: "landmark" | "dialog" | "list";
+  tagName: string;
+  text: string;
+}
+
+export interface PageTableObservation extends ObservedElementMetadata {
+  caption?: string | null;
+  headers: string[];
+  rowCount: number;
+  sampleRows: string[][];
+}
+
+export interface PageFrameObservation extends ObservedElementMetadata {
+  src?: string | null;
+  title?: string | null;
+  name?: string | null;
 }
 
 export interface ConsoleLogObservation {
@@ -127,6 +185,9 @@ export interface PageObservation {
   buttons: PageButtonObservation[];
   inputs: PageInputObservation[];
   forms: PageFormObservation[];
+  landmarks: PageElementObservation[];
+  tables: PageTableObservation[];
+  frames: PageFrameObservation[];
   console: ConsoleLogObservation[];
   network: NetworkObservation[];
 }
@@ -151,6 +212,7 @@ export interface InspectCandidate {
   selector: string;
   roleSelector?: string;
   textSelector?: string;
+  selectorHints?: SelectorHint[];
   action: "click" | "fill" | "submit" | "navigate";
   href?: string;
   inputType?: string | null;
