@@ -12,10 +12,11 @@ pub fn extract_attachments(text: &str, cwd: &Path) -> (String, Vec<Attachment>) 
         .replace_all(text, |captures: &regex::Captures| {
             let raw = captures.name("path").map(|m| m.as_str()).unwrap_or("");
             let path = path_from_token(raw, cwd);
-            if path.exists() && path.is_file() {
-                if let Ok(attachment) = attachment_for(&path) {
-                    attachments.push(attachment);
-                }
+            if path.exists()
+                && path.is_file()
+                && let Ok(attachment) = attachment_for(&path)
+            {
+                attachments.push(attachment);
             }
             captures
                 .get(0)
@@ -76,12 +77,13 @@ fn percent_decode(value: &str) -> String {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(hex) = u8::from_str_radix(&value[i + 1..i + 3], 16) {
-                out.push(hex);
-                i += 3;
-                continue;
-            }
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let Ok(hex) = u8::from_str_radix(&value[i + 1..i + 3], 16)
+        {
+            out.push(hex);
+            i += 3;
+            continue;
         }
         out.push(bytes[i]);
         i += 1;

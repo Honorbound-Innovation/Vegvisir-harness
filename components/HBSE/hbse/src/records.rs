@@ -2,22 +2,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::serialization::b64url_decode_no_padding;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SecretStatus {
+    #[default]
     Active,
     Staged,
     Disabled,
     Destroyed,
 }
 
-impl Default for SecretStatus {
-    fn default() -> Self {
-        Self::Active
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SecretType {
     ApiKey,
@@ -33,13 +28,8 @@ pub enum SecretType {
     Certificate,
     Credential,
     JsonCredential,
+    #[default]
     Generic,
-}
-
-impl Default for SecretType {
-    fn default() -> Self {
-        Self::Generic
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

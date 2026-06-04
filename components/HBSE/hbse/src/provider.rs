@@ -56,17 +56,9 @@ pub struct PassphraseProviderBinding {
     pub warning: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PassphraseProvider {
     pub params: ScryptParams,
-}
-
-impl Default for PassphraseProvider {
-    fn default() -> Self {
-        Self {
-            params: ScryptParams::default(),
-        }
-    }
 }
 
 impl PassphraseProvider {

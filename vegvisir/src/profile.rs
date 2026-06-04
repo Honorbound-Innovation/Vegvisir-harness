@@ -6,7 +6,7 @@ use std::{
 use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UserProfile {
     #[serde(default)]
     pub identity: ProfileIdentity,
@@ -74,18 +74,6 @@ pub struct AutonomyPreferences {
     pub default_max_steps: usize,
     #[serde(default = "default_max_attempts")]
     pub default_max_attempts: usize,
-}
-
-impl Default for UserProfile {
-    fn default() -> Self {
-        Self {
-            identity: ProfileIdentity::default(),
-            communication: CommunicationPreferences::default(),
-            coding: CodingPreferences::default(),
-            workflow: WorkflowPreferences::default(),
-            autonomy: AutonomyPreferences::default(),
-        }
-    }
 }
 
 impl Default for CommunicationPreferences {

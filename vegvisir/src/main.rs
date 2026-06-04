@@ -288,6 +288,7 @@ fn run_skiller(args: Vec<std::ffi::OsString>) -> anyhow::Result<()> {
     skiller::run_cli_from(argv)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_setup_command(
     status: bool,
     data_root: Option<PathBuf>,
@@ -521,6 +522,7 @@ fn verification_evidence_from_eval_results(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_headless(
     prompt: String,
     workspace: PathBuf,
@@ -636,6 +638,7 @@ fn run_headless(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_headless_provider(
     prompt: String,
     workspace: PathBuf,

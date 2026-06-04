@@ -241,17 +241,17 @@ pub(crate) fn parse_autonomy_markdown_plan(
             continue;
         }
 
-        if let Some(item) = parse_plain_list_item(line) {
-            if let Some(section) = semantic_list {
-                match section {
-                    SemanticList::SuccessConditions => node.success_conditions.push(item),
-                    SemanticList::ExpectedDeliverables => node.expected_deliverables.push(item),
-                    SemanticList::ImplementationRules => node.implementation_rules.push(item),
-                    SemanticList::Guardrails => node.guardrails.push(item),
-                    SemanticList::Validation => node.validation.push(item),
-                }
-                continue;
+        if let Some(item) = parse_plain_list_item(line)
+            && let Some(section) = semantic_list
+        {
+            match section {
+                SemanticList::SuccessConditions => node.success_conditions.push(item),
+                SemanticList::ExpectedDeliverables => node.expected_deliverables.push(item),
+                SemanticList::ImplementationRules => node.implementation_rules.push(item),
+                SemanticList::Guardrails => node.guardrails.push(item),
+                SemanticList::Validation => node.validation.push(item),
             }
+            continue;
         }
 
         if !line.trim().is_empty() {
@@ -477,6 +477,7 @@ pub(crate) fn autonomy_plan_status_with_evidence(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn autonomy_plan_status_unchecked(
     markdown: &str,
     objective: &str,
@@ -533,6 +534,7 @@ fn autonomy_plan_status_unchecked(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn autonomy_plan_status_from_nodes(
     nodes: Vec<AutonomyNodeStatus>,
     evidence_dir: Option<&Path>,
@@ -1378,7 +1380,7 @@ Validation:
         );
         assert_eq!(plan.nodes[1].guardrails, vec!["Preserve user work"]);
         assert_eq!(plan.nodes[1].validation, vec!["cargo test autonomy_plan"]);
-        assert_eq!(plan.nodes[2].checklist[0].checked, true);
+        assert!(plan.nodes[2].checklist[0].checked);
     }
 
     #[test]

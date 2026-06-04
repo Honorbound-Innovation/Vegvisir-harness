@@ -196,21 +196,11 @@ impl DiffRenderer {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ChatTranscriptRenderCache {
     pub width: usize,
     pub search_query: String,
     pub message_lines: Vec<Option<ChatMessageRenderCacheEntry>>,
-}
-
-impl Default for ChatTranscriptRenderCache {
-    fn default() -> Self {
-        Self {
-            width: 0,
-            search_query: String::new(),
-            message_lines: Vec::new(),
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -761,7 +751,7 @@ impl TuiApplication {
             speech_ptt_key: defaults
                 .get("speech_ptt_key")
                 .and_then(Value::as_str)
-                .map(|value| PushToTalkKey::parse(value))
+                .map(PushToTalkKey::parse)
                 .unwrap_or_else(|| Some(DEFAULT_PTT_KEY.clone())),
             speech_ptt_seconds: defaults
                 .get("speech_ptt_seconds")

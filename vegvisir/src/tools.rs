@@ -326,9 +326,9 @@ impl ToolExecutor {
                     "ApprovalRequired"
                 } else if error_text.starts_with("Unknown tool:") {
                     "UnknownTool"
-                } else if error_text.contains("Missing required argument") {
-                    "InvalidToolArguments"
-                } else if error_text.contains(" must be ") {
+                } else if error_text.contains("Missing required argument")
+                    || error_text.contains(" must be ")
+                {
                     "InvalidToolArguments"
                 } else if error_text.contains("not allowed")
                     || error_text.contains("requires human approval")
@@ -2104,6 +2104,7 @@ fn subagent_child_argv(launch: SubagentChildLaunch) -> Vec<String> {
     argv
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_spawned_subagent(
     board_path: PathBuf,
     mut record: SubAgentTaskRecord,
@@ -2435,9 +2436,8 @@ fn atomic_write_json(path: &Path, content: &str) -> anyhow::Result<()> {
     }
     let tmp = path.with_extension(format!("{}.tmp", Uuid::new_v4().simple()));
     std::fs::write(&tmp, content)?;
-    std::fs::rename(&tmp, path).or_else(|rename_error| {
+    std::fs::rename(&tmp, path).inspect_err(|_| {
         let _ = std::fs::remove_file(&tmp);
-        Err(rename_error)
     })?;
     Ok(())
 }

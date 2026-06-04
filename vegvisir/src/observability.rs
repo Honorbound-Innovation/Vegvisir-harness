@@ -25,10 +25,10 @@ pub struct EventLogger {
 
 impl EventLogger {
     pub fn new(path: Option<PathBuf>) -> Self {
-        if let Some(path) = &path {
-            if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
+        if let Some(path) = &path
+            && let Some(parent) = path.parent()
+        {
+            let _ = std::fs::create_dir_all(parent);
         }
         Self {
             path,
@@ -45,14 +45,14 @@ impl EventLogger {
         if let Ok(mut events) = self.events.lock() {
             events.push(event.clone());
         }
-        if let Some(path) = &self.path {
-            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-                let _ = writeln!(
-                    file,
-                    "{}",
-                    serde_json::to_string(&event).unwrap_or_default()
-                );
-            }
+        if let Some(path) = &self.path
+            && let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path)
+        {
+            let _ = writeln!(
+                file,
+                "{}",
+                serde_json::to_string(&event).unwrap_or_default()
+            );
         }
     }
 

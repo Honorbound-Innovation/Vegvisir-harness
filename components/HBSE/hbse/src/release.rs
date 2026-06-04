@@ -679,7 +679,7 @@ mod tests {
         generate_signing_keypair(&private_key, &public_key, None).unwrap();
         sign_release_artifacts(
             &release,
-            &[artifact.clone()],
+            std::slice::from_ref(&artifact),
             &private_key,
             Some(&public_key),
             None,

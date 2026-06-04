@@ -192,17 +192,14 @@ impl ApprovalLedger {
         args: &Map<String, Value>,
     ) -> bool {
         let mut consumed = false;
-        if let Ok(mut state) = self.state.lock() {
-            if state
+        if let Ok(mut state) = self.state.lock()
+            && (state
                 .approved_for_session
                 .contains(&approval_session_key(tool_name, args))
-            {
-                state.pending.remove(id);
-                consumed = true;
-            } else if state.approved_once.remove(id) {
-                state.pending.remove(id);
-                consumed = true;
-            }
+                || state.approved_once.remove(id))
+        {
+            state.pending.remove(id);
+            consumed = true;
         }
         self.save();
         consumed

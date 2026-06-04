@@ -95,17 +95,15 @@ pub(crate) fn prepare_lsl_augmented_content(
             }),
         ));
     }
-    let already_enabled = session
-        .active_agent_id
-        .is_some()
-        .then(|| {
-            session
-                .enabled_skills
-                .iter()
-                .map(|skill| skill.name.clone())
-                .collect::<std::collections::BTreeSet<_>>()
-        })
-        .unwrap_or_default();
+    let already_enabled = if session.active_agent_id.is_some() {
+        session
+            .enabled_skills
+            .iter()
+            .map(|skill| skill.name.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+    } else {
+        std::collections::BTreeSet::new()
+    };
     let skill_sections = context
         .selected
         .iter()

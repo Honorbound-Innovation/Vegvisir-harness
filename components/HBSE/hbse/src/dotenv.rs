@@ -1,4 +1,6 @@
 use std::collections::BTreeMap;
+
+pub type SplitDotenvValues = (BTreeMap<String, String>, BTreeMap<String, String>);
 use std::path::Path;
 
 use regex::Regex;
@@ -75,7 +77,7 @@ pub fn parse_dotenv(path: impl AsRef<Path>) -> Result<BTreeMap<String, String>, 
 
 pub fn split_dotenv_values(
     values: BTreeMap<String, String>,
-) -> Result<(BTreeMap<String, String>, BTreeMap<String, String>), DotenvError> {
+) -> Result<SplitDotenvValues, DotenvError> {
     let secret_ref = Regex::new(r"^secret://[A-Za-z0-9_.:/@+-]+$")?;
     let mut plain = BTreeMap::new();
     let mut refs = BTreeMap::new();

@@ -345,10 +345,10 @@ pub(crate) fn expand_workspace_path(raw: &str) -> PathBuf {
     if raw == "~" {
         return home_dir().unwrap_or_else(|| PathBuf::from(raw));
     }
-    if let Some(rest) = raw.strip_prefix("~/") {
-        if let Some(home) = home_dir() {
-            return home.join(rest);
-        }
+    if let Some(rest) = raw.strip_prefix("~/")
+        && let Some(home) = home_dir()
+    {
+        return home.join(rest);
     }
     PathBuf::from(raw)
 }

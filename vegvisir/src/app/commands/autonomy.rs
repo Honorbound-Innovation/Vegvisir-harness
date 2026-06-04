@@ -473,31 +473,30 @@ Required next action: create/update the Markdown implementation plan at `{plan_p
                     .journal_path
                     .clone()
                     .or(self.autonomy.journal_path.clone());
-                if previous_node != current_node_id
+                if (previous_node != current_node_id
                     || previous_evidence_valid != self.autonomy.current_evidence_valid
-                    || previous_evidence_status != self.autonomy.current_evidence_status
+                    || previous_evidence_status != self.autonomy.current_evidence_status)
+                    && let Some(journal_path) = self.autonomy.journal_path.as_deref()
                 {
-                    if let Some(journal_path) = self.autonomy.journal_path.as_deref() {
-                        let _ = append_autonomy_journal_event(
-                            &self.cwd,
-                            Path::new(journal_path),
-                            "node_status",
-                            json!({
-                                "session": self.session.session_id,
-                                "current_node_id": current_node_id,
-                                "current_node_title": current_node_title,
-                                "node_total": status.total_nodes,
-                                "node_completed": status.completed_nodes,
-                                "current_evidence_path": current_evidence_path,
-                                "current_evidence_status": self.autonomy.current_evidence_status,
-                                "current_evidence_valid": self.autonomy.current_evidence_valid,
-                                "current_evidence_blocked": self.autonomy.current_evidence_blocked,
-                                "current_evidence_partial": self.autonomy.current_evidence_partial,
-                                "current_node_attempts": self.autonomy.current_node_attempts,
-                                "current_evidence_errors": current_evidence_errors,
-                            }),
-                        );
-                    }
+                    let _ = append_autonomy_journal_event(
+                        &self.cwd,
+                        Path::new(journal_path),
+                        "node_status",
+                        json!({
+                            "session": self.session.session_id,
+                            "current_node_id": current_node_id,
+                            "current_node_title": current_node_title,
+                            "node_total": status.total_nodes,
+                            "node_completed": status.completed_nodes,
+                            "current_evidence_path": current_evidence_path,
+                            "current_evidence_status": self.autonomy.current_evidence_status,
+                            "current_evidence_valid": self.autonomy.current_evidence_valid,
+                            "current_evidence_blocked": self.autonomy.current_evidence_blocked,
+                            "current_evidence_partial": self.autonomy.current_evidence_partial,
+                            "current_node_attempts": self.autonomy.current_node_attempts,
+                            "current_evidence_errors": current_evidence_errors,
+                        }),
+                    );
                 }
             }
             Ok(None) => {}

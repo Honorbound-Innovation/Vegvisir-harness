@@ -883,10 +883,8 @@ Steering: {display_content}{attachment_note}"
                         content.push_str(detail);
                     }
                     self.push_live_tool_message(content);
-                    if ok {
-                        if let Some(detail) = detail {
-                            self.push_assistant_tool_artifact(&name, detail);
-                        }
+                    if ok && let Some(detail) = detail {
+                        self.push_assistant_tool_artifact(&name, detail);
                     }
                 }
             }
@@ -1147,7 +1145,7 @@ Next step: I should retry or continue from the last successful step instead of l
     pub(crate) fn command_palette_page_size(&self) -> usize {
         self.renderer
             .viewport
-            .map(|(_, lines)| usize::from(lines.min(12)))
+            .map(|(_, lines)| lines.min(12))
             .or_else(|| {
                 crossterm::terminal::size()
                     .ok()

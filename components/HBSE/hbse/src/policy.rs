@@ -205,7 +205,7 @@ impl PolicyEngine {
         if !policy.allowed_os_uids.is_empty()
             && !request
                 .os_uid
-                .map_or(false, |uid| policy.allowed_os_uids.contains(&uid))
+                .is_some_and(|uid| policy.allowed_os_uids.contains(&uid))
         {
             deny!("OS user not allowed");
         }
@@ -218,7 +218,7 @@ impl PolicyEngine {
             && !request
                 .executable_path
                 .as_ref()
-                .map_or(false, |path| policy.allowed_executable_paths.contains(path))
+                .is_some_and(|path| policy.allowed_executable_paths.contains(path))
         {
             deny!("executable path not allowed");
         }
@@ -228,9 +228,10 @@ impl PolicyEngine {
             }
         }
         if !policy.allowed_executable_sha256.is_empty()
-            && !request.executable_sha256.as_ref().map_or(false, |hash| {
-                policy.allowed_executable_sha256.contains(hash)
-            })
+            && !request
+                .executable_sha256
+                .as_ref()
+                .is_some_and(|hash| policy.allowed_executable_sha256.contains(hash))
         {
             deny!("executable hash not allowed");
         }

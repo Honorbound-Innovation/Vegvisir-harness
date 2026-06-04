@@ -948,6 +948,7 @@ fn is_multipart_request(headers: &serde_json::Map<String, Value>) -> bool {
     })
 }
 
+#[allow(clippy::result_large_err)]
 fn send_multipart_bytes(
     request: ureq::Request,
     body: &[u8],

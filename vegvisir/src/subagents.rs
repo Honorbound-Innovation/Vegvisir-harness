@@ -442,6 +442,7 @@ impl<M: Model> SubAgentSupervisor<M> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_child_worker<N: Model>(
     name: String,
     model: &mut N,

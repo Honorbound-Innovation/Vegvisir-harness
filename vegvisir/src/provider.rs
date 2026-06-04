@@ -4542,7 +4542,7 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
             .provider
             .supports_tool_calls(model, &session.current_provider)
             && self.tools.is_some()
-            && self.tool_executor.is_some()
+            && let Some(executor) = self.tool_executor.as_mut()
         {
             session.activity = "thinking through tool use".to_string();
             let tools = self
@@ -4550,7 +4550,6 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
                 .as_ref()
                 .map(ToolRegistry::schemas)
                 .unwrap_or_default();
-            let executor = self.tool_executor.as_mut().expect("checked above");
             let session_id = session.session_id.clone();
             let current_provider = session.current_provider.clone();
             let steering_rx = self.steering_rx.take();
@@ -4701,19 +4700,19 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
             .provider
             .supports_tool_calls(model, &session.current_provider)
             && self.tools.is_some()
-            && self.tool_executor.is_some()
+            && let Some(executor) = self.tool_executor.as_mut()
         {
             session.activity = "thinking through tool use".to_string();
-            self.emit_event(ProviderRunEvent::Activity(
-                "thinking through tool use".to_string(),
-            ));
+            let event_sink = self.event_sink.clone();
+            emit_provider_event(
+                &event_sink,
+                ProviderRunEvent::Activity("thinking through tool use".to_string()),
+            );
             let tools = self
                 .tools
                 .as_ref()
                 .map(ToolRegistry::schemas)
                 .unwrap_or_default();
-            let executor = self.tool_executor.as_mut().expect("checked above");
-            let event_sink = self.event_sink.clone();
             let current_provider = session.current_provider.clone();
             let steering_rx = self.steering_rx.take();
             let mut approval_required = None::<String>;
@@ -4777,7 +4776,7 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
                         name: name.to_string(),
                         ok: observation.ok,
                         summary: summarize_observation(&observation),
-                        detail: tool_display_detail(&name, &observation),
+                        detail: tool_display_detail(name, &observation),
                     },
                 );
                 let observation_text = if observation.ok {
@@ -4886,10 +4885,10 @@ fn tool_display_detail(name: &str, observation: &Observation) -> Option<String> 
     if !observation.ok {
         return None;
     }
-    if let Some(diff) = observation.data.get("diff").and_then(Value::as_str) {
-        if !diff.trim().is_empty() {
-            return Some(format!("```diff\n{}\n```", diff.trim_end()));
-        }
+    if let Some(diff) = observation.data.get("diff").and_then(Value::as_str)
+        && !diff.trim().is_empty()
+    {
+        return Some(format!("```diff\n{}\n```", diff.trim_end()));
     }
     if name == "read_file" {
         let path = observation

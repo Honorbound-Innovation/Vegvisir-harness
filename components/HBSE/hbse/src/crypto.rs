@@ -32,6 +32,7 @@ pub enum CryptoError {
 pub struct CryptoEngine;
 
 impl CryptoEngine {
+    #[allow(clippy::too_many_arguments)]
     pub fn encrypt_secret(
         &self,
         key_hierarchy: &KeyHierarchy,
@@ -182,6 +183,7 @@ pub fn hash_bytes(value: &[u8]) -> String {
     b64url_no_padding(&Sha256::digest(value))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn secret_aad(
     vault_id: &str,
     namespace_id: &str,

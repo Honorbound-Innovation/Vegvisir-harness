@@ -202,7 +202,7 @@ impl VegvisirCms {
                 if bundle.results.len() >= limit.max(1) {
                     break;
                 }
-                if result.memory.metadata.get("project_id").is_some() {
+                if result.memory.metadata.contains_key("project_id") {
                     continue;
                 }
                 if bundle

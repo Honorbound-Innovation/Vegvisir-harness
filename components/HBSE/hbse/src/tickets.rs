@@ -111,6 +111,7 @@ impl TicketManager {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn issue(
         &self,
         vault_id: &str,

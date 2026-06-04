@@ -64,17 +64,9 @@ pub struct SystemFingerprintProviderBinding {
     pub warning: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SystemFingerprintProvider {
     pub params: ScryptParams,
-}
-
-impl Default for SystemFingerprintProvider {
-    fn default() -> Self {
-        Self {
-            params: ScryptParams::default(),
-        }
-    }
 }
 
 impl SystemFingerprintProvider {

@@ -488,12 +488,11 @@ impl TuiApplication {
                                 .is_model_allowed_for_provider(model, provider_name)
                         })
                         .is_none()
+                    && let Some(default) = self.models.default_for_provider(provider_name)
                 {
-                    if let Some(default) = self.models.default_for_provider(provider_name) {
-                        self.session.current_model = default.name.clone();
-                        if let Some(context_window) = default.context_window {
-                            self.session.context_limit = context_window;
-                        }
+                    self.session.current_model = default.name.clone();
+                    if let Some(context_window) = default.context_window {
+                        self.session.context_limit = context_window;
                     }
                 }
                 Some(format!("Refreshed {count} model(s) from {provider_name}."))

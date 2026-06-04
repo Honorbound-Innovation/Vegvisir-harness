@@ -366,10 +366,10 @@ fn complete_plan(state: &mut RunState) {
         return;
     };
     for item in items {
-        if item.get("status").and_then(Value::as_str) == Some("in_progress") {
-            if let Some(obj) = item.as_object_mut() {
-                obj.insert("status".to_string(), Value::String("passed".to_string()));
-            }
+        if item.get("status").and_then(Value::as_str) == Some("in_progress")
+            && let Some(obj) = item.as_object_mut()
+        {
+            obj.insert("status".to_string(), Value::String("passed".to_string()));
         }
     }
 }

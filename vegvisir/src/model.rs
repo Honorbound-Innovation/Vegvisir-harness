@@ -23,10 +23,10 @@ impl ScriptedModel {
         let decisions = values
             .into_iter()
             .map(|mut value| {
-                if let Value::Object(ref mut object) = value {
-                    if let Some(final_value) = object.remove("final") {
-                        object.insert("final_answer".to_string(), final_value);
-                    }
+                if let Value::Object(ref mut object) = value
+                    && let Some(final_value) = object.remove("final")
+                {
+                    object.insert("final_answer".to_string(), final_value);
                 }
                 serde_json::from_value(value).map_err(Into::into)
             })

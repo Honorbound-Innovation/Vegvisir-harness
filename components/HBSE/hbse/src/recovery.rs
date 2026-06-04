@@ -67,17 +67,9 @@ impl RecoveryPackage {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RecoveryManager {
     provider: PassphraseProvider,
-}
-
-impl Default for RecoveryManager {
-    fn default() -> Self {
-        Self {
-            provider: PassphraseProvider::default(),
-        }
-    }
 }
 
 impl RecoveryManager {

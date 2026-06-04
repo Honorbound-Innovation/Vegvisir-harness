@@ -516,6 +516,7 @@ enum ProviderCommand {
 }
 
 #[derive(Debug, Subcommand)]
+#[allow(clippy::large_enum_variant)]
 enum ModelProviderCommand {
     List,
     Setup {
@@ -2550,6 +2551,7 @@ fn http_path_prefix_from_base_url(base_url: &str) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn model_provider_gateway_command(
     base_url: &str,
     secret_ref: &str,
@@ -2711,6 +2713,7 @@ fn parse_delivery_mode(value: &str) -> Result<DeliveryMode, Box<dyn std::error::
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_access_request(
     secret_ref: String,
     consumer: String,

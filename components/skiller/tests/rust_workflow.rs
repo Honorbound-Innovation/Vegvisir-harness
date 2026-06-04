@@ -1030,7 +1030,7 @@ fn forge_validate_rejects_unsupported_source_and_out_of_range_scores() {
     let report: serde_yaml::Value = serde_yaml::from_str(&report_text).unwrap();
     assert_eq!(report["request_id"].as_str().unwrap(), request_id);
     assert_eq!(report["pass_type"].as_str().unwrap(), "SkillExpansion");
-    assert_eq!(report["valid"].as_bool().unwrap(), false);
+    assert!(!report["valid"].as_bool().unwrap());
     assert!(report["error_count"].as_u64().unwrap() >= 4);
     let errors = report["errors"]
         .as_sequence()
@@ -3194,7 +3194,12 @@ fn registry_publish_writes_rich_provenance_and_index_lifecycle_metadata() {
     assert_eq!(provenance["version"].as_str(), Some(version.as_str()));
     assert_eq!(provenance["force"].as_bool(), Some(true));
     assert_eq!(provenance["readiness_ready"].as_bool(), Some(false));
-    assert!(provenance["readiness_blockers"].as_array().unwrap().len() > 0);
+    assert!(
+        !provenance["readiness_blockers"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     assert!(provenance["content_manifest_hash"].as_str().unwrap().len() == 64);
     assert!(provenance["source_count"].as_u64().unwrap() > 0);
     assert!(provenance["skill_count"].as_u64().unwrap() > 0);

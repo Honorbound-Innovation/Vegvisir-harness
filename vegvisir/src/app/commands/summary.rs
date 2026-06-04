@@ -315,15 +315,15 @@ fn append_git_state(out: &mut String, cwd: &std::path::Path) {
         }
         Err(error) => push_line(out, &format!("- Git status unavailable: {error}")),
     }
-    if let Ok(branch) = run_git(cwd, &["branch", "--show-current"]) {
-        if !branch.trim().is_empty() {
-            push_line(out, &format!("- branch: `{}`", branch.trim()));
-        }
+    if let Ok(branch) = run_git(cwd, &["branch", "--show-current"])
+        && !branch.trim().is_empty()
+    {
+        push_line(out, &format!("- branch: `{}`", branch.trim()));
     }
-    if let Ok(head) = run_git(cwd, &["rev-parse", "--short", "HEAD"]) {
-        if !head.trim().is_empty() {
-            push_line(out, &format!("- head: `{}`", head.trim()));
-        }
+    if let Ok(head) = run_git(cwd, &["rev-parse", "--short", "HEAD"])
+        && !head.trim().is_empty()
+    {
+        push_line(out, &format!("- head: `{}`", head.trim()));
     }
     push_line(out, "");
 }

@@ -210,17 +210,12 @@ impl AgentProfile {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum McpTransport {
+    #[default]
     Stdio,
     Http,
-}
-
-impl Default for McpTransport {
-    fn default() -> Self {
-        Self::Stdio
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

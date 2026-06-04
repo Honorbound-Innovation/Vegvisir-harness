@@ -1038,6 +1038,7 @@ fn strip_thinking_trace_sections(content: &str) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compact_system_message_line(
     marker: &str,
     role_label: &str,
@@ -1504,9 +1505,7 @@ fn segment_chat_content(text: &str) -> Vec<ChatContentSegment> {
         }
 
         if is_unfenced_code_line(line) {
-            if pending_code.is_empty() {
-                pending_language = detect_code_language(line);
-            } else if pending_language == "text" {
+            if pending_code.is_empty() || pending_language == "text" {
                 pending_language = detect_code_language(line);
             }
             pending_code.push(line.to_string());
@@ -2267,7 +2266,7 @@ fn draw_suggestions(f: &mut Frame<'_>, app: &TuiApplication, input_area: Rect, s
         return;
     }
     let count = app.input.suggestions.len().min(8) as u16;
-    let width = input_area.width.min(92).max(30);
+    let width = input_area.width.clamp(30, 92);
     let height = count + 2;
     let x = input_area.x;
     let y = input_area.y.saturating_sub(height);
@@ -2951,7 +2950,7 @@ fn draw_command_palette(f: &mut Frame<'_>, app: &TuiApplication, screen: Rect) {
 }
 
 fn command_palette_rect(screen: Rect, visible_items: usize) -> Rect {
-    let width = screen.width.min(92).max(34);
+    let width = screen.width.clamp(34, 92);
     let height = (visible_items as u16 + 4).min(screen.height.saturating_sub(4).max(8));
     Rect {
         x: screen.x + screen.width.saturating_sub(width) / 2,
@@ -3289,7 +3288,7 @@ fn input_height(input: &InputState, terminal_width: u16) -> u16 {
     if should_collapse_paste(input, width) {
         return 4;
     }
-    let rows = input.visual_line_count(width).min(8).max(1) as u16;
+    let rows = input.visual_line_count(width).clamp(1, 8) as u16;
     rows + 2
 }
 
@@ -3339,7 +3338,7 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
 }
 
 fn search_rect(area: Rect) -> Rect {
-    let width = area.width.min(92).max(32);
+    let width = area.width.clamp(32, 92);
     Rect {
         x: area.x + area.width.saturating_sub(width) / 2,
         y: area

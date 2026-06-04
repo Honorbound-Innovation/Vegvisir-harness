@@ -122,6 +122,7 @@ impl RunArtifactManager {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn start_with_run_id(
         workspace: impl AsRef<Path>,
         data_root: impl AsRef<Path>,

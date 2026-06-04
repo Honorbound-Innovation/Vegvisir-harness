@@ -180,8 +180,7 @@ fn parse_worker_count(raw: &str, available: usize, reserved: usize) -> Option<us
 fn auto_worker_count(available: usize, reserved: usize) -> usize {
     available
         .saturating_sub(reserved)
-        .max(1)
-        .min(ABSOLUTE_MAX_WORKERS)
+        .clamp(1, ABSOLUTE_MAX_WORKERS)
 }
 
 #[cfg(test)]

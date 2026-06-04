@@ -914,6 +914,7 @@ impl LslRegistry {
             .min()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn collect_dependency_plan(
         &self,
         id: &str,
@@ -970,7 +971,7 @@ impl LslRegistry {
                     );
                 }
                 "related" => {
-                    if depth + 1 <= max_depth && !seen.contains(&link.to) {
+                    if depth < max_depth && !seen.contains(&link.to) {
                         self.collect_dependency_plan(
                             &link.to,
                             Some(relation.to_string()),
@@ -1004,7 +1005,7 @@ impl LslRegistry {
                     }
                 }
                 "fallback" => {
-                    if term_overlap(query_terms, &[link.to.clone()]) > 0 {
+                    if term_overlap(query_terms, std::slice::from_ref(&link.to)) > 0 {
                         self.collect_dependency_plan(
                             &link.to,
                             Some(relation.to_string()),

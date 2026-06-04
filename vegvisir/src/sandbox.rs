@@ -472,10 +472,10 @@ fn open_read_no_follow(path: &Path, bypass: bool) -> anyhow::Result<fs::File> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        return Ok(fs::OpenOptions::new()
+        Ok(fs::OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NOFOLLOW)
-            .open(path)?);
+            .open(path)?)
     }
     #[cfg(not(unix))]
     {
@@ -490,12 +490,12 @@ fn open_write_no_follow(path: &Path, bypass: bool) -> anyhow::Result<fs::File> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        return Ok(fs::OpenOptions::new()
+        Ok(fs::OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
             .custom_flags(libc::O_NOFOLLOW)
-            .open(path)?);
+            .open(path)?)
     }
     #[cfg(not(unix))]
     {

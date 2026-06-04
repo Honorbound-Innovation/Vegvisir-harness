@@ -423,17 +423,9 @@ pub mod theme {
         }
     }
 
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, Default)]
     pub struct ThemeRenderer {
         pub theme: UiTheme,
-    }
-
-    impl Default for ThemeRenderer {
-        fn default() -> Self {
-            Self {
-                theme: UiTheme::default(),
-            }
-        }
     }
 
     impl ThemeRenderer {
@@ -604,22 +596,14 @@ pub mod layout {
         rendered
     }
 
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, Default)]
     pub struct LayoutRenderer {
         pub theme: ThemeRenderer,
         pub viewport: Option<(usize, usize)>,
     }
 
-    impl Default for LayoutRenderer {
-        fn default() -> Self {
-            Self {
-                theme: ThemeRenderer::default(),
-                viewport: None,
-            }
-        }
-    }
-
     impl LayoutRenderer {
+        #[allow(clippy::too_many_arguments)]
         pub fn render_startup(
             &self,
             session: &SessionState,
@@ -859,14 +843,14 @@ pub mod layout {
             {
                 lines.push(String::new());
             }
-            if session.status == "streaming" {
-                if let Some(activity) = self.activity_label(session) {
-                    lines.push(format!(
-                        "{:<6} {}",
-                        "agent",
-                        truncate(&activity, width.saturating_sub(12).max(20))
-                    ));
-                }
+            if session.status == "streaming"
+                && let Some(activity) = self.activity_label(session)
+            {
+                lines.push(format!(
+                    "{:<6} {}",
+                    "agent",
+                    truncate(&activity, width.saturating_sub(12).max(20))
+                ));
             }
             let max_offset = lines.len().saturating_sub(inner_height);
             let offset = scroll_offset.min(max_offset);
@@ -1465,14 +1449,14 @@ pub mod layout {
     }
 
     fn highlight_json(line: &str, theme: &ThemeRenderer) -> String {
-        if let Some((key, rest)) = line.split_once(':') {
-            if key.trim_start().starts_with('"') {
-                return format!(
-                    "{}:{}",
-                    theme.paint(key, "code_keyword"),
-                    theme.paint(rest, "code_string")
-                );
-            }
+        if let Some((key, rest)) = line.split_once(':')
+            && key.trim_start().starts_with('"')
+        {
+            return format!(
+                "{}:{}",
+                theme.paint(key, "code_keyword"),
+                theme.paint(rest, "code_string")
+            );
         }
         theme.paint(line, "code")
     }
@@ -1535,7 +1519,7 @@ pub mod layout {
             }
         }
         if !token.is_empty() {
-            out.push_str(&paint_token(&token, &keywords, theme));
+            out.push_str(&paint_token(&token, keywords, theme));
         }
         out
     }
@@ -2006,17 +1990,16 @@ pub mod layout {
             .flat_map(|(row_index, row)| {
                 let mut rendered = vec![format_table_row(&row, &widths, theme)];
                 if row_index == 0 {
-                    rendered.push(theme.paint(
-                        format!(
-                            "{}",
+                    rendered.push(
+                        theme.paint(
                             widths
                                 .iter()
                                 .map(|cell_width| "─".repeat(cell_width + 2))
                                 .collect::<Vec<_>>()
-                                .join("┼")
+                                .join("┼"),
+                            "table",
                         ),
-                        "table",
-                    ));
+                    );
                 }
                 rendered
             })
@@ -2070,8 +2053,10 @@ mod tests {
     fn layout_renderer_can_use_explicit_viewport() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let app = crate::app::TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
-        let mut renderer = LayoutRenderer::default();
-        renderer.viewport = Some((72, 24));
+        let renderer = LayoutRenderer {
+            viewport: Some((72, 24)),
+            ..Default::default()
+        };
 
         let output = renderer.render_startup(
             &app.session,
@@ -2095,8 +2080,10 @@ mod tests {
     fn layout_renderer_surfaces_pending_approval() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let app = crate::app::TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
-        let mut renderer = LayoutRenderer::default();
-        renderer.viewport = Some((96, 30));
+        let renderer = LayoutRenderer {
+            viewport: Some((96, 30)),
+            ..Default::default()
+        };
         let approval = ApprovalRequest {
             id: "apr_test".to_string(),
             reason: "Risky tool requires human approval: write_file".to_string(),
