@@ -27,6 +27,7 @@ pub mod profile;
 pub mod prompts;
 pub mod provider;
 pub mod retrieval;
+pub mod run_artifacts;
 pub mod runtime;
 pub mod sandbox;
 pub mod setup;
