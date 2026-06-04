@@ -254,6 +254,7 @@ impl TuiApplication {
                 "Full redraw requested.".to_string()
             }
             "/cancel" => self.cancel_pending_response(),
+            "/turn-repair" => self.turn_repair_command(&args),
             "/auto" | "/autonomous" => self.autonomous_command(&args),
             "/autonomy" => self.autonomy_command(&args),
             "/history" => self.history(),

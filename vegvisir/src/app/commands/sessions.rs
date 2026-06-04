@@ -136,6 +136,7 @@ impl TuiApplication {
         }
 
         self.session = loaded;
+        self.turn_repair(false);
         self.session.status = "ready".to_string();
         self.session.activity.clear();
         self.session.activity_tick = 0;
@@ -389,6 +390,7 @@ impl TuiApplication {
         }
         self.session = restored;
         self.session.cwd = self.cwd.display().to_string();
+        self.turn_repair(false);
         self.session.status = "ready".to_string();
         self.session.activity.clear();
         self.session.activity_tick = 0;
@@ -448,6 +450,7 @@ impl TuiApplication {
                 .unwrap_or_else(default_system_prompt);
         }
         self.session.cwd = self.cwd.display().to_string();
+        self.turn_repair(false);
         if self.session.active_agent_id.is_none() {
             self.apply_provider_selection_for_workspace();
         }

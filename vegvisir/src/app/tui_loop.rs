@@ -54,6 +54,7 @@ impl TuiApplication {
             }
             self.poll_stream_events();
             self.poll_pending_send();
+            self.turn_repair(false);
             self.poll_autonomy_controller();
             self.poll_background_jobs();
             if self.pending_editor_action.is_some() {

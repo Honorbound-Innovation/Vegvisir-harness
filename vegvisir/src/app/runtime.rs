@@ -66,6 +66,9 @@ impl TuiApplication {
         let worker_cancel_token = Arc::clone(&cancel_token);
         self.pending_stream = Some(stream_rx);
         self.pending_steering = Some(steering_tx);
+        let now = Instant::now();
+        self.pending_turn_started_at = Some(now);
+        self.pending_turn_last_activity_at = Some(now);
         let handle = thread::spawn(move || -> anyhow::Result<SessionState> {
             let mut cms = VegvisirCms::open({
                 cms_config.commit_writebacks = true;
@@ -202,9 +205,7 @@ impl TuiApplication {
                 self.restore_latest_visible_user_message(&mut session);
                 let had_tool_activity = self.completed_session_had_tool_activity(&session);
                 self.session = session;
-                self.pending_stream = None;
-                self.pending_cancel = None;
-                self.pending_steering = None;
+                self.clear_pending_turn_runtime_handles();
                 self.autonomy.last_turn_had_tools = had_tool_activity;
                 self.autosave_session();
             }
@@ -215,9 +216,7 @@ impl TuiApplication {
                 self.poll_stream_events();
                 self.session.status = "ready".to_string();
                 self.session.activity.clear();
-                self.pending_stream = None;
-                self.pending_cancel = None;
-                self.pending_steering = None;
+                self.clear_pending_turn_runtime_handles();
                 self.pop_empty_assistant_placeholder();
                 if error.to_string() == "Cancelled" {
                     self.pop_last_assistant_response();
@@ -241,9 +240,7 @@ impl TuiApplication {
                 self.poll_stream_events();
                 self.session.status = "ready".to_string();
                 self.session.activity.clear();
-                self.pending_stream = None;
-                self.pending_cancel = None;
-                self.pending_steering = None;
+                self.clear_pending_turn_runtime_handles();
                 self.pop_empty_assistant_placeholder();
                 self.push_turn_failure_summary(
                     "provider worker panicked before completing the turn".to_string(),
@@ -464,9 +461,7 @@ Steering: {display_content}{attachment_note}"
             cancel_token.store(true, Ordering::SeqCst);
         }
         drop(handle);
-        self.pending_stream = None;
-        self.pending_cancel = None;
-        self.pending_steering = None;
+        self.clear_pending_turn_runtime_handles();
         self.session.status = "ready".to_string();
         self.session.activity.clear();
         self.pop_last_assistant_response();
@@ -482,6 +477,162 @@ Steering: {display_content}{attachment_note}"
             }),
         );
         "Cancelled in-flight model response.".to_string()
+    }
+
+    pub(crate) fn turn_repair_command(&mut self, args: &[String]) -> String {
+        let force = args
+            .iter()
+            .any(|arg| matches!(arg.trim(), "force" | "--force" | "-f"));
+        self.turn_repair(force).unwrap_or_else(|| {
+            if self.pending_send.is_some() {
+                "Turn repair: active turn is still running and has not crossed the repair timeout. Use `/turn-repair force` to cancel and revive it if it is truly stuck.".to_string()
+            } else {
+                "Turn repair: no stuck/dead turn detected.".to_string()
+            }
+        })
+    }
+
+    pub(crate) fn turn_repair(&mut self, force: bool) -> Option<String> {
+        self.poll_stream_events();
+
+        if let Some(handle) = self.pending_send.take() {
+            if handle.is_finished() {
+                self.pending_send = Some(handle);
+                if self.poll_pending_send() {
+                    return Some(
+                        "Turn repair: finalized a completed provider worker that was still marked pending."
+                            .to_string(),
+                    );
+                }
+                return Some(
+                    "Turn repair: provider worker was finished but finalization made no visible change."
+                        .to_string(),
+                );
+            }
+
+            let now = Instant::now();
+            let started_at = self.pending_turn_started_at.unwrap_or(now);
+            let last_activity_at = self.pending_turn_last_activity_at.unwrap_or(started_at);
+            let age = now.saturating_duration_since(started_at);
+            let idle = now.saturating_duration_since(last_activity_at);
+            let timeout = turn_repair_idle_timeout();
+            if force || (age >= timeout && idle >= timeout) {
+                if let Some(cancel_token) = &self.pending_cancel {
+                    cancel_token.store(true, Ordering::SeqCst);
+                }
+                drop(handle);
+                self.clear_pending_turn_runtime_handles();
+                self.session.status = "ready".to_string();
+                self.session.activity.clear();
+                self.pop_empty_assistant_placeholder();
+                let reason = if force {
+                    "turn_repair was forced by the operator while a provider worker was still in-flight".to_string()
+                } else {
+                    format!(
+                        "turn_repair detected an in-flight provider worker with no stream/tool activity for {}s (turn age {}s)",
+                        idle.as_secs(),
+                        age.as_secs()
+                    )
+                };
+                self.push_turn_failure_summary(format!(
+                    "{reason}. The in-flight worker was detached/cancelled, partial output and recent tool context were preserved, and the UI was returned to ready so the next turn can retry or continue."
+                ));
+                self.finish_turn_repair_housekeeping(&reason);
+                return Some(format!(
+                    "Turn repair: revived stuck in-flight turn. {reason}."
+                ));
+            }
+
+            self.pending_send = Some(handle);
+            return None;
+        }
+
+        let mut reasons = Vec::new();
+        if self.pending_stream.is_some() {
+            self.pending_stream = None;
+            reasons.push("removed a stranded stream receiver".to_string());
+        }
+        if self.pending_cancel.is_some() {
+            self.pending_cancel = None;
+            reasons.push("removed a stranded cancel token".to_string());
+        }
+        if self.pending_steering.is_some() {
+            self.pending_steering = None;
+            reasons.push("removed a stranded steering channel".to_string());
+        }
+        self.pending_turn_started_at = None;
+        self.pending_turn_last_activity_at = None;
+
+        if self.session.status == "streaming" {
+            self.session.status = "ready".to_string();
+            self.session.activity.clear();
+            reasons.push(
+                "session status was streaming without an in-flight provider worker".to_string(),
+            );
+        }
+
+        if reasons.is_empty() {
+            return None;
+        }
+
+        let should_summarize = self.has_repairable_turn_artifact();
+        self.pop_empty_assistant_placeholder();
+        let reason = reasons.join("; ");
+        if should_summarize {
+            self.push_turn_failure_summary(format!(
+                "turn_repair detected a dead turn: {reason}. The stale runtime handles were cleared and the UI was returned to ready so the next turn can retry or continue."
+            ));
+        }
+        self.finish_turn_repair_housekeeping(&reason);
+        Some(format!("Turn repair: revived dead turn ({reason})."))
+    }
+
+    fn clear_pending_turn_runtime_handles(&mut self) {
+        self.pending_stream = None;
+        self.pending_cancel = None;
+        self.pending_steering = None;
+        self.pending_turn_started_at = None;
+        self.pending_turn_last_activity_at = None;
+    }
+
+    fn finish_turn_repair_housekeeping(&mut self, reason: &str) {
+        if self.autonomy.active {
+            self.autonomy.active = false;
+            self.autonomy.enabled = false;
+            self.autonomy.last_status = format!("failed: turn repair: {reason}");
+        }
+        self.autosave_session();
+        self.chat_scroll_offset = 0;
+        self.redraw_requested = true;
+        self.logger.emit(
+            "turn_repaired",
+            json!({
+                "session": self.session.session_id,
+                "workspace": self.cwd.display().to_string(),
+                "reason": reason,
+            }),
+        );
+    }
+
+    fn has_repairable_turn_artifact(&self) -> bool {
+        let Some(last_user_index) = self
+            .session
+            .messages
+            .iter()
+            .rposition(|message| message.role == "user")
+        else {
+            return self
+                .session
+                .messages
+                .last()
+                .is_some_and(|message| message.role == "assistant");
+        };
+        self.session.messages[last_user_index + 1..]
+            .iter()
+            .any(|message| {
+                message.role == "assistant"
+                    || (message.role == "system" && is_live_tool_message(&message.content))
+            })
     }
 
     pub(crate) fn handle_ctrl_c(&mut self) {
@@ -501,7 +652,8 @@ Steering: {display_content}{attachment_note}"
             for _ in 0..MAX_STREAM_EVENTS_PER_POLL {
                 match receiver.try_recv() {
                     Ok(event) => events.push(event),
-                    Err(_) => break,
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => break,
                 }
             }
             reached_frame_budget = events.len() == MAX_STREAM_EVENTS_PER_POLL;
@@ -509,6 +661,7 @@ Steering: {display_content}{attachment_note}"
         if events.is_empty() {
             return;
         }
+        self.pending_turn_last_activity_at = Some(Instant::now());
         for event in events {
             match event {
                 StreamEvent::Delta(delta) => {
@@ -959,6 +1112,16 @@ fn first_nonempty_line(content: &str) -> &str {
         .find(|line| !line.trim().is_empty())
         .unwrap_or(content)
         .trim()
+}
+
+fn turn_repair_idle_timeout() -> Duration {
+    Duration::from_secs(
+        std::env::var("VEGVISIR_TURN_REPAIR_IDLE_SECONDS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(600)
+            .clamp(30, 86_400),
+    )
 }
 
 fn spawn_cms_complete_turn_writeback(

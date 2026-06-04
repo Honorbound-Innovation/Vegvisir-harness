@@ -101,6 +101,12 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
             &["/stop"],
         ),
         cmd(
+            "/turn-repair",
+            "detect and revive a stuck/dead model turn",
+            "/turn-repair [force]",
+            &["/repair-turn", "/revive-turn"],
+        ),
+        cmd(
             "/auto",
             "control prompt-contract autonomous working mode",
             "/auto [status|on|off]",

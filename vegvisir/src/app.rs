@@ -8,7 +8,7 @@ use std::{
         mpsc::{Receiver, Sender},
     },
     thread::JoinHandle,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
@@ -108,6 +108,8 @@ pub struct TuiApplication {
     pending_stream: Option<Receiver<StreamEvent>>,
     pending_cancel: Option<Arc<AtomicBool>>,
     pending_steering: Option<Sender<String>>,
+    pending_turn_started_at: Option<Instant>,
+    pending_turn_last_activity_at: Option<Instant>,
     pub pending_editor_action: Option<PendingEditorAction>,
     pub command_palette_open: bool,
     pub help_overlay_open: bool,
@@ -760,6 +762,8 @@ impl TuiApplication {
             pending_stream: None,
             pending_cancel: None,
             pending_steering: None,
+            pending_turn_started_at: None,
+            pending_turn_last_activity_at: None,
             pending_editor_action: None,
             command_palette_open: false,
             help_overlay_open: false,
@@ -1138,7 +1142,10 @@ mod tests {
     use super::{StreamEvent, TuiApplication};
     use crate::core::ChatMessage;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
-    use std::sync::mpsc;
+    use std::{
+        sync::{Arc, atomic::AtomicBool, mpsc},
+        time::Instant,
+    };
 
     #[test]
     fn terminal_frame_returns_carriage_on_each_rendered_line() {
@@ -1553,6 +1560,152 @@ mod tests {
         assert!(content.contains("Code/Diff update from `write_file`"));
         assert!(content.contains("Final answer that must remain visible"));
         assert!(content.contains("completed cleanly"));
+        Ok(())
+    }
+
+    #[test]
+    fn turn_repair_revives_streaming_session_without_worker() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "fix the stuck thing".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        app.session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: String::new(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        let (_tx, rx) = mpsc::channel();
+        app.pending_stream = Some(rx);
+        app.pending_cancel = Some(Arc::new(AtomicBool::new(false)));
+        app.session.status = "streaming".to_string();
+        app.session.activity = "stale provider activity".to_string();
+        app.redraw_requested = false;
+
+        let report = app.turn_repair(false).expect("dead turn should repair");
+
+        assert!(report.contains("revived dead turn"));
+        assert!(app.pending_stream.is_none());
+        assert!(app.pending_cancel.is_none());
+        assert_eq!(app.session.status, "ready");
+        assert!(app.session.activity.is_empty());
+        assert!(app.redraw_requested);
+        let transcript = app
+            .session
+            .messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            transcript.contains("Turn failed before the model produced a normal final summary")
+        );
+        assert!(transcript.contains("turn_repair detected a dead turn"));
+        assert!(
+            !app.session
+                .messages
+                .iter()
+                .any(|message| message.role == "assistant" && message.content.is_empty())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn turn_repair_finalizes_finished_worker() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        let mut completed = app.session.clone();
+        completed.status = "ready".to_string();
+        completed.activity.clear();
+        completed.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "hello".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        completed.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: "done".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        app.pending_send = Some(std::thread::spawn(move || Ok(completed)));
+        app.session.status = "streaming".to_string();
+
+        for _ in 0..20 {
+            if app
+                .pending_send
+                .as_ref()
+                .is_some_and(|handle| handle.is_finished())
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let report = app
+            .turn_repair(false)
+            .expect("finished worker should finalize");
+
+        assert!(report.contains("finalized a completed provider worker"));
+        assert!(app.pending_send.is_none());
+        assert_eq!(app.session.status, "ready");
+        assert!(
+            app.session
+                .messages
+                .iter()
+                .any(|message| { message.role == "assistant" && message.content == "done" })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn turn_repair_force_cancels_and_revives_inflight_worker() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "long task".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        app.session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: "partial output".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = Arc::clone(&cancel);
+        app.pending_send = Some(std::thread::spawn(move || {
+            while !worker_cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(anyhow::anyhow!("cancel observed"))
+        }));
+        app.pending_cancel = Some(Arc::clone(&cancel));
+        app.pending_turn_started_at = Some(Instant::now());
+        app.pending_turn_last_activity_at = Some(Instant::now());
+        app.session.status = "streaming".to_string();
+
+        let report = app.turn_repair(true).expect("forced repair should revive");
+
+        assert!(report.contains("revived stuck in-flight turn"));
+        assert!(cancel.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(app.pending_send.is_none());
+        assert_eq!(app.session.status, "ready");
+        let transcript = app
+            .session
+            .messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(transcript.contains("partial output"));
+        assert!(transcript.contains("turn_repair was forced"));
         Ok(())
     }
 
