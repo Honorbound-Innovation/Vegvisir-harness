@@ -119,6 +119,7 @@ Headless mode is useful for scripted tasks:
 vegvisir --workspace /path/to/project run "Summarize this repository"
 vegvisir --workspace /path/to/project --artifacts run "Summarize this repository"
 vegvisir --workspace /path/to/project --json --artifacts run "Summarize this repository"
+vegvisir --workspace /path/to/project --artifacts eval golden
 vegvisir --workspace /path/to/project --artifacts verify runtime
 ```
 
@@ -135,7 +136,7 @@ Default location:
 <workspace>/.vegvisir/runs/<run-id>/
 ```
 
-Headless `run` and `verify` commands write bundles when `--artifacts` is set or when `--artifact-dir <root>` is provided. `--artifact-dir` changes the root and writes the bundle as `<root>/<run-id>/`. TUI sends create and finalize turn artifacts automatically in the workspace run directory.
+Headless `run`, `eval`, and `verify` commands write bundles when `--artifacts` is set or when `--artifact-dir <root>` is provided. `--artifact-dir` changes the root and writes the bundle as `<root>/<run-id>/`. TUI sends create and finalize turn artifacts automatically in the workspace run directory.
 
 Current emitted files include:
 
@@ -156,6 +157,8 @@ file-changes.json        redacted git status evidence captured at bundle finaliz
 diff.patch               redacted tracked staged/unstaged git diff evidence captured at bundle finalization
 failure.json             recoverable or fatal worker failure details when a turn fails
 ```
+
+Provider/TUI/headless `run` bundles include prepared-prompt context artifacts. Deterministic `eval` and `verify` bundles may omit `context.md`, `context-sources.json`, and `memory-used.json` because they do not send a provider prompt.
 
 `memory-used.json` records the memory IDs, block/capsule IDs, prompt cache key, and token counts that came from the CMS/ECM prepared prompt envelope; it avoids storing full memory bodies beyond the already-redacted context artifact. `memory-written.json` records completion writeback status and memory IDs from successful headless runs and TUI turns, or an unavailable/no-write status when writeback cannot be captured. `approvals.json` records the pending approval queue snapshot for the run, using redacted/summarized arguments such as command arrays, file paths, and content length rather than raw file content. `verification.json` records observed verification/test tool events when available, otherwise it records `no_verification` for completed runs with no captured checks or `unavailable` for runs that ended before verification evidence could be captured. `subagents.json` records the current durable subagent board snapshot at bundle finalization, including task status, bounded scope/budget, captured final answer/error, observability, and file-change summaries when available. Artifact writers apply best-effort redaction to secret-like JSON keys and common token-shaped text before persisting files, but artifacts should still be treated as local operational evidence rather than a credential store.
 

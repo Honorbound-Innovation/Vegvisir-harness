@@ -717,6 +717,63 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
             .contains("model selection failed")
     );
 
+    let eval_artifact_root = tmp.path().join("eval-artifacts");
+    let eval_artifact_run = std::process::Command::new(binary)
+        .args([
+            "--workspace",
+            tmp.path().to_str().unwrap(),
+            "--artifact-dir",
+            eval_artifact_root.to_str().unwrap(),
+            "eval",
+            "golden",
+        ])
+        .env("VEGVISIR_HOME", tmp.path().join("home-eval-artifacts"))
+        .output()?;
+    assert!(
+        eval_artifact_run.status.success(),
+        "eval artifact run failed: {}",
+        String::from_utf8_lossy(&eval_artifact_run.stderr)
+    );
+    let eval_stdout = String::from_utf8_lossy(&eval_artifact_run.stdout);
+    assert!(eval_stdout.contains("eval summary: passed="));
+    assert!(eval_stdout.contains("artifact_dir:"));
+    let eval_runs = fs::read_dir(&eval_artifact_root)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(eval_runs.len(), 1);
+    let eval_manifest: Value =
+        serde_json::from_str(&fs::read_to_string(eval_runs[0].join("manifest.json"))?)?;
+    assert_eq!(eval_manifest["status"], "completed");
+    assert_eq!(eval_manifest["session_id"], "headless-eval");
+    assert_eq!(eval_manifest["provider"], "harness");
+    assert_eq!(eval_manifest["model"], "eval");
+    let eval_request: Value =
+        serde_json::from_str(&fs::read_to_string(eval_runs[0].join("request.json"))?)?;
+    assert_eq!(eval_request["mode"], "eval");
+    assert_eq!(eval_request["scope"], "golden");
+    let eval_evidence: Value =
+        serde_json::from_str(&fs::read_to_string(eval_runs[0].join("verification.json"))?)?;
+    assert_eq!(eval_evidence["status"], "captured");
+    assert_eq!(eval_evidence["overall"], "passed");
+    assert_eq!(eval_evidence["checks"][0]["source"], "harness");
+    assert!(
+        eval_evidence["checks"][0]["name"]
+            .as_str()
+            .unwrap()
+            .starts_with("vegvisir_eval/")
+    );
+    let eval_memory_written: Value = serde_json::from_str(&fs::read_to_string(
+        eval_runs[0].join("memory-written.json"),
+    )?)?;
+    assert_eq!(eval_memory_written["status"], "unavailable");
+    let eval_approvals: Value =
+        serde_json::from_str(&fs::read_to_string(eval_runs[0].join("approvals.json"))?)?;
+    assert_eq!(eval_approvals["status"], "unavailable");
+    assert!(eval_runs[0].join("result.md").exists());
+    assert!(eval_runs[0].join("subagents.json").exists());
+    assert!(eval_runs[0].join("file-changes.json").exists());
+    assert!(eval_runs[0].join("diff.patch").exists());
+
     let verify_artifact_root = tmp.path().join("verify-artifacts");
     let verify_artifact_run = std::process::Command::new(binary)
         .args([

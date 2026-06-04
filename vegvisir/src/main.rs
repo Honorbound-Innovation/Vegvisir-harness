@@ -192,7 +192,9 @@ fn main() -> anyhow::Result<()> {
                 model,
                 workspace,
             }) => run_model_request(workspace, message, provider, model),
-            Some(Command::Eval { scope, file }) => run_eval(scope, file),
+            Some(Command::Eval { scope, file }) => {
+                run_eval(cli.workspace, scope, file, cli.artifacts, cli.artifact_dir)
+            }
             Some(Command::Verify { scope, workspace }) => run_verify(
                 workspace,
                 scope,
@@ -384,14 +386,106 @@ fn verify_output_passed(output: &str) -> bool {
             .any(|line| line.trim_start().starts_with("fail "))
 }
 
-fn run_eval(scope: String, file: Option<PathBuf>) -> anyhow::Result<()> {
-    let results = if let Some(file) = file {
-        run_eval_file(file)?
+fn run_eval(
+    workspace: PathBuf,
+    scope: String,
+    file: Option<PathBuf>,
+    artifacts: bool,
+    artifact_dir: Option<PathBuf>,
+) -> anyhow::Result<()> {
+    let mut artifact_bundle = if artifacts || artifact_dir.is_some() {
+        Some(RunArtifactManager::start_in(
+            &workspace,
+            default_vegvisir_data_root(),
+            artifact_dir.as_deref(),
+            "headless-eval",
+            "harness",
+            "eval",
+            None,
+        )?)
     } else {
-        run_builtin_evals(&scope)?
+        None
     };
-    println!("{}", format_eval_results(&results));
+    let results = match if let Some(file) = file.as_ref() {
+        run_eval_file(file)
+    } else {
+        run_builtin_evals(&scope)
+    } {
+        Ok(results) => results,
+        Err(error) => {
+            if let Some((manager, mut manifest)) = artifact_bundle.take() {
+                manager.write_request(&serde_json::json!({
+                    "scope": scope,
+                    "file": file.as_ref().map(|path| path.display().to_string()),
+                    "mode": "eval",
+                }))?;
+                manager.write_verification_unavailable(
+                    "eval command failed before verification evidence could be finalized",
+                )?;
+                manager.write_approvals_unavailable(
+                    "eval command does not expose a persistent approval ledger snapshot",
+                )?;
+                manager.fail(&mut manifest, error.to_string(), true)?;
+            }
+            return Err(error);
+        }
+    };
+    let output = format_eval_results(&results);
+    if let Some((manager, mut manifest)) = artifact_bundle.take() {
+        manager.write_request(&serde_json::json!({
+            "scope": scope,
+            "file": file.as_ref().map(|path| path.display().to_string()),
+            "mode": "eval",
+        }))?;
+        manager.write_result(&output)?;
+        manager.write_verification_evidence(&verification_evidence_from_eval_results(
+            manager.run_id.clone(),
+            &scope,
+            file.as_ref().map(|path| path.display().to_string()),
+            &results,
+        ))?;
+        manager.write_memory_written_unavailable(
+            "eval command does not perform completion memory writeback",
+        )?;
+        manager.write_approvals_unavailable(
+            "eval command does not expose a persistent approval ledger snapshot",
+        )?;
+        manager.write_subagents_from_board()?;
+        manager.write_workspace_change_artifacts()?;
+        manager.finish(&mut manifest, RunStatus::Completed)?;
+        println!("{output}");
+        println!("artifact_dir: {}", manager.run_dir.display());
+        return Ok(());
+    }
+    println!("{output}");
     Ok(())
+}
+
+fn verification_evidence_from_eval_results(
+    run_id: String,
+    scope: &str,
+    file: Option<String>,
+    results: &[vegvisir_rust::evals::EvalResult],
+) -> RunVerificationEvidence {
+    RunVerificationEvidence::captured(
+        run_id,
+        results
+            .iter()
+            .map(|result| RunVerificationCheck {
+                name: format!("vegvisir_eval/{}/{}", result.category, result.id),
+                command: Some(match &file {
+                    Some(path) => format!("vegvisir eval --file {path}"),
+                    None => format!("vegvisir eval {scope}"),
+                }),
+                ok: Some(result.passed),
+                summary: result.details.clone(),
+                detail: Some(
+                    serde_json::to_string(result).unwrap_or_else(|_| result.details.clone()),
+                ),
+                source: RunVerificationSource::Harness,
+            })
+            .collect(),
+    )
 }
 
 fn run_headless(

@@ -176,6 +176,8 @@ Options:
       --agent <AGENT>
       --json
       --scripted
+      --artifacts
+      --artifact-dir <ARTIFACT_DIR>
       --dangerously-bypass-approvals-and-sandbox
   -h, --help                                      Print help
 ```
@@ -329,6 +331,8 @@ Options:
       --agent <AGENT>
       --json
       --scripted
+      --artifacts
+      --artifact-dir <ARTIFACT_DIR>
       --dangerously-bypass-approvals-and-sandbox
   -h, --help                                      Print help
 ```
@@ -343,10 +347,21 @@ vegvisir eval all
 vegvisir eval --file ./evals/security.json
 ```
 
+```bash
+vegvisir --workspace /path/to/project --artifacts eval golden
+```
+
+```bash
+vegvisir --workspace /path/to/project --artifact-dir ./audit-runs eval all
+```
+
 Notes:
 
 - `--workspace` controls project scope for tools and memory.
 - `--agent` applies a persistent custom agent profile.
+- `--artifacts` writes a run artifact bundle for the eval run. The default location is `<workspace>/.vegvisir/runs/<run-id>/`.
+- `--artifact-dir <path>` writes the run artifact bundle below that root as `<path>/<run-id>/` and also enables artifact writing.
+- Eval artifact bundles record the formatted eval output in `result.md`, per-case pass/fail checks in `verification.json`, and unavailable memory-write/approval evidence because eval execution is deterministic harness work rather than a provider turn.
 - `--dangerously-bypass-approvals-and-sandbox` is startup-only and should be used only for explicitly trusted sessions.
 
 
@@ -440,7 +455,7 @@ Notes:
 
 ## Run Artifacts
 
-Vegvisir writes auditable run artifact bundles for TUI turns and can write them for headless `run` and `verify` commands on demand. Bundles are local workspace/runtime evidence; do not commit them.
+Vegvisir writes auditable run artifact bundles for TUI turns and can write them for headless `run`, `eval`, and `verify` commands on demand. Bundles are local workspace/runtime evidence; do not commit them.
 
 Default bundle location:
 
@@ -454,6 +469,7 @@ Headless opt-in flags:
 vegvisir --workspace /path/to/project --artifacts run "Summarize this repository"
 vegvisir --workspace /path/to/project --artifact-dir ./audit-runs run "Summarize this repository"
 vegvisir --workspace /path/to/project --json --artifacts run "Summarize this repository"
+vegvisir --workspace /path/to/project --artifacts eval golden
 vegvisir --workspace /path/to/project --artifacts verify runtime
 ```
 
@@ -476,6 +492,8 @@ file-changes.json        redacted git status evidence captured at bundle finaliz
 diff.patch               redacted tracked staged/unstaged git diff evidence captured at bundle finalization
 failure.json             failure detail for failed/recoverable runs
 ```
+
+Provider/TUI/headless `run` bundles include `context.md`, `context-sources.json`, and `memory-used.json`; deterministic `eval` and `verify` bundles may omit prepared-prompt context files because they do not send a provider prompt.
 
 `memory-used.json` records the memory IDs, block/capsule IDs, prompt cache key, and token counts that came from the CMS/ECM prepared prompt envelope; it avoids storing full memory bodies beyond the already-redacted context artifact. `memory-written.json` records completion writeback status and memory IDs from successful headless runs and TUI turns, or an unavailable/no-write status when writeback cannot be captured. `approvals.json` records the pending approval queue snapshot for the run, using redacted/summarized arguments such as command arrays, file paths, and content length rather than raw file content. `verification.json` records observed verification/test tool events when available, otherwise it records `no_verification` for completed runs with no captured checks or `unavailable` for runs that ended before verification evidence could be captured. `subagents.json` records the current durable subagent board snapshot at bundle finalization, including task status, bounded scope/budget, captured final answer/error, observability, and file-change summaries when available.
 
