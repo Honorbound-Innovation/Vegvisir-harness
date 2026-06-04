@@ -498,6 +498,7 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
     assert!(scripted_artifact_dir.join("context-sources.json").exists());
     assert!(scripted_artifact_dir.join("result.md").exists());
     assert!(scripted_artifact_dir.join("file-changes.json").exists());
+    assert!(scripted_artifact_dir.join("diff.patch").exists());
     let scripted_changes: Value = serde_json::from_str(&fs::read_to_string(
         scripted_artifact_dir.join("file-changes.json"),
     )?)?;
@@ -548,6 +549,12 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
             .unwrap()
             .contains("max_steps_exceeded")
     );
+    assert!(
+        failed_scripted_artifact_dir
+            .join("file-changes.json")
+            .exists()
+    );
+    assert!(failed_scripted_artifact_dir.join("diff.patch").exists());
 
     let provider_run = std::process::Command::new(binary)
         .args([
@@ -606,6 +613,7 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
     assert!(provider_artifact_dir.join("context-sources.json").exists());
     assert!(provider_artifact_dir.join("result.md").exists());
     assert!(provider_artifact_dir.join("file-changes.json").exists());
+    assert!(provider_artifact_dir.join("diff.patch").exists());
     let provider_changes: Value = serde_json::from_str(&fs::read_to_string(
         provider_artifact_dir.join("file-changes.json"),
     )?)?;
@@ -649,6 +657,7 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
     )?)?;
     assert_eq!(failed_provider_manifest["status"], "failed");
     assert!(failed_provider_runs[0].join("file-changes.json").exists());
+    assert!(failed_provider_runs[0].join("diff.patch").exists());
     let failed_provider_failure: Value = serde_json::from_str(&fs::read_to_string(
         failed_provider_runs[0].join("failure.json"),
     )?)?;

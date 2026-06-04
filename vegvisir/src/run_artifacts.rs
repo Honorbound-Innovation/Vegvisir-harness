@@ -18,6 +18,7 @@ use crate::provider::ProviderRunEvent;
 pub const RUN_ARTIFACT_SCHEMA_VERSION: u32 = 1;
 const REDACTION: &str = "[REDACTED]";
 const MAX_FILE_CHANGE_ENTRIES: usize = 200;
+const MAX_WORKSPACE_DIFF_BYTES: usize = 262_144;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -200,6 +201,15 @@ impl RunArtifactManager {
         self.write_json_file("file-changes.json", &evidence)
     }
 
+    pub fn write_workspace_diff(&self) -> anyhow::Result<()> {
+        self.write_text_file("diff.patch", &capture_workspace_diff(&self.workspace))
+    }
+
+    pub fn write_workspace_change_artifacts(&self) -> anyhow::Result<()> {
+        self.write_workspace_file_changes()?;
+        self.write_workspace_diff()
+    }
+
     pub fn write_verification(&self, verification: &Value) -> anyhow::Result<()> {
         self.write_json_value_file("verification.json", verification)
     }
@@ -259,7 +269,7 @@ impl RunArtifactManager {
             timestamp: Utc::now(),
         };
         self.write_failure(&failure)?;
-        self.write_workspace_file_changes()?;
+        self.write_workspace_change_artifacts()?;
         self.finish(manifest, RunStatus::Failed)
     }
 
@@ -394,6 +404,93 @@ fn parse_git_status_line(line: &str) -> WorkspaceFileChange {
     let status_code = line.get(0..2).unwrap_or(line).to_string();
     let path = line.get(3..).unwrap_or("").trim().to_string();
     WorkspaceFileChange { status_code, path }
+}
+
+fn capture_workspace_diff(workspace: &Path) -> String {
+    let captures = [
+        (
+            "staged changes",
+            vec!["diff", "--cached", "--no-ext-diff", "--no-color", "--"],
+        ),
+        (
+            "unstaged changes",
+            vec!["diff", "--no-ext-diff", "--no-color", "--"],
+        ),
+    ];
+    let mut output = String::from("# Vegvisir workspace diff\n");
+    let mut wrote_diff = false;
+    let mut errors = Vec::new();
+
+    for (label, args) in captures {
+        match Command::new("git")
+            .arg("-C")
+            .arg(workspace)
+            .args(args)
+            .output()
+        {
+            Ok(command_output) if command_output.status.success() => {
+                let diff = String::from_utf8_lossy(&command_output.stdout);
+                if diff.trim().is_empty() {
+                    continue;
+                }
+                if !output.ends_with('\n') {
+                    output.push('\n');
+                }
+                output.push_str("\n# ");
+                output.push_str(label);
+                output.push('\n');
+                push_truncated_diff(&mut output, &diff);
+                wrote_diff = true;
+            }
+            Ok(command_output) => {
+                let stderr = String::from_utf8_lossy(&command_output.stderr)
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                errors.push(if stderr.is_empty() {
+                    format!("{label}: git diff exited with {}", command_output.status)
+                } else {
+                    format!("{label}: {stderr}")
+                });
+            }
+            Err(_) => errors.push(format!("{label}: git diff failed to start")),
+        }
+    }
+
+    if !errors.is_empty() {
+        output.push_str("\n# Diff capture unavailable or incomplete\n");
+        for error in errors {
+            output.push_str("# ");
+            output.push_str(&error);
+            output.push('\n');
+        }
+    } else if !wrote_diff {
+        output.push_str("\n# No tracked workspace diffs captured.\n");
+    }
+
+    output
+}
+
+fn push_truncated_diff(output: &mut String, diff: &str) {
+    if diff.len() <= MAX_WORKSPACE_DIFF_BYTES {
+        output.push_str(diff);
+        if !diff.ends_with('\n') {
+            output.push('\n');
+        }
+        return;
+    }
+
+    let mut end = MAX_WORKSPACE_DIFF_BYTES;
+    while end > 0 && !diff.is_char_boundary(end) {
+        end -= 1;
+    }
+    output.push_str(&diff[..end]);
+    if !output.ends_with('\n') {
+        output.push('\n');
+    }
+    output.push_str("# [truncated after ");
+    output.push_str(&MAX_WORKSPACE_DIFF_BYTES.to_string());
+    output.push_str(" bytes]\n");
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -820,6 +917,63 @@ mod tests {
                 .iter()
                 .any(|change| change.status_code == "??" && change.path == "changed.txt")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn run_artifacts_captures_workspace_diff() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        fs::create_dir_all(&workspace)?;
+        let git_init = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&workspace)
+            .arg("init")
+            .output()?;
+        if !git_init.status.success() {
+            return Ok(());
+        }
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&workspace)
+            .args(["config", "user.email", "vegvisir@example.test"])
+            .output()?;
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&workspace)
+            .args(["config", "user.name", "Vegvisir Test"])
+            .output()?;
+        fs::write(workspace.join("tracked.txt"), "before\n")?;
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&workspace)
+            .args(["add", "tracked.txt"])
+            .output()?;
+        let commit = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&workspace)
+            .args(["commit", "-m", "initial"])
+            .output()?;
+        if !commit.status.success() {
+            return Ok(());
+        }
+        fs::write(workspace.join("tracked.txt"), "before\nafter\n")?;
+
+        let (manager, _manifest) = RunArtifactManager::start(
+            &workspace,
+            tmp.path().join("data"),
+            "session-1",
+            "demo",
+            "demo-model",
+            None,
+        )?;
+
+        manager.write_workspace_diff()?;
+
+        let diff = fs::read_to_string(manager.artifact_path("diff.patch"))?;
+        assert!(diff.contains("# Vegvisir workspace diff"));
+        assert!(diff.contains("diff --git a/tracked.txt b/tracked.txt"));
+        assert!(diff.contains("+after"));
         Ok(())
     }
 

@@ -674,9 +674,9 @@ Steering: {display_content}{attachment_note}"
                 "Warning: failed to write run artifact result: {error}"
             ));
         }
-        if let Err(error) = manager.write_workspace_file_changes() {
+        if let Err(error) = manager.write_workspace_change_artifacts() {
             self.push_system_message(format!(
-                "Warning: failed to write run artifact file changes: {error}"
+                "Warning: failed to write run artifact workspace changes: {error}"
             ));
         }
         if let Err(error) = manager.finish(&mut manifest, status) {
@@ -702,9 +702,9 @@ Steering: {display_content}{attachment_note}"
                 "Warning: failed to write run artifact failure: {error}"
             ));
         }
-        if let Err(error) = manager.write_workspace_file_changes() {
+        if let Err(error) = manager.write_workspace_change_artifacts() {
             self.push_system_message(format!(
-                "Warning: failed to write run artifact file changes: {error}"
+                "Warning: failed to write run artifact workspace changes: {error}"
             ));
         }
         if let Err(error) = manager.finish(&mut manifest, RunStatus::Failed) {

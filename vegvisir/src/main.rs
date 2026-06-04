@@ -379,7 +379,7 @@ fn run_headless(
         if let Some(answer) = result.final_answer.as_deref() {
             manager.write_result(answer)?;
         }
-        manager.write_workspace_file_changes()?;
+        manager.write_workspace_change_artifacts()?;
         if status == RunStatus::Failed {
             let message = result.final_answer.as_deref().unwrap_or(&result.status);
             manager.write_failure(&vegvisir_rust::run_artifacts::RunFailure {
@@ -575,7 +575,7 @@ fn write_provider_headless_artifacts(
     }))?;
     manager.write_context_artifacts(&observed.prompt_envelope)?;
     manager.write_result(&observed.response)?;
-    manager.write_workspace_file_changes()?;
+    manager.write_workspace_change_artifacts()?;
     for event in &observed.events {
         manager.append_observed_provider_event(event)?;
     }
