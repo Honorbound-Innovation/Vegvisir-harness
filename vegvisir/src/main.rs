@@ -378,6 +378,12 @@ fn run_headless(
         manager.write_context_artifacts(&envelope)?;
         if let Some(answer) = result.final_answer.as_deref() {
             manager.write_result(answer)?;
+            let memory_write_results = cms.complete_turn(&prompt, answer)?;
+            manager.write_memory_written_from_results(&memory_write_results)?;
+        } else {
+            manager.write_memory_written_unavailable(
+                "scripted run produced no final answer for completion memory writeback",
+            )?;
         }
         manager.write_workspace_change_artifacts()?;
         if status == RunStatus::Failed {
@@ -575,6 +581,10 @@ fn write_provider_headless_artifacts(
     }))?;
     manager.write_context_artifacts(&observed.prompt_envelope)?;
     manager.write_result(&observed.response)?;
+    manager.write_memory_written_from_outcome(
+        &observed.memory_write_results,
+        observed.memory_write_error.as_deref(),
+    )?;
     manager.write_workspace_change_artifacts()?;
     for event in &observed.events {
         manager.append_observed_provider_event(event)?;

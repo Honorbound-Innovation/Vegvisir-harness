@@ -144,6 +144,7 @@ request.json             redacted prompt/request metadata
 context.md               redacted CMS/ECM-prepared provider prompt context
 context-sources.json     redacted prompt-cache block/capsule/source metadata for the prepared context
 memory-used.json         redacted memory/source-id evidence derived from the prepared prompt envelope
+memory-written.json      redacted completion memory writeback ids/status when captured
 result.md                redacted final answer when available
 provider-events.jsonl    redacted provider/runtime stream events
 tool-events.jsonl        redacted tool start/end events
@@ -153,7 +154,7 @@ failure.json             recoverable or fatal worker failure details when a turn
 verification.json        verification payloads when a caller explicitly writes them
 ```
 
-`memory-used.json` records the memory IDs, block/capsule IDs, prompt cache key, and token counts that came from the CMS/ECM prepared prompt envelope; it avoids storing full memory bodies beyond the already-redacted context artifact. The manifest also reserves stable names for additional evidence files such as memory-written, approval, and subagent artifacts. Reserved paths can be absent until a runtime path has evidence to write. Artifact writers apply best-effort redaction to secret-like JSON keys and common token-shaped text before persisting files, but artifacts should still be treated as local operational evidence rather than a credential store.
+`memory-used.json` records the memory IDs, block/capsule IDs, prompt cache key, and token counts that came from the CMS/ECM prepared prompt envelope; it avoids storing full memory bodies beyond the already-redacted context artifact. `memory-written.json` records completion writeback status and memory IDs from successful headless runs and TUI turns, or an unavailable/no-write status when writeback cannot be captured. The manifest also reserves stable names for additional approval and subagent artifacts. Reserved paths can be absent until a runtime path has evidence to write. Artifact writers apply best-effort redaction to secret-like JSON keys and common token-shaped text before persisting files, but artifacts should still be treated as local operational evidence rather than a credential store.
 
 ## App-server Bridge
 

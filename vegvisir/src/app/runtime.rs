@@ -67,6 +67,10 @@ impl TuiApplication {
         self.pending_stream = Some(stream_rx);
         self.pending_steering = Some(steering_tx);
         self.start_tui_turn_artifact(&display_content);
+        let turn_artifact_manager = self
+            .pending_run_artifact
+            .as_ref()
+            .map(|(manager, _)| manager.clone());
         let now = Instant::now();
         self.pending_turn_started_at = Some(now);
         self.pending_turn_last_activity_at = Some(now);
@@ -171,14 +175,14 @@ impl TuiApplication {
             }
             // Do not run CMS writeback on the foreground TUI worker. Completion
             // writeback can involve SQLite/vectors/graph work and has previously
-            // made the live UI look stalled after the provider finished: status
-            // stayed "streaming" and the context counter did not advance because
-            // the JoinHandle could not complete. Snapshot the answer and persist
-            // memory asynchronously instead.
+            // made the live UI look stalled after the provider finished. Snapshot
+            // the answer and persist memory asynchronously; when a run artifact
+            // manager exists, the background write also records memory-written.json.
             spawn_cms_complete_turn_writeback(
                 cms.config.clone(),
                 display_content.clone(),
                 response.clone(),
+                turn_artifact_manager,
             );
             Ok(worker_session)
         });
@@ -1263,15 +1267,21 @@ fn spawn_cms_complete_turn_writeback(
     config: crate::memory::VegvisirCmsConfig,
     user_content: String,
     assistant_response: String,
+    artifact_manager: Option<RunArtifactManager>,
 ) {
     thread::spawn(move || {
         let mut config = config;
         config.commit_writebacks = true;
-        match VegvisirCms::open(config) {
-            Ok(mut cms) => {
-                let _ = cms.complete_turn(&user_content, &assistant_response);
-            }
-            Err(_) => {}
+        let outcome = match VegvisirCms::open(config) {
+            Ok(mut cms) => cms
+                .complete_turn(&user_content, &assistant_response)
+                .map(|results| (results, None))
+                .unwrap_or_else(|error| (Vec::new(), Some(error.to_string()))),
+            Err(error) => (Vec::new(), Some(error.to_string())),
+        };
+        if let Some(manager) = artifact_manager {
+            let (results, error) = outcome;
+            let _ = manager.write_memory_written_from_outcome(&results, error.as_deref());
         }
     });
 }

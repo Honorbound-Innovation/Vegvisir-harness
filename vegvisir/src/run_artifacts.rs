@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use cms_v2::prompt_cache::CachedPromptEnvelope;
+use cms_v2::{cms_api::CommitResult, prompt_cache::CachedPromptEnvelope};
 
 use crate::provider::ProviderRunEvent;
 
@@ -197,6 +197,28 @@ impl RunArtifactManager {
         self.write_json_file("memory-used.json", &evidence)
     }
 
+    pub fn write_memory_written_from_results(
+        &self,
+        results: &[CommitResult],
+    ) -> anyhow::Result<()> {
+        let evidence = RunMemoryWriteEvidence::from_results(self.run_id.clone(), results);
+        self.write_json_file("memory-written.json", &evidence)
+    }
+
+    pub fn write_memory_written_from_outcome(
+        &self,
+        results: &[CommitResult],
+        error: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let evidence = RunMemoryWriteEvidence::from_outcome(self.run_id.clone(), results, error);
+        self.write_json_file("memory-written.json", &evidence)
+    }
+
+    pub fn write_memory_written_unavailable(&self, note: impl Into<String>) -> anyhow::Result<()> {
+        let evidence = RunMemoryWriteEvidence::unavailable(self.run_id.clone(), note);
+        self.write_json_file("memory-written.json", &evidence)
+    }
+
     pub fn write_failure(&self, failure: &RunFailure) -> anyhow::Result<()> {
         self.write_json_file("failure.json", failure)
     }
@@ -275,6 +297,9 @@ impl RunArtifactManager {
             timestamp: Utc::now(),
         };
         self.write_failure(&failure)?;
+        self.write_memory_written_unavailable(
+            "run failed before completion memory writeback was captured",
+        )?;
         self.write_workspace_change_artifacts()?;
         self.finish(manifest, RunStatus::Failed)
     }
@@ -586,6 +611,96 @@ pub struct RunMemoryUseCapsule {
     pub source_memory_ids: Vec<String>,
     pub source_version_hashes: Vec<String>,
     pub block_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RunMemoryWriteEvidence {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub captured_at: DateTime<Utc>,
+    pub status: RunMemoryWriteStatus,
+    pub writes: Vec<RunMemoryWriteResult>,
+    pub error: Option<String>,
+    pub notes: Vec<String>,
+}
+
+impl RunMemoryWriteEvidence {
+    pub fn from_results(run_id: String, results: &[CommitResult]) -> Self {
+        Self::from_outcome(run_id, results, None)
+    }
+
+    pub fn from_outcome(run_id: String, results: &[CommitResult], error: Option<&str>) -> Self {
+        let writes = results
+            .iter()
+            .map(RunMemoryWriteResult::from_commit_result)
+            .collect::<Vec<_>>();
+        let status = if error.is_some() {
+            RunMemoryWriteStatus::Unavailable
+        } else if writes.is_empty() {
+            RunMemoryWriteStatus::NoWrites
+        } else {
+            RunMemoryWriteStatus::Captured
+        };
+        let notes = if error.is_some() {
+            vec!["completion memory writeback failed or could not be inspected".to_string()]
+        } else {
+            Vec::new()
+        };
+        Self {
+            schema_version: RUN_ARTIFACT_SCHEMA_VERSION,
+            run_id,
+            captured_at: Utc::now(),
+            status,
+            writes,
+            error: error.map(str::to_string),
+            notes,
+        }
+    }
+
+    pub fn unavailable(run_id: String, note: impl Into<String>) -> Self {
+        Self {
+            schema_version: RUN_ARTIFACT_SCHEMA_VERSION,
+            run_id,
+            captured_at: Utc::now(),
+            status: RunMemoryWriteStatus::Unavailable,
+            writes: Vec::new(),
+            error: None,
+            notes: vec![note.into()],
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunMemoryWriteStatus {
+    Captured,
+    NoWrites,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RunMemoryWriteResult {
+    pub memory_id: String,
+    pub created_new: bool,
+    pub updated_existing: bool,
+    pub linked_memory_ids: Vec<String>,
+    pub trace: Value,
+}
+
+impl RunMemoryWriteResult {
+    fn from_commit_result(result: &CommitResult) -> Self {
+        Self {
+            memory_id: result.memory_id.0.clone(),
+            created_new: result.created_new,
+            updated_existing: result.updated_existing,
+            linked_memory_ids: result
+                .linked_memory_ids
+                .iter()
+                .map(|memory_id| memory_id.0.clone())
+                .collect(),
+            trace: serde_json::to_value(&result.trace).unwrap_or(Value::Null),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -964,6 +1079,70 @@ mod tests {
                 .iter()
                 .any(|block| block.title.contains("Artifact context evidence"))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn run_artifacts_writes_memory_written_from_commit_results() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        fs::create_dir_all(&workspace)?;
+        let (manager, _manifest) = RunArtifactManager::start(
+            &workspace,
+            tmp.path().join("data"),
+            "session-1",
+            "demo",
+            "demo-model",
+            None,
+        )?;
+        let mut cms = crate::memory::VegvisirCms::open(crate::memory::VegvisirCmsConfig {
+            db_path: tmp.path().join("cms.sqlite3"),
+            user_id: "tester".to_string(),
+            project_id: Some("project".to_string()),
+            context_mode: cms_v2::ecm::ContextMode::Project,
+            commit_writebacks: true,
+        })?;
+        let result = cms.remember(
+            "ArchitectureChange",
+            "Artifact writeback evidence",
+            "Decision: run artifacts should persist memory writeback ids.",
+        )?;
+
+        manager.write_memory_written_from_results(&[result])?;
+
+        let memory_written: RunMemoryWriteEvidence = serde_json::from_str(&fs::read_to_string(
+            manager.artifact_path("memory-written.json"),
+        )?)?;
+        assert_eq!(memory_written.schema_version, RUN_ARTIFACT_SCHEMA_VERSION);
+        assert_eq!(memory_written.run_id, manager.run_id);
+        assert_eq!(memory_written.status, RunMemoryWriteStatus::Captured);
+        assert_eq!(memory_written.writes.len(), 1);
+        assert!(memory_written.writes[0].created_new || memory_written.writes[0].updated_existing);
+        Ok(())
+    }
+
+    #[test]
+    fn run_artifacts_writes_unavailable_memory_written_evidence() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        fs::create_dir_all(&workspace)?;
+        let (manager, _manifest) = RunArtifactManager::start(
+            &workspace,
+            tmp.path().join("data"),
+            "session-1",
+            "demo",
+            "demo-model",
+            None,
+        )?;
+
+        manager.write_memory_written_unavailable("not captured in this runtime path")?;
+
+        let memory_written: RunMemoryWriteEvidence = serde_json::from_str(&fs::read_to_string(
+            manager.artifact_path("memory-written.json"),
+        )?)?;
+        assert_eq!(memory_written.status, RunMemoryWriteStatus::Unavailable);
+        assert!(memory_written.writes.is_empty());
+        assert!(memory_written.notes[0].contains("not captured"));
         Ok(())
     }
 

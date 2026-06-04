@@ -464,6 +464,7 @@ request.json             redacted prompt/request metadata
 context.md               redacted CMS/ECM-prepared provider prompt context
 context-sources.json     redacted prompt-cache block/capsule/source metadata for the prepared context
 memory-used.json         redacted memory/source-id evidence derived from the prepared prompt envelope
+memory-written.json      redacted completion memory writeback ids/status, when captured
 result.md                redacted final response, when available
 provider-events.jsonl    redacted provider/runtime stream events
 tool-events.jsonl        redacted tool start/end events derived from observed runtime events
@@ -472,7 +473,7 @@ diff.patch               redacted tracked staged/unstaged git diff evidence capt
 failure.json             failure detail for failed/recoverable runs
 ```
 
-`memory-used.json` records the memory IDs, block/capsule IDs, prompt cache key, and token counts that came from the CMS/ECM prepared prompt envelope; it avoids storing full memory bodies beyond the already-redacted context artifact. The manifest also reserves stable names for planned evidence files such as `memory-written.json`, `approvals.json`, `subagents.json`, and `verification.json`. These reserved paths let later integrations fill in more evidence without changing the schema shape.
+`memory-used.json` records the memory IDs, block/capsule IDs, prompt cache key, and token counts that came from the CMS/ECM prepared prompt envelope; it avoids storing full memory bodies beyond the already-redacted context artifact. `memory-written.json` records completion writeback status and memory IDs from successful headless runs and TUI turns, or an unavailable/no-write status when writeback cannot be captured. The manifest still reserves stable names for planned evidence files such as `approvals.json`, `subagents.json`, and `verification.json`. These reserved paths let later integrations fill in more evidence without changing the schema shape.
 
 Artifact writers redact secret-like JSON keys and common token-shaped text before data is persisted. Treat artifacts as operational evidence, not as a secret store.
 

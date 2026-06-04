@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use cms_v2::prompt_cache::CachedPromptEnvelope;
+use cms_v2::{cms_api::CommitResult, prompt_cache::CachedPromptEnvelope};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use serde_json::{Value, json};
 
@@ -146,6 +146,8 @@ pub struct HeadlessObservedRun {
     pub response: String,
     pub events: Vec<ProviderRunEvent>,
     pub prompt_envelope: CachedPromptEnvelope,
+    pub memory_write_results: Vec<CommitResult>,
+    pub memory_write_error: Option<String>,
 }
 
 enum StreamEvent {
@@ -840,18 +842,47 @@ impl TuiApplication {
     }
 
     pub fn send_headless_observed(&mut self, content: &str) -> anyhow::Result<HeadlessObservedRun> {
-        let prompt_envelope = self.current_prompt_envelope(content)?;
         let events = Arc::new(std::sync::Mutex::new(Vec::new()));
         let captured_events = Arc::clone(&events);
-        let response = self.send_headless_streaming_with_event_sink(
-            content,
-            &mut |_| {},
-            Some(Arc::new(move |event| {
+        let mut runner = ConversationRunner {
+            provider: ProviderRouter::from_registry(&self.provider_registry)
+                .get(&self.session.current_provider)
+                .cloned()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Unknown provider: {}", self.session.current_provider)
+                })?,
+            models: self.models.clone(),
+            tools: Some(self.tool_registry.clone()),
+            tool_executor: Some(self.tool_executor.clone()),
+            event_sink: Some(Arc::new(move |event| {
                 if let Ok(mut events) = captured_events.lock() {
                     events.push(event);
                 }
             })),
+            cancel_token: None,
+            steering_rx: None,
+        };
+        let (model_content, skill_trace) = self.prepare_lsl_for_content(content)?;
+        let prompt_envelope = self.cms.prepare_cached_prompt(
+            &model_content,
+            self.session.current_provider.clone(),
+            self.session.current_model.clone(),
         )?;
+        let response = runner.send_with_envelope_streaming(
+            &mut self.session,
+            &model_content,
+            prompt_envelope.clone(),
+            &mut |_| {},
+        )?;
+        if let Some(trace) = skill_trace {
+            let _ = append_skill_trace(&self.skill_trace_path(), trace);
+        }
+        let (memory_write_results, memory_write_error) =
+            match self.cms.complete_turn(content, &response) {
+                Ok(results) => (results, None),
+                Err(error) => (Vec::new(), Some(error.to_string())),
+            };
+        self.autosave_session();
         let events = events
             .lock()
             .map(|events| events.clone())
@@ -860,6 +891,8 @@ impl TuiApplication {
             response,
             events,
             prompt_envelope,
+            memory_write_results,
+            memory_write_error,
         })
     }
 
