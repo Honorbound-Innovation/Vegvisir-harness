@@ -26,6 +26,7 @@ Commands:
   verify
   app-server
   open-ai-compat-server
+  setup                  Run first-time setup or inspect setup status
   skiller                Run the integrated Skiller component. Use `vegvisir skiller -- <args>`
   help                   Print this message or the help of the given subcommand(s)
 
@@ -38,6 +39,8 @@ Options:
       --agent <AGENT>
       --json
       --scripted
+      --artifacts
+      --artifact-dir <ARTIFACT_DIR>
       --dangerously-bypass-approvals-and-sandbox
   -h, --help                                      Print help
 ```
@@ -70,6 +73,8 @@ Options:
       --agent <AGENT>
       --json
       --scripted
+      --artifacts
+      --artifact-dir <ARTIFACT_DIR>
       --dangerously-bypass-approvals-and-sandbox
   -h, --help                                      Print help
 ```
@@ -92,6 +97,7 @@ Notes:
 
 - `--workspace` controls project scope for tools and memory.
 - `--agent` applies a persistent custom agent profile.
+- TUI turns automatically write local run artifacts under `<workspace>/.vegvisir/runs/<run-id>/`.
 - `--dangerously-bypass-approvals-and-sandbox` is startup-only and should be used only for explicitly trusted sessions.
 
 
@@ -117,6 +123,8 @@ Options:
       --agent <AGENT>
       --json
       --scripted
+      --artifacts
+      --artifact-dir <ARTIFACT_DIR>
       --dangerously-bypass-approvals-and-sandbox
   -h, --help                                      Print help
 ```
@@ -127,10 +135,20 @@ Examples:
 vegvisir --workspace /path/to/project run "Summarize this repository"
 ```
 
+```bash
+vegvisir --workspace /path/to/project --artifacts run "Summarize this repository"
+```
+
+```bash
+vegvisir --workspace /path/to/project --artifact-dir ./audit-runs run "Summarize this repository"
+```
+
 Notes:
 
 - `--workspace` controls project scope for tools and memory.
 - `--agent` applies a persistent custom agent profile.
+- `--artifacts` writes a run artifact bundle for the headless turn. The default location is `<workspace>/.vegvisir/runs/<run-id>/`.
+- `--artifact-dir <path>` writes the run artifact bundle below that root as `<path>/<run-id>/` and also enables artifact writing.
 - `--dangerously-bypass-approvals-and-sandbox` is startup-only and should be used only for explicitly trusted sessions.
 
 
@@ -417,6 +435,40 @@ Notes:
 - Skiller's Forge handoff path is designed for Vegvisir to provide the governed reasoning pass while retaining auditable request/response artifacts.
 - Skiller is an integrated Vegvisir feature for governed skill compilation, Forge workflows, lifecycle reports, and Agent Builder handoff artifacts. It does not replace Vegvisir's current runtime, CMS/ECM memory, HBSE secret handling, approvals, traces, evals, app bridge, subagents, or existing LSL skill mechanisms.
 - Generated Agent Builder artifacts include verification/report/index commands intended for GUI, desktop, and app-bridge consumers.
+
+
+## Run Artifacts
+
+Vegvisir writes auditable run artifact bundles for TUI turns and can write them for headless runs on demand. Bundles are local workspace/runtime evidence; do not commit them.
+
+Default bundle location:
+
+```text
+<workspace>/.vegvisir/runs/<run-id>/
+```
+
+Headless opt-in flags:
+
+```bash
+vegvisir --workspace /path/to/project --artifacts run "Summarize this repository"
+vegvisir --workspace /path/to/project --artifact-dir ./audit-runs run "Summarize this repository"
+vegvisir --workspace /path/to/project --json --artifacts run "Summarize this repository"
+```
+
+Current bundle files include:
+
+```text
+manifest.json            run id, session id, workspace, provider/model/agent, status, timestamps, artifact path registry
+request.json             redacted prompt/request metadata
+result.md                redacted final response, when available
+provider-events.jsonl    redacted provider/runtime stream events
+tool-events.jsonl        redacted tool start/end events derived from observed runtime events
+failure.json             failure detail for failed/recoverable runs
+```
+
+The manifest also reserves stable names for planned evidence files such as `context.md`, `context-sources.json`, `file-changes.json`, `diff.patch`, `memory-used.json`, `memory-written.json`, `approvals.json`, `subagents.json`, and `verification.json`. These reserved paths let later integrations fill in more evidence without changing the schema shape.
+
+Artifact writers redact secret-like JSON keys and common token-shaped text before data is persisted. Treat artifacts as operational evidence, not as a secret store.
 
 ## TUI Slash Commands
 

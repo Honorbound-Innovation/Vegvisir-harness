@@ -10,6 +10,8 @@
 **/*.db-shm
 **/.env
 **/.env.*
+**/__pycache__/
+*.py[cod]
 *.log
 *.tmp
 *.bak

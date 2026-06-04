@@ -24,6 +24,7 @@ vegvisir/src/openai_sso.rs           OpenAI SSO integration support
 vegvisir/src/tools.rs                Tool registry and tool implementations
 vegvisir/src/policy.rs               Tool/risk policy behavior
 vegvisir/src/sandbox.rs              Workspace and command safety support
+vegvisir/src/run_artifacts.rs        Local run artifact bundle schema and writers
 vegvisir/src/memory.rs               CMS-v2 integration
 vegvisir/src/context.rs              Context preparation surfaces
 vegvisir/src/mcp.rs                  MCP client/runtime support
@@ -58,7 +59,7 @@ skiller
 
 Running `vegvisir` with no subcommand starts the TUI. Supplying `--prompt` or `run <goal>` executes a headless task.
 
-Global options include provider/model/agent selection, JSON/scripted mode flags, workspace selection, max steps, and startup-only dangerous bypass mode.
+Global options include provider/model/agent selection, JSON/scripted mode flags, workspace selection, max steps, run artifact output flags, and startup-only dangerous bypass mode.
 
 ## Agent Harness
 
@@ -116,9 +117,38 @@ Headless mode is useful for scripted tasks:
 
 ```bash
 vegvisir --workspace /path/to/project run "Summarize this repository"
+vegvisir --workspace /path/to/project --artifacts run "Summarize this repository"
+vegvisir --workspace /path/to/project --json --artifacts run "Summarize this repository"
 ```
 
-It should still respect workspace scope, provider configuration, tool policies, memory behavior, and max-step bounds. Use headless mode for automation where an interactive approvals UI is not needed or where policy is already configured for the run.
+It should still respect workspace scope, provider configuration, tool policies, memory behavior, and max-step bounds. Use headless mode for automation where an interactive approvals UI is not needed or where policy is already configured for the run. When `--artifacts` or `--artifact-dir` is used, JSON headless output includes the emitted `run_id` and `artifact_dir`.
+
+
+## Run Artifact Bundles
+
+Run artifact bundles are local audit/evidence directories for individual Vegvisir turns. They are intended to make headless and TUI work reviewable without mixing runtime evidence into durable CMS memory or source control.
+
+Default location:
+
+```text
+<workspace>/.vegvisir/runs/<run-id>/
+```
+
+Headless runs write bundles when `--artifacts` is set or when `--artifact-dir <root>` is provided. `--artifact-dir` changes the root and writes the bundle as `<root>/<run-id>/`. TUI sends create and finalize turn artifacts automatically in the workspace run directory.
+
+Current emitted files include:
+
+```text
+manifest.json            schema version, run/session identity, provider/model/agent, status, timestamps, path registry
+request.json             redacted prompt/request metadata
+result.md                redacted final answer when available
+provider-events.jsonl    redacted provider/runtime stream events
+tool-events.jsonl        redacted tool start/end events
+failure.json             recoverable or fatal worker failure details when a turn fails
+verification.json        verification payloads when a caller explicitly writes them
+```
+
+The manifest also reserves stable names for additional evidence files such as context, source, diff, memory, approval, subagent, and file-change artifacts. Reserved paths can be absent until a runtime path has evidence to write. Artifact writers apply best-effort redaction to secret-like JSON keys and common token-shaped text before persisting files, but artifacts should still be treated as local operational evidence rather than a credential store.
 
 ## App-server Bridge
 
