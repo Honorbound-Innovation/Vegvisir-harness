@@ -497,6 +497,12 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
     assert!(scripted_artifact_dir.join("context.md").exists());
     assert!(scripted_artifact_dir.join("context-sources.json").exists());
     assert!(scripted_artifact_dir.join("result.md").exists());
+    assert!(scripted_artifact_dir.join("file-changes.json").exists());
+    let scripted_changes: Value = serde_json::from_str(&fs::read_to_string(
+        scripted_artifact_dir.join("file-changes.json"),
+    )?)?;
+    assert_eq!(scripted_changes["status"], "unavailable");
+    assert_eq!(scripted_changes["run_id"], scripted_run_id);
     let scripted_manifest: Value = serde_json::from_str(&fs::read_to_string(
         scripted_artifact_dir.join("manifest.json"),
     )?)?;
@@ -599,6 +605,11 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
     assert!(provider_artifact_dir.join("context.md").exists());
     assert!(provider_artifact_dir.join("context-sources.json").exists());
     assert!(provider_artifact_dir.join("result.md").exists());
+    assert!(provider_artifact_dir.join("file-changes.json").exists());
+    let provider_changes: Value = serde_json::from_str(&fs::read_to_string(
+        provider_artifact_dir.join("file-changes.json"),
+    )?)?;
+    assert_eq!(provider_changes["status"], "unavailable");
     let provider_manifest: Value = serde_json::from_str(&fs::read_to_string(
         provider_artifact_dir.join("manifest.json"),
     )?)?;
@@ -637,6 +648,7 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
         failed_provider_runs[0].join("manifest.json"),
     )?)?;
     assert_eq!(failed_provider_manifest["status"], "failed");
+    assert!(failed_provider_runs[0].join("file-changes.json").exists());
     let failed_provider_failure: Value = serde_json::from_str(&fs::read_to_string(
         failed_provider_runs[0].join("failure.json"),
     )?)?;
@@ -4470,6 +4482,10 @@ fn tui_submit_message_uses_cms_memory_and_demo_provider() -> anyhow::Result<()> 
     assert_eq!(request["mode"], "tui_turn");
     assert_eq!(request["goal"], "hello from tui");
     assert!(fs::read_to_string(run_dir.join("result.md"))?.contains("CMS-v2 model request"));
+    let file_changes: Value =
+        serde_json::from_str(&fs::read_to_string(run_dir.join("file-changes.json"))?)?;
+    assert_eq!(file_changes["status"], "unavailable");
+    assert_eq!(file_changes["run_id"], manifest["run_id"]);
     Ok(())
 }
 
@@ -4511,6 +4527,7 @@ fn tui_failed_provider_send_keeps_user_message_and_shows_error() -> anyhow::Resu
     let manifest: Value =
         serde_json::from_str(&fs::read_to_string(run_dir.join("manifest.json"))?)?;
     assert_eq!(manifest["status"], "failed");
+    assert!(run_dir.join("file-changes.json").exists());
     let failure: Value = serde_json::from_str(&fs::read_to_string(run_dir.join("failure.json"))?)?;
     assert!(
         failure["message"]

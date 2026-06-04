@@ -466,10 +466,11 @@ context-sources.json     redacted prompt-cache block/capsule/source metadata for
 result.md                redacted final response, when available
 provider-events.jsonl    redacted provider/runtime stream events
 tool-events.jsonl        redacted tool start/end events derived from observed runtime events
+file-changes.json        redacted git status evidence captured at bundle finalization
 failure.json             failure detail for failed/recoverable runs
 ```
 
-The manifest also reserves stable names for planned evidence files such as `file-changes.json`, `diff.patch`, `memory-used.json`, `memory-written.json`, `approvals.json`, `subagents.json`, and `verification.json`. These reserved paths let later integrations fill in more evidence without changing the schema shape.
+The manifest also reserves stable names for planned evidence files such as `diff.patch`, `memory-used.json`, `memory-written.json`, `approvals.json`, `subagents.json`, and `verification.json`. These reserved paths let later integrations fill in more evidence without changing the schema shape.
 
 Artifact writers redact secret-like JSON keys and common token-shaped text before data is persisted. Treat artifacts as operational evidence, not as a secret store.
 

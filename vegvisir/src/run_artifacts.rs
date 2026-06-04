@@ -3,6 +3,7 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
+    process::Command,
 };
 
 use chrono::{DateTime, Utc};
@@ -16,6 +17,7 @@ use crate::provider::ProviderRunEvent;
 
 pub const RUN_ARTIFACT_SCHEMA_VERSION: u32 = 1;
 const REDACTION: &str = "[REDACTED]";
+const MAX_FILE_CHANGE_ENTRIES: usize = 200;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -192,6 +194,12 @@ impl RunArtifactManager {
         self.write_json_file("failure.json", failure)
     }
 
+    pub fn write_workspace_file_changes(&self) -> anyhow::Result<()> {
+        let evidence =
+            WorkspaceFileChangeEvidence::capture(self.run_id.clone(), self.workspace.clone());
+        self.write_json_file("file-changes.json", &evidence)
+    }
+
     pub fn write_verification(&self, verification: &Value) -> anyhow::Result<()> {
         self.write_json_value_file("verification.json", verification)
     }
@@ -251,6 +259,7 @@ impl RunArtifactManager {
             timestamp: Utc::now(),
         };
         self.write_failure(&failure)?;
+        self.write_workspace_file_changes()?;
         self.finish(manifest, RunStatus::Failed)
     }
 
@@ -283,6 +292,108 @@ impl RunArtifactManager {
         writeln!(file, "{}", serde_json::to_string(&redacted)?)?;
         Ok(())
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceFileChangeEvidence {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub workspace: PathBuf,
+    pub captured_at: DateTime<Utc>,
+    pub status: WorkspaceFileChangeStatus,
+    pub changes: Vec<WorkspaceFileChange>,
+    pub truncated: bool,
+    pub error: Option<String>,
+}
+
+impl WorkspaceFileChangeEvidence {
+    pub fn capture(run_id: String, workspace: PathBuf) -> Self {
+        let captured_at = Utc::now();
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&workspace)
+            .arg("status")
+            .arg("--short")
+            .output();
+        let Ok(output) = output else {
+            return Self {
+                schema_version: RUN_ARTIFACT_SCHEMA_VERSION,
+                run_id,
+                workspace,
+                captured_at,
+                status: WorkspaceFileChangeStatus::Unavailable,
+                changes: Vec::new(),
+                truncated: false,
+                error: Some("git status failed to start".to_string()),
+            };
+        };
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            return Self {
+                schema_version: RUN_ARTIFACT_SCHEMA_VERSION,
+                run_id,
+                workspace,
+                captured_at,
+                status: WorkspaceFileChangeStatus::Unavailable,
+                changes: Vec::new(),
+                truncated: false,
+                error: Some(if stderr.is_empty() {
+                    format!("git status exited with {}", output.status)
+                } else {
+                    stderr
+                }),
+            };
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut truncated = false;
+        let mut changes = Vec::new();
+        for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
+            if changes.len() >= MAX_FILE_CHANGE_ENTRIES {
+                truncated = true;
+                break;
+            }
+            changes.push(parse_git_status_line(line));
+        }
+        let status = if changes.is_empty() {
+            WorkspaceFileChangeStatus::Clean
+        } else {
+            WorkspaceFileChangeStatus::Changed
+        };
+        Self {
+            schema_version: RUN_ARTIFACT_SCHEMA_VERSION,
+            run_id,
+            workspace,
+            captured_at,
+            status,
+            changes,
+            truncated,
+            error: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceFileChangeStatus {
+    Clean,
+    Changed,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceFileChange {
+    pub status_code: String,
+    pub path: String,
+}
+
+fn parse_git_status_line(line: &str) -> WorkspaceFileChange {
+    let status_code = line.get(0..2).unwrap_or(line).to_string();
+    let path = line.get(3..).unwrap_or("").trim().to_string();
+    WorkspaceFileChange { status_code, path }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -670,6 +781,45 @@ mod tests {
         assert_eq!(tool_events.lines().count(), 1);
         assert!(tool_events.contains("read_file"));
         assert!(tool_events.contains("src/lib.rs"));
+        Ok(())
+    }
+
+    #[test]
+    fn run_artifacts_captures_workspace_file_changes() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        fs::create_dir_all(&workspace)?;
+        let git_init = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&workspace)
+            .arg("init")
+            .output()?;
+        if !git_init.status.success() {
+            return Ok(());
+        }
+        fs::write(workspace.join("changed.txt"), "new file")?;
+
+        let (manager, _manifest) = RunArtifactManager::start(
+            &workspace,
+            tmp.path().join("data"),
+            "session-1",
+            "demo",
+            "demo-model",
+            None,
+        )?;
+
+        manager.write_workspace_file_changes()?;
+
+        let evidence: WorkspaceFileChangeEvidence = serde_json::from_str(&fs::read_to_string(
+            manager.artifact_path("file-changes.json"),
+        )?)?;
+        assert_eq!(evidence.status, WorkspaceFileChangeStatus::Changed);
+        assert!(
+            evidence
+                .changes
+                .iter()
+                .any(|change| change.status_code == "??" && change.path == "changed.txt")
+        );
         Ok(())
     }
 

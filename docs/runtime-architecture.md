@@ -146,11 +146,12 @@ context-sources.json     redacted prompt-cache block/capsule/source metadata for
 result.md                redacted final answer when available
 provider-events.jsonl    redacted provider/runtime stream events
 tool-events.jsonl        redacted tool start/end events
+file-changes.json        redacted git status evidence captured at bundle finalization
 failure.json             recoverable or fatal worker failure details when a turn fails
 verification.json        verification payloads when a caller explicitly writes them
 ```
 
-The manifest also reserves stable names for additional evidence files such as diff, memory, approval, subagent, and file-change artifacts. Reserved paths can be absent until a runtime path has evidence to write. Artifact writers apply best-effort redaction to secret-like JSON keys and common token-shaped text before persisting files, but artifacts should still be treated as local operational evidence rather than a credential store.
+The manifest also reserves stable names for additional evidence files such as diff, memory, approval, and subagent artifacts. Reserved paths can be absent until a runtime path has evidence to write. Artifact writers apply best-effort redaction to secret-like JSON keys and common token-shaped text before persisting files, but artifacts should still be treated as local operational evidence rather than a credential store.
 
 ## App-server Bridge
 
