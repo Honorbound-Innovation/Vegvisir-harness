@@ -44,8 +44,9 @@ use crate::{
     speech::{ActiveSpeechRecording, DEFAULT_PTT_KEY, DEFAULT_PTT_SECONDS, PushToTalkKey},
     subagents::{SubAgentStatus, SubAgentTaskRecord},
     tools::{
-        DEFAULT_ACTIVE_SUBAGENT_LIMIT, ToolExecutor, ToolRegistry,
+        DEFAULT_ACTIVE_SUBAGENT_LIMIT, SubagentProviderDefaults, ToolExecutor, ToolRegistry,
         build_builtin_registry_with_cms_mode_and_subagent_limit,
+        build_builtin_registry_with_cms_mode_subagent_limit_and_provider_defaults,
     },
     types::ToolCall,
     ui::{
@@ -959,12 +960,17 @@ impl TuiApplication {
     fn rebuild_tooling_for_cms(&mut self) -> anyhow::Result<()> {
         let policy = self.tool_executor.guardrails.policy.clone();
         let bypass = policy.bypass_approvals_and_sandbox;
-        let mut tool_registry = build_builtin_registry_with_cms_mode_and_subagent_limit(
-            &self.cwd,
-            self.cms.config.clone(),
-            bypass,
-            self.active_subagent_limit,
-        )?;
+        let mut tool_registry =
+            build_builtin_registry_with_cms_mode_subagent_limit_and_provider_defaults(
+                &self.cwd,
+                self.cms.config.clone(),
+                bypass,
+                self.active_subagent_limit,
+                SubagentProviderDefaults::new(
+                    self.session.current_provider.clone(),
+                    self.session.current_model.clone(),
+                ),
+            )?;
         let mcp_servers = self.active_mcp_servers();
         register_mcp_tools(
             &mut tool_registry,
@@ -1940,6 +1946,8 @@ mod tests {
             name: "reviewer".to_string(),
             workspace: workspace.clone(),
             goal: "inspect transcript logging".to_string(),
+            provider: None,
+            model: None,
             file_scope: vec![workspace.join("vegvisir/src")],
             work_budget: crate::subagents::SubAgentWorkBudget {
                 max_steps: Some(2),
@@ -2261,8 +2269,10 @@ mod tests {
         drop(source_app);
 
         let previous_xdg = std::env::var_os("XDG_DATA_HOME");
+        let previous_hidden_paths = std::env::var_os("VEGVISIR_COMMAND_HIDDEN_PATHS");
         unsafe {
             std::env::set_var("XDG_DATA_HOME", tmp.path().join("xdg-data"));
+            std::env::remove_var("VEGVISIR_COMMAND_HIDDEN_PATHS");
         }
         let result = (|| -> anyhow::Result<()> {
             let mut app = TuiApplication::with_data_root(&workspace, &custom_data_root)?;
@@ -2282,6 +2292,10 @@ mod tests {
             match previous_xdg {
                 Some(value) => std::env::set_var("XDG_DATA_HOME", value),
                 None => std::env::remove_var("XDG_DATA_HOME"),
+            }
+            match previous_hidden_paths {
+                Some(value) => std::env::set_var("VEGVISIR_COMMAND_HIDDEN_PATHS", value),
+                None => std::env::remove_var("VEGVISIR_COMMAND_HIDDEN_PATHS"),
             }
         }
         result

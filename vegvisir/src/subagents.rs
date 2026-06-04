@@ -126,6 +126,10 @@ pub struct SubAgentTaskRecord {
     pub name: String,
     pub workspace: PathBuf,
     pub goal: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     #[serde(default)]
     pub file_scope: Vec<PathBuf>,
     #[serde(default, skip_serializing_if = "SubAgentWorkBudget::is_empty")]
@@ -148,6 +152,8 @@ impl SubAgentTaskRecord {
             name: name.into(),
             workspace: task.workspace.clone(),
             goal: task.goal.clone(),
+            provider: None,
+            model: None,
             file_scope: Vec::new(),
             work_budget: SubAgentWorkBudget::default(),
             status: SubAgentStatus::Queued,

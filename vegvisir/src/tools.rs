@@ -486,6 +486,39 @@ fn execute_bounded_command(
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SubagentProviderDefaults {
+    pub provider: String,
+    pub model: String,
+}
+
+impl SubagentProviderDefaults {
+    pub fn new(provider: impl Into<String>, model: impl Into<String>) -> Self {
+        let provider = provider.into();
+        let model = model.into();
+        let provider = provider.trim();
+        let model = model.trim();
+        Self {
+            provider: if provider.is_empty() {
+                "demo".to_string()
+            } else {
+                provider.to_string()
+            },
+            model: if model.is_empty() {
+                "demo-local".to_string()
+            } else {
+                model.to_string()
+            },
+        }
+    }
+}
+
+impl Default for SubagentProviderDefaults {
+    fn default() -> Self {
+        Self::new("demo", "demo-local")
+    }
+}
+
 pub fn build_builtin_registry(workspace: impl AsRef<Path>) -> anyhow::Result<ToolRegistry> {
     build_builtin_registry_with_cms(
         workspace.as_ref(),
@@ -518,6 +551,22 @@ pub fn build_builtin_registry_with_cms_mode_and_subagent_limit(
     cms_config: VegvisirCmsConfig,
     bypass_sandbox: bool,
     active_subagent_limit: usize,
+) -> anyhow::Result<ToolRegistry> {
+    build_builtin_registry_with_cms_mode_subagent_limit_and_provider_defaults(
+        workspace,
+        cms_config,
+        bypass_sandbox,
+        active_subagent_limit,
+        SubagentProviderDefaults::default(),
+    )
+}
+
+pub fn build_builtin_registry_with_cms_mode_subagent_limit_and_provider_defaults(
+    workspace: impl AsRef<Path>,
+    cms_config: VegvisirCmsConfig,
+    bypass_sandbox: bool,
+    active_subagent_limit: usize,
+    subagent_provider_defaults: SubagentProviderDefaults,
 ) -> anyhow::Result<ToolRegistry> {
     let sandbox = if bypass_sandbox {
         WorkspaceSandbox::new_unrestricted(workspace)?
@@ -1467,6 +1516,7 @@ pub fn build_builtin_registry_with_cms_mode_and_subagent_limit(
     let subagent_root = sandbox.root.clone();
     let subagent_sandbox = sandbox.clone();
     let spawn_subagent_board_path = subagent_board_path.clone();
+    let spawn_subagent_provider_defaults = subagent_provider_defaults.clone();
     registry.register(Tool::new(
         "spawn_subagent",
         "Delegate a bounded task to a background Vegvisir child agent and record it on the subagent board.",
@@ -1497,8 +1547,10 @@ pub fn build_builtin_registry_with_cms_mode_and_subagent_limit(
                 .unwrap_or(4)
                 .clamp(1, 32)
                 .to_string();
-            let provider = optional_nonempty_string(args.get("provider"));
-            let model = optional_nonempty_string(args.get("model"));
+            let provider = optional_nonempty_string(args.get("provider"))
+                .unwrap_or_else(|| spawn_subagent_provider_defaults.provider.clone());
+            let model = optional_nonempty_string(args.get("model"))
+                .unwrap_or_else(|| spawn_subagent_provider_defaults.model.clone());
             let agent = optional_nonempty_string(args.get("agent"));
             let work_budget = parse_subagent_work_budget(args.get("work_budget"), args.get("max_steps"));
             let workspace_scope_sandbox = match if bypass_sandbox {
@@ -1542,6 +1594,8 @@ pub fn build_builtin_registry_with_cms_mode_and_subagent_limit(
                 name: name.clone(),
                 workspace: workspace.clone(),
                 goal: goal.to_string(),
+                provider: Some(provider.clone()),
+                model: Some(model.clone()),
                 file_scope: file_scope.clone(),
                 work_budget: work_budget.clone(),
                 status: SubAgentStatus::Queued,
@@ -1558,6 +1612,8 @@ pub fn build_builtin_registry_with_cms_mode_and_subagent_limit(
             }
 
             let child_record = record.clone();
+            let child_provider = provider.clone();
+            let child_model = model.clone();
             let child_goal = apply_subagent_scope_to_goal(
                 &apply_subagent_work_budget_to_goal(goal, &work_budget),
                 &workspace,
@@ -1570,8 +1626,8 @@ pub fn build_builtin_registry_with_cms_mode_and_subagent_limit(
                     child_goal,
                     workspace,
                     max_steps,
-                    provider,
-                    model,
+                    child_provider,
+                    child_model,
                     agent,
                     bypass_sandbox,
                     work_budget,
@@ -1582,6 +1638,8 @@ pub fn build_builtin_registry_with_cms_mode_and_subagent_limit(
             data.insert("id".to_string(), json!(record.id));
             data.insert("name".to_string(), json!(record.name));
             data.insert("workspace".to_string(), json!(record.workspace));
+            data.insert("provider".to_string(), json!(provider));
+            data.insert("model".to_string(), json!(model));
             data.insert("file_scope".to_string(), json!(record.file_scope));
             data.insert("work_budget".to_string(), json!(record.work_budget));
             data.insert("board_path".to_string(), json!(subagent_data_root.join("subagents.json")));
@@ -1982,8 +2040,8 @@ struct SubagentChildLaunch {
     goal: String,
     workspace: PathBuf,
     max_steps: String,
-    provider: Option<String>,
-    model: Option<String>,
+    provider: String,
+    model: String,
     agent: Option<String>,
     bypass_sandbox: bool,
     work_budget: SubAgentWorkBudget,
@@ -2016,14 +2074,10 @@ fn subagent_child_argv(launch: SubagentChildLaunch) -> Vec<String> {
     if launch.bypass_sandbox {
         argv.push("--dangerously-bypass-approvals-and-sandbox".to_string());
     }
-    if let Some(provider) = launch.provider {
-        argv.push("--provider".to_string());
-        argv.push(provider);
-    }
-    if let Some(model) = launch.model {
-        argv.push("--model".to_string());
-        argv.push(model);
-    }
+    argv.push("--provider".to_string());
+    argv.push(launch.provider);
+    argv.push("--model".to_string());
+    argv.push(launch.model);
     argv.push("run".to_string());
     argv.push(launch.goal);
     argv.push("--workspace".to_string());
@@ -2043,8 +2097,8 @@ fn run_spawned_subagent(
     goal: String,
     workspace: PathBuf,
     max_steps: String,
-    provider: Option<String>,
-    model: Option<String>,
+    provider: String,
+    model: String,
     agent: Option<String>,
     bypass_sandbox: bool,
     work_budget: SubAgentWorkBudget,
@@ -2396,10 +2450,12 @@ fn subagent_status_label(status: &SubAgentStatus) -> &'static str {
 
 fn format_subagent_record_summary(record: &SubAgentTaskRecord) -> String {
     format!(
-        "{}  name={} status={} workspace={} scope={} goal={}",
+        "{}  name={} status={} provider={} model={} workspace={} scope={} goal={}",
         record.id,
         record.name,
         subagent_status_label(&record.status),
+        record.provider.as_deref().unwrap_or("-"),
+        record.model.as_deref().unwrap_or("-"),
         record.workspace.display(),
         record
             .file_scope
@@ -2796,8 +2852,8 @@ mod skiller_tool_tests {
             goal: "inspect".to_string(),
             workspace: PathBuf::from("/tmp/workspace"),
             max_steps: "5".to_string(),
-            provider: None,
-            model: None,
+            provider: "demo".to_string(),
+            model: "demo-local".to_string(),
             agent: None,
             bypass_sandbox: true,
             work_budget: SubAgentWorkBudget {
@@ -2824,8 +2880,8 @@ mod skiller_tool_tests {
             goal: "inspect only".to_string(),
             workspace: workspace.clone(),
             max_steps: "2".to_string(),
-            provider: Some("openai-sso".to_string()),
-            model: Some("gpt-5.5".to_string()),
+            provider: "openai-sso".to_string(),
+            model: "gpt-5.5".to_string(),
             agent: None,
             bypass_sandbox: false,
             work_budget: SubAgentWorkBudget::default(),
@@ -2840,8 +2896,8 @@ mod skiller_tool_tests {
             goal: "inspect only".to_string(),
             workspace,
             max_steps: "2".to_string(),
-            provider: Some("openai-sso".to_string()),
-            model: Some("gpt-5.5".to_string()),
+            provider: "openai-sso".to_string(),
+            model: "gpt-5.5".to_string(),
             agent: None,
             bypass_sandbox: true,
             work_budget: SubAgentWorkBudget::default(),
@@ -2857,7 +2913,8 @@ mod skiller_tool_tests {
     #[test]
     fn subagent_board_tools_list_show_and_cancel_records() -> anyhow::Result<()> {
         let workspace = TempDir::new()?;
-        let cms_config = VegvisirCmsConfig::for_workspace(workspace.path());
+        let mut cms_config = VegvisirCmsConfig::for_workspace(workspace.path());
+        cms_config.db_path = workspace.path().join(".vegvisir/cms-v2.sqlite3");
         let board_path = cms_config
             .db_path
             .parent()
@@ -2870,6 +2927,8 @@ mod skiller_tool_tests {
             name: "planner".to_string(),
             workspace: workspace.path().to_path_buf(),
             goal: "Inspect subagent visibility".to_string(),
+            provider: None,
+            model: None,
             file_scope: vec![workspace.path().join("vegvisir/src/subagents.rs")],
             work_budget: SubAgentWorkBudget::default(),
             status: SubAgentStatus::Running,
@@ -2979,7 +3038,8 @@ mod skiller_tool_tests {
     #[test]
     fn spawn_subagent_uses_configurable_active_limit() -> anyhow::Result<()> {
         let workspace = TempDir::new()?;
-        let cms_config = VegvisirCmsConfig::for_workspace(workspace.path());
+        let mut cms_config = VegvisirCmsConfig::for_workspace(workspace.path());
+        cms_config.db_path = workspace.path().join(".vegvisir/cms-v2.sqlite3");
         let board_path = cms_config
             .db_path
             .parent()
@@ -2992,6 +3052,8 @@ mod skiller_tool_tests {
             name: "active".to_string(),
             workspace: workspace.path().to_path_buf(),
             goal: "existing".to_string(),
+            provider: None,
+            model: None,
             file_scope: vec![workspace.path().join("other")],
             work_budget: SubAgentWorkBudget::default(),
             status: SubAgentStatus::Running,
@@ -3040,6 +3102,76 @@ mod skiller_tool_tests {
                 .content
                 .contains("Maximum active subagents reached (1)")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn spawn_subagent_materializes_default_provider_and_model() -> anyhow::Result<()> {
+        let _env_lock = env_var_test_lock();
+        let workspace = TempDir::new()?;
+        let fake_bin = workspace.path().join("fake-vegvisir");
+        std::fs::write(
+            &fake_bin,
+            r#"#!/bin/sh
+echo '{"events":[]}'; exit 0
+"#,
+        )?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&fake_bin)?.permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&fake_bin, permissions)?;
+        }
+        let _bin_guard = EnvVarGuard::set("VEGVISIR_BIN", &fake_bin);
+        let mut cms_config = VegvisirCmsConfig::for_workspace(workspace.path());
+        cms_config.db_path = workspace.path().join(".vegvisir/cms-v2.sqlite3");
+        let board_path = cms_config
+            .db_path
+            .parent()
+            .expect("cms db parent")
+            .join("subagents.json");
+        let registry = build_builtin_registry_with_cms_mode_subagent_limit_and_provider_defaults(
+            workspace.path(),
+            cms_config,
+            true,
+            3,
+            SubagentProviderDefaults::new("openai-sso", "gpt-5.1"),
+        )?;
+        let mut executor = ToolExecutor {
+            registry,
+            guardrails: GuardrailEngine {
+                policy: crate::guardrails::PermissionPolicy {
+                    allow_risky_tools: true,
+                    require_human_approval: false,
+                    bypass_approvals_and_sandbox: true,
+                    ..crate::guardrails::PermissionPolicy::default()
+                },
+                approvals: crate::guardrails::ApprovalLedger::default(),
+            },
+            runtime_policy: RuntimePolicy::default(),
+            logger: EventLogger::new(None),
+        };
+
+        let observation = executor.execute(ToolCall {
+            name: "spawn_subagent".to_string(),
+            args: serde_json::from_value(json!({
+                "goal": "inspect defaults",
+                "name": "defaults-check",
+                "file_scope": ["."]
+            }))?,
+        });
+
+        assert!(observation.ok, "{}", observation.content);
+        assert_eq!(observation.data.get("provider"), Some(&json!("openai-sso")));
+        assert_eq!(observation.data.get("model"), Some(&json!("gpt-5.1")));
+        let records = load_subagent_board_records(&board_path)?;
+        let record = records
+            .iter()
+            .find(|record| record.name == "defaults-check")
+            .expect("spawned defaults-check record");
+        assert_eq!(record.provider.as_deref(), Some("openai-sso"));
+        assert_eq!(record.model.as_deref(), Some("gpt-5.1"));
         Ok(())
     }
 
