@@ -120,12 +120,30 @@ pub struct SubAgentFileChange {
     pub diff: Option<String>,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SubAgentFileOwnership {
+    #[serde(default)]
+    pub read_scope: Vec<PathBuf>,
+    #[serde(default)]
+    pub write_scope: Vec<PathBuf>,
+    #[serde(default)]
+    pub exclusive_write: bool,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SubAgentTaskRecord {
     pub id: String,
     pub name: String,
     pub workspace: PathBuf,
     pub goal: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_dir: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ownership: Option<SubAgentFileOwnership>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -152,6 +170,10 @@ impl SubAgentTaskRecord {
             name: name.into(),
             workspace: task.workspace.clone(),
             goal: task.goal.clone(),
+            parent_run_id: None,
+            child_run_id: None,
+            artifact_dir: None,
+            ownership: None,
             provider: None,
             model: None,
             file_scope: Vec::new(),

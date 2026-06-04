@@ -1,6 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use cms_v2::{
+    archive::{
+        ArchiveExportOptions, ArchiveRedactionPolicy, ArchiveScopeFilter, export_json_with_options,
+    },
     cms_api::{
         CmsMemoryClient, CommitRequest, CommitResult, MemoryId, MemoryObject,
         MemoryRetrievalResult, Metadata, ProjectId, RetrievalBundle, RetrievalMode,
@@ -287,6 +290,60 @@ impl VegvisirCms {
             });
         }
         Ok(out)
+    }
+
+    pub fn get_memory_summary(
+        &self,
+        memory_id: &str,
+    ) -> anyhow::Result<Option<VegvisirMemorySummary>> {
+        let Some(memory) = self.ledger.get_memory(memory_id)? else {
+            return Ok(None);
+        };
+        Ok(Some(VegvisirMemorySummary {
+            id: memory.id,
+            memory_type: memory.memory_type,
+            title: memory.title,
+            summary: summarize(&memory.summary, 220),
+            user_id: memory.metadata.get("user_id").cloned(),
+            project_id: memory.metadata.get("project_id").cloned(),
+            updated_at: memory.updated_at,
+        }))
+    }
+
+    pub fn forget_memory(&self, memory_id: &str) -> anyhow::Result<bool> {
+        self.ledger.soft_delete_memory(memory_id)
+    }
+
+    pub fn quarantine_memory(&self, memory_id: &str) -> anyhow::Result<bool> {
+        self.ledger.quarantine_memory(memory_id)
+    }
+
+    pub fn export_json(
+        &self,
+        output_file: impl AsRef<Path>,
+        global: bool,
+    ) -> anyhow::Result<usize> {
+        let scope_filter = ArchiveScopeFilter {
+            visibility: Some("private".to_string()),
+            user_id: Some(self.config.user_id.clone()),
+            project_id: if global {
+                None
+            } else {
+                self.config.project_id.clone()
+            },
+        };
+        let export = export_json_with_options(
+            &self.ledger,
+            output_file,
+            ArchiveExportOptions {
+                scope_filter: Some(scope_filter),
+                redaction_policy: ArchiveRedactionPolicy {
+                    exclude_private: false,
+                    redact_sensitive: true,
+                },
+            },
+        )?;
+        Ok(export.memory_count)
     }
 
     pub fn prepare_context(

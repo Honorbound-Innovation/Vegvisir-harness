@@ -630,6 +630,7 @@ Steering: {display_content}{attachment_note}"
                     "goal": prompt,
                     "mode": "tui_turn",
                     "autonomous_mode_enabled": self.autonomous_mode_enabled,
+                    "autonomous_level": self.autonomous_level,
                     "dangerously_bypass_approvals_and_sandbox": self.dangerously_bypass_approvals_and_sandbox,
                 })) {
                     self.push_system_message(format!(
@@ -1351,6 +1352,15 @@ How to spawn subagents:
 - Prefer read-only/review/test-planning goals unless the user explicitly asks for parallel implementation. Parallel implementation must be partitioned by non-overlapping file scopes so agents never edit or reason as owners of the same files at the same time.
 - Continue useful main-thread work while subagents run; do not idle solely because a child is running.
 - Check `/subagents list` or `/subagents show <id>` before final summary when subagents were spawned.
+
+Subagent final report contract:
+- Task understood
+- Files inspected
+- Tools used
+- Findings
+- Changes made
+- Verification run
+- Risks/blockers
 
 Boundaries:
 - Do not delegate plaintext secrets, credential handling, destructive actions, persistence/stealth, or ambiguous external side effects.

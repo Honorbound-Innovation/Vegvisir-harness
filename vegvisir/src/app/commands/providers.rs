@@ -32,6 +32,9 @@ impl TuiApplication {
     }
 
     pub(crate) fn models_command(&mut self, args: &[String]) -> anyhow::Result<String> {
+        if args.first().map(String::as_str) == Some("compare") {
+            return Ok(self.model_compare_command(&args[1..]));
+        }
         if !args.is_empty() {
             return self.select_model(args);
         }
@@ -95,6 +98,9 @@ impl TuiApplication {
     }
 
     pub(crate) fn select_model(&mut self, args: &[String]) -> anyhow::Result<String> {
+        if args.first().map(String::as_str) == Some("compare") {
+            return Ok(self.model_compare_command(&args[1..]));
+        }
         if args.is_empty() {
             let reasoning = self
                 .models
@@ -231,6 +237,76 @@ impl TuiApplication {
         ))
     }
 
+    fn model_compare_command(&self, args: &[String]) -> String {
+        let names = if args.is_empty() {
+            vec![self.session.current_model.clone()]
+        } else {
+            args.to_vec()
+        };
+        let mut lines = vec![
+            "Model comparison".to_string(),
+            "name | provider | ctx | streaming | reasoning | fast | enabled".to_string(),
+        ];
+        for name in names {
+            match self.models.get(&name) {
+                Some(model) => {
+                    lines.push(format!(
+                        "{} | {} | {} | {} | {} | {} | {}",
+                        model.name,
+                        model.provider,
+                        model
+                            .context_window
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "unknown".to_string()),
+                        model.supports_streaming,
+                        model
+                            .metadata
+                            .get("reasoning_level")
+                            .and_then(Value::as_str)
+                            .unwrap_or("unset"),
+                        supports_fast_mode(model, &model.provider),
+                        model.enabled
+                    ));
+                }
+                None => lines.push(format!("{name} | unknown | - | - | - | - | -")),
+            }
+        }
+        lines.join("\n")
+    }
+
+    fn provider_diagnose_command(&self, provider_name: Option<&str>) -> String {
+        let provider_name = provider_name.unwrap_or(&self.session.current_provider);
+        let Some(provider) = self.provider_registry.get(provider_name) else {
+            return format!("Unknown provider: {provider_name}");
+        };
+        let ready = self
+            .provider_registry
+            .availability()
+            .get(provider_name)
+            .copied()
+            .unwrap_or(false);
+        let models = self.models.by_provider(provider_name);
+        format!(
+            "Provider diagnostic\nname={}\nkind={}\nauth_type={}\nready={}\ndirect_auth_allowed={}\nmodels={}\ndefault_model={}\nmetadata={}\nnext_step={}",
+            provider.name,
+            provider.kind,
+            provider.auth_type,
+            ready,
+            direct_provider_auth_allowed(),
+            models.len(),
+            self.models
+                .default_for_provider(provider_name)
+                .map(|model| model.name.clone())
+                .unwrap_or_else(|| "none".to_string()),
+            serde_json::to_string(&provider.metadata).unwrap_or_default(),
+            if ready {
+                "run /models to inspect available models"
+            } else {
+                "configure auth with /auth or HBSE provider refs"
+            }
+        )
+    }
+
     pub(crate) fn fast_command(&mut self, args: &[String]) -> anyhow::Result<String> {
         let Some(model) = self.models.get(&self.session.current_model) else {
             return Ok(format!(
@@ -276,6 +352,9 @@ impl TuiApplication {
     }
 
     pub(crate) fn provider_command(&mut self, args: &[String]) -> anyhow::Result<String> {
+        if args.first().map(String::as_str) == Some("diagnose") {
+            return Ok(self.provider_diagnose_command(args.get(1).map(String::as_str)));
+        }
         if args.is_empty() {
             return Ok(format!(
                 "Current provider: {}",

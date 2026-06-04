@@ -14,6 +14,20 @@ impl TuiApplication {
         ) {
             return self.tool_commands_command(&args[1..]);
         }
+        if matches!(args.first().map(String::as_str), Some("explain" | "why")) {
+            let Some(tool_name) = args.get(1) else {
+                return "Usage: /tools explain <tool-name>".to_string();
+            };
+            return match self.tool_registry.get(tool_name) {
+                Ok(tool) => crate::policy_explain::explain_tool_call(
+                    tool,
+                    None,
+                    &self.tool_executor.guardrails.policy,
+                )
+                .to_markdown(),
+                Err(error) => format!("Unknown tool `{tool_name}`: {error}"),
+            };
+        }
         if let Some(action) = args.first().map(|arg| arg.as_str()) {
             match action {
                 "allow-risky" | "enable-risky" | "deny-risky" | "disable-risky"
@@ -131,6 +145,7 @@ impl TuiApplication {
     pub(crate) fn autonomous_command(&mut self, args: &[String]) -> String {
         match args.first().map(String::as_str) {
             None | Some("status") | Some("show") => self.autonomous_status_message(),
+            Some("level") => self.autonomous_level_command(args.get(1).map(String::as_str)),
             Some("on") | Some("enable") | Some("enabled") | Some("start") => {
                 self.autonomous_mode_enabled = true;
                 self.logger.emit(
@@ -163,13 +178,41 @@ impl TuiApplication {
 
     fn autonomous_status_message(&self) -> String {
         format!(
-            "Autonomous working mode: {}\n\n{}\n\nNotes:\n- This is not Vegvisir's default mode.\n- It affects new model turns while enabled.\n- Approval and sandbox policy still apply unless dangerous bypass was selected at startup.",
+            "Autonomous working mode: {}\nAutonomy level: {} - {}\n\n{}\n\nNotes:\n- This is not Vegvisir's default mode.\n- It affects new model turns while enabled.\n- Approval and sandbox policy still apply unless dangerous bypass was selected at startup.",
             if self.autonomous_mode_enabled {
                 "enabled"
             } else {
                 "disabled"
             },
+            self.autonomous_level,
+            autonomy_level_label(self.autonomous_level),
             autonomous_mode_summary()
+        )
+    }
+
+    fn autonomous_level_command(&mut self, raw: Option<&str>) -> String {
+        let Some(raw) = raw else {
+            return format!(
+                "Autonomy level: {} - {}\nUsage: /auto level <0-6>\n{}",
+                self.autonomous_level,
+                autonomy_level_label(self.autonomous_level),
+                autonomy_levels_help()
+            );
+        };
+        let Ok(level) = raw.parse::<usize>() else {
+            return "Usage: /auto level <0-6>".to_string();
+        };
+        if level > 6 {
+            return "Autonomy level must be between 0 and 6.".to_string();
+        }
+        self.autonomous_level = level;
+        if level == 0 {
+            self.autonomous_mode_enabled = false;
+        }
+        format!(
+            "Autonomy level set to {} - {}. Approval and sandbox policy still apply.",
+            self.autonomous_level,
+            autonomy_level_label(self.autonomous_level)
         )
     }
 
@@ -320,6 +363,20 @@ Usage: /tool-limit <rounds>|unlimited",
                 }))
                 .unwrap_or_else(|error| format!("Failed to render approval {id}: {error}"))
             }
+            Some("explain") | Some("why") => {
+                let Some(id) = args.get(1) else {
+                    return "Usage: /approvals explain <id>".to_string();
+                };
+                let pending = self.tool_executor.guardrails.approvals.pending();
+                let Some(request) = pending.get(id) else {
+                    return format!("Unknown pending approval: {id}");
+                };
+                crate::policy_explain::explain_pending_approval(
+                    request,
+                    &self.tool_executor.guardrails.policy,
+                )
+                .to_markdown()
+            }
             Some("approve") | Some("allow") => {
                 let Some(id) = args.get(1) else {
                     return "Usage: /approvals approve <id>".to_string();
@@ -464,6 +521,23 @@ fn tool_command_update_message(
     } else {
         lines.join("\n")
     }
+}
+
+fn autonomy_level_label(level: usize) -> &'static str {
+    match level {
+        0 => "off/manual only",
+        1 => "ask-before-action",
+        2 => "tool-assisted with approvals",
+        3 => "bounded workspace execution",
+        4 => "multi-step autonomous with evidence",
+        5 => "subagent-assisted autonomous",
+        6 => "maximum local autonomy within policy",
+        _ => "unknown",
+    }
+}
+
+fn autonomy_levels_help() -> &'static str {
+    "Levels: 0 off/manual; 1 ask-before-action; 2 tool-assisted; 3 bounded workspace; 4 evidence-gated autonomous; 5 subagent-assisted; 6 maximum local autonomy within active policy."
 }
 
 fn autonomous_mode_summary() -> &'static str {

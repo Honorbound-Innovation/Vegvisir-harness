@@ -49,8 +49,8 @@ enum Command {
     Tui,
     Run {
         goal: String,
-        #[arg(long, default_value_os_t = current_workspace())]
-        workspace: PathBuf,
+        #[arg(long)]
+        workspace: Option<PathBuf>,
         #[arg(long, default_value_t = 4)]
         max_steps: usize,
     },
@@ -59,20 +59,20 @@ enum Command {
         content: String,
         #[arg(long, default_value = "note")]
         memory_type: String,
-        #[arg(long, default_value_os_t = current_workspace())]
-        workspace: PathBuf,
+        #[arg(long)]
+        workspace: Option<PathBuf>,
     },
     Recall {
         query: String,
         #[arg(long, default_value_t = 8)]
         limit: usize,
-        #[arg(long, default_value_os_t = current_workspace())]
-        workspace: PathBuf,
+        #[arg(long)]
+        workspace: Option<PathBuf>,
     },
     Context {
         message: String,
-        #[arg(long, default_value_os_t = current_workspace())]
-        workspace: PathBuf,
+        #[arg(long)]
+        workspace: Option<PathBuf>,
     },
     ModelRequest {
         message: String,
@@ -80,8 +80,8 @@ enum Command {
         provider: String,
         #[arg(long, default_value = "unspecified")]
         model: String,
-        #[arg(long, default_value_os_t = current_workspace())]
-        workspace: PathBuf,
+        #[arg(long)]
+        workspace: Option<PathBuf>,
     },
     Eval {
         #[arg(default_value = "all")]
@@ -92,26 +92,35 @@ enum Command {
     Verify {
         #[arg(default_value = "all")]
         scope: String,
-        #[arg(long, default_value_os_t = current_workspace())]
-        workspace: PathBuf,
+        #[arg(long)]
+        workspace: Option<PathBuf>,
     },
     AppServer {
-        #[arg(long, default_value_os_t = current_workspace())]
-        workspace: PathBuf,
+        #[arg(long)]
+        workspace: Option<PathBuf>,
     },
     OpenAiCompatServer {
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
         #[arg(long, default_value_t = 11435)]
         port: u16,
-        #[arg(long, default_value_os_t = current_workspace())]
-        workspace: PathBuf,
+        #[arg(long)]
+        workspace: Option<PathBuf>,
     },
     /// Run first-time setup or inspect setup status.
     Setup {
         /// Print current setup status instead of writing setup config.
         #[arg(long)]
         status: bool,
+        /// Guided setup alias for the interactive default.
+        #[arg(long)]
+        guided: bool,
+        /// Check setup status without writing config.
+        #[arg(long)]
+        check: bool,
+        /// Run setup doctor/status checks without writing config.
+        #[arg(long)]
+        doctor: bool,
         /// Vegvisir data root. Defaults to the platform Vegvisir data directory.
         #[arg(long)]
         data_root: Option<PathBuf>,
@@ -141,6 +150,7 @@ fn current_workspace() -> PathBuf {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let root_workspace = cli.workspace.clone();
     if let Some(prompt) = cli.prompt {
         run_headless(
             prompt,
@@ -163,7 +173,7 @@ fn main() -> anyhow::Result<()> {
                 max_steps,
             }) => run_headless(
                 goal,
-                workspace,
+                workspace.unwrap_or_else(|| root_workspace.clone()),
                 max_steps,
                 cli.provider,
                 cli.model,
@@ -179,31 +189,51 @@ fn main() -> anyhow::Result<()> {
                 content,
                 memory_type,
                 workspace,
-            }) => run_remember(workspace, memory_type, title, content),
+            }) => run_remember(
+                workspace.unwrap_or_else(|| root_workspace.clone()),
+                memory_type,
+                title,
+                content,
+            ),
             Some(Command::Recall {
                 query,
                 limit,
                 workspace,
-            }) => run_recall(workspace, query, limit),
-            Some(Command::Context { message, workspace }) => run_context(workspace, message),
+            }) => run_recall(
+                workspace.unwrap_or_else(|| root_workspace.clone()),
+                query,
+                limit,
+            ),
+            Some(Command::Context { message, workspace }) => {
+                run_context(workspace.unwrap_or_else(|| root_workspace.clone()), message)
+            }
             Some(Command::ModelRequest {
                 message,
                 provider,
                 model,
                 workspace,
-            }) => run_model_request(workspace, message, provider, model),
-            Some(Command::Eval { scope, file }) => {
-                run_eval(cli.workspace, scope, file, cli.artifacts, cli.artifact_dir)
-            }
+            }) => run_model_request(
+                workspace.unwrap_or_else(|| root_workspace.clone()),
+                message,
+                provider,
+                model,
+            ),
+            Some(Command::Eval { scope, file }) => run_eval(
+                root_workspace.clone(),
+                scope,
+                file,
+                cli.artifacts,
+                cli.artifact_dir,
+            ),
             Some(Command::Verify { scope, workspace }) => run_verify(
-                workspace,
+                workspace.unwrap_or_else(|| root_workspace.clone()),
                 scope,
                 cli.artifacts,
                 cli.artifact_dir,
                 cli.dangerously_bypass_approvals_and_sandbox,
             ),
             Some(Command::AppServer { workspace }) => run_app_server(BridgeOptions {
-                workspace,
+                workspace: workspace.unwrap_or_else(|| root_workspace.clone()),
                 data_root: None,
                 provider: cli.provider,
                 model: cli.model,
@@ -218,7 +248,7 @@ fn main() -> anyhow::Result<()> {
             }) => run_openai_compat_server(CompatServerOptions {
                 host,
                 port,
-                workspace,
+                workspace: workspace.unwrap_or_else(|| root_workspace.clone()),
                 provider: cli.provider,
                 model: cli.model,
                 agent: cli.agent,
@@ -227,16 +257,19 @@ fn main() -> anyhow::Result<()> {
             }),
             Some(Command::Setup {
                 status,
+                guided,
+                check,
+                doctor,
                 data_root,
                 workspace,
                 non_interactive,
                 force,
                 skip_hbse,
             }) => run_setup_command(
-                status,
+                status || check || doctor,
                 data_root,
                 workspace,
-                non_interactive,
+                if guided { false } else { non_interactive },
                 force,
                 skip_hbse,
                 cli.provider,

@@ -1,0 +1,1 @@
+{"id":"add-cli-option","goal":"Add a CLI option with docs and tests","metrics":["success","tests_passed","approval_prompts","trace_completeness"]}

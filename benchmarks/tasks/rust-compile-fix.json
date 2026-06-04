@@ -1,0 +1,1 @@
+{"id":"rust-compile-fix","goal":"Fix a small Rust compile failure and run focused tests","metrics":["success","tests_passed","tool_calls","artifact_completeness"]}

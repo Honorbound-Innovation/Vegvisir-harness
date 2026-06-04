@@ -255,11 +255,13 @@ impl TuiApplication {
             }
             "/cancel" => self.cancel_pending_response(),
             "/turn-repair" => self.turn_repair_command(&args),
+            "/recover" => self.recover_command(&args)?,
             "/auto" | "/autonomous" => self.autonomous_command(&args),
             "/autonomy" => self.autonomy_command(&args),
             "/history" => self.history(),
             "/status" => self.session_status_command(&args),
             "/diff" => self.diff_command(&args)?,
+            "/runs" => self.runs_command(&args)?,
             "/save" => format!(
                 "Saved session to {}",
                 self.sessions.save(&self.session)?.display()

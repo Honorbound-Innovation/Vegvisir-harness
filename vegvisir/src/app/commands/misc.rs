@@ -608,6 +608,50 @@ impl TuiApplication {
                 };
                 Ok(serde_json::to_string_pretty(&record)?)
             }
+            Some("timeline") => self.subagents_timeline(),
+            Some("diff") => {
+                let Some(id_or_name) = args.get(1) else {
+                    return Ok("Usage: /subagents diff <id-or-name>".to_string());
+                };
+                let Some(record) = self.find_subagent_record(id_or_name)? else {
+                    return Ok(format!("Unknown subagent task: {id_or_name}"));
+                };
+                Ok(format_subagent_diffs(&record))
+            }
+            Some("events") => {
+                let Some(id_or_name) = args.get(1) else {
+                    return Ok("Usage: /subagents events <id-or-name>".to_string());
+                };
+                let Some(record) = self.find_subagent_record(id_or_name)? else {
+                    return Ok(format!("Unknown subagent task: {id_or_name}"));
+                };
+                Ok(format_subagent_events(&record))
+            }
+            Some("artifacts") => {
+                let Some(id_or_name) = args.get(1) else {
+                    return Ok("Usage: /subagents artifacts <id-or-name>".to_string());
+                };
+                let Some(record) = self.find_subagent_record(id_or_name)? else {
+                    return Ok(format!("Unknown subagent task: {id_or_name}"));
+                };
+                Ok(format!(
+                    "Subagent artifacts for {}\nparent_run_id={}\nchild_run_id={}\nartifact_dir={}\ncheckpoint={}",
+                    record.id,
+                    record.parent_run_id.as_deref().unwrap_or("none"),
+                    record.child_run_id.as_deref().unwrap_or("none"),
+                    record
+                        .artifact_dir
+                        .as_ref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| "none".to_string()),
+                    record
+                        .checkpoint
+                        .as_ref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| "none".to_string())
+                ))
+            }
+            Some("ownership") => self.subagents_ownership(),
             Some("cancel") => {
                 let Some(id_or_name) = args.get(1) else {
                     return Ok("Usage: /subagents cancel <id-or-name>".to_string());
@@ -645,6 +689,66 @@ impl TuiApplication {
             }
             Some(other) => Ok(format!("Unknown /subagents command: {other}")),
         }
+    }
+
+    fn subagents_timeline(&self) -> anyhow::Result<String> {
+        let mut records = self.load_subagent_records()?;
+        if records.is_empty() {
+            return Ok("No subagent task records.".to_string());
+        }
+        records.sort_by_key(|record| record.created_at);
+        Ok(records
+            .iter()
+            .map(|record| {
+                format!(
+                    "{} created={} started={} finished={} status={:?} name={} parent_run={} child_run={}",
+                    record.id,
+                    record.created_at.to_rfc3339(),
+                    record.started_at.map(|ts| ts.to_rfc3339()).unwrap_or_else(|| "none".to_string()),
+                    record.finished_at.map(|ts| ts.to_rfc3339()).unwrap_or_else(|| "none".to_string()),
+                    record.status,
+                    record.name,
+                    record.parent_run_id.as_deref().unwrap_or("none"),
+                    record.child_run_id.as_deref().unwrap_or("none"),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n"))
+    }
+
+    fn subagents_ownership(&self) -> anyhow::Result<String> {
+        let records = self.load_subagent_records()?;
+        if records.is_empty() {
+            return Ok("No subagent task records.".to_string());
+        }
+        Ok(records
+            .iter()
+            .map(|record| {
+                let ownership = record.ownership.as_ref();
+                let read_scope = ownership
+                    .map(|o| &o.read_scope)
+                    .unwrap_or(&record.file_scope)
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let write_scope = ownership
+                    .map(|o| {
+                        o.write_scope
+                            .iter()
+                            .map(|p| p.display().to_string())
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    })
+                    .unwrap_or_else(|| "<none/read-only>".to_string());
+                let exclusive = ownership.map(|o| o.exclusive_write).unwrap_or(true);
+                format!(
+                    "{} name={} status={:?} read_scope={} write_scope={} exclusive_write={}",
+                    record.id, record.name, record.status, read_scope, write_scope, exclusive
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n"))
     }
 
     pub(crate) fn try_subagent_limit_command(
@@ -716,6 +820,11 @@ Boundaries:
 Commands:
 /subagents list
 /subagents show <id-or-name>
+/subagents timeline
+/subagents diff <id-or-name>
+/subagents events <id-or-name>
+/subagents artifacts <id-or-name>
+/subagents ownership
 /subagents cancel <id-or-name>
 /subagents policy
 /subagents max <n>
@@ -799,4 +908,53 @@ fn format_duration(seconds: i64) -> String {
     } else {
         format!("{secs}s")
     }
+}
+
+fn format_subagent_diffs(record: &SubAgentTaskRecord) -> String {
+    let changes = &record.observability.file_changes;
+    if changes.is_empty() {
+        return format!("No file-change diffs captured for subagent {}.", record.id);
+    }
+    let mut out = format!("Subagent diffs for {} ({})\n", record.id, record.name);
+    for change in changes {
+        out.push_str(&format!(
+            "\n# {:?}: {} before_bytes={:?} after_bytes={:?}\n",
+            change.change,
+            change.path.display(),
+            change.before_bytes,
+            change.after_bytes
+        ));
+        if let Some(diff) = &change.diff {
+            out.push_str(diff.trim());
+            out.push('\n');
+        } else {
+            out.push_str("<no diff text captured>\n");
+        }
+    }
+    out
+}
+
+fn format_subagent_events(record: &SubAgentTaskRecord) -> String {
+    if record.observability.events.is_empty() {
+        return format!("No observed events captured for subagent {}.", record.id);
+    }
+    record
+        .observability
+        .events
+        .iter()
+        .map(|event| {
+            format!(
+                "{:?} name={} ok={} summary={} args={}",
+                event.kind,
+                event.name.as_deref().unwrap_or("-"),
+                event
+                    .ok
+                    .map(|ok| ok.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                event.summary.as_deref().unwrap_or("-"),
+                event.args.as_deref().unwrap_or("-")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }

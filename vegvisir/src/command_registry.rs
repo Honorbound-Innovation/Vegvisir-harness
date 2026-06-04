@@ -107,9 +107,15 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
             &["/repair-turn", "/revive-turn"],
         ),
         cmd(
+            "/recover",
+            "recover from a stuck turn or inspect latest run replay plan",
+            "/recover [turn|force|last]",
+            &[],
+        ),
+        cmd(
             "/auto",
             "control prompt-contract autonomous working mode",
-            "/auto [status|on|off]",
+            "/auto [status|on|off|level <0-6>]",
             &["/autonomous"],
         ),
         cmd(
@@ -130,6 +136,12 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
             "show the current workspace git diff; supports delta and difftastic when installed",
             "/diff [semantic|difftastic|delta|unified] [--staged|--cached|--stat] [path]",
             &[],
+        ),
+        cmd(
+            "/runs",
+            "list, inspect, export, diff, or replay-plan run artifact bundles",
+            "/runs [list|show|open|export|diff|replay-plan] <run-id|latest>",
+            &["/run-artifacts"],
         ),
         cmd("/save", "save the current session", "/save", &[]),
         cmd("/retry", "retry last assistant response", "/retry", &[]),
@@ -213,13 +225,13 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
         cmd(
             "/tools",
             "show available tools",
-            "/tools [status|allow-risky|deny-risky|require-approval|no-approval|max-rounds <rounds>|max-rounds default]",
+            "/tools [status|explain <tool>|allow-risky|deny-risky|require-approval|no-approval|max-rounds <rounds>|max-rounds default]",
             &[],
         ),
         cmd(
             "/auto",
             "enable or disable autonomous working mode for unattended project work",
-            "/auto [status|on|off]",
+            "/auto [status|on|off|level <0-6>]",
             &["/autonomous"],
         ),
         cmd(
@@ -231,13 +243,13 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
         cmd(
             "/approvals",
             "inspect and manage pending risky tool approvals",
-            "/approvals [list|show <id>|approve <id>|session <id>|edit <id> <json-args>|deny <id>]",
+            "/approvals [list|show|explain <id>|approve <id>|session <id>|edit <id> <json-args>|deny <id>]",
             &["/approval"],
         ),
         cmd(
             "/skills",
             "show, compile, route, or load skills",
-            "/skills [status|compile|route <query>|load [--tokens N] <query-or-subskill>|eval [target-or-eval]|forge <id> | <title> | <summary> | <body>|patch <id> | <op> | <path> | <value>|curate|detect|trace|promote <id>|archive <id>]",
+            "/skills [status|audit|trust|provenance|registry status|compile|route|load|eval|forge|patch|curate|detect|trace|promote|archive]",
             &[],
         ),
         cmd(
@@ -249,7 +261,7 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
         cmd(
             "/memory",
             "inspect CMS-v2 memory scope, recent memories, or import ChatGPT exports",
-            "/memory [status|recent|import-chatgpt <path>|search-chatgpt <query>] [--global] [--limit N]",
+            "/memory [status|recent|used-this-turn|writes-this-session|why <id>|diff <a> <b>|quarantine <id>|forget <id>|export [--global] [--out file]|import-chatgpt <path>|search-chatgpt <query>]",
             &["/memories"],
         ),
         cmd(
@@ -261,7 +273,7 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
         cmd(
             "/context",
             "prepare ECM context for a message",
-            "/context <message>",
+            "/context [explain|budget|sources] <message> | /context last | /context diff-last",
             &[],
         ),
         cmd(
@@ -271,7 +283,12 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
             &[],
         ),
         cmd("/models", "show available models", "/models", &[]),
-        cmd("/model", "select active model", "/model [name]", &[]),
+        cmd(
+            "/model",
+            "select active model",
+            "/model [name|compare <model...>]",
+            &[],
+        ),
         cmd(
             "/effort",
             "show or set model reasoning effort",
@@ -287,7 +304,7 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
         cmd(
             "/provider",
             "select active provider",
-            "/provider [name]",
+            "/provider [name|diagnose [provider]]",
             &[],
         ),
         cmd("/providers", "show provider auth status", "/providers", &[]),
@@ -319,19 +336,19 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
         cmd(
             "/subagents",
             "inspect durable subagent task records",
-            "/subagents [list|show <id-or-name>|cancel <id-or-name>|policy|max=<n>|max <n>]",
+            "/subagents [list|show|timeline|diff|events|artifacts|ownership|cancel|policy|max]",
             &["/workers"],
         ),
         cmd(
             "/mcp",
             "show configured MCP servers and tools",
-            "/mcp [list|status|show|tools|reload|add-http|add-http-service|add-stdio|add-tool|remove-tool|remove|enable|disable]",
+            "/mcp [list|status|auth-map|show|tools|reload|add-http|add-http-service|add-stdio|add-tool|remove-tool|remove|enable|disable]",
             &[],
         ),
         cmd(
             "/hbse",
             "show HBSE secret reference setup commands",
-            "/hbse [provider <id>|mcp <server> [url]|service <name>|service add|show|enable|disable|remove|services]",
+            "/hbse [status|usage-this-session|usage-this-run|provider <id>|mcp <server> [url]|service <name>|service add|show|enable|disable|remove|services]",
             &[],
         ),
         cmd(

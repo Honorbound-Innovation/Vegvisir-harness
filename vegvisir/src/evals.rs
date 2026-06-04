@@ -65,6 +65,24 @@ pub fn run_builtin_evals(scope: &str) -> anyhow::Result<Vec<EvalResult>> {
     if matches!(scope, "" | "all" | "golden") {
         results.extend(run_golden_eval_cases(load_builtin_golden_cases()?)?);
     }
+    if matches!(scope, "" | "all" | "artifacts") {
+        results.push(eval_run_artifact_commands()?);
+    }
+    if matches!(scope, "" | "all" | "context") {
+        results.push(eval_context_commands()?);
+    }
+    if matches!(scope, "" | "all" | "subagents") {
+        results.push(eval_subagent_commands()?);
+    }
+    if matches!(scope, "" | "all" | "approvals" | "policy") {
+        results.push(eval_policy_explain_command()?);
+    }
+    if matches!(scope, "" | "all" | "providers") {
+        results.push(eval_provider_compare_commands()?);
+    }
+    if matches!(scope, "" | "all" | "autonomy" | "cancellation") {
+        results.push(eval_autonomy_level_command()?);
+    }
     if results.is_empty() {
         anyhow::bail!("unknown eval scope: {scope}");
     }
@@ -310,4 +328,102 @@ fn eval_root(name: &str) -> anyhow::Result<PathBuf> {
     let root = std::env::temp_dir().join(format!("vegvisir-eval-{name}-{}", Uuid::new_v4()));
     fs::create_dir_all(&root)?;
     Ok(root)
+}
+
+fn eval_run_artifact_commands() -> anyhow::Result<EvalResult> {
+    let root = eval_root("artifact-commands")?;
+    let home = root.join("home");
+    let mut app = TuiApplication::with_data_root(&root, &home)?;
+    let output = app.execute_command("/runs")?.unwrap_or_default();
+    Ok(EvalResult {
+        id: "run_artifact_commands".to_string(),
+        category: "artifacts".to_string(),
+        passed: output.contains("No run artifact bundles")
+            || output.contains("Recent run artifacts"),
+        details: "/runs command is available and artifact-root aware".to_string(),
+    })
+}
+
+fn eval_context_commands() -> anyhow::Result<EvalResult> {
+    let root = eval_root("context-commands")?;
+    let home = root.join("home");
+    let mut app = TuiApplication::with_data_root(&root, &home)?;
+    let budget = app
+        .execute_command("/context budget hello context")?
+        .unwrap_or_default();
+    let explain = app
+        .execute_command("/context explain hello context")?
+        .unwrap_or_default();
+    Ok(EvalResult {
+        id: "context_commands".to_string(),
+        category: "context".to_string(),
+        passed: budget.contains("Context budget") && explain.contains("Context explanation"),
+        details: "/context budget and explain expose prepared context metadata".to_string(),
+    })
+}
+
+fn eval_subagent_commands() -> anyhow::Result<EvalResult> {
+    let root = eval_root("subagent-commands")?;
+    let home = root.join("home");
+    let mut app = TuiApplication::with_data_root(&root, &home)?;
+    let timeline = app
+        .execute_command("/subagents timeline")?
+        .unwrap_or_default();
+    let ownership = app
+        .execute_command("/subagents ownership")?
+        .unwrap_or_default();
+    Ok(EvalResult {
+        id: "subagent_commands".to_string(),
+        category: "subagents".to_string(),
+        passed: timeline.contains("No subagent task records")
+            && ownership.contains("No subagent task records"),
+        details: "subagent timeline and ownership surfaces are command-addressable".to_string(),
+    })
+}
+
+fn eval_policy_explain_command() -> anyhow::Result<EvalResult> {
+    let root = eval_root("policy-explain")?;
+    let home = root.join("home");
+    let mut app = TuiApplication::with_data_root(&root, &home)?;
+    let output = app
+        .execute_command("/tools explain write_file")?
+        .unwrap_or_default();
+    Ok(EvalResult {
+        id: "policy_explain".to_string(),
+        category: "policy".to_string(),
+        passed: output.contains("Policy gates:") && output.contains("Decision:"),
+        details: "policy explanation engine renders guardrail gates for a tool".to_string(),
+    })
+}
+
+fn eval_provider_compare_commands() -> anyhow::Result<EvalResult> {
+    let root = eval_root("provider-compare")?;
+    let home = root.join("home");
+    let mut app = TuiApplication::with_data_root(&root, &home)?;
+    let compare = app
+        .execute_command("/model compare demo-local")?
+        .unwrap_or_default();
+    let diagnose = app
+        .execute_command("/provider diagnose demo")?
+        .unwrap_or_default();
+    Ok(EvalResult {
+        id: "provider_compare".to_string(),
+        category: "providers".to_string(),
+        passed: compare.contains("Model comparison") && diagnose.contains("Provider diagnostic"),
+        details: "model comparison and provider diagnosis surfaces are available".to_string(),
+    })
+}
+
+fn eval_autonomy_level_command() -> anyhow::Result<EvalResult> {
+    let root = eval_root("autonomy-level")?;
+    let home = root.join("home");
+    let mut app = TuiApplication::with_data_root(&root, &home)?;
+    let set = app.execute_command("/auto level 4")?.unwrap_or_default();
+    let status = app.execute_command("/auto status")?.unwrap_or_default();
+    Ok(EvalResult {
+        id: "autonomy_level".to_string(),
+        category: "autonomy".to_string(),
+        passed: set.contains("Autonomy level set to 4") && status.contains("Autonomy level: 4"),
+        details: "autonomy levels are user-visible and configurable".to_string(),
+    })
 }

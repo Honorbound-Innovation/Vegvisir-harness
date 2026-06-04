@@ -29,8 +29,9 @@ use crate::{
     policy::RuntimePolicy,
     sandbox::WorkspaceSandbox,
     subagents::{
-        SubAgentFileChange, SubAgentFileChangeKind, SubAgentObservability, SubAgentObservedEvent,
-        SubAgentObservedEventKind, SubAgentStatus, SubAgentTaskRecord, SubAgentWorkBudget,
+        SubAgentFileChange, SubAgentFileChangeKind, SubAgentFileOwnership, SubAgentObservability,
+        SubAgentObservedEvent, SubAgentObservedEventKind, SubAgentStatus, SubAgentTaskRecord,
+        SubAgentWorkBudget,
     },
     types::{Observation, ToolCall},
 };
@@ -1594,6 +1595,14 @@ pub fn build_builtin_registry_with_cms_mode_subagent_limit_and_provider_defaults
                 name: name.clone(),
                 workspace: workspace.clone(),
                 goal: goal.to_string(),
+                parent_run_id: None,
+                child_run_id: None,
+                artifact_dir: None,
+                ownership: Some(SubAgentFileOwnership {
+                    read_scope: file_scope.clone(),
+                    write_scope: Vec::new(),
+                    exclusive_write: true,
+                }),
                 provider: Some(provider.clone()),
                 model: Some(model.clone()),
                 file_scope: file_scope.clone(),
@@ -1900,6 +1909,10 @@ fn apply_subagent_work_budget_to_goal(goal: &str, budget: &SubAgentWorkBudget) -
     }
     lines.push("- If the task cannot be completed within this budget, stop with a concise blocked/needs-more-budget report.".to_string());
     lines.push("[/Vegvisir subagent work budget]".to_string());
+    lines.push("".to_string());
+    lines.push("[Vegvisir subagent final report contract]".to_string());
+    lines.push("End with these sections: Task understood; Files inspected; Tools used; Findings; Changes made; Verification run; Risks/blockers.".to_string());
+    lines.push("[/Vegvisir subagent final report contract]".to_string());
     format!("{}\n\nSubagent task:\n{}", lines.join("\n"), goal.trim())
 }
 
@@ -2927,6 +2940,10 @@ mod skiller_tool_tests {
             name: "planner".to_string(),
             workspace: workspace.path().to_path_buf(),
             goal: "Inspect subagent visibility".to_string(),
+            parent_run_id: None,
+            child_run_id: None,
+            artifact_dir: None,
+            ownership: None,
             provider: None,
             model: None,
             file_scope: vec![workspace.path().join("vegvisir/src/subagents.rs")],
@@ -3052,6 +3069,10 @@ mod skiller_tool_tests {
             name: "active".to_string(),
             workspace: workspace.path().to_path_buf(),
             goal: "existing".to_string(),
+            parent_run_id: None,
+            child_run_id: None,
+            artifact_dir: None,
+            ownership: None,
             provider: None,
             model: None,
             file_scope: vec![workspace.path().join("other")],

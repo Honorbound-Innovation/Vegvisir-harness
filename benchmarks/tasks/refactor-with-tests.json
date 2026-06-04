@@ -1,0 +1,1 @@
+{"id":"refactor-with-tests","goal":"Refactor a module while preserving behavior","metrics":["success","tests_passed","diff_size","recovery_quality"]}

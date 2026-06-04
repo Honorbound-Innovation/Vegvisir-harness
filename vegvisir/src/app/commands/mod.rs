@@ -7,6 +7,7 @@ mod misc;
 mod persona;
 mod profile;
 mod providers;
+mod runs;
 mod sessions;
 mod skills;
 mod speech;

@@ -1,0 +1,1 @@
+{"id":"subagent-review","goal":"Delegate a read-only code review and inspect subagent artifacts","metrics":["subagent_events","file_scope_conflicts","final_report_quality"]}
