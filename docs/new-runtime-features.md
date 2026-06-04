@@ -12,7 +12,7 @@ Recent Vegvisir runtime work added or hardened these areas:
 - **Workspace file hardening** that rejects path escapes and unsafe symlink traversal for file tools.
 - **Optional command OS sandboxing** through Bubblewrap with path-only, disabled, bwrap, and strict-bwrap modes.
 - **Startup-only dangerous bypass mode** for intentionally high-risk local sessions.
-- **Provider reasoning trace fencing** so visible provider reasoning summaries are rendered as a clearly separated thinking/audit block before the answer.
+- **Provider reasoning trace hiding** so provider reasoning summaries are accepted by stream parsers but are not rendered or persisted as chat transcript content.
 - **Recoverable tool-limit responses** so hitting a model tool-call round cap produces an operator-visible recovery result instead of losing the turn.
 - **Subagent delegation board** with durable records, scoped file ownership, bounded work budgets, status inspection, and cancellation.
 - **MCP stdio stabilization** with bounded timeouts and restart-on-first-failure behavior.
@@ -140,17 +140,16 @@ When active, it bypasses:
 
 It cannot be enabled from inside chat or the TUI. `/tools status`, `/verify runtime`, and app-server status surfaces report whether it is active.
 
-## Provider Streaming And Reasoning Trace Fencing
+## Provider Streaming And Reasoning Trace Hiding
 
-Provider adapters stream output when supported. For providers/models that surface a visible reasoning summary, Vegvisir fences that content as an explicit thinking/audit block before the assistant answer.
+Provider adapters stream output when supported. For providers/models that surface reasoning summaries, Vegvisir hides that content from the chat transcript and streams only assistant answer text.
 
-This keeps three things separate:
+This keeps operator-visible chat focused on:
 
-1. provider-visible reasoning summary or audit trace,
-2. normal assistant answer,
-3. tool observations and verification evidence.
+1. normal assistant answer,
+2. tool observations and verification evidence.
 
-Reasoning trace fencing also prevents a partial reasoning summary from swallowing the final answer if the provider ends unexpectedly. If a tool-round cap or provider stream failure occurs, Vegvisir should report the recoverable state clearly.
+Reasoning trace hiding prevents provider reasoning summaries from being preserved as assistant chat content. If a tool-round cap or provider stream failure occurs, Vegvisir should report the recoverable state clearly.
 
 ## MCP STDIO Stabilization
 

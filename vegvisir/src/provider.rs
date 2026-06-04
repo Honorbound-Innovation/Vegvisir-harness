@@ -3269,18 +3269,13 @@ fn handle_response_stream_text_event(
 }
 
 fn emit_reasoning_trace_delta(
-    delta: &str,
-    on_delta: &mut dyn FnMut(&str),
-    emitted_reasoning_trace: &mut bool,
+    _delta: &str,
+    _on_delta: &mut dyn FnMut(&str),
+    _emitted_reasoning_trace: &mut bool,
 ) {
-    if delta.is_empty() {
-        return;
-    }
-    if !*emitted_reasoning_trace {
-        on_delta("\n\n**Thinking trace**\n\n```text\n");
-        *emitted_reasoning_trace = true;
-    }
-    on_delta(delta);
+    // Provider reasoning/thinking summaries are intentionally hidden from the
+    // chat transcript. Keep accepting these stream events so provider streams
+    // parse normally, but do not render or persist them as assistant content.
 }
 
 fn emit_response_output_delta(
@@ -5087,7 +5082,7 @@ mod tests {
     }
 
     #[test]
-    fn responses_stream_surfaces_reasoning_summary_before_answer() -> anyhow::Result<()> {
+    fn responses_stream_hides_reasoning_summary_and_streams_answer() -> anyhow::Result<()> {
         let body = concat!(
             "data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"Checking context.\"}\n\n",
             "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Final answer.\"}\n\n",
@@ -5101,10 +5096,9 @@ mod tests {
             value.get("output_text").and_then(Value::as_str),
             Some("Final answer.")
         );
-        assert!(visible.contains("**Thinking trace**"));
-        assert!(visible.contains("```text\nChecking context."));
-        assert!(visible.contains("\n```\n\n**Answer**"));
-        assert!(visible.ends_with("Final answer."));
+        assert_eq!(visible, "Final answer.");
+        assert!(!visible.contains("Thinking trace"));
+        assert!(!visible.contains("Checking context."));
         Ok(())
     }
 

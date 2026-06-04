@@ -139,7 +139,7 @@ Recent Vegvisir builds make high-capability sessions more controllable and easie
 - Optional command OS sandboxing is configured with `VEGVISIR_COMMAND_SANDBOX=path|none|bwrap|strict-bwrap`, with network and mount controls for hardened local sessions.
 - `--dangerously-bypass-approvals-and-sandbox` remains startup-only and is reported in `/tools status`, `/verify runtime`, and app-server status payloads.
 - Subagents are tracked as bounded workers with durable board records. Use `/subagents list`, `/subagents show <id-or-name>`, `/subagents cancel <id-or-name>`, and `/subagents policy`.
-- Provider reasoning summaries, when surfaced by a provider/model, are fenced as a visible thinking/audit block before the assistant answer so they do not blur into the final response.
+- Provider reasoning summaries, when surfaced by a provider/model, are hidden from the chat transcript so only the assistant answer is displayed and persisted.
 - STDIO MCP calls are timeout-bound and can restart once after an initial failure, making local MCP integrations less fragile.
 
 See [New runtime features](docs/new-runtime-features.md), [Command sandboxing and approvals](docs/command-sandboxing-and-approvals.md), and [Subagent delegation](docs/subagent-delegation.md) for the detailed operator guidance.

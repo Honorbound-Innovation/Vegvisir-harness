@@ -30,7 +30,6 @@ const RED: Color = Color::Rgb(230, 86, 86);
 const BORDER: Color = Color::Rgb(62, 66, 76);
 const PANEL: Color = Color::Rgb(16, 17, 20);
 const ACTIVITY_LABEL_WIDTH: usize = 18;
-const THINKING_TRACE_VISIBLE_MILLIS: i64 = 1_500;
 
 const FALLBACK_SPINNER_VERBS: &[&str] = &[
     "Architecting",
@@ -509,14 +508,8 @@ fn chat_message_render_cache_key(message: &ChatMessage) -> ChatMessageRenderCach
     }
 }
 
-fn thinking_trace_visible(message: &ChatMessage) -> bool {
-    if message.role != "assistant" || !contains_thinking_trace(&message.content) {
-        return false;
-    }
-    chrono::Utc::now()
-        .signed_duration_since(message.created_at)
-        .num_milliseconds()
-        < THINKING_TRACE_VISIBLE_MILLIS
+fn thinking_trace_visible(_message: &ChatMessage) -> bool {
+    false
 }
 
 fn append_streaming_activity_lines(app: &TuiApplication, lines: &mut Vec<Line<'static>>) {
@@ -948,27 +941,13 @@ fn message_lines(message: &ChatMessage, width: usize, search_query: &str) -> Vec
 }
 
 pub fn next_thinking_trace_expiry_at(
-    app: &TuiApplication,
+    _app: &TuiApplication,
 ) -> Option<chrono::DateTime<chrono::Utc>> {
-    let now = chrono::Utc::now();
-    app.session
-        .messages
-        .iter()
-        .filter(|message| message.role == "assistant" && contains_thinking_trace(&message.content))
-        .filter_map(|message| {
-            let expires_at =
-                message.created_at + chrono::Duration::milliseconds(THINKING_TRACE_VISIBLE_MILLIS);
-            (expires_at > now).then_some(expires_at)
-        })
-        .min()
+    None
 }
 
 fn visible_chat_message_content(message: &ChatMessage) -> String {
     if message.role != "assistant" || !contains_thinking_trace(&message.content) {
-        return message.content.clone();
-    }
-    let age = chrono::Utc::now().signed_duration_since(message.created_at);
-    if age.num_milliseconds() < THINKING_TRACE_VISIBLE_MILLIS {
         return message.content.clone();
     }
     strip_thinking_trace_sections(&message.content)
@@ -981,13 +960,10 @@ fn contains_thinking_trace(content: &str) -> bool {
 }
 
 fn strip_thinking_trace_sections(content: &str) -> String {
-    // Thinking traces are a presentation-only affordance: after a short grace
-    // period we hide them from the chat viewport, but the assistant message
-    // itself must never become blank. Some providers/harness paths can emit a
-    // message that contains a `**Thinking trace**` heading without a matching
-    // `**Answer**` heading. The old one-pass stripper treated that as "skip
-    // until EOF", making the whole assistant message appear to disappear.
-    // Only strip when there is at least one explicit answer boundary to render.
+    // Thinking traces are hidden from the chat viewport. Some older persisted
+    // messages may contain a `**Thinking trace**` heading without a matching
+    // `**Answer**` heading; keep those messages visible rather than stripping
+    // everything to blank. Only strip when there is an explicit answer boundary.
     let has_answer_boundary = content
         .lines()
         .any(|line| line.trim().eq_ignore_ascii_case("**Answer**"));
@@ -3433,37 +3409,23 @@ mod tests {
     }
 
     #[test]
-    fn ratatui_thinking_trace_is_temporarily_visible_then_hidden() {
-        let fresh = ChatMessage {
+    fn ratatui_thinking_trace_is_hidden_immediately() {
+        let message = ChatMessage {
             role: "assistant".to_string(),
             content: "**Thinking trace**\n\nworking through it\n\n**Answer**\n\nDone.".to_string(),
             attachments: Vec::new(),
             created_at: chrono::Utc::now(),
         };
-        let fresh_rendered = message_lines(&fresh, 100, "")
+        let rendered = message_lines(&message, 100, "")
             .iter()
             .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
             .collect::<String>();
-        assert!(fresh_rendered.contains("Thinking trace"));
-        assert!(fresh_rendered.contains("working through it"));
-        assert!(fresh_rendered.contains("Done."));
 
-        let expired = ChatMessage {
-            role: "assistant".to_string(),
-            content: fresh.content.clone(),
-            attachments: Vec::new(),
-            created_at: chrono::Utc::now()
-                - chrono::Duration::milliseconds(THINKING_TRACE_VISIBLE_MILLIS + 1_000),
-        };
-        let expired_rendered = message_lines(&expired, 100, "")
-            .iter()
-            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
-            .collect::<String>();
-        assert!(!expired_rendered.contains("Thinking trace"));
-        assert!(!expired_rendered.contains("working through it"));
-        assert!(!expired_rendered.contains("Answer"));
-        assert!(expired_rendered.contains("Done."));
-        assert!(expired.content.contains("working through it"));
+        assert!(!rendered.contains("Thinking trace"));
+        assert!(!rendered.contains("working through it"));
+        assert!(!rendered.contains("Answer"));
+        assert!(rendered.contains("Done."));
+        assert!(message.content.contains("working through it"));
     }
 
     #[test]
@@ -3472,8 +3434,7 @@ mod tests {
             role: "assistant".to_string(),
             content: "**Thinking trace**\n\nI am still useful visible text.".to_string(),
             attachments: Vec::new(),
-            created_at: chrono::Utc::now()
-                - chrono::Duration::milliseconds(THINKING_TRACE_VISIBLE_MILLIS + 1_000),
+            created_at: chrono::Utc::now(),
         };
 
         let rendered = message_lines(&message, 100, "")
@@ -3486,34 +3447,23 @@ mod tests {
     }
 
     #[test]
-    fn ratatui_reports_next_thinking_trace_expiry_for_redraw() -> anyhow::Result<()> {
+    fn ratatui_does_not_schedule_thinking_trace_expiry_redraw() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let mut app =
             crate::app::TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
-        let created_at = chrono::Utc::now();
         app.session.messages.push(ChatMessage {
             role: "assistant".to_string(),
-            content: "**Thinking trace**\n\nstill visible\n\n**Answer**\n\nDone.".to_string(),
+            content: "**Thinking trace**\n\nstill hidden\n\n**Answer**\n\nDone.".to_string(),
             attachments: Vec::new(),
-            created_at,
+            created_at: chrono::Utc::now(),
         });
 
-        let expires_at = next_thinking_trace_expiry_at(&app)
-            .expect("fresh thinking trace should schedule a redraw expiry");
-        assert!(expires_at > chrono::Utc::now());
-        assert_eq!(
-            expires_at,
-            created_at + chrono::Duration::milliseconds(THINKING_TRACE_VISIBLE_MILLIS)
-        );
-
-        app.session.messages[0].created_at = chrono::Utc::now()
-            - chrono::Duration::milliseconds(THINKING_TRACE_VISIBLE_MILLIS + 1_000);
         assert!(next_thinking_trace_expiry_at(&app).is_none());
         Ok(())
     }
 
     #[test]
-    fn ratatui_multiple_expired_thinking_traces_are_hidden_from_chat_only() {
+    fn ratatui_multiple_thinking_traces_are_hidden_from_chat_only() {
         let message = ChatMessage {
             role: "assistant".to_string(),
             content: [
@@ -3535,8 +3485,7 @@ mod tests {
             ]
             .join("\n"),
             attachments: Vec::new(),
-            created_at: chrono::Utc::now()
-                - chrono::Duration::milliseconds(THINKING_TRACE_VISIBLE_MILLIS + 1_000),
+            created_at: chrono::Utc::now(),
         };
 
         let rendered = message_lines(&message, 100, "")
