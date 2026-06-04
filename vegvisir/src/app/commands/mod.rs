@@ -1,4 +1,4 @@
-mod agents;
+pub(crate) mod agents;
 mod autonomy;
 mod autonomy_plan;
 mod mcp_hbse;

@@ -1,7 +1,14 @@
+use std::{
+    collections::BTreeSet,
+    fs,
+    path::{Path, PathBuf},
+};
+
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
-    core::{AgentProfile, default_system_prompt},
+    core::{AgentProfile, AgentProfileStore, default_system_prompt, normalize_agent_id},
     memory::VegvisirCms,
     policy::RuntimePolicy,
 };
@@ -10,6 +17,331 @@ use super::super::{
     TuiApplication, comma_items, configured_user_id, list_or_dash, self_model_invalid,
     workspace_project_id,
 };
+
+#[derive(Debug, Default)]
+pub(crate) struct AgentIdentityRegistrationReport {
+    pub builtin_created: usize,
+    pub skiller_created: usize,
+    pub warnings: Vec<String>,
+}
+
+pub(crate) fn ensure_registered_agent_identities(
+    store: &AgentProfileStore,
+    cwd: &Path,
+    data_root: &Path,
+) -> anyhow::Result<AgentIdentityRegistrationReport> {
+    let mut report = AgentIdentityRegistrationReport::default();
+    let mut known_ids = store
+        .list_lossy()?
+        .0
+        .into_iter()
+        .map(|profile| profile.id)
+        .collect::<BTreeSet<_>>();
+
+    for template in agent_templates() {
+        if known_ids.contains(&template.mode) {
+            continue;
+        }
+        let profile = agent_profile_from_template(&template)?;
+        store.save(&profile)?;
+        known_ids.insert(profile.id);
+        report.builtin_created += 1;
+    }
+
+    for artifact in find_skiller_agent_artifacts(cwd, data_root) {
+        match artifact {
+            Ok(SkillerAgentArtifact::Pack(path)) => {
+                match register_skiller_agent_pack(store, &mut known_ids, &path) {
+                    Ok(created) => report.skiller_created += usize::from(created),
+                    Err(error) => report.warnings.push(format!(
+                        "skipped Skiller agent pack {}: {error}",
+                        path.display()
+                    )),
+                }
+            }
+            Ok(SkillerAgentArtifact::ProposalIndex(path)) => {
+                match register_skiller_agent_proposals(store, &mut known_ids, &path) {
+                    Ok(created) => report.skiller_created += created,
+                    Err(error) => report.warnings.push(format!(
+                        "skipped Skiller agent proposal index {}: {error}",
+                        path.display()
+                    )),
+                }
+            }
+            Err(error) => report.warnings.push(error.to_string()),
+        }
+    }
+
+    Ok(report)
+}
+
+pub(crate) fn builtin_agent_profile(id_or_mode: &str) -> anyhow::Result<Option<AgentProfile>> {
+    let Some(template) = agent_template(id_or_mode) else {
+        return Ok(None);
+    };
+    agent_profile_from_template(&template).map(Some)
+}
+
+fn agent_profile_from_template(template: &AgentTemplate) -> anyhow::Result<AgentProfile> {
+    let mut profile = AgentProfile::new(
+        &template.mode,
+        &template.display_name,
+        &template.system_prompt,
+    )?;
+    profile.mode = template.mode.clone();
+    profile.description = template.description.clone();
+    profile.enabled_tools = template.enabled_tools.clone();
+    profile.enabled_skills = template.enabled_skills.clone();
+    profile.usrl_contracts = template.usrl_contracts.clone();
+    profile.memory_policy = template.memory_policy.clone();
+    profile
+        .metadata
+        .insert("registered_identity".to_string(), json!(true));
+    profile
+        .metadata
+        .insert("identity_source".to_string(), json!("builtin-template"));
+    profile
+        .metadata
+        .insert("template".to_string(), Value::String(template.mode.clone()));
+    Ok(profile)
+}
+
+#[derive(Debug)]
+enum SkillerAgentArtifact {
+    Pack(PathBuf),
+    ProposalIndex(PathBuf),
+}
+
+fn find_skiller_agent_artifacts(
+    cwd: &Path,
+    data_root: &Path,
+) -> Vec<anyhow::Result<SkillerAgentArtifact>> {
+    let mut artifacts = Vec::new();
+    let roots = [
+        cwd.join(".vegvisir").join("agent-packs"),
+        cwd.join(".vegvisir").join("skiller"),
+        cwd.join(".vegvisir").join("skiller-agent-packs"),
+        data_root.join("agent-packs"),
+        data_root.join("skiller"),
+        data_root.join("skiller-agent-packs"),
+    ];
+    let mut seen = BTreeSet::new();
+    for root in roots {
+        collect_skiller_agent_artifacts(&root, 6, &mut seen, &mut artifacts);
+    }
+    artifacts
+}
+
+fn collect_skiller_agent_artifacts(
+    path: &Path,
+    remaining_depth: usize,
+    seen: &mut BTreeSet<PathBuf>,
+    artifacts: &mut Vec<anyhow::Result<SkillerAgentArtifact>>,
+) {
+    if remaining_depth == 0 || !path.exists() {
+        return;
+    }
+    let Ok(metadata) = fs::metadata(path) else {
+        artifacts.push(Err(anyhow::anyhow!("could not inspect {}", path.display())));
+        return;
+    };
+    if metadata.is_file() {
+        match path.file_name().and_then(|name| name.to_str()) {
+            Some("agent-pack.yaml") if seen.insert(path.to_path_buf()) => {
+                artifacts.push(Ok(SkillerAgentArtifact::Pack(path.to_path_buf())));
+            }
+            Some("agent-proposals-index.yaml") if seen.insert(path.to_path_buf()) => {
+                artifacts.push(Ok(SkillerAgentArtifact::ProposalIndex(path.to_path_buf())));
+            }
+            _ => {}
+        }
+        return;
+    }
+    let Ok(entries) = fs::read_dir(path) else {
+        artifacts.push(Err(anyhow::anyhow!("could not list {}", path.display())));
+        return;
+    };
+    for entry in entries.flatten() {
+        collect_skiller_agent_artifacts(&entry.path(), remaining_depth - 1, seen, artifacts);
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct SkillerAgentPackOnDisk {
+    #[serde(default)]
+    agent_name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    system_prompt_material: String,
+    #[serde(default)]
+    skill_ids: Vec<String>,
+    #[serde(default)]
+    tool_permissions: Vec<String>,
+    #[serde(default)]
+    memory_policy: String,
+    #[serde(default)]
+    source_bundle_ids: Vec<String>,
+    #[serde(default)]
+    source_bundle_name: String,
+    #[serde(default)]
+    source_bundle_version: String,
+}
+
+fn register_skiller_agent_pack(
+    store: &AgentProfileStore,
+    known_ids: &mut BTreeSet<String>,
+    path: &Path,
+) -> anyhow::Result<bool> {
+    let pack: SkillerAgentPackOnDisk = serde_yaml::from_str(&fs::read_to_string(path)?)?;
+    let id = normalize_agent_id(&pack.agent_name);
+    if id.is_empty() || known_ids.contains(&id) {
+        return Ok(false);
+    }
+    let prompt = if pack.system_prompt_material.trim().is_empty() {
+        format!(
+            "You are {}. Operate as a Skiller-generated specialist agent for source-grounded technical work. Use selected Skiller skills as evidence, respect runtime policy, cite sources when possible, and escalate unsupported or unsafe requests.",
+            pack.agent_name
+        )
+    } else {
+        pack.system_prompt_material.clone()
+    };
+    let mut profile = AgentProfile::new(&id, &pack.agent_name, prompt)?;
+    profile.mode = "skiller".to_string();
+    profile.description = if pack.description.trim().is_empty() {
+        format!(
+            "Skiller-generated agent pack loaded from {}",
+            path.display()
+        )
+    } else {
+        pack.description.clone()
+    };
+    profile.enabled_skills = pack.skill_ids.clone();
+    profile.enabled_tools = pack
+        .tool_permissions
+        .iter()
+        .filter_map(|permission| permission.split(':').next())
+        .map(str::trim)
+        .filter(|tool| !tool.is_empty())
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    profile.memory_policy = if pack.memory_policy.trim().is_empty() {
+        "agent-scoped".to_string()
+    } else {
+        pack.memory_policy.clone()
+    };
+    profile
+        .metadata
+        .insert("registered_identity".to_string(), json!(true));
+    profile
+        .metadata
+        .insert("identity_source".to_string(), json!("skiller-agent-pack"));
+    profile.metadata.insert(
+        "artifact_path".to_string(),
+        json!(path.display().to_string()),
+    );
+    profile.metadata.insert(
+        "source_bundle_ids".to_string(),
+        json!(pack.source_bundle_ids),
+    );
+    profile.metadata.insert(
+        "source_bundle_name".to_string(),
+        json!(pack.source_bundle_name),
+    );
+    profile.metadata.insert(
+        "source_bundle_version".to_string(),
+        json!(pack.source_bundle_version),
+    );
+    store.save(&profile)?;
+    known_ids.insert(profile.id);
+    Ok(true)
+}
+
+fn register_skiller_agent_proposals(
+    store: &AgentProfileStore,
+    known_ids: &mut BTreeSet<String>,
+    index_path: &Path,
+) -> anyhow::Result<usize> {
+    let index: skiller::agents::AgentProposalIndex =
+        serde_yaml::from_str(&fs::read_to_string(index_path)?)?;
+    let base = index_path.parent().unwrap_or_else(|| Path::new("."));
+    let mut created = 0;
+    for entry in &index.proposals {
+        if entry.file.contains("..") || Path::new(&entry.file).is_absolute() {
+            continue;
+        }
+        let proposal_path = base.join(&entry.file);
+        let proposal: skiller::models::AgentProfileProposal =
+            serde_yaml::from_str(&fs::read_to_string(&proposal_path)?)?;
+        if register_skiller_agent_proposal(store, known_ids, &index, &proposal, &proposal_path)? {
+            created += 1;
+        }
+    }
+    Ok(created)
+}
+
+fn register_skiller_agent_proposal(
+    store: &AgentProfileStore,
+    known_ids: &mut BTreeSet<String>,
+    index: &skiller::agents::AgentProposalIndex,
+    proposal: &skiller::models::AgentProfileProposal,
+    path: &Path,
+) -> anyhow::Result<bool> {
+    let id = normalize_agent_id(&proposal.agent_id);
+    if id.is_empty() || known_ids.contains(&id) {
+        return Ok(false);
+    }
+    let prompt = format!(
+        "You are {}.\n\nPurpose: {}\n\nRuntime context policy: {}\nReview policy: {}\nEscalation policy: {}\n\nRecommended Skiller skills:\n{}",
+        proposal.agent_name,
+        proposal.agent_purpose,
+        proposal.runtime_context_policy,
+        proposal.review_policy,
+        proposal.escalation_policy,
+        proposal
+            .recommended_skills
+            .iter()
+            .map(|skill| format!("- {skill}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    let mut profile = AgentProfile::new(&id, &proposal.agent_name, prompt)?;
+    profile.mode = "skiller".to_string();
+    profile.description = proposal.agent_purpose.clone();
+    profile.enabled_skills = proposal.recommended_skills.clone();
+    profile.enabled_tools = proposal.required_tools.clone();
+    profile.memory_policy = "agent-scoped".to_string();
+    profile
+        .metadata
+        .insert("registered_identity".to_string(), json!(true));
+    profile.metadata.insert(
+        "identity_source".to_string(),
+        json!("skiller-agent-proposal"),
+    );
+    profile.metadata.insert(
+        "artifact_path".to_string(),
+        json!(path.display().to_string()),
+    );
+    profile
+        .metadata
+        .insert("source_bundle_id".to_string(), json!(index.bundle_id));
+    profile
+        .metadata
+        .insert("source_bundle_name".to_string(), json!(index.bundle_name));
+    profile.metadata.insert(
+        "ready_for_packaging".to_string(),
+        json!(proposal.proposal_readiness.ready_for_packaging),
+    );
+    profile.metadata.insert(
+        "ready_for_default_use_candidate".to_string(),
+        json!(proposal.proposal_readiness.ready_for_default_use_candidate),
+    );
+    store.save(&profile)?;
+    known_ids.insert(profile.id);
+    Ok(true)
+}
 
 impl TuiApplication {
     pub(crate) fn try_handle_natural_agent_template_request(
@@ -205,7 +537,17 @@ impl TuiApplication {
                 let Some(id) = args.get(1) else {
                     return Ok("Usage: /agent use <id>".to_string());
                 };
-                let profile = self.agents.load(id)?;
+                let profile = match self.agents.load(id) {
+                    Ok(profile) => profile,
+                    Err(load_error) => {
+                        if let Some(profile) = builtin_agent_profile(id)? {
+                            self.agents.save(&profile)?;
+                            profile
+                        } else {
+                            return Err(load_error);
+                        }
+                    }
+                };
                 self.apply_agent_profile(&profile)
             }
             Some("clone") => {
@@ -1158,5 +1500,82 @@ fn template_with_skills(
             .collect(),
         usrl_contracts: Vec::new(),
         memory_policy: "agent-scoped".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod registration_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn registers_builtin_template_agents_as_profiles() -> anyhow::Result<()> {
+        let tmp = tempdir()?;
+        let store = AgentProfileStore::new(tmp.path().join("agents"))?;
+
+        let report = ensure_registered_agent_identities(&store, tmp.path(), tmp.path())?;
+
+        assert!(report.builtin_created >= 7);
+        let engineer = store.load("engineer")?;
+        assert_eq!(engineer.mode, "engineer");
+        assert_eq!(
+            engineer
+                .metadata
+                .get("identity_source")
+                .and_then(Value::as_str),
+            Some("builtin-template")
+        );
+        assert!(engineer.enabled_tools.contains(&"run_tests".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn registers_skiller_agent_pack_profiles_from_known_roots() -> anyhow::Result<()> {
+        let tmp = tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        let data_root = tmp.path().join("data");
+        let pack_dir = workspace.join(".vegvisir/skiller-agent-packs/practical-engineer");
+        fs::create_dir_all(&pack_dir)?;
+        fs::write(
+            pack_dir.join("agent-pack.yaml"),
+            r#"
+agent_name: Practical Engineer
+agent_version: 0.1.0
+description: Engineer generated from a Skiller bundle.
+source_bundle_ids:
+  - bundle-test
+source_bundle_name: Test Bundle
+source_bundle_version: 0.1.0
+skill_ids:
+  - rust.build.verify
+tool_permissions:
+  - read_file:ReadOnly:Required
+  - run_tests:Execute:Required
+memory_policy: agent-scoped
+system_prompt_material: |
+  You are a Skiller-generated practical engineer. Verify changes with tests.
+"#,
+        )?;
+        let store = AgentProfileStore::new(data_root.join("agents"))?;
+
+        let report = ensure_registered_agent_identities(&store, &workspace, &data_root)?;
+
+        assert_eq!(report.skiller_created, 1);
+        let profile = store.load("practical-engineer")?;
+        assert_eq!(profile.mode, "skiller");
+        assert_eq!(
+            profile.enabled_skills,
+            vec!["rust.build.verify".to_string()]
+        );
+        assert!(profile.enabled_tools.contains(&"read_file".to_string()));
+        assert!(profile.enabled_tools.contains(&"run_tests".to_string()));
+        assert_eq!(
+            profile
+                .metadata
+                .get("identity_source")
+                .and_then(Value::as_str),
+            Some("skiller-agent-pack")
+        );
+        Ok(())
     }
 }

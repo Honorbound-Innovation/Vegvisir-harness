@@ -589,6 +589,8 @@ impl TuiApplication {
             &cwd,
         );
         let agents = AgentProfileStore::new(data_root.join("agents"))?;
+        let _agent_registration_report =
+            commands::agents::ensure_registered_agent_identities(&agents, &cwd, &data_root)?;
         let cms_project_id = workspace_project_id(&cwd);
         let cms = VegvisirCms::open(VegvisirCmsConfig {
             db_path: data_root.join("cms-v2.sqlite3"),

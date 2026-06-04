@@ -1501,7 +1501,15 @@ pub fn build_builtin_registry_with_cms_mode_and_subagent_limit(
             let model = optional_nonempty_string(args.get("model"));
             let agent = optional_nonempty_string(args.get("agent"));
             let work_budget = parse_subagent_work_budget(args.get("work_budget"), args.get("max_steps"));
-            let file_scope = match parse_subagent_file_scope(args.get("file_scope"), &subagent_sandbox) {
+            let workspace_scope_sandbox = match if bypass_sandbox {
+                WorkspaceSandbox::new_unrestricted(&workspace)
+            } else {
+                WorkspaceSandbox::new(&workspace)
+            } {
+                Ok(sandbox) => sandbox,
+                Err(error) => return Observation::err(error.to_string(), "SandboxViolation"),
+            };
+            let file_scope = match parse_subagent_file_scope(args.get("file_scope"), &workspace_scope_sandbox) {
                 Ok(scope) => scope,
                 Err(error) => return Observation::err(error.to_string(), "InvalidFileScope"),
             };
@@ -1550,7 +1558,11 @@ pub fn build_builtin_registry_with_cms_mode_and_subagent_limit(
             }
 
             let child_record = record.clone();
-            let child_goal = apply_subagent_work_budget_to_goal(goal, &work_budget);
+            let child_goal = apply_subagent_scope_to_goal(
+                &apply_subagent_work_budget_to_goal(goal, &work_budget),
+                &workspace,
+                &file_scope,
+            );
             thread::spawn(move || {
                 run_spawned_subagent(
                     board_path,
@@ -1831,6 +1843,37 @@ fn apply_subagent_work_budget_to_goal(goal: &str, budget: &SubAgentWorkBudget) -
     lines.push("- If the task cannot be completed within this budget, stop with a concise blocked/needs-more-budget report.".to_string());
     lines.push("[/Vegvisir subagent work budget]".to_string());
     format!("{}\n\nSubagent task:\n{}", lines.join("\n"), goal.trim())
+}
+
+fn apply_subagent_scope_to_goal(goal: &str, workspace: &Path, file_scope: &[PathBuf]) -> String {
+    if file_scope.is_empty() {
+        return goal.to_string();
+    }
+    let scope_lines = file_scope
+        .iter()
+        .map(|path| {
+            path.strip_prefix(workspace)
+                .unwrap_or(path)
+                .display()
+                .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join(
+            "
+",
+        );
+    format!(
+        "[Vegvisir subagent file scope]
+Workspace: {}
+Assigned file_scope paths are workspace-relative unless shown absolute. Treat these as your coordination boundary; inspect or modify only within this scope unless explicitly asked for broader review.
+{}
+[/Vegvisir subagent file scope]
+
+{}",
+        workspace.display(),
+        scope_lines,
+        goal.trim()
+    )
 }
 
 fn optional_nonempty_string(value: Option<&Value>) -> Option<String> {
@@ -2308,16 +2351,27 @@ fn load_subagent_board_records(path: &Path) -> anyhow::Result<Vec<SubAgentTaskRe
     if !path.exists() {
         return Ok(Vec::new());
     }
-    Ok(serde_json::from_str::<Vec<SubAgentTaskRecord>>(
-        &std::fs::read_to_string(path)?,
-    )?)
+    let text = std::fs::read_to_string(path)?;
+    if text.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(serde_json::from_str::<Vec<SubAgentTaskRecord>>(&text)?)
 }
 
 fn save_subagent_board_records(path: &Path, records: &[SubAgentTaskRecord]) -> anyhow::Result<()> {
+    atomic_write_json(path, &serde_json::to_string_pretty(records)?)
+}
+
+fn atomic_write_json(path: &Path, content: &str) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(path, serde_json::to_string_pretty(records)?)?;
+    let tmp = path.with_extension(format!("{}.tmp", Uuid::new_v4().simple()));
+    std::fs::write(&tmp, content)?;
+    std::fs::rename(&tmp, path).or_else(|rename_error| {
+        let _ = std::fs::remove_file(&tmp);
+        Err(rename_error)
+    })?;
     Ok(())
 }
 
@@ -2361,10 +2415,10 @@ fn validate_subagent_file_scope_available(
     path: &Path,
     requested: &[PathBuf],
 ) -> anyhow::Result<()> {
-    if requested.is_empty() || !path.exists() {
+    if requested.is_empty() {
         return Ok(());
     }
-    let records = serde_json::from_str::<Vec<SubAgentTaskRecord>>(&std::fs::read_to_string(path)?)?;
+    let records = load_subagent_board_records(path)?;
     for record in records.into_iter().filter(|record| {
         matches!(
             record.status,
@@ -2396,10 +2450,7 @@ fn scopes_overlap(left: &Path, right: &Path) -> bool {
 }
 
 fn active_subagent_count(path: &Path) -> anyhow::Result<usize> {
-    if !path.exists() {
-        return Ok(0);
-    }
-    let records = serde_json::from_str::<Vec<SubAgentTaskRecord>>(&std::fs::read_to_string(path)?)?;
+    let records = load_subagent_board_records(path)?;
     Ok(records
         .into_iter()
         .filter(|record| {
@@ -2412,21 +2463,13 @@ fn active_subagent_count(path: &Path) -> anyhow::Result<usize> {
 }
 
 fn upsert_subagent_record(path: &Path, record: SubAgentTaskRecord) -> anyhow::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let mut records = if path.exists() {
-        serde_json::from_str::<Vec<SubAgentTaskRecord>>(&std::fs::read_to_string(path)?)?
-    } else {
-        Vec::new()
-    };
+    let mut records = load_subagent_board_records(path)?;
     if let Some(existing) = records.iter_mut().find(|existing| existing.id == record.id) {
         *existing = record;
     } else {
         records.push(record);
     }
-    std::fs::write(path, serde_json::to_string_pretty(&records)?)?;
-    Ok(())
+    save_subagent_board_records(path, &records)
 }
 
 fn context_options_from_args(args: &Map<String, Value>) -> ContextPrepareOptions {
