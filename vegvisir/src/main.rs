@@ -8,7 +8,10 @@ use vegvisir_rust::{
     compat_server::{CompatServerOptions, run_openai_compat_server},
     evals::{format_eval_results, run_builtin_evals, run_eval_file},
     memory::{VegvisirCms, VegvisirCmsConfig, default_vegvisir_data_root},
-    run_artifacts::{RunArtifactManager, RunManifest, RunStatus},
+    run_artifacts::{
+        RunArtifactManager, RunManifest, RunStatus, RunVerificationCheck, RunVerificationEvidence,
+        RunVerificationSource,
+    },
     setup::{SetupOptions, run_setup, setup_status},
 };
 
@@ -193,6 +196,8 @@ fn main() -> anyhow::Result<()> {
             Some(Command::Verify { scope, workspace }) => run_verify(
                 workspace,
                 scope,
+                cli.artifacts,
+                cli.artifact_dir,
                 cli.dangerously_bypass_approvals_and_sandbox,
             ),
             Some(Command::AppServer { workspace }) => run_app_server(BridgeOptions {
@@ -298,17 +303,85 @@ fn run_setup_command(
 fn run_verify(
     workspace: PathBuf,
     scope: String,
+    artifacts: bool,
+    artifact_dir: Option<PathBuf>,
     dangerously_bypass_approvals_and_sandbox: bool,
 ) -> anyhow::Result<()> {
     let mut app = TuiApplication::new_with_dangerous_bypass(
-        workspace,
+        workspace.clone(),
         dangerously_bypass_approvals_and_sandbox,
     )?;
+    let mut artifact_bundle = if artifacts || artifact_dir.is_some() {
+        Some(RunArtifactManager::start_in(
+            &workspace,
+            default_vegvisir_data_root(),
+            artifact_dir.as_deref(),
+            app.session.session_id.clone(),
+            app.session.current_provider.clone(),
+            app.session.current_model.clone(),
+            app.session.active_agent_id.clone(),
+        )?)
+    } else {
+        None
+    };
+    let command = format!("/verify {scope}");
     let output = app
-        .execute_command(&format!("/verify {scope}"))?
+        .execute_command(&command)?
         .unwrap_or_else(|| "No verification output.".to_string());
+    if let Some((manager, mut manifest)) = artifact_bundle.take() {
+        manager.write_request(&serde_json::json!({
+            "scope": scope,
+            "mode": "verify",
+            "command": command,
+        }))?;
+        manager.write_result(&output)?;
+        manager.write_verification_evidence(&verification_evidence_from_verify_output(
+            manager.run_id.clone(),
+            &command,
+            &output,
+        ))?;
+        manager.write_memory_written_unavailable(
+            "verify command does not perform completion memory writeback",
+        )?;
+        manager.write_approvals_from_pending(&app.tool_executor.guardrails.approvals.pending())?;
+        manager.write_subagents_from_board()?;
+        manager.write_workspace_change_artifacts()?;
+        manager.finish(&mut manifest, RunStatus::Completed)?;
+        println!("{output}");
+        println!("artifact_dir: {}", manager.run_dir.display());
+        return Ok(());
+    }
     println!("{output}");
     Ok(())
+}
+
+fn verification_evidence_from_verify_output(
+    run_id: String,
+    command: &str,
+    output: &str,
+) -> RunVerificationEvidence {
+    RunVerificationEvidence::captured(
+        run_id,
+        vec![RunVerificationCheck {
+            name: "vegvisir_verify".to_string(),
+            command: Some(command.to_string()),
+            ok: Some(verify_output_passed(output)),
+            summary: output
+                .lines()
+                .next()
+                .unwrap_or("No verification output.")
+                .to_string(),
+            detail: Some(output.to_string()),
+            source: RunVerificationSource::Harness,
+        }],
+    )
+}
+
+fn verify_output_passed(output: &str) -> bool {
+    !output.starts_with("Usage:")
+        && !output
+            .lines()
+            .any(|line| line.trim_start().starts_with("fail "))
 }
 
 fn run_eval(scope: String, file: Option<PathBuf>) -> anyhow::Result<()> {
@@ -386,6 +459,7 @@ fn run_headless(
             )?;
         }
         manager.write_approvals_from_pending(&harness.executor.guardrails.approvals.pending())?;
+        manager.write_subagents_from_board()?;
         manager.write_verification_no_checks(
             "scripted harness does not run verification commands automatically",
         )?;
@@ -611,6 +685,7 @@ fn write_provider_headless_artifacts(
         observed.memory_write_error.as_deref(),
     )?;
     manager.write_approvals_from_pending(pending_approvals)?;
+    manager.write_subagents_from_board()?;
     manager.write_workspace_change_artifacts()?;
     for event in &observed.events {
         manager.append_observed_provider_event(event)?;

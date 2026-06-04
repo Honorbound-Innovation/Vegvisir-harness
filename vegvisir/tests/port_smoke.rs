@@ -499,6 +499,7 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
     assert!(scripted_artifact_dir.join("memory-used.json").exists());
     assert!(scripted_artifact_dir.join("memory-written.json").exists());
     assert!(scripted_artifact_dir.join("approvals.json").exists());
+    assert!(scripted_artifact_dir.join("subagents.json").exists());
     assert!(scripted_artifact_dir.join("verification.json").exists());
     assert!(scripted_artifact_dir.join("result.md").exists());
     assert!(scripted_artifact_dir.join("file-changes.json").exists());
@@ -517,6 +518,10 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
         scripted_artifact_dir.join("approvals.json"),
     )?)?;
     assert_eq!(scripted_approvals["status"], "no_approvals");
+    let scripted_subagents: Value = serde_json::from_str(&fs::read_to_string(
+        scripted_artifact_dir.join("subagents.json"),
+    )?)?;
+    assert_eq!(scripted_subagents["status"], "no_subagents");
     let scripted_verification: Value = serde_json::from_str(&fs::read_to_string(
         scripted_artifact_dir.join("verification.json"),
     )?)?;
@@ -632,6 +637,7 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
     assert!(provider_artifact_dir.join("memory-used.json").exists());
     assert!(provider_artifact_dir.join("memory-written.json").exists());
     assert!(provider_artifact_dir.join("approvals.json").exists());
+    assert!(provider_artifact_dir.join("subagents.json").exists());
     assert!(provider_artifact_dir.join("verification.json").exists());
     assert!(provider_artifact_dir.join("result.md").exists());
     assert!(provider_artifact_dir.join("file-changes.json").exists());
@@ -650,6 +656,10 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
         provider_artifact_dir.join("approvals.json"),
     )?)?;
     assert_eq!(provider_approvals["status"], "no_approvals");
+    let provider_subagents: Value = serde_json::from_str(&fs::read_to_string(
+        provider_artifact_dir.join("subagents.json"),
+    )?)?;
+    assert_eq!(provider_subagents["status"], "no_subagents");
     let provider_verification: Value = serde_json::from_str(&fs::read_to_string(
         provider_artifact_dir.join("verification.json"),
     )?)?;
@@ -691,6 +701,7 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
     assert!(failed_provider_runs[0].join("diff.patch").exists());
     assert!(failed_provider_runs[0].join("memory-written.json").exists());
     assert!(failed_provider_runs[0].join("approvals.json").exists());
+    assert!(failed_provider_runs[0].join("subagents.json").exists());
     assert!(failed_provider_runs[0].join("verification.json").exists());
     let failed_provider_verification: Value = serde_json::from_str(&fs::read_to_string(
         failed_provider_runs[0].join("verification.json"),
@@ -705,6 +716,46 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
             .unwrap()
             .contains("model selection failed")
     );
+
+    let verify_artifact_root = tmp.path().join("verify-artifacts");
+    let verify_artifact_run = std::process::Command::new(binary)
+        .args([
+            "--workspace",
+            tmp.path().to_str().unwrap(),
+            "--artifact-dir",
+            verify_artifact_root.to_str().unwrap(),
+            "verify",
+            "runtime",
+        ])
+        .env("VEGVISIR_HOME", tmp.path().join("home-verify-artifacts"))
+        .output()?;
+    assert!(
+        verify_artifact_run.status.success(),
+        "verify artifact run failed: {}",
+        String::from_utf8_lossy(&verify_artifact_run.stderr)
+    );
+    let verify_stdout = String::from_utf8_lossy(&verify_artifact_run.stdout);
+    assert!(verify_stdout.contains("ok runtime/approvals"));
+    assert!(verify_stdout.contains("artifact_dir:"));
+    let verify_runs = fs::read_dir(&verify_artifact_root)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(verify_runs.len(), 1);
+    let verify_manifest: Value =
+        serde_json::from_str(&fs::read_to_string(verify_runs[0].join("manifest.json"))?)?;
+    assert_eq!(verify_manifest["status"], "completed");
+    let verify_request: Value =
+        serde_json::from_str(&fs::read_to_string(verify_runs[0].join("request.json"))?)?;
+    assert_eq!(verify_request["mode"], "verify");
+    assert_eq!(verify_request["scope"], "runtime");
+    let verify_evidence: Value = serde_json::from_str(&fs::read_to_string(
+        verify_runs[0].join("verification.json"),
+    )?)?;
+    assert_eq!(verify_evidence["status"], "captured");
+    assert_eq!(verify_evidence["overall"], "passed");
+    assert_eq!(verify_evidence["checks"][0]["source"], "harness");
+    assert!(verify_runs[0].join("result.md").exists());
+    assert!(verify_runs[0].join("subagents.json").exists());
 
     let agent_home = tmp.path().join("home-agent-cli");
     let mut agent_app = TuiApplication::with_data_root(tmp.path(), &agent_home)?;

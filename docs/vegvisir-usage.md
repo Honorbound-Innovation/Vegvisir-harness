@@ -440,7 +440,7 @@ Notes:
 
 ## Run Artifacts
 
-Vegvisir writes auditable run artifact bundles for TUI turns and can write them for headless runs on demand. Bundles are local workspace/runtime evidence; do not commit them.
+Vegvisir writes auditable run artifact bundles for TUI turns and can write them for headless `run` and `verify` commands on demand. Bundles are local workspace/runtime evidence; do not commit them.
 
 Default bundle location:
 
@@ -454,6 +454,7 @@ Headless opt-in flags:
 vegvisir --workspace /path/to/project --artifacts run "Summarize this repository"
 vegvisir --workspace /path/to/project --artifact-dir ./audit-runs run "Summarize this repository"
 vegvisir --workspace /path/to/project --json --artifacts run "Summarize this repository"
+vegvisir --workspace /path/to/project --artifacts verify runtime
 ```
 
 Current bundle files include:
@@ -466,6 +467,7 @@ context-sources.json     redacted prompt-cache block/capsule/source metadata for
 memory-used.json         redacted memory/source-id evidence derived from the prepared prompt envelope
 memory-written.json      redacted completion memory writeback ids/status, when captured
 approvals.json           redacted pending approval evidence, or no_approvals/unavailable status
+subagents.json           redacted subagent board snapshot, or no_subagents/unavailable status
 verification.json        redacted verification/test evidence, or no_verification/unavailable status
 result.md                redacted final response, when available
 provider-events.jsonl    redacted provider/runtime stream events
@@ -475,7 +477,7 @@ diff.patch               redacted tracked staged/unstaged git diff evidence capt
 failure.json             failure detail for failed/recoverable runs
 ```
 
-`memory-used.json` records the memory IDs, block/capsule IDs, prompt cache key, and token counts that came from the CMS/ECM prepared prompt envelope; it avoids storing full memory bodies beyond the already-redacted context artifact. `memory-written.json` records completion writeback status and memory IDs from successful headless runs and TUI turns, or an unavailable/no-write status when writeback cannot be captured. `approvals.json` records the pending approval queue snapshot for the run, using redacted/summarized arguments such as command arrays, file paths, and content length rather than raw file content. `verification.json` records observed verification/test tool events when available, otherwise it records `no_verification` for completed runs with no captured checks or `unavailable` for runs that ended before verification evidence could be captured. The manifest still reserves a stable name for planned `subagents.json` evidence. This reserved path lets later integrations fill in more evidence without changing the schema shape.
+`memory-used.json` records the memory IDs, block/capsule IDs, prompt cache key, and token counts that came from the CMS/ECM prepared prompt envelope; it avoids storing full memory bodies beyond the already-redacted context artifact. `memory-written.json` records completion writeback status and memory IDs from successful headless runs and TUI turns, or an unavailable/no-write status when writeback cannot be captured. `approvals.json` records the pending approval queue snapshot for the run, using redacted/summarized arguments such as command arrays, file paths, and content length rather than raw file content. `verification.json` records observed verification/test tool events when available, otherwise it records `no_verification` for completed runs with no captured checks or `unavailable` for runs that ended before verification evidence could be captured. `subagents.json` records the current durable subagent board snapshot at bundle finalization, including task status, bounded scope/budget, captured final answer/error, observability, and file-change summaries when available.
 
 Artifact writers redact secret-like JSON keys and common token-shaped text before data is persisted. Treat artifacts as operational evidence, not as a secret store.
 

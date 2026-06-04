@@ -119,6 +119,7 @@ Headless mode is useful for scripted tasks:
 vegvisir --workspace /path/to/project run "Summarize this repository"
 vegvisir --workspace /path/to/project --artifacts run "Summarize this repository"
 vegvisir --workspace /path/to/project --json --artifacts run "Summarize this repository"
+vegvisir --workspace /path/to/project --artifacts verify runtime
 ```
 
 It should still respect workspace scope, provider configuration, tool policies, memory behavior, and max-step bounds. Use headless mode for automation where an interactive approvals UI is not needed or where policy is already configured for the run. When `--artifacts` or `--artifact-dir` is used, JSON headless output includes the emitted `run_id` and `artifact_dir`. Artifact-enabled scripted and provider headless failures finalize the bundle with `manifest.json` status `failed` and a `failure.json` recoverable failure record.
@@ -134,7 +135,7 @@ Default location:
 <workspace>/.vegvisir/runs/<run-id>/
 ```
 
-Headless runs write bundles when `--artifacts` is set or when `--artifact-dir <root>` is provided. `--artifact-dir` changes the root and writes the bundle as `<root>/<run-id>/`. TUI sends create and finalize turn artifacts automatically in the workspace run directory.
+Headless `run` and `verify` commands write bundles when `--artifacts` is set or when `--artifact-dir <root>` is provided. `--artifact-dir` changes the root and writes the bundle as `<root>/<run-id>/`. TUI sends create and finalize turn artifacts automatically in the workspace run directory.
 
 Current emitted files include:
 
@@ -146,6 +147,7 @@ context-sources.json     redacted prompt-cache block/capsule/source metadata for
 memory-used.json         redacted memory/source-id evidence derived from the prepared prompt envelope
 memory-written.json      redacted completion memory writeback ids/status when captured
 approvals.json           redacted pending approval evidence, or no_approvals/unavailable status
+subagents.json           redacted subagent board snapshot, or no_subagents/unavailable status
 verification.json        redacted verification/test evidence, or no_verification/unavailable status
 result.md                redacted final answer when available
 provider-events.jsonl    redacted provider/runtime stream events
@@ -155,7 +157,7 @@ diff.patch               redacted tracked staged/unstaged git diff evidence capt
 failure.json             recoverable or fatal worker failure details when a turn fails
 ```
 
-`memory-used.json` records the memory IDs, block/capsule IDs, prompt cache key, and token counts that came from the CMS/ECM prepared prompt envelope; it avoids storing full memory bodies beyond the already-redacted context artifact. `memory-written.json` records completion writeback status and memory IDs from successful headless runs and TUI turns, or an unavailable/no-write status when writeback cannot be captured. `approvals.json` records the pending approval queue snapshot for the run, using redacted/summarized arguments such as command arrays, file paths, and content length rather than raw file content. `verification.json` records observed verification/test tool events when available, otherwise it records `no_verification` for completed runs with no captured checks or `unavailable` for runs that ended before verification evidence could be captured. The manifest still reserves a stable name for future subagent artifact evidence. Reserved paths can be absent until a runtime path has evidence to write. Artifact writers apply best-effort redaction to secret-like JSON keys and common token-shaped text before persisting files, but artifacts should still be treated as local operational evidence rather than a credential store.
+`memory-used.json` records the memory IDs, block/capsule IDs, prompt cache key, and token counts that came from the CMS/ECM prepared prompt envelope; it avoids storing full memory bodies beyond the already-redacted context artifact. `memory-written.json` records completion writeback status and memory IDs from successful headless runs and TUI turns, or an unavailable/no-write status when writeback cannot be captured. `approvals.json` records the pending approval queue snapshot for the run, using redacted/summarized arguments such as command arrays, file paths, and content length rather than raw file content. `verification.json` records observed verification/test tool events when available, otherwise it records `no_verification` for completed runs with no captured checks or `unavailable` for runs that ended before verification evidence could be captured. `subagents.json` records the current durable subagent board snapshot at bundle finalization, including task status, bounded scope/budget, captured final answer/error, observability, and file-change summaries when available. Artifact writers apply best-effort redaction to secret-like JSON keys and common token-shaped text before persisting files, but artifacts should still be treated as local operational evidence rather than a credential store.
 
 ## App-server Bridge
 

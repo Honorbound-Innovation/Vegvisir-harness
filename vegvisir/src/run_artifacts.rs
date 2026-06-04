@@ -13,7 +13,11 @@ use uuid::Uuid;
 
 use cms_v2::{cms_api::CommitResult, prompt_cache::CachedPromptEnvelope};
 
-use crate::{guardrails::ApprovalRequest, provider::ProviderRunEvent};
+use crate::{
+    guardrails::ApprovalRequest,
+    provider::ProviderRunEvent,
+    subagents::{SubAgentStatus, SubAgentTaskRecord},
+};
 
 pub const RUN_ARTIFACT_SCHEMA_VERSION: u32 = 1;
 const REDACTION: &str = "[REDACTED]";
@@ -232,6 +236,43 @@ impl RunArtifactManager {
         self.write_json_file("approvals.json", &evidence)
     }
 
+    pub fn write_subagents_from_records(
+        &self,
+        records: &[SubAgentTaskRecord],
+    ) -> anyhow::Result<()> {
+        let evidence = RunSubagentEvidence::from_records(self.run_id.clone(), records);
+        self.write_json_file("subagents.json", &evidence)
+    }
+
+    pub fn write_subagents_unavailable(&self, note: impl Into<String>) -> anyhow::Result<()> {
+        let evidence = RunSubagentEvidence::unavailable(self.run_id.clone(), note);
+        self.write_json_file("subagents.json", &evidence)
+    }
+
+    pub fn write_subagents_from_board(&self) -> anyhow::Result<()> {
+        let path = self.data_root.join("subagents.json");
+        if !path.exists() {
+            return self.write_json_file(
+                "subagents.json",
+                &RunSubagentEvidence::no_subagents(
+                    self.run_id.clone(),
+                    "no subagent board was present for this run",
+                ),
+            );
+        }
+        match fs::read_to_string(&path)
+            .map_err(anyhow::Error::from)
+            .and_then(|text| {
+                serde_json::from_str::<Vec<SubAgentTaskRecord>>(&text).map_err(Into::into)
+            }) {
+            Ok(records) => self.write_subagents_from_records(&records),
+            Err(error) => self.write_subagents_unavailable(format!(
+                "subagent board could not be read from {}: {error}",
+                path.display()
+            )),
+        }
+    }
+
     pub fn write_failure(&self, failure: &RunFailure) -> anyhow::Result<()> {
         self.write_json_file("failure.json", failure)
     }
@@ -360,6 +401,9 @@ impl RunArtifactManager {
         )?;
         if !self.artifact_path("approvals.json").exists() {
             self.write_approvals_unavailable("approval ledger was not supplied for failed run")?;
+        }
+        if !self.artifact_path("subagents.json").exists() {
+            self.write_subagents_from_board()?;
         }
         self.write_workspace_change_artifacts()?;
         self.finish(manifest, RunStatus::Failed)
@@ -838,6 +882,78 @@ impl RunApprovalEvidence {
 pub enum RunApprovalStatus {
     Captured,
     NoApprovals,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RunSubagentEvidence {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub captured_at: DateTime<Utc>,
+    pub status: RunSubagentStatus,
+    pub records: Vec<SubAgentTaskRecord>,
+    pub active_count: usize,
+    pub notes: Vec<String>,
+}
+
+impl RunSubagentEvidence {
+    pub fn from_records(run_id: String, records: &[SubAgentTaskRecord]) -> Self {
+        let records = records.to_vec();
+        let active_count = records
+            .iter()
+            .filter(|record| {
+                matches!(
+                    record.status,
+                    SubAgentStatus::Queued | SubAgentStatus::Running
+                )
+            })
+            .count();
+        let status = if records.is_empty() {
+            RunSubagentStatus::NoSubagents
+        } else {
+            RunSubagentStatus::Captured
+        };
+        Self {
+            schema_version: RUN_ARTIFACT_SCHEMA_VERSION,
+            run_id,
+            captured_at: Utc::now(),
+            status,
+            records,
+            active_count,
+            notes: Vec::new(),
+        }
+    }
+
+    pub fn no_subagents(run_id: String, note: impl Into<String>) -> Self {
+        Self {
+            schema_version: RUN_ARTIFACT_SCHEMA_VERSION,
+            run_id,
+            captured_at: Utc::now(),
+            status: RunSubagentStatus::NoSubagents,
+            records: Vec::new(),
+            active_count: 0,
+            notes: vec![note.into()],
+        }
+    }
+
+    pub fn unavailable(run_id: String, note: impl Into<String>) -> Self {
+        Self {
+            schema_version: RUN_ARTIFACT_SCHEMA_VERSION,
+            run_id,
+            captured_at: Utc::now(),
+            status: RunSubagentStatus::Unavailable,
+            records: Vec::new(),
+            active_count: 0,
+            notes: vec![note.into()],
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunSubagentStatus {
+    Captured,
+    NoSubagents,
     Unavailable,
 }
 
@@ -1561,6 +1677,82 @@ mod tests {
         )?)?;
         assert_eq!(approvals.status, RunApprovalStatus::NoApprovals);
         assert!(approvals.pending.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn run_artifacts_writes_subagent_board_evidence() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        let data_root = tmp.path().join("data");
+        fs::create_dir_all(&workspace)?;
+        fs::create_dir_all(&data_root)?;
+        let (manager, _manifest) = RunArtifactManager::start(
+            &workspace,
+            &data_root,
+            "session-1",
+            "demo",
+            "demo-model",
+            None,
+        )?;
+        let record = SubAgentTaskRecord {
+            id: "task-1".to_string(),
+            name: "reviewer".to_string(),
+            workspace: workspace.clone(),
+            goal: "Review run artifact gaps".to_string(),
+            provider: Some("demo".to_string()),
+            model: Some("demo-model".to_string()),
+            file_scope: vec![workspace.join("vegvisir/src/run_artifacts.rs")],
+            work_budget: Default::default(),
+            status: SubAgentStatus::Running,
+            created_at: Utc::now(),
+            started_at: Some(Utc::now()),
+            finished_at: None,
+            checkpoint: None,
+            final_answer: None,
+            error: None,
+            observability: Default::default(),
+        };
+        fs::write(
+            data_root.join("subagents.json"),
+            serde_json::to_string_pretty(&vec![record])?,
+        )?;
+
+        manager.write_subagents_from_board()?;
+
+        let evidence: RunSubagentEvidence = serde_json::from_str(&fs::read_to_string(
+            manager.artifact_path("subagents.json"),
+        )?)?;
+        assert_eq!(evidence.schema_version, RUN_ARTIFACT_SCHEMA_VERSION);
+        assert_eq!(evidence.status, RunSubagentStatus::Captured);
+        assert_eq!(evidence.active_count, 1);
+        assert_eq!(evidence.records.len(), 1);
+        assert_eq!(evidence.records[0].name, "reviewer");
+        Ok(())
+    }
+
+    #[test]
+    fn run_artifacts_writes_no_subagents_when_board_absent() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        fs::create_dir_all(&workspace)?;
+        let (manager, _manifest) = RunArtifactManager::start(
+            &workspace,
+            tmp.path().join("data"),
+            "session-1",
+            "demo",
+            "demo-model",
+            None,
+        )?;
+
+        manager.write_subagents_from_board()?;
+
+        let evidence: RunSubagentEvidence = serde_json::from_str(&fs::read_to_string(
+            manager.artifact_path("subagents.json"),
+        )?)?;
+        assert_eq!(evidence.status, RunSubagentStatus::NoSubagents);
+        assert_eq!(evidence.active_count, 0);
+        assert!(evidence.records.is_empty());
         Ok(())
     }
 

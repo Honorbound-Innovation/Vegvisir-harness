@@ -692,6 +692,11 @@ Steering: {display_content}{attachment_note}"
                 "Warning: failed to write run artifact approvals: {error}"
             ));
         }
+        if let Err(error) = manager.write_subagents_from_board() {
+            self.push_system_message(format!(
+                "Warning: failed to write run artifact subagents: {error}"
+            ));
+        }
         if let Err(error) = manager.write_workspace_change_artifacts() {
             self.push_system_message(format!(
                 "Warning: failed to write run artifact workspace changes: {error}"
@@ -732,6 +737,11 @@ Steering: {display_content}{attachment_note}"
         {
             self.push_system_message(format!(
                 "Warning: failed to write run artifact approvals: {error}"
+            ));
+        }
+        if let Err(error) = manager.write_subagents_from_board() {
+            self.push_system_message(format!(
+                "Warning: failed to write run artifact subagents: {error}"
             ));
         }
         if let Err(error) = manager.write_workspace_change_artifacts() {
