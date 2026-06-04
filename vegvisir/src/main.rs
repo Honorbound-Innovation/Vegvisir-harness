@@ -385,6 +385,9 @@ fn run_headless(
                 "scripted run produced no final answer for completion memory writeback",
             )?;
         }
+        manager.write_verification_no_checks(
+            "scripted harness does not run verification commands automatically",
+        )?;
         manager.write_workspace_change_artifacts()?;
         if status == RunStatus::Failed {
             let message = result.final_answer.as_deref().unwrap_or(&result.status);
@@ -479,6 +482,9 @@ fn run_headless_provider(
                 "goal": prompt,
                 "mode": "provider_runtime",
             }))?;
+            manager.write_verification_unavailable(
+                "provider selection failed before verification evidence could be captured",
+            )?;
             manager.fail(&mut manifest, error.to_string(), true)?;
         }
         return Err(error);
@@ -563,6 +569,9 @@ fn send_provider_headless_with_artifacts(
                 "goal": prompt,
                 "mode": "provider_runtime",
             }))?;
+            manager.write_verification_unavailable(
+                "provider run failed before verification evidence could be finalized",
+            )?;
             manager.fail(&mut manifest, error.to_string(), true)?;
             Err(error)
         }

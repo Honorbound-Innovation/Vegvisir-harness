@@ -242,6 +242,49 @@ impl RunArtifactManager {
         self.write_json_value_file("verification.json", verification)
     }
 
+    pub fn write_verification_evidence(
+        &self,
+        verification: &RunVerificationEvidence,
+    ) -> anyhow::Result<()> {
+        self.write_json_file("verification.json", verification)
+    }
+
+    pub fn write_verification_from_provider_events(
+        &self,
+        events: &[ProviderRunEvent],
+    ) -> anyhow::Result<()> {
+        let evidence = RunVerificationEvidence::from_provider_events(self.run_id.clone(), events);
+        self.write_verification_evidence(&evidence)
+    }
+
+    pub fn write_verification_no_checks(&self, note: impl Into<String>) -> anyhow::Result<()> {
+        self.write_verification_evidence(&RunVerificationEvidence::no_verification(
+            self.run_id.clone(),
+            note,
+        ))
+    }
+
+    pub fn write_verification_unavailable(&self, note: impl Into<String>) -> anyhow::Result<()> {
+        self.write_verification_evidence(&RunVerificationEvidence::unavailable(
+            self.run_id.clone(),
+            note,
+        ))
+    }
+
+    pub fn write_verification_if_absent(&self, status: &RunStatus) -> anyhow::Result<()> {
+        if self.artifact_path("verification.json").exists() {
+            return Ok(());
+        }
+        match status {
+            RunStatus::Failed | RunStatus::Cancelled => self.write_verification_unavailable(
+                "run ended before verification evidence was captured",
+            ),
+            RunStatus::Running | RunStatus::Completed => self.write_verification_no_checks(
+                "no verification command or test tool evidence was captured for this run",
+            ),
+        }
+    }
+
     pub fn append_provider_event(&self, event: &ProviderRunEvent) -> anyhow::Result<()> {
         self.append_jsonl_value(
             "provider-events.jsonl",
@@ -259,7 +302,7 @@ impl RunArtifactManager {
         match event {
             ProviderRunEvent::ToolStart { name, args } => self.append_tool_event(
                 &ToolRunEvent::start(self.run_id.clone(), name.clone(), Some(args.clone()), None),
-            ),
+            )?,
             ProviderRunEvent::ToolEnd {
                 name, ok, summary, ..
             } => self.append_tool_event(&ToolRunEvent::end(
@@ -268,9 +311,10 @@ impl RunArtifactManager {
                 *ok,
                 summary.clone(),
                 None,
-            )),
-            ProviderRunEvent::Activity(_) => Ok(()),
+            ))?,
+            ProviderRunEvent::Activity(_) => {}
         }
+        self.record_verification_from_provider_event(event)
     }
 
     pub fn append_tool_event(&self, event: &ToolRunEvent) -> anyhow::Result<()> {
@@ -278,6 +322,7 @@ impl RunArtifactManager {
     }
 
     pub fn finish(&self, manifest: &mut RunManifest, status: RunStatus) -> anyhow::Result<()> {
+        self.write_verification_if_absent(&status)?;
         manifest.status = status;
         manifest.finished_at = Some(Utc::now());
         self.write_manifest(manifest)
@@ -332,6 +377,32 @@ impl RunArtifactManager {
             .open(self.artifact_path(name))?;
         writeln!(file, "{}", serde_json::to_string(&redacted)?)?;
         Ok(())
+    }
+
+    fn record_verification_from_provider_event(
+        &self,
+        event: &ProviderRunEvent,
+    ) -> anyhow::Result<()> {
+        let Some(check) = RunVerificationCheck::from_provider_event(event, None) else {
+            return Ok(());
+        };
+        let mut evidence = self
+            .read_verification_evidence()
+            .unwrap_or_else(|| RunVerificationEvidence::captured(self.run_id.clone(), Vec::new()));
+        evidence.status = RunVerificationStatus::Captured;
+        evidence.captured_at = Utc::now();
+        evidence
+            .notes
+            .retain(|note| !note.contains("no verification command"));
+        evidence.checks.push(check);
+        evidence.overall = verification_overall(&evidence.checks);
+        self.write_verification_evidence(&evidence)
+    }
+
+    fn read_verification_evidence(&self) -> Option<RunVerificationEvidence> {
+        let path = self.artifact_path("verification.json");
+        let text = fs::read_to_string(path).ok()?;
+        serde_json::from_str(&text).ok()
     }
 }
 
@@ -701,6 +772,175 @@ impl RunMemoryWriteResult {
             trace: serde_json::to_value(&result.trace).unwrap_or(Value::Null),
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunVerificationEvidence {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub captured_at: DateTime<Utc>,
+    pub status: RunVerificationStatus,
+    pub overall: RunVerificationOverall,
+    pub checks: Vec<RunVerificationCheck>,
+    pub notes: Vec<String>,
+}
+
+impl RunVerificationEvidence {
+    pub fn captured(run_id: String, checks: Vec<RunVerificationCheck>) -> Self {
+        let overall = verification_overall(&checks);
+        Self {
+            schema_version: RUN_ARTIFACT_SCHEMA_VERSION,
+            run_id,
+            captured_at: Utc::now(),
+            status: RunVerificationStatus::Captured,
+            overall,
+            checks,
+            notes: Vec::new(),
+        }
+    }
+
+    pub fn from_provider_events(run_id: String, events: &[ProviderRunEvent]) -> Self {
+        let checks = events
+            .iter()
+            .filter_map(|event| RunVerificationCheck::from_provider_event(event, None))
+            .collect::<Vec<_>>();
+        if checks.is_empty() {
+            Self::no_verification(
+                run_id,
+                "no verification command or test tool evidence was captured for this run",
+            )
+        } else {
+            Self::captured(run_id, checks)
+        }
+    }
+
+    pub fn no_verification(run_id: String, note: impl Into<String>) -> Self {
+        Self {
+            schema_version: RUN_ARTIFACT_SCHEMA_VERSION,
+            run_id,
+            captured_at: Utc::now(),
+            status: RunVerificationStatus::NoVerification,
+            overall: RunVerificationOverall::NotRun,
+            checks: Vec::new(),
+            notes: vec![note.into()],
+        }
+    }
+
+    pub fn unavailable(run_id: String, note: impl Into<String>) -> Self {
+        Self {
+            schema_version: RUN_ARTIFACT_SCHEMA_VERSION,
+            run_id,
+            captured_at: Utc::now(),
+            status: RunVerificationStatus::Unavailable,
+            overall: RunVerificationOverall::Unknown,
+            checks: Vec::new(),
+            notes: vec![note.into()],
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunVerificationStatus {
+    Captured,
+    NoVerification,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunVerificationOverall {
+    Passed,
+    Failed,
+    Mixed,
+    NotRun,
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunVerificationCheck {
+    pub name: String,
+    pub command: Option<String>,
+    pub ok: Option<bool>,
+    pub summary: String,
+    pub detail: Option<String>,
+    pub source: RunVerificationSource,
+}
+
+impl RunVerificationCheck {
+    fn from_provider_event(event: &ProviderRunEvent, command: Option<String>) -> Option<Self> {
+        let ProviderRunEvent::ToolEnd {
+            name,
+            ok,
+            summary,
+            detail,
+        } = event
+        else {
+            return None;
+        };
+        if !is_verification_tool_observation(name, summary, detail.as_deref()) {
+            return None;
+        }
+        Some(Self {
+            name: name.clone(),
+            command,
+            ok: Some(*ok),
+            summary: summary.clone(),
+            detail: detail.clone(),
+            source: RunVerificationSource::ProviderToolEvent,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunVerificationSource {
+    ProviderToolEvent,
+    Harness,
+}
+
+fn verification_overall(checks: &[RunVerificationCheck]) -> RunVerificationOverall {
+    if checks.is_empty() {
+        return RunVerificationOverall::NotRun;
+    }
+    let passed = checks.iter().any(|check| check.ok == Some(true));
+    let failed = checks.iter().any(|check| check.ok == Some(false));
+    match (passed, failed) {
+        (true, true) => RunVerificationOverall::Mixed,
+        (true, false) => RunVerificationOverall::Passed,
+        (false, true) => RunVerificationOverall::Failed,
+        (false, false) => RunVerificationOverall::Unknown,
+    }
+}
+
+fn is_verification_tool_observation(name: &str, summary: &str, detail: Option<&str>) -> bool {
+    let lower_name = name.to_ascii_lowercase();
+    if matches!(
+        lower_name.as_str(),
+        "run_tests" | "verify" | "skiller_eval" | "skiller_validate" | "skiller_readiness"
+    ) {
+        return true;
+    }
+    if lower_name != "run_command" {
+        return false;
+    }
+    let text = format!(
+        "{} {}",
+        summary.to_ascii_lowercase(),
+        detail.unwrap_or_default().to_ascii_lowercase()
+    );
+    [
+        "cargo test",
+        "cargo check",
+        "cargo clippy",
+        "npm test",
+        "pytest",
+        "run_tests",
+        "vegvisir verify",
+        "/verify",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1143,6 +1383,63 @@ mod tests {
         assert_eq!(memory_written.status, RunMemoryWriteStatus::Unavailable);
         assert!(memory_written.writes.is_empty());
         assert!(memory_written.notes[0].contains("not captured"));
+        Ok(())
+    }
+
+    #[test]
+    fn run_artifacts_writes_default_verification_on_finish() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        fs::create_dir_all(&workspace)?;
+        let (manager, mut manifest) = RunArtifactManager::start(
+            &workspace,
+            tmp.path().join("data"),
+            "session-1",
+            "demo",
+            "demo-model",
+            None,
+        )?;
+
+        manager.finish(&mut manifest, RunStatus::Completed)?;
+
+        let verification: RunVerificationEvidence = serde_json::from_str(&fs::read_to_string(
+            manager.artifact_path("verification.json"),
+        )?)?;
+        assert_eq!(verification.status, RunVerificationStatus::NoVerification);
+        assert_eq!(verification.overall, RunVerificationOverall::NotRun);
+        assert!(verification.checks.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn run_artifacts_captures_verification_tool_events() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        fs::create_dir_all(&workspace)?;
+        let (manager, _manifest) = RunArtifactManager::start(
+            &workspace,
+            tmp.path().join("data"),
+            "session-1",
+            "demo",
+            "demo-model",
+            None,
+        )?;
+
+        manager.append_observed_provider_event(&ProviderRunEvent::ToolEnd {
+            name: "run_tests".to_string(),
+            ok: true,
+            summary: "cargo test -p vegvisir-rust passed".to_string(),
+            detail: None,
+        })?;
+
+        let verification: RunVerificationEvidence = serde_json::from_str(&fs::read_to_string(
+            manager.artifact_path("verification.json"),
+        )?)?;
+        assert_eq!(verification.status, RunVerificationStatus::Captured);
+        assert_eq!(verification.overall, RunVerificationOverall::Passed);
+        assert_eq!(verification.checks.len(), 1);
+        assert_eq!(verification.checks[0].name, "run_tests");
+        assert_eq!(verification.checks[0].ok, Some(true));
         Ok(())
     }
 
