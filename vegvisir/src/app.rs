@@ -2540,6 +2540,48 @@ mod tests {
     }
 
     #[test]
+    fn runs_export_zip_creates_archive_or_actionable_failure() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace)?;
+        let data_root = tmp.path().join("home");
+        let mut app = TuiApplication::with_data_root(&workspace, &data_root)?;
+        let (manager, mut manifest) = crate::run_artifacts::RunArtifactManager::start_with_run_id(
+            &workspace,
+            &data_root,
+            "test-run-export",
+            Option::<&std::path::Path>::None,
+            "session-1",
+            "demo",
+            "demo-model",
+            None,
+        )?;
+        manager.write_result("export me")?;
+        manager.finish(&mut manifest, crate::run_artifacts::RunStatus::Completed)?;
+
+        let response = app
+            .execute_command("/runs export test-run-export --zip")?
+            .unwrap();
+
+        assert!(!response.contains("not enabled"));
+        assert!(response.contains("test-run-export"));
+        assert!(
+            workspace
+                .join(".vegvisir")
+                .join("exports")
+                .join("test-run-export.zip")
+                .exists()
+                || workspace
+                    .join(".vegvisir")
+                    .join("exports")
+                    .join("test-run-export.tar.gz")
+                    .exists()
+                || response.contains("Run export failed")
+        );
+        Ok(())
+    }
+
+    #[test]
     fn status_command_reports_session_telemetry() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;

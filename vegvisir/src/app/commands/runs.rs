@@ -1,6 +1,7 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    process::Command,
 };
 
 use chrono::{DateTime, Utc};
@@ -66,13 +67,16 @@ impl TuiApplication {
                     return Ok(format!("No run matching `{selector}`."));
                 };
                 if args.iter().any(|arg| arg == "--zip") {
-                    return Ok("Zip export is not enabled in this build yet. Use the artifact directory path below with your archive tool.\n".to_string()
-                        + &entry.run_dir.display().to_string());
+                    return self.runs_export_archive(&entry);
                 }
                 Ok(format!(
-                    "Run {} export source:\n{}\n\nCopy or archive this directory; artifacts are already redacted by RunArtifactManager.",
+                    "Run {} export source:
+{}
+
+Copy or archive this directory; artifacts are already redacted by RunArtifactManager. Use `/runs export {} --zip` to create an archive.",
                     entry.run_id,
-                    entry.run_dir.display()
+                    entry.run_dir.display(),
+                    entry.run_id
                 ))
             }
             Some("replay-plan") => {
@@ -184,6 +188,104 @@ impl TuiApplication {
         ))
     }
 
+    fn runs_export_archive(&self, entry: &RunListEntry) -> anyhow::Result<String> {
+        let export_dir = self.cwd.join(".vegvisir").join("exports");
+        fs::create_dir_all(&export_dir)?;
+        let zip_path = export_dir.join(format!("{}.zip", entry.run_id));
+        let parent = entry.run_dir.parent().ok_or_else(|| {
+            anyhow::anyhow!("run directory has no parent: {}", entry.run_dir.display())
+        })?;
+        let run_dir_name = entry
+            .run_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "run directory has no valid final path component: {}",
+                    entry.run_dir.display()
+                )
+            })?;
+
+        match Command::new("zip")
+            .arg("-qr")
+            .arg(&zip_path)
+            .arg(run_dir_name)
+            .current_dir(parent)
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                return Ok(format!(
+                    "Run {} exported to {}
+
+Archive format: zip
+Source: {}",
+                    entry.run_id,
+                    zip_path.display(),
+                    entry.run_dir.display()
+                ));
+            }
+            Ok(output) => {
+                let stderr = compact_stderr(&output.stderr);
+                if !stderr.is_empty() {
+                    self.logger.emit(
+                        "run_export_zip_failed",
+                        serde_json::json!({
+                            "run_id": entry.run_id,
+                            "status": output.status.to_string(),
+                            "stderr": stderr,
+                        }),
+                    );
+                }
+            }
+            Err(error) => {
+                self.logger.emit(
+                    "run_export_zip_unavailable",
+                    serde_json::json!({
+                        "run_id": entry.run_id,
+                        "error": error.to_string(),
+                    }),
+                );
+            }
+        }
+
+        let tar_path = export_dir.join(format!("{}.tar.gz", entry.run_id));
+        match Command::new("tar")
+            .arg("-czf")
+            .arg(&tar_path)
+            .arg(run_dir_name)
+            .current_dir(parent)
+            .output()
+        {
+            Ok(output) if output.status.success() => Ok(format!(
+                "Run {} exported to {}
+
+Archive format: tar.gz fallback because `zip` was unavailable or failed.
+Source: {}",
+                entry.run_id,
+                tar_path.display(),
+                entry.run_dir.display()
+            )),
+            Ok(output) => {
+                let stderr = compact_stderr(&output.stderr);
+                Ok(format!(
+                    "Run export failed: neither `zip` nor `tar` could archive {}. tar status={} stderr={}
+
+Source remains available at {}",
+                    entry.run_id,
+                    output.status,
+                    if stderr.is_empty() { "<empty>" } else { &stderr },
+                    entry.run_dir.display()
+                ))
+            }
+            Err(error) => Ok(format!(
+                "Run export failed: neither `zip` nor `tar` was available. tar error={error}
+
+Source remains available at {}",
+                entry.run_dir.display()
+            )),
+        }
+    }
+
     pub(crate) fn recover_command(&mut self, args: &[String]) -> anyhow::Result<String> {
         match args.first().map(String::as_str) {
             None | Some("turn") => Ok(self
@@ -258,6 +360,13 @@ impl TuiApplication {
                 || entry.run_dir.ends_with(selector)
         }))
     }
+}
+
+fn compact_stderr(stderr: &[u8]) -> String {
+    String::from_utf8_lossy(stderr)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn read_optional_trimmed(path: impl AsRef<Path>, max_chars: usize) -> Option<String> {

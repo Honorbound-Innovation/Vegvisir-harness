@@ -54,9 +54,11 @@ pub fn ingest_url(
         let source_type =
             if content_type.contains("html") || redacted.to_lowercase().contains("<html") {
                 SourceType::Html
-            } else if content_type.contains("json") || current.path().ends_with(".json") {
-                SourceType::ApiSpec
-            } else if current.path().ends_with(".yaml") || current.path().ends_with(".yml") {
+            } else if content_type.contains("json")
+                || current.path().ends_with(".json")
+                || current.path().ends_with(".yaml")
+                || current.path().ends_with(".yml")
+            {
                 SourceType::ApiSpec
             } else {
                 SourceType::Url
@@ -406,7 +408,11 @@ fn markdown_like_heading_sections(source_id: &str, text: &str) -> Vec<DocumentSe
 
 fn html_to_text(text: &str) -> String {
     let mut out = text.to_string();
-    out = Regex::new(r"(?is)<(script|style)[^>]*>.*?</\1>")
+    out = Regex::new(r"(?is)<script[^>]*>.*?</script>")
+        .unwrap_or_else(|_| Regex::new(r"$^").unwrap())
+        .replace_all(&out, "")
+        .to_string();
+    out = Regex::new(r"(?is)<style[^>]*>.*?</style>")
         .unwrap_or_else(|_| Regex::new(r"$^").unwrap())
         .replace_all(&out, "")
         .to_string();
@@ -468,12 +474,11 @@ fn same_host_links(base: &url::Url, html: &str, host: Option<&str>) -> Vec<url::
     let mut out = Vec::new();
     let href_re = Regex::new(r#"(?is)href\s*=\s*[\"']([^\"'#]+)[\"']"#).unwrap();
     for caps in href_re.captures_iter(html) {
-        if let Ok(link) = base.join(caps[1].trim()) {
-            if link.scheme() == "http" || link.scheme() == "https" {
-                if host.is_none() || link.host_str() == host {
-                    out.push(link);
-                }
-            }
+        if let Ok(link) = base.join(caps[1].trim())
+            && (link.scheme() == "http" || link.scheme() == "https")
+            && (host.is_none() || link.host_str() == host)
+        {
+            out.push(link);
         }
     }
     out.sort_by(|a, b| a.as_str().cmp(b.as_str()));

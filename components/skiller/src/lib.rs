@@ -723,10 +723,10 @@ where
                 lifecycle_status.as_deref(),
             )?;
             if let Some(report) = report {
-                if let Some(parent) = report.parent() {
-                    if !parent.as_os_str().is_empty() {
-                        std::fs::create_dir_all(parent)?;
-                    }
+                if let Some(parent) = report.parent()
+                    && !parent.as_os_str().is_empty()
+                {
+                    std::fs::create_dir_all(parent)?;
                 }
                 std::fs::write(&report, serde_yaml::to_string(&build_report)?)?;
             }

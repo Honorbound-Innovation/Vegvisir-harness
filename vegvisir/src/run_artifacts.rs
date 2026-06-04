@@ -1969,30 +1969,18 @@ mod tests {
         if !git_init.status.success() {
             return Ok(());
         }
-        std::process::Command::new("git")
-            .arg("-C")
-            .arg(&workspace)
-            .args(["config", "user.email", "vegvisir@example.test"])
-            .output()?;
-        std::process::Command::new("git")
-            .arg("-C")
-            .arg(&workspace)
-            .args(["config", "user.name", "Vegvisir Test"])
-            .output()?;
         fs::write(workspace.join("tracked.txt"), "before\n")?;
-        std::process::Command::new("git")
+        let add = std::process::Command::new("git")
             .arg("-C")
             .arg(&workspace)
             .args(["add", "tracked.txt"])
             .output()?;
-        let commit = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&workspace)
-            .args(["commit", "-m", "initial"])
-            .output()?;
-        if !commit.status.success() {
+        if !add.status.success() {
             return Ok(());
         }
+        // No commit is needed: `git diff` compares an unstaged worktree
+        // modification against the indexed file. This keeps the test isolated
+        // from global git user.name/user.email configuration and commit hooks.
         fs::write(workspace.join("tracked.txt"), "before\nafter\n")?;
 
         let (manager, _manifest) = RunArtifactManager::start(

@@ -516,7 +516,7 @@ pub struct AuditEvent {
     pub metadata: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum SourceType {
     Markdown,
     Html,
@@ -529,6 +529,7 @@ pub enum SourceType {
     Url,
     Pdf,
     Epub,
+    #[default]
     Unknown,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -544,19 +545,22 @@ pub enum RetentionPolicy {
     FullTextAllowed,
     DeleteAfterCompile,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub enum ExportPolicy {
+    #[default]
     PrivateOnly,
     OrganizationOnly,
     PublicAllowed,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub enum ScanStatus {
+    #[default]
     Clean,
     Findings(Vec<String>),
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub enum PermissionStatus {
+    #[default]
     Allowed,
     IndexOnly,
     Blocked(String),
@@ -587,9 +591,10 @@ pub enum SkillScope {
     RoleLevel,
     DomainLevel,
 }
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum SkillStatus {
     Draft,
+    #[default]
     Candidate,
     NeedsReview,
     Reviewed,
@@ -599,9 +604,10 @@ pub enum SkillStatus {
     Archived,
     Unsafe,
 }
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum SkillMaturity {
     Level0RawCandidate,
+    #[default]
     Level1StructuredCandidate,
     Level2ForgeEnhanced,
     Level3Verified,
@@ -610,53 +616,13 @@ pub enum SkillMaturity {
     Level6Certified,
 }
 
-impl Default for SkillMaturity {
-    fn default() -> Self {
-        Self::Level1StructuredCandidate
-    }
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub enum PublishStatus {
+    #[default]
     Unpublished,
     Staged,
     Published,
     Rejected,
-}
-
-impl Default for SourceType {
-    fn default() -> Self {
-        Self::Unknown
-    }
-}
-
-impl Default for ExportPolicy {
-    fn default() -> Self {
-        Self::PrivateOnly
-    }
-}
-
-impl Default for ScanStatus {
-    fn default() -> Self {
-        Self::Clean
-    }
-}
-
-impl Default for PermissionStatus {
-    fn default() -> Self {
-        Self::Allowed
-    }
-}
-
-impl Default for SkillStatus {
-    fn default() -> Self {
-        Self::Candidate
-    }
-}
-
-impl Default for PublishStatus {
-    fn default() -> Self {
-        Self::Unpublished
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

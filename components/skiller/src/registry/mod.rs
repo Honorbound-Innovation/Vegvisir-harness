@@ -560,16 +560,15 @@ pub fn readiness_report(bundle: &SkillBundle) -> ReadinessReport {
             ) || matches!(tool.requirement_type, ToolRequirementType::Dangerous)
         });
         let high_risk_runtime = s.runtime_policy.modify_external_systems;
-        if high_risk_runtime || high_risk_tool {
-            if !matches!(s.status, SkillStatus::Approved | SkillStatus::Published)
+        if (high_risk_runtime || high_risk_tool)
+            && (!matches!(s.status, SkillStatus::Approved | SkillStatus::Published)
                 || s.maturity < SkillMaturity::Level4HumanApproved
-                || s.confidence.human_review < 0.5
-            {
-                blockers.push(format!(
-                    "{} is high-risk and requires human-approved Level4+ maturity before publication",
-                    s.id
-                ));
-            }
+                || s.confidence.human_review < 0.5)
+        {
+            blockers.push(format!(
+                "{} is high-risk and requires human-approved Level4+ maturity before publication",
+                s.id
+            ));
         }
 
         if s.runtime_policy.modify_files && !s.runtime_policy.requires_backup_or_rollback {
@@ -1014,7 +1013,7 @@ pub fn verify_manifest(root: &Path) -> Result<ManifestVerificationReport> {
     {
         let path = entry.path();
         let rel = path.strip_prefix(root).unwrap().to_path_buf();
-        if rel == PathBuf::from("MANIFEST.sha256") {
+        if rel.as_path() == std::path::Path::new("MANIFEST.sha256") {
             continue;
         }
         if !expected_paths.contains(&rel) {

@@ -1034,10 +1034,10 @@ pub fn write_agent_builder_summary(
     pack_paths: &[PathBuf],
     out: &Path,
 ) -> Result<AgentBuilderSummary> {
-    if let Some(parent) = out.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
-        }
+    if let Some(parent) = out.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)?;
     }
     let summary = agent_builder_summary(proposals_path, pack_paths)?;
     fs::write(out, serde_yaml::to_string(&summary)?)?;
@@ -1231,10 +1231,10 @@ pub fn agent_builder_summary(
 }
 
 pub fn write_agent_artifact_index(root: &Path, out: &Path) -> Result<AgentArtifactIndex> {
-    if let Some(parent) = out.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
-        }
+    if let Some(parent) = out.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)?;
     }
     let index = agent_artifact_index(root)?;
     fs::write(out, serde_yaml::to_string(&index)?)?;
@@ -1553,7 +1553,7 @@ fn classify_agent_artifact_file(
 
 fn agent_artifact_index_markdown(index: &AgentArtifactIndex) -> String {
     let mut out = String::new();
-    out.push_str(&format!("# Agent Artifact Index\n\n"));
+    out.push_str("# Agent Artifact Index\n\n");
     out.push_str(&format!("- Index ID: `{}`\n", index.index_id));
     out.push_str(&format!("- Root: `{}`\n", index.root));
     out.push_str(&format!("- Valid: {}\n", index.valid));
@@ -2473,7 +2473,7 @@ fn agent_system_prompt_material(
 
     out.push_str("# Communication ka\n\n");
     out.push_str(&render_ka_prompt_section(ka));
-    out.push_str("\n");
+    out.push('\n');
 
     out.push_str("# Verification and reporting\n\n");
     out.push_str("- Before strong claims: inspect relevant skill/source/tool evidence.\n");
@@ -2740,16 +2740,15 @@ fn agent_pack_readiness_status(
         .filter(|skill| is_high_risk_agent_skill(skill))
         .count();
     for skill in selected_skills {
-        if is_high_risk_agent_skill(skill) {
-            if !matches!(skill.status, SkillStatus::Approved | SkillStatus::Published)
+        if is_high_risk_agent_skill(skill)
+            && (!matches!(skill.status, SkillStatus::Approved | SkillStatus::Published)
                 || skill.maturity < SkillMaturity::Level4HumanApproved
-                || skill.confidence.human_review < 0.8
-            {
-                blockers.push(format!(
-                    "{}: high-risk selected skill requires Approved/Published status, Level4 human approval, and human_review confidence >= 0.8",
-                    skill.id
-                ));
-            }
+                || skill.confidence.human_review < 0.8)
+        {
+            blockers.push(format!(
+                "{}: high-risk selected skill requires Approved/Published status, Level4 human approval, and human_review confidence >= 0.8",
+                skill.id
+            ));
         }
         if skill
             .inference_records
