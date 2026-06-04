@@ -2563,6 +2563,30 @@ fn draw_info_overlay(f: &mut Frame<'_>, app: &TuiApplication, info: &InfoOverlay
     f.render_widget(paragraph, area);
 }
 
+fn trace_event_line_style(raw: &str) -> Option<Style> {
+    // `/trace` lines are rendered as plain command output in the info overlay:
+    // `<timestamp> <event_name> <json payload>`.  A successful `tool_end`
+    // payload includes `"error":null`, so classify by event/status before the
+    // generic substring-based error rule below.
+    if raw.contains(" tool_start ") {
+        return Some(Style::default().fg(CYAN));
+    }
+    if raw.contains(" tool_end ") {
+        let compact = raw.replace(char::is_whitespace, "");
+        let ok_true = compact.contains("\"ok\":true");
+        let ok_false = compact.contains("\"ok\":false");
+        let null_error = compact.contains("\"error\":null");
+        if ok_true && null_error {
+            return Some(Style::default().fg(GREEN));
+        }
+        if ok_false || (compact.contains("\"error\":") && !null_error) {
+            return Some(Style::default().fg(RED));
+        }
+        return Some(Style::default().fg(AMBER));
+    }
+    None
+}
+
 fn info_overlay_lines(info: &InfoOverlay, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for raw in info.body.lines() {
@@ -2584,7 +2608,9 @@ fn info_overlay_lines(info: &InfoOverlay, width: usize) -> Vec<Line<'static>> {
             )));
             continue;
         }
-        let style = if raw.to_ascii_lowercase().contains("error") {
+        let style = if let Some(style) = trace_event_line_style(raw) {
+            style
+        } else if raw.to_ascii_lowercase().contains("error") {
             Style::default().fg(RED)
         } else if raw.starts_with('/') || raw.contains(" = ") || raw.contains(':') {
             Style::default().fg(CYAN)
@@ -4065,6 +4091,24 @@ four",
         assert!(rendered.contains("Models for provider openai"));
         assert!(rendered.contains("/model gpt-5.5"));
         assert!(rendered.contains("context: 400000"));
+    }
+
+    #[test]
+    fn ratatui_info_overlay_colors_trace_tool_lifecycle_by_status() {
+        let overlay = InfoOverlay {
+            title: "trace".to_string(),
+            body: [
+                r#"2026-06-04T01:28:17Z tool_start {"args":{"status":"failed"},"tool":"subagents_list"}"#,
+                r#"2026-06-04T01:28:17Z tool_end {"error":null,"ok":true,"tool":"subagents_list"}"#,
+                r#"2026-06-04T01:28:18Z tool_end {"error":"boom","ok":false,"tool":"subagents_list"}"#,
+            ]
+            .join("\n"),
+        };
+        let lines = info_overlay_lines(&overlay, 160);
+
+        assert_eq!(lines[0].spans[0].style.fg, Some(CYAN));
+        assert_eq!(lines[1].spans[0].style.fg, Some(GREEN));
+        assert_eq!(lines[2].spans[0].style.fg, Some(RED));
     }
 
     #[test]

@@ -2541,8 +2541,18 @@ mod skiller_tool_tests {
     use super::*;
     use crate::memory::VegvisirCmsConfig;
     use serde_json::json;
-    use std::ffi::{OsStr, OsString};
+    use std::{
+        ffi::{OsStr, OsString},
+        sync::{Mutex, OnceLock},
+    };
     use tempfile::TempDir;
+
+    fn env_var_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env var test lock poisoned")
+    }
 
     struct EnvVarGuard {
         key: &'static str,
@@ -2736,6 +2746,7 @@ mod skiller_tool_tests {
 
     #[test]
     fn resolve_vegvisir_executable_honors_explicit_env() -> anyhow::Result<()> {
+        let _env_lock = env_var_test_lock();
         let workspace = TempDir::new()?;
         let bin = workspace.path().join("custom-vegvisir");
         std::fs::write(&bin, "#!/bin/sh\n")?;
@@ -2748,6 +2759,7 @@ mod skiller_tool_tests {
 
     #[test]
     fn resolve_vegvisir_executable_finds_workspace_release_binary() -> anyhow::Result<()> {
+        let _env_lock = env_var_test_lock();
         let workspace = TempDir::new()?;
         let bin = workspace.path().join("target/release/vegvisir-rust");
         std::fs::create_dir_all(bin.parent().expect("bin parent"))?;
@@ -2761,6 +2773,7 @@ mod skiller_tool_tests {
 
     #[test]
     fn resolve_vegvisir_executable_reports_checked_paths_when_missing() -> anyhow::Result<()> {
+        let _env_lock = env_var_test_lock();
         let workspace = TempDir::new()?;
         let fake_home = workspace.path().join("home-without-vegvisir");
         std::fs::create_dir_all(&fake_home)?;
