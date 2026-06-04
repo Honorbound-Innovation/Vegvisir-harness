@@ -41,6 +41,7 @@ use crate::{
         ConversationRunner, ProviderRouter, ProviderRunEvent, configured_max_tool_rounds_label,
         direct_provider_auth_allowed, set_runtime_max_tool_rounds,
     },
+    run_artifacts::{RunArtifactManager, RunFailure, RunManifest, RunStatus},
     speech::{ActiveSpeechRecording, DEFAULT_PTT_KEY, DEFAULT_PTT_SECONDS, PushToTalkKey},
     subagents::{SubAgentStatus, SubAgentTaskRecord},
     tools::{
@@ -107,6 +108,7 @@ pub struct TuiApplication {
     pub speech_ptt_seconds: u64,
     pending_stream: Option<Receiver<StreamEvent>>,
     pending_cancel: Option<Arc<AtomicBool>>,
+    pending_run_artifact: Option<(RunArtifactManager, RunManifest)>,
     pending_steering: Option<Sender<String>>,
     pending_turn_started_at: Option<Instant>,
     pending_turn_last_activity_at: Option<Instant>,
@@ -761,6 +763,7 @@ impl TuiApplication {
                 .clamp(1, 30),
             pending_stream: None,
             pending_cancel: None,
+            pending_run_artifact: None,
             pending_steering: None,
             pending_turn_started_at: None,
             pending_turn_last_activity_at: None,

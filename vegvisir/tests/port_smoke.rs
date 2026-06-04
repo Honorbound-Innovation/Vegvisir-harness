@@ -4363,6 +4363,26 @@ fn tui_submit_message_uses_cms_memory_and_demo_provider() -> anyhow::Result<()> 
     );
     assert!(app.session.last_prompt_cache_key.is_some());
     assert!(home.join("cms-v2.sqlite3").exists());
+
+    let runs_dir = tmp.path().join(".vegvisir/runs");
+    let run_dirs = fs::read_dir(&runs_dir)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(run_dirs.len(), 1);
+    let run_dir = &run_dirs[0];
+    assert!(run_dir.join("manifest.json").exists());
+    assert!(run_dir.join("request.json").exists());
+    assert!(run_dir.join("result.md").exists());
+    let manifest: Value =
+        serde_json::from_str(&fs::read_to_string(run_dir.join("manifest.json"))?)?;
+    assert_eq!(manifest["status"], "completed");
+    assert_eq!(manifest["session_id"], app.session.session_id);
+    assert_eq!(manifest["provider"], "demo");
+    assert_eq!(manifest["model"], "demo-local");
+    let request: Value = serde_json::from_str(&fs::read_to_string(run_dir.join("request.json"))?)?;
+    assert_eq!(request["mode"], "tui_turn");
+    assert_eq!(request["goal"], "hello from tui");
+    assert!(fs::read_to_string(run_dir.join("result.md"))?.contains("CMS-v2 model request"));
     Ok(())
 }
 
@@ -4392,6 +4412,23 @@ fn tui_failed_provider_send_keeps_user_message_and_shows_error() -> anyhow::Resu
             .last()
             .unwrap()
             .content
+            .contains("Unknown model: missing-model")
+    );
+
+    let runs_dir = tmp.path().join(".vegvisir/runs");
+    let run_dirs = fs::read_dir(&runs_dir)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(run_dirs.len(), 1);
+    let run_dir = &run_dirs[0];
+    let manifest: Value =
+        serde_json::from_str(&fs::read_to_string(run_dir.join("manifest.json"))?)?;
+    assert_eq!(manifest["status"], "failed");
+    let failure: Value = serde_json::from_str(&fs::read_to_string(run_dir.join("failure.json"))?)?;
+    assert!(
+        failure["message"]
+            .as_str()
+            .unwrap()
             .contains("Unknown model: missing-model")
     );
     Ok(())

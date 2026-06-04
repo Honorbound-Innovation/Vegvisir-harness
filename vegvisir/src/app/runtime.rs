@@ -66,6 +66,7 @@ impl TuiApplication {
         let worker_cancel_token = Arc::clone(&cancel_token);
         self.pending_stream = Some(stream_rx);
         self.pending_steering = Some(steering_tx);
+        self.start_tui_turn_artifact(&display_content);
         let now = Instant::now();
         self.pending_turn_started_at = Some(now);
         self.pending_turn_last_activity_at = Some(now);
@@ -204,6 +205,14 @@ impl TuiApplication {
                 self.merge_live_reasoning_trace(&mut session);
                 self.restore_latest_visible_user_message(&mut session);
                 let had_tool_activity = self.completed_session_had_tool_activity(&session);
+                let final_response = session
+                    .messages
+                    .iter()
+                    .rev()
+                    .find(|message| message.role == "assistant")
+                    .map(|message| message.content.clone())
+                    .unwrap_or_default();
+                self.finish_tui_turn_artifact(RunStatus::Completed, Some(&final_response));
                 self.session = session;
                 self.clear_pending_turn_runtime_handles();
                 self.autonomy.last_turn_had_tools = had_tool_activity;
@@ -219,6 +228,7 @@ impl TuiApplication {
                 self.clear_pending_turn_runtime_handles();
                 self.pop_empty_assistant_placeholder();
                 if error.to_string() == "Cancelled" {
+                    self.finish_tui_turn_artifact(RunStatus::Cancelled, None);
                     self.pop_last_assistant_response();
                     self.push_system_message("Cancelled in-flight model response.");
                     if self.autonomy.active {
@@ -227,6 +237,7 @@ impl TuiApplication {
                         self.autonomy.last_status = "cancelled".to_string();
                     }
                 } else {
+                    self.fail_tui_turn_artifact(&error.to_string(), true);
                     self.push_turn_failure_summary(error.to_string());
                     if self.autonomy.active {
                         self.autonomy.active = false;
@@ -242,6 +253,10 @@ impl TuiApplication {
                 self.session.activity.clear();
                 self.clear_pending_turn_runtime_handles();
                 self.pop_empty_assistant_placeholder();
+                self.fail_tui_turn_artifact(
+                    "provider worker panicked before completing the turn",
+                    true,
+                );
                 self.push_turn_failure_summary(
                     "provider worker panicked before completing the turn".to_string(),
                 );
@@ -595,6 +610,86 @@ Steering: {display_content}{attachment_note}"
         self.pending_turn_last_activity_at = None;
     }
 
+    fn start_tui_turn_artifact(&mut self, prompt: &str) {
+        match RunArtifactManager::start_in(
+            &self.cwd,
+            &self.data_root,
+            None::<std::path::PathBuf>,
+            self.session.session_id.clone(),
+            self.session.current_provider.clone(),
+            self.session.current_model.clone(),
+            self.session.active_agent_id.clone(),
+        ) {
+            Ok((manager, manifest)) => {
+                if let Err(error) = manager.write_request(&json!({
+                    "goal": prompt,
+                    "mode": "tui_turn",
+                    "autonomous_mode_enabled": self.autonomous_mode_enabled,
+                    "dangerously_bypass_approvals_and_sandbox": self.dangerously_bypass_approvals_and_sandbox,
+                })) {
+                    self.push_system_message(format!(
+                        "Warning: failed to write run artifact request: {error}"
+                    ));
+                }
+                self.pending_run_artifact = Some((manager, manifest));
+            }
+            Err(error) => self.push_system_message(format!(
+                "Warning: failed to start run artifact bundle: {error}"
+            )),
+        }
+    }
+
+    fn append_tui_turn_provider_event(&mut self, event: &ProviderRunEvent) {
+        if let Some((manager, _)) = self.pending_run_artifact.as_ref()
+            && let Err(error) = manager.append_observed_provider_event(event)
+        {
+            self.push_system_message(format!(
+                "Warning: failed to append run artifact event: {error}"
+            ));
+        }
+    }
+
+    fn finish_tui_turn_artifact(&mut self, status: RunStatus, response: Option<&str>) {
+        let Some((manager, mut manifest)) = self.pending_run_artifact.take() else {
+            return;
+        };
+        if let Some(response) = response
+            && let Err(error) = manager.write_result(response)
+        {
+            self.push_system_message(format!(
+                "Warning: failed to write run artifact result: {error}"
+            ));
+        }
+        if let Err(error) = manager.finish(&mut manifest, status) {
+            self.push_system_message(format!(
+                "Warning: failed to finalize run artifact manifest: {error}"
+            ));
+        }
+    }
+
+    fn fail_tui_turn_artifact(&mut self, message: &str, recoverable: bool) {
+        let Some((manager, mut manifest)) = self.pending_run_artifact.take() else {
+            return;
+        };
+        let failure = RunFailure {
+            schema_version: crate::run_artifacts::RUN_ARTIFACT_SCHEMA_VERSION,
+            run_id: manager.run_id.clone(),
+            message: message.to_string(),
+            recoverable,
+            timestamp: chrono::Utc::now(),
+        };
+        if let Err(error) = manager.write_failure(&failure) {
+            self.push_system_message(format!(
+                "Warning: failed to write run artifact failure: {error}"
+            ));
+        }
+        if let Err(error) = manager.finish(&mut manifest, RunStatus::Failed) {
+            self.push_system_message(format!(
+                "Warning: failed to finalize failed run artifact: {error}"
+            ));
+        }
+    }
+
     fn finish_turn_repair_housekeeping(&mut self, reason: &str) {
         if self.autonomy.active {
             self.autonomy.active = false;
@@ -684,9 +779,16 @@ Steering: {display_content}{attachment_note}"
                         .push_str(&delta);
                 }
                 StreamEvent::Activity(activity) => {
+                    self.append_tui_turn_provider_event(&ProviderRunEvent::Activity(
+                        activity.clone(),
+                    ));
                     self.session.activity = activity;
                 }
                 StreamEvent::ToolStart { name, args } => {
+                    self.append_tui_turn_provider_event(&ProviderRunEvent::ToolStart {
+                        name: name.clone(),
+                        args: args.clone(),
+                    });
                     self.session.activity = format!("using tool {name}");
                     self.push_live_tool_message(format!("Running tool: {name} {args}"));
                 }
@@ -696,6 +798,12 @@ Steering: {display_content}{attachment_note}"
                     summary,
                     detail,
                 } => {
+                    self.append_tui_turn_provider_event(&ProviderRunEvent::ToolEnd {
+                        name: name.clone(),
+                        ok,
+                        summary: summary.clone(),
+                        detail: detail.clone(),
+                    });
                     self.session.activity = format!("finished tool {name}");
                     let status = if ok { "finished" } else { "failed" };
                     let mut content = format!("Tool {status}: {name} - {summary}");
