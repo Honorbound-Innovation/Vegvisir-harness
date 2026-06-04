@@ -636,6 +636,13 @@ Steering: {display_content}{attachment_note}"
                         "Warning: failed to write run artifact request: {error}"
                     ));
                 }
+                if let Err(error) = manager.write_approvals_from_pending(
+                    &self.tool_executor.guardrails.approvals.pending(),
+                ) {
+                    self.push_system_message(format!(
+                        "Warning: failed to write run artifact approvals: {error}"
+                    ));
+                }
                 self.pending_run_artifact = Some((manager, manifest));
             }
             Err(error) => self.push_system_message(format!(
@@ -678,6 +685,13 @@ Steering: {display_content}{attachment_note}"
                 "Warning: failed to write run artifact result: {error}"
             ));
         }
+        if let Err(error) =
+            manager.write_approvals_from_pending(&self.tool_executor.guardrails.approvals.pending())
+        {
+            self.push_system_message(format!(
+                "Warning: failed to write run artifact approvals: {error}"
+            ));
+        }
         if let Err(error) = manager.write_workspace_change_artifacts() {
             self.push_system_message(format!(
                 "Warning: failed to write run artifact workspace changes: {error}"
@@ -704,6 +718,20 @@ Steering: {display_content}{attachment_note}"
         if let Err(error) = manager.write_failure(&failure) {
             self.push_system_message(format!(
                 "Warning: failed to write run artifact failure: {error}"
+            ));
+        }
+        if let Err(error) = manager.write_memory_written_unavailable(
+            "run failed before completion memory writeback was captured",
+        ) {
+            self.push_system_message(format!(
+                "Warning: failed to write run artifact memory-write status: {error}"
+            ));
+        }
+        if let Err(error) =
+            manager.write_approvals_from_pending(&self.tool_executor.guardrails.approvals.pending())
+        {
+            self.push_system_message(format!(
+                "Warning: failed to write run artifact approvals: {error}"
             ));
         }
         if let Err(error) = manager.write_workspace_change_artifacts() {

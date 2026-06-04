@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use cms_v2::{cms_api::CommitResult, prompt_cache::CachedPromptEnvelope};
 
-use crate::provider::ProviderRunEvent;
+use crate::{guardrails::ApprovalRequest, provider::ProviderRunEvent};
 
 pub const RUN_ARTIFACT_SCHEMA_VERSION: u32 = 1;
 const REDACTION: &str = "[REDACTED]";
@@ -219,6 +219,19 @@ impl RunArtifactManager {
         self.write_json_file("memory-written.json", &evidence)
     }
 
+    pub fn write_approvals_from_pending(
+        &self,
+        pending: &BTreeMap<String, ApprovalRequest>,
+    ) -> anyhow::Result<()> {
+        let evidence = RunApprovalEvidence::from_pending(self.run_id.clone(), pending);
+        self.write_json_file("approvals.json", &evidence)
+    }
+
+    pub fn write_approvals_unavailable(&self, note: impl Into<String>) -> anyhow::Result<()> {
+        let evidence = RunApprovalEvidence::unavailable(self.run_id.clone(), note);
+        self.write_json_file("approvals.json", &evidence)
+    }
+
     pub fn write_failure(&self, failure: &RunFailure) -> anyhow::Result<()> {
         self.write_json_file("failure.json", failure)
     }
@@ -345,6 +358,9 @@ impl RunArtifactManager {
         self.write_memory_written_unavailable(
             "run failed before completion memory writeback was captured",
         )?;
+        if !self.artifact_path("approvals.json").exists() {
+            self.write_approvals_unavailable("approval ledger was not supplied for failed run")?;
+        }
         self.write_workspace_change_artifacts()?;
         self.finish(manifest, RunStatus::Failed)
     }
@@ -770,6 +786,105 @@ impl RunMemoryWriteResult {
                 .map(|memory_id| memory_id.0.clone())
                 .collect(),
             trace: serde_json::to_value(&result.trace).unwrap_or(Value::Null),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RunApprovalEvidence {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub captured_at: DateTime<Utc>,
+    pub status: RunApprovalStatus,
+    pub pending: Vec<RunApprovalRequestEvidence>,
+    pub notes: Vec<String>,
+}
+
+impl RunApprovalEvidence {
+    pub fn from_pending(run_id: String, pending: &BTreeMap<String, ApprovalRequest>) -> Self {
+        let pending = pending
+            .values()
+            .map(RunApprovalRequestEvidence::from_request)
+            .collect::<Vec<_>>();
+        let status = if pending.is_empty() {
+            RunApprovalStatus::NoApprovals
+        } else {
+            RunApprovalStatus::Captured
+        };
+        Self {
+            schema_version: RUN_ARTIFACT_SCHEMA_VERSION,
+            run_id,
+            captured_at: Utc::now(),
+            status,
+            pending,
+            notes: Vec::new(),
+        }
+    }
+
+    pub fn unavailable(run_id: String, note: impl Into<String>) -> Self {
+        Self {
+            schema_version: RUN_ARTIFACT_SCHEMA_VERSION,
+            run_id,
+            captured_at: Utc::now(),
+            status: RunApprovalStatus::Unavailable,
+            pending: Vec::new(),
+            notes: vec![note.into()],
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunApprovalStatus {
+    Captured,
+    NoApprovals,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RunApprovalRequestEvidence {
+    pub id: String,
+    pub tool_name: String,
+    pub risk_label: String,
+    pub reason: String,
+    pub args_summary: Value,
+}
+
+impl RunApprovalRequestEvidence {
+    fn from_request(request: &ApprovalRequest) -> Self {
+        Self {
+            id: request.id.clone(),
+            tool_name: request.tool_name.clone(),
+            risk_label: request.risk_label.clone(),
+            reason: request.reason.clone(),
+            args_summary: summarize_approval_args(&request.tool_name, &request.args),
+        }
+    }
+}
+
+fn summarize_approval_args(tool_name: &str, args: &serde_json::Map<String, Value>) -> Value {
+    match tool_name {
+        "run_command" => json!({
+            "command": args.get("command").cloned().unwrap_or(Value::Null),
+            "timeout": args.get("timeout").cloned(),
+            "output_limit": args.get("output_limit").cloned(),
+        }),
+        "write_file" => json!({
+            "path": args.get("path").cloned().unwrap_or(Value::Null),
+            "content_chars": args
+                .get("content")
+                .and_then(Value::as_str)
+                .map(|content| content.chars().count()),
+        }),
+        "spawn_subagent" => json!({
+            "name": args.get("name").cloned(),
+            "workspace": args.get("workspace").cloned(),
+            "file_scope": args.get("file_scope").cloned(),
+            "max_steps": args.get("max_steps").cloned(),
+        }),
+        _ => {
+            let keys = args.keys().cloned().collect::<Vec<_>>();
+            json!({ "argument_keys": keys })
         }
     }
 }
@@ -1383,6 +1498,69 @@ mod tests {
         assert_eq!(memory_written.status, RunMemoryWriteStatus::Unavailable);
         assert!(memory_written.writes.is_empty());
         assert!(memory_written.notes[0].contains("not captured"));
+        Ok(())
+    }
+
+    #[test]
+    fn run_artifacts_writes_approval_evidence_without_raw_content() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        fs::create_dir_all(&workspace)?;
+        let (manager, _manifest) = RunArtifactManager::start(
+            &workspace,
+            tmp.path().join("data"),
+            "session-1",
+            "demo",
+            "demo-model",
+            None,
+        )?;
+        let request = ApprovalRequest {
+            id: "approval-1".to_string(),
+            reason: "Risky tool requires human approval: write_file".to_string(),
+            tool_name: "write_file".to_string(),
+            args: json!({"path": "secret.txt", "content": "token=github_pat_123456789012345678901234"})
+                .as_object()
+                .unwrap()
+                .clone(),
+            risk_label: "filesystem-write".to_string(),
+        };
+        let pending = BTreeMap::from([("approval-1".to_string(), request)]);
+
+        manager.write_approvals_from_pending(&pending)?;
+
+        let text = fs::read_to_string(manager.artifact_path("approvals.json"))?;
+        assert!(!text.contains("github_pat_123"));
+        let approvals: RunApprovalEvidence = serde_json::from_str(&text)?;
+        assert_eq!(approvals.schema_version, RUN_ARTIFACT_SCHEMA_VERSION);
+        assert_eq!(approvals.status, RunApprovalStatus::Captured);
+        assert_eq!(approvals.pending.len(), 1);
+        assert_eq!(approvals.pending[0].tool_name, "write_file");
+        assert_eq!(approvals.pending[0].args_summary["path"], "secret.txt");
+        assert_eq!(approvals.pending[0].args_summary["content_chars"], 41);
+        Ok(())
+    }
+
+    #[test]
+    fn run_artifacts_writes_no_approval_evidence_for_empty_pending_queue() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        fs::create_dir_all(&workspace)?;
+        let (manager, _manifest) = RunArtifactManager::start(
+            &workspace,
+            tmp.path().join("data"),
+            "session-1",
+            "demo",
+            "demo-model",
+            None,
+        )?;
+
+        manager.write_approvals_from_pending(&BTreeMap::new())?;
+
+        let approvals: RunApprovalEvidence = serde_json::from_str(&fs::read_to_string(
+            manager.artifact_path("approvals.json"),
+        )?)?;
+        assert_eq!(approvals.status, RunApprovalStatus::NoApprovals);
+        assert!(approvals.pending.is_empty());
         Ok(())
     }
 

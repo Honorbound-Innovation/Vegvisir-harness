@@ -498,6 +498,7 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
     assert!(scripted_artifact_dir.join("context-sources.json").exists());
     assert!(scripted_artifact_dir.join("memory-used.json").exists());
     assert!(scripted_artifact_dir.join("memory-written.json").exists());
+    assert!(scripted_artifact_dir.join("approvals.json").exists());
     assert!(scripted_artifact_dir.join("verification.json").exists());
     assert!(scripted_artifact_dir.join("result.md").exists());
     assert!(scripted_artifact_dir.join("file-changes.json").exists());
@@ -512,6 +513,10 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
     )?)?;
     assert_eq!(scripted_manifest["run_id"], scripted_run_id);
     assert_eq!(scripted_manifest["status"], "completed");
+    let scripted_approvals: Value = serde_json::from_str(&fs::read_to_string(
+        scripted_artifact_dir.join("approvals.json"),
+    )?)?;
+    assert_eq!(scripted_approvals["status"], "no_approvals");
     let scripted_verification: Value = serde_json::from_str(&fs::read_to_string(
         scripted_artifact_dir.join("verification.json"),
     )?)?;
@@ -626,6 +631,7 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
     assert!(provider_artifact_dir.join("context-sources.json").exists());
     assert!(provider_artifact_dir.join("memory-used.json").exists());
     assert!(provider_artifact_dir.join("memory-written.json").exists());
+    assert!(provider_artifact_dir.join("approvals.json").exists());
     assert!(provider_artifact_dir.join("verification.json").exists());
     assert!(provider_artifact_dir.join("result.md").exists());
     assert!(provider_artifact_dir.join("file-changes.json").exists());
@@ -640,6 +646,10 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
     assert_eq!(provider_manifest["status"], "completed");
     assert_eq!(provider_manifest["provider"], "demo");
     assert_eq!(provider_manifest["model"], "demo-local");
+    let provider_approvals: Value = serde_json::from_str(&fs::read_to_string(
+        provider_artifact_dir.join("approvals.json"),
+    )?)?;
+    assert_eq!(provider_approvals["status"], "no_approvals");
     let provider_verification: Value = serde_json::from_str(&fs::read_to_string(
         provider_artifact_dir.join("verification.json"),
     )?)?;
@@ -680,6 +690,7 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
     assert!(failed_provider_runs[0].join("file-changes.json").exists());
     assert!(failed_provider_runs[0].join("diff.patch").exists());
     assert!(failed_provider_runs[0].join("memory-written.json").exists());
+    assert!(failed_provider_runs[0].join("approvals.json").exists());
     assert!(failed_provider_runs[0].join("verification.json").exists());
     let failed_provider_verification: Value = serde_json::from_str(&fs::read_to_string(
         failed_provider_runs[0].join("verification.json"),

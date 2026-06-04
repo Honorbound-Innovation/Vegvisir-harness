@@ -385,6 +385,7 @@ fn run_headless(
                 "scripted run produced no final answer for completion memory writeback",
             )?;
         }
+        manager.write_approvals_from_pending(&harness.executor.guardrails.approvals.pending())?;
         manager.write_verification_no_checks(
             "scripted harness does not run verification commands automatically",
         )?;
@@ -482,6 +483,8 @@ fn run_headless_provider(
                 "goal": prompt,
                 "mode": "provider_runtime",
             }))?;
+            manager
+                .write_approvals_from_pending(&app.tool_executor.guardrails.approvals.pending())?;
             manager.write_verification_unavailable(
                 "provider selection failed before verification evidence could be captured",
             )?;
@@ -557,7 +560,14 @@ fn send_provider_headless_with_artifacts(
 ) -> anyhow::Result<(vegvisir_rust::app::HeadlessObservedRun, String, String)> {
     match app.send_headless_observed(prompt) {
         Ok(observed) => {
-            write_provider_headless_artifacts(&manager, &mut manifest, prompt, &observed)?;
+            let pending_approvals = app.tool_executor.guardrails.approvals.pending();
+            write_provider_headless_artifacts(
+                &manager,
+                &mut manifest,
+                prompt,
+                &observed,
+                &pending_approvals,
+            )?;
             Ok((
                 observed,
                 manager.run_id.clone(),
@@ -569,6 +579,8 @@ fn send_provider_headless_with_artifacts(
                 "goal": prompt,
                 "mode": "provider_runtime",
             }))?;
+            manager
+                .write_approvals_from_pending(&app.tool_executor.guardrails.approvals.pending())?;
             manager.write_verification_unavailable(
                 "provider run failed before verification evidence could be finalized",
             )?;
@@ -583,6 +595,10 @@ fn write_provider_headless_artifacts(
     manifest: &mut RunManifest,
     prompt: &str,
     observed: &vegvisir_rust::app::HeadlessObservedRun,
+    pending_approvals: &std::collections::BTreeMap<
+        String,
+        vegvisir_rust::guardrails::ApprovalRequest,
+    >,
 ) -> anyhow::Result<()> {
     manager.write_request(&serde_json::json!({
         "goal": prompt,
@@ -594,6 +610,7 @@ fn write_provider_headless_artifacts(
         &observed.memory_write_results,
         observed.memory_write_error.as_deref(),
     )?;
+    manager.write_approvals_from_pending(pending_approvals)?;
     manager.write_workspace_change_artifacts()?;
     for event in &observed.events {
         manager.append_observed_provider_event(event)?;
