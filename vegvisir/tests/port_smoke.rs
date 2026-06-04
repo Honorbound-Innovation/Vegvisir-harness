@@ -496,6 +496,7 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
     assert!(scripted_artifact_dir.join("request.json").exists());
     assert!(scripted_artifact_dir.join("context.md").exists());
     assert!(scripted_artifact_dir.join("context-sources.json").exists());
+    assert!(scripted_artifact_dir.join("memory-used.json").exists());
     assert!(scripted_artifact_dir.join("result.md").exists());
     assert!(scripted_artifact_dir.join("file-changes.json").exists());
     assert!(scripted_artifact_dir.join("diff.patch").exists());
@@ -611,6 +612,7 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
     assert!(provider_artifact_dir.join("request.json").exists());
     assert!(provider_artifact_dir.join("context.md").exists());
     assert!(provider_artifact_dir.join("context-sources.json").exists());
+    assert!(provider_artifact_dir.join("memory-used.json").exists());
     assert!(provider_artifact_dir.join("result.md").exists());
     assert!(provider_artifact_dir.join("file-changes.json").exists());
     assert!(provider_artifact_dir.join("diff.patch").exists());

@@ -188,7 +188,13 @@ impl RunArtifactManager {
 
     pub fn write_context_artifacts(&self, envelope: &CachedPromptEnvelope) -> anyhow::Result<()> {
         self.write_context(&envelope.model_request.prompt)?;
-        self.write_context_sources(&context_sources_from_envelope(envelope))
+        self.write_context_sources(&context_sources_from_envelope(envelope))?;
+        self.write_memory_used(envelope)
+    }
+
+    pub fn write_memory_used(&self, envelope: &CachedPromptEnvelope) -> anyhow::Result<()> {
+        let evidence = RunMemoryUseEvidence::from_envelope(self.run_id.clone(), envelope);
+        self.write_json_file("memory-used.json", &evidence)
     }
 
     pub fn write_failure(&self, failure: &RunFailure) -> anyhow::Result<()> {
@@ -494,6 +500,95 @@ fn push_truncated_diff(output: &mut String, diff: &str) {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunMemoryUseEvidence {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub captured_at: DateTime<Utc>,
+    pub provider: String,
+    pub model: String,
+    pub prompt_cache_key: String,
+    pub total_prompt_tokens: usize,
+    pub memory_ids: Vec<String>,
+    pub blocks: Vec<RunMemoryUseBlock>,
+    pub capsules: Vec<RunMemoryUseCapsule>,
+}
+
+impl RunMemoryUseEvidence {
+    pub fn from_envelope(run_id: String, envelope: &CachedPromptEnvelope) -> Self {
+        let mut memory_ids = envelope
+            .blocks
+            .iter()
+            .flat_map(|block| block.source_memory_ids.iter().cloned())
+            .chain(
+                envelope
+                    .capsules
+                    .iter()
+                    .flat_map(|capsule| capsule.source_memory_ids.iter().cloned()),
+            )
+            .collect::<Vec<_>>();
+        memory_ids.sort();
+        memory_ids.dedup();
+
+        Self {
+            schema_version: RUN_ARTIFACT_SCHEMA_VERSION,
+            run_id,
+            captured_at: Utc::now(),
+            provider: envelope.manifest.provider.clone(),
+            model: envelope.manifest.model.clone(),
+            prompt_cache_key: envelope.manifest.prompt_cache_key.clone(),
+            total_prompt_tokens: envelope.manifest.total_prompt_tokens,
+            memory_ids,
+            blocks: envelope
+                .blocks
+                .iter()
+                .filter(|block| !block.source_memory_ids.is_empty())
+                .map(|block| RunMemoryUseBlock {
+                    id: block.id.clone(),
+                    kind: format!("{:?}", block.kind),
+                    title: block.title.clone(),
+                    token_estimate: block.token_estimate,
+                    source_memory_ids: block.source_memory_ids.clone(),
+                    source_version_hashes: block.source_version_hashes.clone(),
+                })
+                .collect(),
+            capsules: envelope
+                .capsules
+                .iter()
+                .filter(|capsule| !capsule.source_memory_ids.is_empty())
+                .map(|capsule| RunMemoryUseCapsule {
+                    capsule_id: capsule.capsule_id.clone(),
+                    capsule_type: format!("{:?}", capsule.capsule_type),
+                    token_estimate: capsule.token_estimate,
+                    source_memory_ids: capsule.source_memory_ids.clone(),
+                    source_version_hashes: capsule.source_version_hashes.clone(),
+                    block_ids: capsule.block_ids.clone(),
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunMemoryUseBlock {
+    pub id: String,
+    pub kind: String,
+    pub title: String,
+    pub token_estimate: usize,
+    pub source_memory_ids: Vec<String>,
+    pub source_version_hashes: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunMemoryUseCapsule {
+    pub capsule_id: String,
+    pub capsule_type: String,
+    pub token_estimate: usize,
+    pub source_memory_ids: Vec<String>,
+    pub source_version_hashes: Vec<String>,
+    pub block_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunFailure {
     pub schema_version: u32,
     pub run_id: String,
@@ -710,6 +805,16 @@ fn push_redacted_token(output: &mut String, token: &str) {
 
 fn is_sensitive_key(key: &str) -> bool {
     let key = key.to_ascii_lowercase();
+    if matches!(
+        key.as_str(),
+        "cacheable_prefix_tokens"
+            | "total_prompt_tokens"
+            | "token_estimate"
+            | "tokens_used"
+            | "thinking_budget_tokens"
+    ) {
+        return false;
+    }
     [
         "api_key",
         "apikey",
@@ -829,7 +934,7 @@ mod tests {
             "Decision: run artifacts should persist ECM context evidence.",
         )?;
         let envelope = cms.prepare_cached_prompt(
-            "Use Artifact context evidence in this run.",
+            "Use Artifact context evidence in this memory run.",
             "demo",
             "demo-model",
         )?;
@@ -844,6 +949,21 @@ mod tests {
         assert_eq!(sources["schema_version"], RUN_ARTIFACT_SCHEMA_VERSION);
         assert!(!sources["blocks"].as_array().unwrap().is_empty());
         assert_eq!(sources["model_request"]["provider"], "demo");
+
+        let memory_used: RunMemoryUseEvidence = serde_json::from_str(&fs::read_to_string(
+            manager.artifact_path("memory-used.json"),
+        )?)?;
+        assert_eq!(memory_used.schema_version, RUN_ARTIFACT_SCHEMA_VERSION);
+        assert_eq!(memory_used.run_id, manager.run_id);
+        assert_eq!(memory_used.provider, "demo");
+        assert_eq!(memory_used.model, "demo-model");
+        assert!(!memory_used.memory_ids.is_empty());
+        assert!(
+            memory_used
+                .blocks
+                .iter()
+                .any(|block| block.title.contains("Artifact context evidence"))
+        );
         Ok(())
     }
 
