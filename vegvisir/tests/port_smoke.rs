@@ -469,6 +469,38 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
     let legacy_stdout = String::from_utf8_lossy(&legacy_run.stdout);
     assert!(legacy_stdout.contains("max_steps_exceeded:"));
 
+    let scripted_artifact_run = std::process::Command::new(binary)
+        .args([
+            "run",
+            "inspect",
+            "--workspace",
+            tmp.path().to_str().unwrap(),
+            "--json",
+            "--scripted",
+            "--artifacts",
+        ])
+        .env("VEGVISIR_HOME", tmp.path().join("home-scripted-artifacts"))
+        .output()?;
+    assert!(
+        scripted_artifact_run.status.success(),
+        "scripted artifact run failed: {}",
+        String::from_utf8_lossy(&scripted_artifact_run.stderr)
+    );
+    let scripted_artifact_json: Value = serde_json::from_slice(&scripted_artifact_run.stdout)?;
+    assert_eq!(scripted_artifact_json["status"], "completed");
+    assert_eq!(scripted_artifact_json["mode"], "scripted_harness");
+    let scripted_run_id = scripted_artifact_json["run_id"].as_str().unwrap();
+    let scripted_artifact_dir =
+        std::path::PathBuf::from(scripted_artifact_json["artifact_dir"].as_str().unwrap());
+    assert!(scripted_artifact_dir.join("manifest.json").exists());
+    assert!(scripted_artifact_dir.join("request.json").exists());
+    assert!(scripted_artifact_dir.join("result.md").exists());
+    let scripted_manifest: Value = serde_json::from_str(&fs::read_to_string(
+        scripted_artifact_dir.join("manifest.json"),
+    )?)?;
+    assert_eq!(scripted_manifest["run_id"], scripted_run_id);
+    assert_eq!(scripted_manifest["status"], "completed");
+
     let provider_run = std::process::Command::new(binary)
         .args([
             "run",
@@ -495,6 +527,40 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
             .unwrap()
             .contains("Demo response")
     );
+
+    let provider_artifact_run = std::process::Command::new(binary)
+        .args([
+            "run",
+            "inspect",
+            "--workspace",
+            tmp.path().to_str().unwrap(),
+            "--provider",
+            "demo",
+            "--model",
+            "demo-local",
+            "--json",
+            "--artifacts",
+        ])
+        .env("VEGVISIR_HOME", tmp.path().join("home-provider-artifacts"))
+        .output()?;
+    assert!(
+        provider_artifact_run.status.success(),
+        "provider artifact run failed: {}",
+        String::from_utf8_lossy(&provider_artifact_run.stderr)
+    );
+    let provider_artifact_json: Value = serde_json::from_slice(&provider_artifact_run.stdout)?;
+    assert_eq!(provider_artifact_json["status"], "completed");
+    let provider_artifact_dir =
+        std::path::PathBuf::from(provider_artifact_json["artifact_dir"].as_str().unwrap());
+    assert!(provider_artifact_dir.join("manifest.json").exists());
+    assert!(provider_artifact_dir.join("request.json").exists());
+    assert!(provider_artifact_dir.join("result.md").exists());
+    let provider_manifest: Value = serde_json::from_str(&fs::read_to_string(
+        provider_artifact_dir.join("manifest.json"),
+    )?)?;
+    assert_eq!(provider_manifest["status"], "completed");
+    assert_eq!(provider_manifest["provider"], "demo");
+    assert_eq!(provider_manifest["model"], "demo-local");
 
     let agent_home = tmp.path().join("home-agent-cli");
     let mut agent_app = TuiApplication::with_data_root(tmp.path(), &agent_home)?;

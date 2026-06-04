@@ -81,10 +81,55 @@ impl RunArtifactManager {
         model: impl Into<String>,
         agent: Option<String>,
     ) -> anyhow::Result<(Self, RunManifest)> {
+        Self::start_in(
+            workspace,
+            data_root,
+            None::<PathBuf>,
+            session_id,
+            provider,
+            model,
+            agent,
+        )
+    }
+
+    pub fn start_in(
+        workspace: impl AsRef<Path>,
+        data_root: impl AsRef<Path>,
+        artifact_root: Option<impl AsRef<Path>>,
+        session_id: impl Into<String>,
+        provider: impl Into<String>,
+        model: impl Into<String>,
+        agent: Option<String>,
+    ) -> anyhow::Result<(Self, RunManifest)> {
+        Self::start_with_run_id(
+            workspace,
+            data_root,
+            new_run_id(),
+            artifact_root,
+            session_id,
+            provider,
+            model,
+            agent,
+        )
+    }
+
+    pub fn start_with_run_id(
+        workspace: impl AsRef<Path>,
+        data_root: impl AsRef<Path>,
+        run_id: impl Into<String>,
+        artifact_root: Option<impl AsRef<Path>>,
+        session_id: impl Into<String>,
+        provider: impl Into<String>,
+        model: impl Into<String>,
+        agent: Option<String>,
+    ) -> anyhow::Result<(Self, RunManifest)> {
         let workspace = workspace.as_ref().to_path_buf();
         let data_root = data_root.as_ref().to_path_buf();
-        let run_id = new_run_id();
-        let run_dir = workspace.join(".vegvisir").join("runs").join(&run_id);
+        let run_id = run_id.into();
+        let run_dir = artifact_root
+            .as_ref()
+            .map(|root| root.as_ref().join(&run_id))
+            .unwrap_or_else(|| workspace.join(".vegvisir").join("runs").join(&run_id));
         fs::create_dir_all(&run_dir)?;
 
         let manager = Self {
@@ -120,6 +165,10 @@ impl RunArtifactManager {
         self.write_json_file("manifest.json", manifest)
     }
 
+    pub fn write_request(&self, request: &Value) -> anyhow::Result<()> {
+        self.write_json_value_file("request.json", request)
+    }
+
     pub fn write_result(&self, markdown: &str) -> anyhow::Result<()> {
         self.write_text_file("result.md", markdown)
     }
@@ -142,6 +191,25 @@ impl RunArtifactManager {
                 "event": event,
             }),
         )
+    }
+
+    pub fn append_observed_provider_event(&self, event: &ProviderRunEvent) -> anyhow::Result<()> {
+        self.append_provider_event(event)?;
+        match event {
+            ProviderRunEvent::ToolStart { name, args } => self.append_tool_event(
+                &ToolRunEvent::start(self.run_id.clone(), name.clone(), Some(args.clone()), None),
+            ),
+            ProviderRunEvent::ToolEnd {
+                name, ok, summary, ..
+            } => self.append_tool_event(&ToolRunEvent::end(
+                self.run_id.clone(),
+                name.clone(),
+                *ok,
+                summary.clone(),
+                None,
+            )),
+            ProviderRunEvent::Activity(_) => Ok(()),
+        }
     }
 
     pub fn append_tool_event(&self, event: &ToolRunEvent) -> anyhow::Result<()> {

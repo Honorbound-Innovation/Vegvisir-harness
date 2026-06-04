@@ -8,6 +8,7 @@ use vegvisir_rust::{
     compat_server::{CompatServerOptions, run_openai_compat_server},
     evals::{format_eval_results, run_builtin_evals, run_eval_file},
     memory::{VegvisirCms, VegvisirCmsConfig, default_vegvisir_data_root},
+    run_artifacts::{RunArtifactManager, RunManifest, RunStatus},
     setup::{SetupOptions, run_setup, setup_status},
 };
 
@@ -30,6 +31,10 @@ struct Cli {
     json: bool,
     #[arg(long, global = true)]
     scripted: bool,
+    #[arg(long, global = true)]
+    artifacts: bool,
+    #[arg(long, global = true)]
+    artifact_dir: Option<PathBuf>,
     #[arg(long, global = true)]
     dangerously_bypass_approvals_and_sandbox: bool,
     #[command(subcommand)]
@@ -143,6 +148,8 @@ fn main() -> anyhow::Result<()> {
             cli.agent,
             cli.json,
             cli.scripted,
+            cli.artifacts,
+            cli.artifact_dir,
             cli.dangerously_bypass_approvals_and_sandbox,
         )
     } else {
@@ -160,6 +167,8 @@ fn main() -> anyhow::Result<()> {
                 cli.agent,
                 cli.json,
                 cli.scripted,
+                cli.artifacts,
+                cli.artifact_dir,
                 cli.dangerously_bypass_approvals_and_sandbox,
             ),
             Some(Command::Remember {
@@ -321,6 +330,8 @@ fn run_headless(
     agent: Option<String>,
     json_output: bool,
     scripted: bool,
+    artifacts: bool,
+    artifact_dir: Option<PathBuf>,
     dangerously_bypass_approvals_and_sandbox: bool,
 ) -> anyhow::Result<()> {
     if !scripted {
@@ -331,6 +342,8 @@ fn run_headless(
             model,
             agent,
             json_output,
+            artifacts,
+            artifact_dir,
             dangerously_bypass_approvals_and_sandbox,
         );
     }
@@ -340,9 +353,34 @@ fn run_headless(
     } else {
         AgentHarness::default(model, &workspace)?
     };
-    let mut task = AgentTask::new(prompt, workspace);
+    let mut task = AgentTask::new(prompt.clone(), workspace.clone());
     task.max_steps = max_steps;
     let result = harness.run(task)?;
+    let artifact_dir = if artifacts || artifact_dir.is_some() {
+        let status = run_status_from_harness_status(&result.status);
+        let (manager, mut manifest) = RunArtifactManager::start_with_run_id(
+            &workspace,
+            default_vegvisir_data_root(),
+            result.run_id.clone(),
+            artifact_dir.as_deref(),
+            "headless-scripted",
+            "scripted",
+            "scripted-model",
+            agent.clone(),
+        )?;
+        manager.write_request(&serde_json::json!({
+            "goal": prompt,
+            "max_steps": max_steps,
+            "mode": "scripted_harness",
+        }))?;
+        if let Some(answer) = result.final_answer.as_deref() {
+            manager.write_result(answer)?;
+        }
+        manager.finish(&mut manifest, status)?;
+        Some(manager.run_dir.display().to_string())
+    } else {
+        None
+    };
     if json_output {
         println!(
             "{}",
@@ -351,6 +389,7 @@ fn run_headless(
                 "answer": result.final_answer,
                 "steps": result.steps,
                 "run_id": result.run_id,
+                "artifact_dir": artifact_dir,
                 "checkpoint": result.checkpoint.as_ref().map(|path| path.display().to_string()),
                 "snapshot": result.snapshot.as_ref().map(|path| path.display().to_string()),
                 "mode": "scripted_harness",
@@ -363,6 +402,9 @@ fn run_headless(
         result.status,
         result.final_answer.unwrap_or_default()
     );
+    if let Some(artifact_dir) = artifact_dir {
+        println!("artifact_dir: {artifact_dir}");
+    }
     if let Some(checkpoint) = result.checkpoint {
         println!("checkpoint: {}", checkpoint.display());
     }
@@ -376,6 +418,8 @@ fn run_headless_provider(
     model: Option<String>,
     agent: Option<String>,
     json_output: bool,
+    artifacts: bool,
+    artifact_dir: Option<PathBuf>,
     dangerously_bypass_approvals_and_sandbox: bool,
 ) -> anyhow::Result<()> {
     let mut app = TuiApplication::new_with_dangerous_bypass(
@@ -393,6 +437,17 @@ fn run_headless_provider(
     }
     if json_output {
         let observed = app.send_headless_observed(&prompt)?;
+        let artifact_dir = if artifacts || artifact_dir.is_some() {
+            Some(write_provider_artifacts_for_app(
+                &app,
+                &workspace,
+                artifact_dir.as_deref(),
+                &prompt,
+                &observed,
+            )?)
+        } else {
+            None
+        };
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
@@ -408,14 +463,73 @@ fn run_headless_provider(
                 "latency_ms": app.session.last_latency_ms,
                 "prompt_cache_key": app.session.last_prompt_cache_key,
                 "events": observed.events,
+                "run_id": artifact_dir.as_ref().map(|(run_id, _)| run_id),
+                "artifact_dir": artifact_dir.as_ref().map(|(_, dir)| dir),
                 "mode": "provider_runtime",
             }))?
         );
+    } else if artifacts || artifact_dir.is_some() {
+        let observed = app.send_headless_observed(&prompt)?;
+        let (_, artifact_dir) = write_provider_artifacts_for_app(
+            &app,
+            &workspace,
+            artifact_dir.as_deref(),
+            &prompt,
+            &observed,
+        )?;
+        println!("{}", observed.response);
+        println!("artifact_dir: {artifact_dir}");
     } else {
         let response = app.send_headless(&prompt)?;
         println!("{response}");
     }
     Ok(())
+}
+
+fn run_status_from_harness_status(status: &str) -> RunStatus {
+    match status {
+        "completed" => RunStatus::Completed,
+        "cancelled" => RunStatus::Cancelled,
+        "failed" => RunStatus::Failed,
+        _ => RunStatus::Failed,
+    }
+}
+
+fn write_provider_artifacts_for_app(
+    app: &TuiApplication,
+    workspace: &std::path::Path,
+    artifact_root: Option<&std::path::Path>,
+    prompt: &str,
+    observed: &vegvisir_rust::app::HeadlessObservedRun,
+) -> anyhow::Result<(String, String)> {
+    let (manager, mut manifest) = RunArtifactManager::start_in(
+        workspace,
+        default_vegvisir_data_root(),
+        artifact_root,
+        app.session.session_id.clone(),
+        app.session.current_provider.clone(),
+        app.session.current_model.clone(),
+        app.session.active_agent_id.clone(),
+    )?;
+    write_provider_headless_artifacts(&manager, &mut manifest, prompt, observed)?;
+    Ok((manager.run_id, manager.run_dir.display().to_string()))
+}
+
+fn write_provider_headless_artifacts(
+    manager: &RunArtifactManager,
+    manifest: &mut RunManifest,
+    prompt: &str,
+    observed: &vegvisir_rust::app::HeadlessObservedRun,
+) -> anyhow::Result<()> {
+    manager.write_request(&serde_json::json!({
+        "goal": prompt,
+        "mode": "provider_runtime",
+    }))?;
+    manager.write_result(&observed.response)?;
+    for event in &observed.events {
+        manager.append_observed_provider_event(event)?;
+    }
+    manager.finish(manifest, RunStatus::Completed)
 }
 
 fn apply_cli_command(app: &mut TuiApplication, command: &str, label: &str) -> anyhow::Result<()> {
