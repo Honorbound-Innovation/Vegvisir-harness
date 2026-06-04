@@ -1495,6 +1495,72 @@ mod tests {
     }
 
     #[test]
+    fn run_artifacts_manifest_schema_shape_matches_documented_bundle() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        let data_root = tmp.path().join("data");
+        fs::create_dir_all(&workspace)?;
+
+        let (manager, manifest) = RunArtifactManager::start_with_run_id(
+            &workspace,
+            &data_root,
+            "run-golden-shape",
+            Option::<&Path>::None,
+            "session-1",
+            "demo",
+            "demo-model",
+            Some("tester".to_string()),
+        )?;
+
+        assert_eq!(manifest.schema_version, RUN_ARTIFACT_SCHEMA_VERSION);
+        assert_eq!(manifest.status, RunStatus::Running);
+        assert_eq!(manifest.artifact_paths, default_artifact_paths());
+        assert_eq!(
+            manager.run_dir,
+            workspace
+                .join(".vegvisir")
+                .join("runs")
+                .join("run-golden-shape")
+        );
+
+        let saved: Value =
+            serde_json::from_str(&fs::read_to_string(manager.artifact_path("manifest.json"))?)?;
+        assert_eq!(saved["schema_version"], RUN_ARTIFACT_SCHEMA_VERSION);
+        assert_eq!(saved["run_id"], "run-golden-shape");
+        assert_eq!(saved["session_id"], "session-1");
+        assert_eq!(saved["provider"], "demo");
+        assert_eq!(saved["model"], "demo-model");
+        assert_eq!(saved["agent"], "tester");
+        assert_eq!(saved["status"], "running");
+
+        let artifact_paths = saved["artifact_paths"]
+            .as_object()
+            .expect("manifest artifact_paths object");
+        let expected_paths = BTreeMap::from([
+            ("manifest", "manifest.json"),
+            ("request", "request.json"),
+            ("context", "context.md"),
+            ("context_sources", "context-sources.json"),
+            ("provider_events", "provider-events.jsonl"),
+            ("tool_events", "tool-events.jsonl"),
+            ("file_changes", "file-changes.json"),
+            ("diff", "diff.patch"),
+            ("memory_used", "memory-used.json"),
+            ("memory_written", "memory-written.json"),
+            ("approvals", "approvals.json"),
+            ("subagents", "subagents.json"),
+            ("result", "result.md"),
+            ("verification", "verification.json"),
+            ("failure", "failure.json"),
+        ]);
+        assert_eq!(artifact_paths.len(), expected_paths.len());
+        for (name, relative_path) in expected_paths {
+            assert_eq!(artifact_paths[name], relative_path);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn run_artifacts_writes_context_sources_from_prompt_envelope() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let workspace = tmp.path().join("workspace");

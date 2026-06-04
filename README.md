@@ -250,6 +250,14 @@ Run headlessly:
 vegvisir --workspace /path/to/project --provider openai-hbse --model gpt-5.5 run "Summarize this repository"
 ```
 
+Write a local run artifact bundle for review/audit evidence:
+
+```bash
+vegvisir --workspace /path/to/project --artifacts run "Summarize this repository"
+vegvisir --workspace /path/to/project --artifact-dir ./audit-runs eval golden
+vegvisir --workspace /path/to/project --artifact-dir ./audit-runs verify runtime
+```
+
 Run the app-server bridge for an external app or desktop shell:
 
 ```bash

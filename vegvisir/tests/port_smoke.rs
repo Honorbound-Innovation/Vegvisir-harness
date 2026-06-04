@@ -439,6 +439,36 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let binary = env!("CARGO_BIN_EXE_vegvisir-rust");
 
+    let help = std::process::Command::new(binary).arg("--help").output()?;
+    assert!(help.status.success());
+    let help_stdout = String::from_utf8_lossy(&help.stdout);
+    assert!(help_stdout.contains("--artifacts"));
+    assert!(help_stdout.contains("--artifact-dir <ARTIFACT_DIR>"));
+
+    let run_help = std::process::Command::new(binary)
+        .args(["help", "run"])
+        .output()?;
+    assert!(run_help.status.success());
+    let run_help_stdout = String::from_utf8_lossy(&run_help.stdout);
+    assert!(run_help_stdout.contains("--artifacts"));
+    assert!(run_help_stdout.contains("--artifact-dir <ARTIFACT_DIR>"));
+
+    let eval_help = std::process::Command::new(binary)
+        .args(["help", "eval"])
+        .output()?;
+    assert!(eval_help.status.success());
+    let eval_help_stdout = String::from_utf8_lossy(&eval_help.stdout);
+    assert!(eval_help_stdout.contains("--artifacts"));
+    assert!(eval_help_stdout.contains("--artifact-dir <ARTIFACT_DIR>"));
+
+    let verify_help = std::process::Command::new(binary)
+        .args(["help", "verify"])
+        .output()?;
+    assert!(verify_help.status.success());
+    let verify_help_stdout = String::from_utf8_lossy(&verify_help.stdout);
+    assert!(verify_help_stdout.contains("--artifacts"));
+    assert!(verify_help_stdout.contains("--artifact-dir <ARTIFACT_DIR>"));
+
     let prompt = std::process::Command::new(binary)
         .args([
             "-p",
@@ -527,6 +557,42 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
     )?)?;
     assert_eq!(scripted_verification["status"], "no_verification");
     assert_eq!(scripted_verification["overall"], "not_run");
+    assert_eq!(
+        scripted_manifest["artifact_paths"]["manifest"],
+        "manifest.json"
+    );
+    assert_eq!(
+        scripted_manifest["artifact_paths"]["request"],
+        "request.json"
+    );
+    assert_eq!(
+        scripted_manifest["artifact_paths"]["context_sources"],
+        "context-sources.json"
+    );
+    assert_eq!(
+        scripted_manifest["artifact_paths"]["provider_events"],
+        "provider-events.jsonl"
+    );
+    assert_eq!(
+        scripted_manifest["artifact_paths"]["tool_events"],
+        "tool-events.jsonl"
+    );
+    assert_eq!(
+        scripted_manifest["artifact_paths"]["file_changes"],
+        "file-changes.json"
+    );
+    assert_eq!(
+        scripted_manifest["artifact_paths"]["memory_used"],
+        "memory-used.json"
+    );
+    assert_eq!(
+        scripted_manifest["artifact_paths"]["memory_written"],
+        "memory-written.json"
+    );
+    assert_eq!(
+        scripted_manifest["artifact_paths"]["verification"],
+        "verification.json"
+    );
 
     let failed_scripted_artifact_run = std::process::Command::new(binary)
         .args([
