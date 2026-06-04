@@ -283,12 +283,18 @@ fn tool_log_lines(app: &TuiApplication, width: usize, max_rows: usize) -> Vec<Li
 
 fn tool_log_message_line(message: &ChatMessage, width: usize) -> Line<'static> {
     let kind = classify_system_message(&message.content);
+    let lifecycle_style = tool_lifecycle_style(&message.content);
     let (marker, style) = match kind {
         SystemMessageKind::Error => ("!", Style::default().fg(RED).add_modifier(Modifier::BOLD)),
         SystemMessageKind::Approval => {
             ("?", Style::default().fg(AMBER).add_modifier(Modifier::BOLD))
         }
-        SystemMessageKind::Tool => ("›", Style::default().fg(CYAN).add_modifier(Modifier::BOLD)),
+        SystemMessageKind::Tool => (
+            "›",
+            lifecycle_style
+                .unwrap_or_else(|| Style::default().fg(CYAN))
+                .add_modifier(Modifier::BOLD),
+        ),
         SystemMessageKind::Note => ("·", Style::default().fg(AMBER).add_modifier(Modifier::BOLD)),
     };
     compact_system_message_line(
@@ -297,7 +303,7 @@ fn tool_log_message_line(message: &ChatMessage, width: usize) -> Line<'static> {
         &message.created_at.format("%H:%M:%S").to_string(),
         &message.content,
         style,
-        kind.content_style(),
+        lifecycle_style.unwrap_or_else(|| kind.content_style()),
         message_matches_search(message, ""),
         width,
     )
@@ -2563,6 +2569,31 @@ fn draw_info_overlay(f: &mut Frame<'_>, app: &TuiApplication, info: &InfoOverlay
     f.render_widget(paragraph, area);
 }
 
+fn tool_lifecycle_style(content: &str) -> Option<Style> {
+    let lower = content.trim_start().to_ascii_lowercase();
+    if lower.starts_with("running tool:")
+        || lower.starts_with("tool started:")
+        || lower.starts_with("tool call")
+    {
+        return Some(Style::default().fg(CYAN));
+    }
+    if lower.starts_with("tool finished:") {
+        let status = lower.split_once(" - ").map(|(_, rest)| rest.trim_start());
+        if matches!(status, Some(rest) if rest.starts_with("ok:") || rest == "ok") {
+            return Some(Style::default().fg(GREEN));
+        }
+        if matches!(status, Some(rest) if rest.starts_with("error:") || rest.starts_with("failed:") || rest.starts_with("err:"))
+        {
+            return Some(Style::default().fg(RED));
+        }
+        return Some(Style::default().fg(AMBER));
+    }
+    if lower.starts_with("tool failed:") || lower.starts_with("tool error:") {
+        return Some(Style::default().fg(RED));
+    }
+    None
+}
+
 fn trace_event_line_style(raw: &str) -> Option<Style> {
     // `/trace` lines are rendered as plain command output in the info overlay:
     // `<timestamp> <event_name> <json payload>`.  A successful `tool_end`
@@ -3679,6 +3710,40 @@ four",
         assert!(!rendered.contains('\r'));
         assert!(!rendered.contains('\u{1b}'));
         assert!(!rendered.contains('\u{7}'));
+        Ok(())
+    }
+
+    #[test]
+    fn ratatui_tool_log_uses_trace_lifecycle_palette() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app =
+            crate::app::TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        for content in [
+            "Running tool: subagents_list {\"status\":\"failed\"}",
+            "Tool finished: subagents_list - ok: {\"error\":null,\"ok\":true}",
+            "Tool finished: subagents_show - error: subagent not found",
+            "Workspace set to /tmp/project",
+        ] {
+            app.session.messages.push(ChatMessage {
+                role: "system".to_string(),
+                content: content.to_string(),
+                attachments: Vec::new(),
+                created_at: chrono::Utc::now(),
+            });
+        }
+
+        let lines = tool_log_lines(&app, 160, 8);
+        let line_style = |index: usize| lines[index].spans[0].style.fg;
+        let content_style = |index: usize| lines[index].spans[5].style.fg;
+
+        assert_eq!(line_style(0), Some(CYAN));
+        assert_eq!(content_style(0), Some(CYAN));
+        assert_eq!(line_style(1), Some(GREEN));
+        assert_eq!(content_style(1), Some(GREEN));
+        assert_eq!(line_style(2), Some(RED));
+        assert_eq!(content_style(2), Some(RED));
+        assert_eq!(line_style(3), Some(AMBER));
+        assert_eq!(content_style(3), Some(AMBER));
         Ok(())
     }
 
