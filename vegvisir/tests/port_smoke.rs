@@ -494,6 +494,8 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
         std::path::PathBuf::from(scripted_artifact_json["artifact_dir"].as_str().unwrap());
     assert!(scripted_artifact_dir.join("manifest.json").exists());
     assert!(scripted_artifact_dir.join("request.json").exists());
+    assert!(scripted_artifact_dir.join("context.md").exists());
+    assert!(scripted_artifact_dir.join("context-sources.json").exists());
     assert!(scripted_artifact_dir.join("result.md").exists());
     let scripted_manifest: Value = serde_json::from_str(&fs::read_to_string(
         scripted_artifact_dir.join("manifest.json"),
@@ -554,6 +556,8 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
         std::path::PathBuf::from(provider_artifact_json["artifact_dir"].as_str().unwrap());
     assert!(provider_artifact_dir.join("manifest.json").exists());
     assert!(provider_artifact_dir.join("request.json").exists());
+    assert!(provider_artifact_dir.join("context.md").exists());
+    assert!(provider_artifact_dir.join("context-sources.json").exists());
     assert!(provider_artifact_dir.join("result.md").exists());
     let provider_manifest: Value = serde_json::from_str(&fs::read_to_string(
         provider_artifact_dir.join("manifest.json"),
@@ -4372,6 +4376,8 @@ fn tui_submit_message_uses_cms_memory_and_demo_provider() -> anyhow::Result<()> 
     let run_dir = &run_dirs[0];
     assert!(run_dir.join("manifest.json").exists());
     assert!(run_dir.join("request.json").exists());
+    assert!(run_dir.join("context.md").exists());
+    assert!(run_dir.join("context-sources.json").exists());
     assert!(run_dir.join("result.md").exists());
     let manifest: Value =
         serde_json::from_str(&fs::read_to_string(run_dir.join("manifest.json"))?)?;

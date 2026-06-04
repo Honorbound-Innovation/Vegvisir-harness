@@ -131,6 +131,7 @@ impl TuiApplication {
                 worker_session.current_provider.clone(),
                 worker_session.current_model.clone(),
             )?;
+            let _ = stream_tx.send(StreamEvent::PromptEnvelope(Box::new(envelope.clone())));
             let mut on_delta = |delta: &str| {
                 if !worker_cancel_token.load(Ordering::SeqCst) {
                     let _ = stream_tx.send(StreamEvent::Delta(delta.to_string()));
@@ -639,6 +640,19 @@ Steering: {display_content}{attachment_note}"
         }
     }
 
+    fn write_tui_turn_context_artifacts(
+        &mut self,
+        envelope: &cms_v2::prompt_cache::CachedPromptEnvelope,
+    ) {
+        if let Some((manager, _)) = self.pending_run_artifact.as_ref()
+            && let Err(error) = manager.write_context_artifacts(envelope)
+        {
+            self.push_system_message(format!(
+                "Warning: failed to write run artifact context: {error}"
+            ));
+        }
+    }
+
     fn append_tui_turn_provider_event(&mut self, event: &ProviderRunEvent) {
         if let Some((manager, _)) = self.pending_run_artifact.as_ref()
             && let Err(error) = manager.append_observed_provider_event(event)
@@ -777,6 +791,9 @@ Steering: {display_content}{attachment_note}"
                     self.session.messages[assistant_index]
                         .content
                         .push_str(&delta);
+                }
+                StreamEvent::PromptEnvelope(envelope) => {
+                    self.write_tui_turn_context_artifacts(&envelope);
                 }
                 StreamEvent::Activity(activity) => {
                     self.append_tui_turn_provider_event(&ProviderRunEvent::Activity(

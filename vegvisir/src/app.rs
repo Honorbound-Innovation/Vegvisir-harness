@@ -11,6 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use cms_v2::prompt_cache::CachedPromptEnvelope;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use serde_json::{Value, json};
 
@@ -144,9 +145,11 @@ pub struct TuiApplication {
 pub struct HeadlessObservedRun {
     pub response: String,
     pub events: Vec<ProviderRunEvent>,
+    pub prompt_envelope: CachedPromptEnvelope,
 }
 
 enum StreamEvent {
+    PromptEnvelope(Box<CachedPromptEnvelope>),
     Delta(String),
     Activity(String),
     ToolStart {
@@ -837,6 +840,7 @@ impl TuiApplication {
     }
 
     pub fn send_headless_observed(&mut self, content: &str) -> anyhow::Result<HeadlessObservedRun> {
+        let prompt_envelope = self.current_prompt_envelope(content)?;
         let events = Arc::new(std::sync::Mutex::new(Vec::new()));
         let captured_events = Arc::clone(&events);
         let response = self.send_headless_streaming_with_event_sink(
@@ -852,7 +856,11 @@ impl TuiApplication {
             .lock()
             .map(|events| events.clone())
             .unwrap_or_default();
-        Ok(HeadlessObservedRun { response, events })
+        Ok(HeadlessObservedRun {
+            response,
+            events,
+            prompt_envelope,
+        })
     }
 
     pub fn send_headless_streaming(
@@ -901,6 +909,18 @@ impl TuiApplication {
         let _ = self.cms.complete_turn(content, &response);
         self.autosave_session();
         Ok(response)
+    }
+
+    pub fn current_prompt_envelope(
+        &mut self,
+        content: &str,
+    ) -> anyhow::Result<CachedPromptEnvelope> {
+        let (model_content, _) = self.prepare_lsl_for_content(content)?;
+        self.cms.prepare_cached_prompt(
+            &model_content,
+            self.session.current_provider.clone(),
+            self.session.current_model.clone(),
+        )
     }
 
     fn input_edit_width(&self) -> usize {

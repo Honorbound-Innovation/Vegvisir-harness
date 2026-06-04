@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use cms_v2::prompt_cache::CachedPromptEnvelope;
+
 use crate::provider::ProviderRunEvent;
 
 pub const RUN_ARTIFACT_SCHEMA_VERSION: u32 = 1;
@@ -171,6 +173,19 @@ impl RunArtifactManager {
 
     pub fn write_result(&self, markdown: &str) -> anyhow::Result<()> {
         self.write_text_file("result.md", markdown)
+    }
+
+    pub fn write_context(&self, markdown: &str) -> anyhow::Result<()> {
+        self.write_text_file("context.md", markdown)
+    }
+
+    pub fn write_context_sources(&self, sources: &Value) -> anyhow::Result<()> {
+        self.write_json_value_file("context-sources.json", sources)
+    }
+
+    pub fn write_context_artifacts(&self, envelope: &CachedPromptEnvelope) -> anyhow::Result<()> {
+        self.write_context(&envelope.model_request.prompt)?;
+        self.write_context_sources(&context_sources_from_envelope(envelope))
     }
 
     pub fn write_failure(&self, failure: &RunFailure) -> anyhow::Result<()> {
@@ -338,6 +353,59 @@ impl ToolRunEvent {
 pub enum ToolRunPhase {
     Start,
     End,
+}
+
+pub fn context_sources_from_envelope(envelope: &CachedPromptEnvelope) -> Value {
+    json!({
+        "schema_version": RUN_ARTIFACT_SCHEMA_VERSION,
+        "manifest": {
+            "manifest_id": envelope.manifest.manifest_id,
+            "provider": envelope.manifest.provider,
+            "model": envelope.manifest.model,
+            "prompt_cache_key": envelope.manifest.prompt_cache_key,
+            "cacheable_prefix_hash": envelope.manifest.cacheable_prefix_hash,
+            "cacheable_prefix_tokens": envelope.manifest.cacheable_prefix_tokens,
+            "total_prompt_tokens": envelope.manifest.total_prompt_tokens,
+            "renderer_version": envelope.manifest.renderer_version,
+            "tokenizer_version": envelope.manifest.tokenizer_version,
+            "scope_identity": envelope.manifest.scope_identity,
+            "block_hashes": envelope.manifest.block_hashes,
+        },
+        "model_request": {
+            "provider": envelope.model_request.provider,
+            "model": envelope.model_request.model,
+            "cache_hint": envelope.model_request.cache_hint,
+            "metadata": envelope.model_request.metadata,
+        },
+        "blocks": envelope.blocks.iter().map(|block| json!({
+            "id": block.id,
+            "kind": block.kind,
+            "zone": block.zone,
+            "title": block.title,
+            "content_hash": block.content_hash,
+            "token_estimate": block.token_estimate,
+            "source_memory_ids": block.source_memory_ids,
+            "source_version_hashes": block.source_version_hashes,
+            "stability": block.stability,
+            "scope": block.scope,
+            "sensitivity": block.sensitivity,
+            "cache_policy": block.cache_policy,
+            "provider_annotations": block.provider_annotations,
+        })).collect::<Vec<_>>(),
+        "capsules": envelope.capsules.iter().map(|capsule| json!({
+            "capsule_id": capsule.capsule_id,
+            "capsule_type": capsule.capsule_type,
+            "scope": capsule.scope,
+            "scope_identity": capsule.scope_identity,
+            "content_hash": capsule.content_hash,
+            "token_estimate": capsule.token_estimate,
+            "source_memory_ids": capsule.source_memory_ids,
+            "source_version_hashes": capsule.source_version_hashes,
+            "block_ids": capsule.block_ids,
+            "renderer_version": capsule.renderer_version,
+        })).collect::<Vec<_>>(),
+        "cache_plan": envelope.cache_plan,
+    })
 }
 
 fn default_artifact_paths() -> BTreeMap<String, PathBuf> {
@@ -524,6 +592,50 @@ mod tests {
             fs::read_to_string(manager.artifact_path("result.md"))?,
             "completed successfully"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn run_artifacts_writes_context_sources_from_prompt_envelope() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        fs::create_dir_all(&workspace)?;
+        let (manager, _manifest) = RunArtifactManager::start(
+            &workspace,
+            tmp.path().join("data"),
+            "session-1",
+            "demo",
+            "demo-model",
+            None,
+        )?;
+        let mut cms = crate::memory::VegvisirCms::open(crate::memory::VegvisirCmsConfig {
+            db_path: tmp.path().join("cms.sqlite3"),
+            user_id: "tester".to_string(),
+            project_id: Some("project".to_string()),
+            context_mode: cms_v2::ecm::ContextMode::Project,
+            commit_writebacks: true,
+        })?;
+        cms.remember(
+            "ArchitectureChange",
+            "Artifact context evidence",
+            "Decision: run artifacts should persist ECM context evidence.",
+        )?;
+        let envelope = cms.prepare_cached_prompt(
+            "Use Artifact context evidence in this run.",
+            "demo",
+            "demo-model",
+        )?;
+
+        manager.write_context_artifacts(&envelope)?;
+
+        let context = fs::read_to_string(manager.artifact_path("context.md"))?;
+        assert!(context.contains("Artifact context evidence"));
+        let sources: Value = serde_json::from_str(&fs::read_to_string(
+            manager.artifact_path("context-sources.json"),
+        )?)?;
+        assert_eq!(sources["schema_version"], RUN_ARTIFACT_SCHEMA_VERSION);
+        assert!(!sources["blocks"].as_array().unwrap().is_empty());
+        assert_eq!(sources["model_request"]["provider"], "demo");
         Ok(())
     }
 

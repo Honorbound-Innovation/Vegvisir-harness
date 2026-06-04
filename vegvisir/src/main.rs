@@ -373,6 +373,9 @@ fn run_headless(
             "max_steps": max_steps,
             "mode": "scripted_harness",
         }))?;
+        let mut cms = open_cms(workspace.clone())?;
+        let envelope = cms.prepare_cached_prompt(&prompt, "scripted", "scripted-model")?;
+        manager.write_context_artifacts(&envelope)?;
         if let Some(answer) = result.final_answer.as_deref() {
             manager.write_result(answer)?;
         }
@@ -525,6 +528,7 @@ fn write_provider_headless_artifacts(
         "goal": prompt,
         "mode": "provider_runtime",
     }))?;
+    manager.write_context_artifacts(&observed.prompt_envelope)?;
     manager.write_result(&observed.response)?;
     for event in &observed.events {
         manager.append_observed_provider_event(event)?;
