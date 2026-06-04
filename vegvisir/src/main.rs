@@ -379,6 +379,16 @@ fn run_headless(
         if let Some(answer) = result.final_answer.as_deref() {
             manager.write_result(answer)?;
         }
+        if status == RunStatus::Failed {
+            let message = result.final_answer.as_deref().unwrap_or(&result.status);
+            manager.write_failure(&vegvisir_rust::run_artifacts::RunFailure {
+                schema_version: vegvisir_rust::run_artifacts::RUN_ARTIFACT_SCHEMA_VERSION,
+                run_id: manager.run_id.clone(),
+                message: message.to_string(),
+                recoverable: true,
+                timestamp: chrono::Utc::now(),
+            })?;
+        }
         manager.finish(&mut manifest, status)?;
         Some(manager.run_dir.display().to_string())
     } else {
@@ -429,27 +439,55 @@ fn run_headless_provider(
         &workspace,
         dangerously_bypass_approvals_and_sandbox,
     )?;
-    if let Some(provider) = provider {
-        apply_cli_command(&mut app, &format!("/provider {provider}"), "provider")?;
+    let mut artifact_bundle = if artifacts || artifact_dir.is_some() {
+        Some(RunArtifactManager::start_in(
+            &workspace,
+            default_vegvisir_data_root(),
+            artifact_dir.as_deref(),
+            app.session.session_id.clone(),
+            app.session.current_provider.clone(),
+            app.session.current_model.clone(),
+            app.session.active_agent_id.clone(),
+        )?)
+    } else {
+        None
+    };
+
+    let selection_result = (|| -> anyhow::Result<()> {
+        if let Some(provider) = provider {
+            apply_cli_command(&mut app, &format!("/provider {provider}"), "provider")?;
+        }
+        if let Some(model) = model {
+            apply_cli_command(&mut app, &format!("/model {model}"), "model")?;
+        }
+        if let Some(agent) = agent {
+            apply_cli_command(&mut app, &format!("/agent use {agent}"), "agent")?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = selection_result {
+        if let Some((manager, mut manifest)) = artifact_bundle.take() {
+            sync_manifest_selection_from_app(&mut manifest, &app);
+            manager.write_request(&serde_json::json!({
+                "goal": prompt,
+                "mode": "provider_runtime",
+            }))?;
+            manager.fail(&mut manifest, error.to_string(), true)?;
+        }
+        return Err(error);
     }
-    if let Some(model) = model {
-        apply_cli_command(&mut app, &format!("/model {model}"), "model")?;
+
+    if let Some((_, manifest)) = artifact_bundle.as_mut() {
+        sync_manifest_selection_from_app(manifest, &app);
     }
-    if let Some(agent) = agent {
-        apply_cli_command(&mut app, &format!("/agent use {agent}"), "agent")?;
-    }
+
     if json_output {
-        let observed = app.send_headless_observed(&prompt)?;
-        let artifact_dir = if artifacts || artifact_dir.is_some() {
-            Some(write_provider_artifacts_for_app(
-                &app,
-                &workspace,
-                artifact_dir.as_deref(),
-                &prompt,
-                &observed,
-            )?)
+        let (observed, artifact_dir) = if let Some((manager, manifest)) = artifact_bundle {
+            let (observed, run_id, dir) =
+                send_provider_headless_with_artifacts(&mut app, &prompt, manager, manifest)?;
+            (observed, Some((run_id, dir)))
         } else {
-            None
+            (app.send_headless_observed(&prompt)?, None)
         };
         println!(
             "{}",
@@ -471,15 +509,9 @@ fn run_headless_provider(
                 "mode": "provider_runtime",
             }))?
         );
-    } else if artifacts || artifact_dir.is_some() {
-        let observed = app.send_headless_observed(&prompt)?;
-        let (_, artifact_dir) = write_provider_artifacts_for_app(
-            &app,
-            &workspace,
-            artifact_dir.as_deref(),
-            &prompt,
-            &observed,
-        )?;
+    } else if let Some((manager, manifest)) = artifact_bundle {
+        let (observed, _, artifact_dir) =
+            send_provider_headless_with_artifacts(&mut app, &prompt, manager, manifest)?;
         println!("{}", observed.response);
         println!("artifact_dir: {artifact_dir}");
     } else {
@@ -487,6 +519,12 @@ fn run_headless_provider(
         println!("{response}");
     }
     Ok(())
+}
+
+fn sync_manifest_selection_from_app(manifest: &mut RunManifest, app: &TuiApplication) {
+    manifest.provider = app.session.current_provider.clone();
+    manifest.model = app.session.current_model.clone();
+    manifest.agent = app.session.active_agent_id.clone();
 }
 
 fn run_status_from_harness_status(status: &str) -> RunStatus {
@@ -498,24 +536,30 @@ fn run_status_from_harness_status(status: &str) -> RunStatus {
     }
 }
 
-fn write_provider_artifacts_for_app(
-    app: &TuiApplication,
-    workspace: &std::path::Path,
-    artifact_root: Option<&std::path::Path>,
+fn send_provider_headless_with_artifacts(
+    app: &mut TuiApplication,
     prompt: &str,
-    observed: &vegvisir_rust::app::HeadlessObservedRun,
-) -> anyhow::Result<(String, String)> {
-    let (manager, mut manifest) = RunArtifactManager::start_in(
-        workspace,
-        default_vegvisir_data_root(),
-        artifact_root,
-        app.session.session_id.clone(),
-        app.session.current_provider.clone(),
-        app.session.current_model.clone(),
-        app.session.active_agent_id.clone(),
-    )?;
-    write_provider_headless_artifacts(&manager, &mut manifest, prompt, observed)?;
-    Ok((manager.run_id, manager.run_dir.display().to_string()))
+    manager: RunArtifactManager,
+    mut manifest: RunManifest,
+) -> anyhow::Result<(vegvisir_rust::app::HeadlessObservedRun, String, String)> {
+    match app.send_headless_observed(prompt) {
+        Ok(observed) => {
+            write_provider_headless_artifacts(&manager, &mut manifest, prompt, &observed)?;
+            Ok((
+                observed,
+                manager.run_id.clone(),
+                manager.run_dir.display().to_string(),
+            ))
+        }
+        Err(error) => {
+            manager.write_request(&serde_json::json!({
+                "goal": prompt,
+                "mode": "provider_runtime",
+            }))?;
+            manager.fail(&mut manifest, error.to_string(), true)?;
+            Err(error)
+        }
+    }
 }
 
 fn write_provider_headless_artifacts(

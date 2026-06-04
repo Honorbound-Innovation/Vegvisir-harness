@@ -503,6 +503,46 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
     assert_eq!(scripted_manifest["run_id"], scripted_run_id);
     assert_eq!(scripted_manifest["status"], "completed");
 
+    let failed_scripted_artifact_run = std::process::Command::new(binary)
+        .args([
+            "run",
+            "inspect",
+            "--workspace",
+            tmp.path().to_str().unwrap(),
+            "--max-steps",
+            "1",
+            "--json",
+            "--scripted",
+            "--artifacts",
+        ])
+        .env(
+            "VEGVISIR_HOME",
+            tmp.path().join("home-failed-scripted-artifacts"),
+        )
+        .output()?;
+    assert!(
+        failed_scripted_artifact_run.status.success(),
+        "failed scripted artifact run failed unexpectedly: {}",
+        String::from_utf8_lossy(&failed_scripted_artifact_run.stderr)
+    );
+    let failed_scripted_json: Value = serde_json::from_slice(&failed_scripted_artifact_run.stdout)?;
+    assert_eq!(failed_scripted_json["status"], "max_steps_exceeded");
+    let failed_scripted_artifact_dir =
+        std::path::PathBuf::from(failed_scripted_json["artifact_dir"].as_str().unwrap());
+    let failed_scripted_manifest: Value = serde_json::from_str(&fs::read_to_string(
+        failed_scripted_artifact_dir.join("manifest.json"),
+    )?)?;
+    assert_eq!(failed_scripted_manifest["status"], "failed");
+    let failed_scripted_failure: Value = serde_json::from_str(&fs::read_to_string(
+        failed_scripted_artifact_dir.join("failure.json"),
+    )?)?;
+    assert!(
+        failed_scripted_failure["message"]
+            .as_str()
+            .unwrap()
+            .contains("max_steps_exceeded")
+    );
+
     let provider_run = std::process::Command::new(binary)
         .args([
             "run",
@@ -565,6 +605,47 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
     assert_eq!(provider_manifest["status"], "completed");
     assert_eq!(provider_manifest["provider"], "demo");
     assert_eq!(provider_manifest["model"], "demo-local");
+
+    let provider_artifact_failure = std::process::Command::new(binary)
+        .args([
+            "run",
+            "inspect",
+            "--workspace",
+            tmp.path().to_str().unwrap(),
+            "--provider",
+            "demo",
+            "--model",
+            "missing-model",
+            "--artifacts",
+            "--artifact-dir",
+            tmp.path()
+                .join("failed-provider-artifacts")
+                .to_str()
+                .unwrap(),
+        ])
+        .env(
+            "VEGVISIR_HOME",
+            tmp.path().join("home-provider-artifact-failure"),
+        )
+        .output()?;
+    assert!(!provider_artifact_failure.status.success());
+    let failed_provider_runs = fs::read_dir(tmp.path().join("failed-provider-artifacts"))?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(failed_provider_runs.len(), 1);
+    let failed_provider_manifest: Value = serde_json::from_str(&fs::read_to_string(
+        failed_provider_runs[0].join("manifest.json"),
+    )?)?;
+    assert_eq!(failed_provider_manifest["status"], "failed");
+    let failed_provider_failure: Value = serde_json::from_str(&fs::read_to_string(
+        failed_provider_runs[0].join("failure.json"),
+    )?)?;
+    assert!(
+        failed_provider_failure["message"]
+            .as_str()
+            .unwrap()
+            .contains("model selection failed")
+    );
 
     let agent_home = tmp.path().join("home-agent-cli");
     let mut agent_app = TuiApplication::with_data_root(tmp.path(), &agent_home)?;

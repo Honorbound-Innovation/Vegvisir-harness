@@ -149,6 +149,7 @@ Notes:
 - `--agent` applies a persistent custom agent profile.
 - `--artifacts` writes a run artifact bundle for the headless turn. The default location is `<workspace>/.vegvisir/runs/<run-id>/`.
 - `--artifact-dir <path>` writes the run artifact bundle below that root as `<path>/<run-id>/` and also enables artifact writing.
+- When an artifact-enabled scripted or provider headless run fails, Vegvisir finalizes `manifest.json` with `status: "failed"` and writes `failure.json` with the recoverable failure detail.
 - `--dangerously-bypass-approvals-and-sandbox` is startup-only and should be used only for explicitly trusted sessions.
 
 

@@ -121,7 +121,7 @@ vegvisir --workspace /path/to/project --artifacts run "Summarize this repository
 vegvisir --workspace /path/to/project --json --artifacts run "Summarize this repository"
 ```
 
-It should still respect workspace scope, provider configuration, tool policies, memory behavior, and max-step bounds. Use headless mode for automation where an interactive approvals UI is not needed or where policy is already configured for the run. When `--artifacts` or `--artifact-dir` is used, JSON headless output includes the emitted `run_id` and `artifact_dir`.
+It should still respect workspace scope, provider configuration, tool policies, memory behavior, and max-step bounds. Use headless mode for automation where an interactive approvals UI is not needed or where policy is already configured for the run. When `--artifacts` or `--artifact-dir` is used, JSON headless output includes the emitted `run_id` and `artifact_dir`. Artifact-enabled scripted and provider headless failures finalize the bundle with `manifest.json` status `failed` and a `failure.json` recoverable failure record.
 
 
 ## Run Artifact Bundles
