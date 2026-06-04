@@ -110,6 +110,10 @@ impl TuiApplication {
             self.redraw_requested = true;
             return;
         }
+        if self.handle_sessions_overlay_key(key) {
+            self.redraw_requested = true;
+            return;
+        }
         if self.help_overlay_open {
             match key.code {
                 KeyCode::Esc | KeyCode::Char('?') => self.help_overlay_open = false,
@@ -295,6 +299,68 @@ impl TuiApplication {
         let suggestions = self.build_suggestions();
         self.input.update_suggestions(suggestions);
         self.redraw_requested = true;
+    }
+
+    pub(crate) fn handle_sessions_overlay_key(&mut self, key: KeyEvent) -> bool {
+        let page_size = self.chat_page_size();
+        let Some(overlay) = self.sessions_overlay.as_mut() else {
+            return false;
+        };
+        match key.code {
+            KeyCode::Esc => {
+                self.sessions_overlay = None;
+                true
+            }
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.handle_ctrl_c();
+                true
+            }
+            KeyCode::Up => {
+                overlay.selected = overlay.selected.saturating_sub(1);
+                true
+            }
+            KeyCode::Down => {
+                if !overlay.entries.is_empty() {
+                    overlay.selected =
+                        (overlay.selected + 1).min(overlay.entries.len().saturating_sub(1));
+                }
+                true
+            }
+            KeyCode::PageUp => {
+                overlay.selected = overlay.selected.saturating_sub(page_size);
+                true
+            }
+            KeyCode::PageDown => {
+                if !overlay.entries.is_empty() {
+                    overlay.selected =
+                        (overlay.selected + page_size).min(overlay.entries.len().saturating_sub(1));
+                }
+                true
+            }
+            KeyCode::Home => {
+                overlay.selected = 0;
+                true
+            }
+            KeyCode::End => {
+                overlay.selected = overlay.entries.len().saturating_sub(1);
+                true
+            }
+            KeyCode::Enter => {
+                let session_id = overlay
+                    .entries
+                    .get(overlay.selected)
+                    .map(|entry| entry.session_id.clone());
+                if let Some(session_id) = session_id {
+                    self.sessions_overlay = None;
+                    if let Err(error) = self.load_session_command(&[session_id]) {
+                        self.push_system_message(format!("Command failed: {error}"));
+                    }
+                    self.autosave_session();
+                }
+                true
+            }
+            _ => true,
+        }
     }
 
     pub(crate) fn handle_profile_overlay_key(&mut self, key: KeyEvent) -> bool {
@@ -650,6 +716,16 @@ impl TuiApplication {
             self.redraw_requested = true;
             return;
         }
+        if let Some(overlay) = self.sessions_overlay.as_mut() {
+            if delta >= 0 {
+                overlay.selected = overlay.selected.saturating_sub(delta as usize);
+            } else if !overlay.entries.is_empty() {
+                overlay.selected = (overlay.selected + delta.unsigned_abs())
+                    .min(overlay.entries.len().saturating_sub(1));
+            }
+            self.redraw_requested = true;
+            return;
+        }
         match mouse.kind {
             MouseEventKind::ScrollUp => {
                 self.chat_scroll_offset = self.chat_scroll_offset.saturating_add(3);
@@ -681,6 +757,7 @@ impl TuiApplication {
             && !self.help_overlay_open
             && self.diff_overlay.is_none()
             && self.info_overlay.is_none()
+            && self.sessions_overlay.is_none()
             && !self.search_open
             && !self.command_palette_open
             && self.tool_executor.guardrails.approvals.pending_len() == 0

@@ -24,25 +24,58 @@ impl TuiApplication {
         format!("Started new session {}", self.session.session_id)
     }
 
-    pub(crate) fn sessions_command(&self) -> anyhow::Result<String> {
-        let sessions = self.sessions.list()?;
+    pub(crate) fn sessions_command(&mut self) -> anyhow::Result<String> {
+        self.autosave_session();
+        let sessions = self.sessions_for_current_workspace()?;
         if sessions.is_empty() {
-            return Ok("No saved sessions.".to_string());
+            self.sessions_overlay = Some(SessionsOverlay {
+                workspace: self.cwd.display().to_string(),
+                entries: Vec::new(),
+                selected: 0,
+                status: "No saved sessions for this workspace yet.".to_string(),
+            });
+            self.redraw_requested = true;
+            return Ok("No saved sessions for this workspace.".to_string());
         }
+
+        let selected = sessions
+            .iter()
+            .position(|session| session.session_id == self.session.session_id)
+            .unwrap_or(0);
+        let entries = sessions
+            .iter()
+            .map(|session| SessionsOverlayEntry {
+                session_id: session.session_id.clone(),
+                title: session.title.clone(),
+                created_at: session.created_at,
+                message_count: session.messages.len(),
+                current: session.session_id == self.session.session_id,
+            })
+            .collect::<Vec<_>>();
+        self.sessions_overlay = Some(SessionsOverlay {
+            workspace: self.cwd.display().to_string(),
+            entries,
+            selected,
+            status: "Up/Down select, Enter load, Esc close.".to_string(),
+        });
+        self.info_overlay = None;
+        self.redraw_requested = true;
+
         Ok(sessions
             .iter()
-            .map(|session| {
-                format!(
-                    "{}  {}  messages={}  title={}  cwd={}",
-                    session.session_id,
-                    session.created_at.format("%Y-%m-%d %H:%M:%S"),
-                    session.messages.len(),
-                    session.title,
-                    session.cwd
-                )
-            })
+            .map(format_session_load_candidate)
             .collect::<Vec<_>>()
             .join("\n"))
+    }
+
+    fn sessions_for_current_workspace(&self) -> anyhow::Result<Vec<SessionState>> {
+        let target = self.cwd.display().to_string();
+        Ok(self
+            .sessions
+            .list()?
+            .into_iter()
+            .filter(|session| session.cwd == target)
+            .collect())
     }
 
     pub(crate) fn load_session_command(&mut self, args: &[String]) -> anyhow::Result<String> {

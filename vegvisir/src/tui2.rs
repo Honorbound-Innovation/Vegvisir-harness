@@ -12,8 +12,8 @@ use unicode_width::UnicodeWidthStr;
 use crate::{
     app::{
         ChatMessageRenderCacheEntry, ChatMessageRenderCacheKey, DiffOverlay,
-        DiffOverlayRenderCache, DiffRenderer, InfoOverlay, ProfileOverlay, TuiApplication,
-        is_turn_failure_summary,
+        DiffOverlayRenderCache, DiffRenderer, InfoOverlay, ProfileOverlay, SessionsOverlay,
+        TuiApplication, is_turn_failure_summary,
     },
     core::{Attachment, ChatMessage},
     guardrails::ApprovalRequest,
@@ -98,6 +98,9 @@ pub fn draw(f: &mut Frame<'_>, app: &mut TuiApplication) {
     }
     if let Some(info) = app.info_overlay.as_ref() {
         draw_info_overlay(f, app, info, centered_rect(110, 30, area));
+    }
+    if let Some(sessions) = app.sessions_overlay.as_ref() {
+        draw_sessions_overlay(f, sessions, centered_rect(116, 30, area));
     }
     if app.search_open {
         draw_search_overlay(f, app, search_rect(area));
@@ -2695,6 +2698,107 @@ fn info_overlay_lines(info: &InfoOverlay, width: usize) -> Vec<Line<'static>> {
     lines
 }
 
+fn draw_sessions_overlay(f: &mut Frame<'_>, overlay: &SessionsOverlay, area: Rect) {
+    f.render_widget(Clear, area);
+    let content_width = area.width.saturating_sub(4) as usize;
+    let visible_capacity = area.height.saturating_sub(7) as usize;
+    let lines = sessions_overlay_lines(overlay, content_width, visible_capacity);
+    let paragraph = Paragraph::new(lines)
+        .style(Style::default().fg(FG).bg(PANEL))
+        .block(
+            Block::default()
+                .title(" sessions: current workspace ")
+                .title_bottom(" ↑/↓ select   Enter load   Esc close ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(CYAN))
+                .padding(Padding::horizontal(1)),
+        );
+    f.render_widget(paragraph, area);
+}
+
+fn sessions_overlay_lines(
+    overlay: &SessionsOverlay,
+    width: usize,
+    visible_capacity: usize,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    lines.push(Line::from(vec![
+        Span::styled(
+            "/sessions",
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  ", Style::default().fg(DIM)),
+        Span::styled(
+            truncate(&overlay.workspace, width.saturating_sub(12)),
+            Style::default().fg(DIM),
+        ),
+    ]));
+    lines.push(Line::from(Span::styled(
+        truncate(&overlay.status, width),
+        Style::default().fg(AMBER),
+    )));
+    lines.push(Line::from(""));
+
+    if overlay.entries.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No saved sessions for this workspace.",
+            Style::default().fg(DIM),
+        )));
+        return lines;
+    }
+
+    let selected = overlay
+        .selected
+        .min(overlay.entries.len().saturating_sub(1));
+    let visible_capacity = visible_capacity.max(1);
+    let start = selected.saturating_sub(visible_capacity.saturating_sub(1));
+    let end = (start + visible_capacity).min(overlay.entries.len());
+    if start > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("↑ {} older session(s)", start),
+            Style::default().fg(DIM),
+        )));
+    }
+    for (index, entry) in overlay.entries[start..end].iter().enumerate() {
+        let absolute = start + index;
+        let is_selected = absolute == selected;
+        let current = if entry.current { " current" } else { "" };
+        let raw = format!(
+            "{}  {}  messages={}{}  {}",
+            entry.session_id,
+            entry.created_at.format("%Y-%m-%d %H:%M:%S"),
+            entry.message_count,
+            current,
+            entry.title
+        );
+        let prefix = if is_selected { "> " } else { "  " };
+        let style = if is_selected {
+            Style::default()
+                .fg(BG)
+                .bg(CYAN)
+                .add_modifier(Modifier::BOLD)
+        } else if entry.current {
+            Style::default().fg(GREEN)
+        } else {
+            Style::default().fg(FG)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(prefix, style),
+            Span::styled(truncate(&raw, width.saturating_sub(2)), style),
+        ]));
+    }
+    if end < overlay.entries.len() {
+        lines.push(Line::from(Span::styled(
+            format!(
+                "↓ {} newer/remaining session(s)",
+                overlay.entries.len() - end
+            ),
+            Style::default().fg(DIM),
+        )));
+    }
+    lines
+}
+
 fn draw_profile_overlay(f: &mut Frame<'_>, overlay: &ProfileOverlay, area: Rect) {
     f.render_widget(Clear, area);
     let content_width = area.width.saturating_sub(4) as usize;
@@ -4220,6 +4324,57 @@ four",
         assert!(rendered.contains("@@ -1,2 +1,3 @@"));
         assert!(rendered.contains("old"));
         assert!(rendered.contains("new"));
+    }
+
+    #[test]
+    fn ratatui_sessions_overlay_highlights_selected_session() {
+        let overlay = SessionsOverlay {
+            workspace: "/tmp/workspace".to_string(),
+            entries: vec![
+                crate::app::SessionsOverlayEntry {
+                    session_id: "aaa111".to_string(),
+                    title: "first".to_string(),
+                    created_at: chrono::DateTime::parse_from_rfc3339("2026-06-04T01:00:00Z")
+                        .unwrap()
+                        .with_timezone(&chrono::Utc),
+                    message_count: 2,
+                    current: true,
+                },
+                crate::app::SessionsOverlayEntry {
+                    session_id: "bbb222".to_string(),
+                    title: "second".to_string(),
+                    created_at: chrono::DateTime::parse_from_rfc3339("2026-06-04T02:00:00Z")
+                        .unwrap()
+                        .with_timezone(&chrono::Utc),
+                    message_count: 5,
+                    current: false,
+                },
+            ],
+            selected: 1,
+            status: "Up/Down select, Enter load, Esc close.".to_string(),
+        };
+
+        let lines = sessions_overlay_lines(&overlay, 100, 10);
+        let rendered = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect::<String>();
+
+        assert!(rendered.contains("/sessions"));
+        assert!(rendered.contains("aaa111"));
+        assert!(rendered.contains("current"));
+        assert!(rendered.contains("bbb222"));
+        assert!(rendered.contains("messages=5"));
+        let selected_line = lines
+            .iter()
+            .find(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content.contains("bbb222"))
+            })
+            .expect("selected session row");
+        assert_eq!(selected_line.spans[0].content.as_ref(), "> ");
+        assert_eq!(selected_line.spans[0].style.bg, Some(CYAN));
     }
 
     #[test]

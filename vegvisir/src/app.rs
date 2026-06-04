@@ -114,6 +114,7 @@ pub struct TuiApplication {
     pub diff_scroll_offset: usize,
     pub info_overlay: Option<InfoOverlay>,
     pub info_scroll_offset: usize,
+    pub sessions_overlay: Option<SessionsOverlay>,
     pub profile_overlay: Option<ProfileOverlay>,
     pub approval_selected_index: usize,
     pub search_open: bool,
@@ -238,6 +239,23 @@ pub struct DiffOverlayRenderCache {
 pub struct InfoOverlay {
     pub title: String,
     pub body: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionsOverlay {
+    pub workspace: String,
+    pub entries: Vec<SessionsOverlayEntry>,
+    pub selected: usize,
+    pub status: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionsOverlayEntry {
+    pub session_id: String,
+    pub title: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub message_count: usize,
+    pub current: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -503,7 +521,7 @@ fn apply_scroll_delta(current: usize, delta: isize) -> usize {
 }
 
 fn command_response_is_chat_suppressed(command: &str) -> bool {
-    matches!(command, "/load" | "/status")
+    matches!(command, "/load" | "/status" | "/sessions")
 }
 
 fn should_show_info_overlay(command: &str, response: &str) -> bool {
@@ -519,7 +537,6 @@ fn should_show_info_overlay(command: &str, response: &str) -> bool {
             | "/effort"
             | "/fast"
             | "/providers"
-            | "/sessions"
             | "/projects"
             | "/approvals"
             | "/system"
@@ -749,6 +766,7 @@ impl TuiApplication {
             diff_scroll_offset: 0,
             info_overlay: None,
             info_scroll_offset: 0,
+            sessions_overlay: None,
             profile_overlay: None,
             approval_selected_index: 0,
             search_open: false,
@@ -2030,6 +2048,131 @@ mod tests {
 
         app.handle_key_event(KeyEvent::new(KeyCode::F(12), KeyModifiers::NONE));
         assert!(app.mouse_capture_enabled);
+        Ok(())
+    }
+
+    #[test]
+    fn sessions_submit_opens_selectable_workspace_overlay_without_chat_pollution()
+    -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        let other_workspace = tmp.path().join("other");
+        std::fs::create_dir_all(&workspace)?;
+        std::fs::create_dir_all(&other_workspace)?;
+        let data_root = tmp.path().join("home");
+        let mut app = TuiApplication::with_data_root(&workspace, &data_root)?;
+        let active_id = app.session.session_id.clone();
+        app.session.title = "active workspace session".to_string();
+        app.sessions.save(&app.session)?;
+
+        let mut workspace_session = app.sessions.create(
+            "older workspace session",
+            app.session.current_provider.clone(),
+            app.session.current_model.clone(),
+            app.session.enabled_tools.clone(),
+            app.session.enabled_skills.clone(),
+        );
+        workspace_session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "workspace saved turn".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        app.sessions.save(&workspace_session)?;
+
+        let mut other_session = app.sessions.create(
+            "other workspace session",
+            app.session.current_provider.clone(),
+            app.session.current_model.clone(),
+            app.session.enabled_tools.clone(),
+            app.session.enabled_skills.clone(),
+        );
+        other_session.cwd = other_workspace.display().to_string();
+        app.sessions.save(&other_session)?;
+        let message_count_before = app.session.messages.len();
+
+        app.input.set_buffer("/sessions");
+        app.handle_submit();
+
+        let overlay = app
+            .sessions_overlay
+            .as_ref()
+            .expect("sessions overlay should open");
+        assert_eq!(overlay.workspace, workspace.display().to_string());
+        assert_eq!(overlay.entries.len(), 2);
+        assert!(
+            overlay
+                .entries
+                .iter()
+                .any(|entry| entry.session_id == active_id)
+        );
+        assert!(
+            overlay
+                .entries
+                .iter()
+                .any(|entry| entry.session_id == workspace_session.session_id)
+        );
+        assert!(
+            !overlay
+                .entries
+                .iter()
+                .any(|entry| entry.session_id == other_session.session_id)
+        );
+        assert_eq!(app.session.messages.len(), message_count_before);
+        assert!(app.info_overlay.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn sessions_overlay_arrow_enter_loads_selected_session() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace)?;
+        let data_root = tmp.path().join("home");
+        let mut app = TuiApplication::with_data_root(&workspace, &data_root)?;
+        let active_id = app.session.session_id.clone();
+        app.sessions.save(&app.session)?;
+
+        let mut target = app.sessions.create(
+            "load me",
+            app.session.current_provider.clone(),
+            app.session.current_model.clone(),
+            app.session.enabled_tools.clone(),
+            app.session.enabled_skills.clone(),
+        );
+        target.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "selected session content".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        let target_id = target.session_id.clone();
+        app.sessions.save(&target)?;
+
+        app.execute_command("/sessions")?;
+        let selected = app
+            .sessions_overlay
+            .as_ref()
+            .and_then(|overlay| {
+                overlay
+                    .entries
+                    .iter()
+                    .position(|entry| entry.session_id == target_id)
+            })
+            .expect("target session should be listed");
+        app.sessions_overlay.as_mut().unwrap().selected = selected;
+
+        app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(app.sessions_overlay.is_none());
+        assert_eq!(app.session.session_id, target_id);
+        assert_ne!(app.session.session_id, active_id);
+        assert_eq!(app.session.status, "ready");
+        assert!(app.session.activity.is_empty());
+        assert!(app.session.messages.iter().any(|message| {
+            message.role == "user" && message.content == "selected session content"
+        }));
+        assert!(app.info_overlay.is_some());
         Ok(())
     }
 
