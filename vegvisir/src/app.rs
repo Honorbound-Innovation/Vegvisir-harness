@@ -502,6 +502,10 @@ fn apply_scroll_delta(current: usize, delta: isize) -> usize {
     }
 }
 
+fn command_response_is_chat_suppressed(command: &str) -> bool {
+    matches!(command, "/load" | "/status")
+}
+
 fn should_show_info_overlay(command: &str, response: &str) -> bool {
     if response.trim().is_empty() || response.lines().count() < 3 {
         return false;
@@ -2186,6 +2190,37 @@ mod tests {
         assert!(response.contains("total_tokens: 168"));
         assert!(response.contains("provider_reported_total_tokens: 140"));
         assert!(app.info_overlay.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn status_submit_opens_overlay_without_chat_pollution() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "hello".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        let message_count_before = app.session.messages.len();
+
+        app.input.set_buffer("/status");
+        app.handle_submit();
+
+        let overlay = app
+            .info_overlay
+            .as_ref()
+            .expect("status overlay should open");
+        assert_eq!(overlay.title, "status");
+        assert!(overlay.body.contains("Session status"));
+        assert_eq!(app.session.messages.len(), message_count_before);
+        assert!(
+            app.session
+                .messages
+                .iter()
+                .all(|message| !message.content.contains("pending_approvals:"))
+        );
         Ok(())
     }
 

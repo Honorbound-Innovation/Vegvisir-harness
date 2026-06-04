@@ -21,7 +21,7 @@ impl TuiApplication {
             let suppress_command_chat_response = self
                 .commands
                 .parse_with_aliases(&raw)
-                .map(|(command, _)| command == "/load")
+                .map(|(command, _)| command_response_is_chat_suppressed(&command))
                 .unwrap_or(false);
             match self.execute_command(&raw) {
                 Ok(Some(response)) if !response.is_empty() => {
