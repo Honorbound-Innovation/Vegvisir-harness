@@ -210,6 +210,7 @@ pub struct ChatMessageRenderCacheEntry {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChatMessageRenderCacheKey {
     pub role: String,
+    pub role_label_hash: u64,
     pub created_at_millis: i64,
     pub content_len: usize,
     pub content_hash: u64,

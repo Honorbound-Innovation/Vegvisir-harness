@@ -6,7 +6,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
 };
-use std::sync::OnceLock;
+use std::{borrow::Cow, sync::OnceLock};
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
@@ -299,7 +299,7 @@ fn tool_log_message_line(message: &ChatMessage, width: usize) -> Line<'static> {
     };
     compact_system_message_line(
         marker,
-        message_label("system", Some(kind)),
+        message_label("system", Some(kind), "you").as_ref(),
         &message.created_at.format("%H:%M:%S").to_string(),
         &message.content,
         style,
@@ -475,12 +475,13 @@ fn cached_chat_lines(app: &mut TuiApplication, width: usize) -> Vec<Line<'static
         last_transcript_role = Some(message.role.as_str());
         last_transcript_content_empty = message.content.is_empty();
 
-        let key = chat_message_render_cache_key(message);
+        let user_label = user_message_label(app);
+        let key = chat_message_render_cache_key(message, &user_label);
         let needs_render = app.chat_render_cache.message_lines[index]
             .as_ref()
             .is_none_or(|entry| entry.key != key);
         if needs_render {
-            let rendered = message_lines(message, width, &app.search_query)
+            let rendered = message_lines(message, width, &app.search_query, &user_label)
                 .into_iter()
                 .flat_map(|line| wrap_line_for_viewport(line, width))
                 .collect();
@@ -504,9 +505,17 @@ fn cached_chat_lines(app: &mut TuiApplication, width: usize) -> Vec<Line<'static
     lines
 }
 
-fn chat_message_render_cache_key(message: &ChatMessage) -> ChatMessageRenderCacheKey {
+fn chat_message_render_cache_key(
+    message: &ChatMessage,
+    user_label: &str,
+) -> ChatMessageRenderCacheKey {
     ChatMessageRenderCacheKey {
         role: message.role.clone(),
+        role_label_hash: if message.role == "user" {
+            stable_hash(user_label)
+        } else {
+            0
+        },
         created_at_millis: message.created_at.timestamp_millis(),
         content_len: message.content.len(),
         content_hash: stable_hash(&message.content),
@@ -541,7 +550,13 @@ fn chat_lines(app: &TuiApplication, width: usize) -> Vec<Line<'static>> {
             if index > 0 {
                 lines.push(Line::from(""));
             }
-            lines.extend(message_lines(message, width, &app.search_query));
+            let user_label = user_message_label(app);
+            lines.extend(message_lines(
+                message,
+                width,
+                &app.search_query,
+                &user_label,
+            ));
         }
         if app
             .session
@@ -872,7 +887,12 @@ fn work_log_line(label: &str, detail: &str, color: Color, width: usize) -> Line<
     ])
 }
 
-fn message_lines(message: &ChatMessage, width: usize, search_query: &str) -> Vec<Line<'static>> {
+fn message_lines(
+    message: &ChatMessage,
+    width: usize,
+    search_query: &str,
+    user_label: &str,
+) -> Vec<Line<'static>> {
     let system_kind = if message.role == "system" {
         Some(classify_system_message(&message.content))
     } else {
@@ -899,7 +919,7 @@ fn message_lines(message: &ChatMessage, width: usize, search_query: &str) -> Vec
             .unwrap_or_else(|| Style::default().fg(AMBER)),
         _ => Style::default().fg(FG),
     };
-    let role_label = message_label(message.role.as_str(), system_kind);
+    let role_label = message_label(message.role.as_str(), system_kind, user_label);
     let timestamp = message.created_at.format("%H:%M:%S").to_string();
     let is_match = message_matches_search(message, search_query);
 
@@ -911,7 +931,7 @@ fn message_lines(message: &ChatMessage, width: usize, search_query: &str) -> Vec
     {
         return vec![compact_system_message_line(
             marker,
-            role_label,
+            role_label.as_ref(),
             &timestamp,
             &message.content,
             style,
@@ -1081,17 +1101,31 @@ impl SystemMessageKind {
     }
 }
 
-fn message_label(role: &str, system_kind: Option<SystemMessageKind>) -> &str {
+fn user_message_label(app: &TuiApplication) -> String {
+    app.user_profile
+        .display_name()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or("you")
+        .to_string()
+}
+
+fn message_label<'a>(
+    role: &'a str,
+    system_kind: Option<SystemMessageKind>,
+    user_label: &'a str,
+) -> Cow<'a, str> {
     match role {
-        "user" => "you",
-        "assistant" => "agent",
-        "system" => match system_kind.unwrap_or(SystemMessageKind::Note) {
+        "user" if user_label.trim().is_empty() => Cow::Borrowed("you"),
+        "user" => Cow::Borrowed(user_label.trim()),
+        "assistant" => Cow::Borrowed("agent"),
+        "system" => Cow::Borrowed(match system_kind.unwrap_or(SystemMessageKind::Note) {
             SystemMessageKind::Error => "error",
             SystemMessageKind::Approval => "approval",
             SystemMessageKind::Tool => "tool",
             SystemMessageKind::Note => "note",
-        },
-        other => other,
+        }),
+        other => Cow::Borrowed(other),
     }
 }
 
@@ -3419,6 +3453,52 @@ mod tests {
     }
 
     #[test]
+    fn ratatui_user_messages_use_profile_display_label() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app =
+            crate::app::TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.user_profile.identity.display_name = "Display Only".to_string();
+        app.user_profile.identity.address_as = "Malice".to_string();
+        app.session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "please inspect the renderer".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+
+        let first = cached_chat_lines(&mut app, 80);
+        let first_text = first
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect::<String>();
+        let first_key = app.chat_render_cache.message_lines[0]
+            .as_ref()
+            .expect("user message should be cached")
+            .key
+            .clone();
+
+        assert!(first_text.contains("Malice"));
+        assert!(!first_text.contains("you"));
+
+        app.user_profile.identity.address_as = "".to_string();
+        app.user_profile.identity.display_name = "Ada".to_string();
+        let second = cached_chat_lines(&mut app, 80);
+        let second_text = second
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect::<String>();
+        let second_key = &app.chat_render_cache.message_lines[0]
+            .as_ref()
+            .expect("user message should be recached after profile label change")
+            .key;
+
+        assert!(second_text.contains("Ada"));
+        assert!(!second_text.contains("Malice"));
+        assert_ne!(&first_key, second_key);
+        Ok(())
+    }
+
+    #[test]
     fn ratatui_chat_render_cache_reuses_unchanged_message_lines() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let mut app =
@@ -3473,7 +3553,7 @@ mod tests {
             attachments: Vec::new(),
             created_at: chrono::Utc::now(),
         };
-        let rendered = message_lines(&message, 100, "")
+        let rendered = message_lines(&message, 100, "", "you")
             .iter()
             .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
             .collect::<String>();
@@ -3494,7 +3574,7 @@ mod tests {
             created_at: chrono::Utc::now(),
         };
 
-        let rendered = message_lines(&message, 100, "")
+        let rendered = message_lines(&message, 100, "", "you")
             .iter()
             .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
             .collect::<String>();
@@ -3545,7 +3625,7 @@ mod tests {
             created_at: chrono::Utc::now(),
         };
 
-        let rendered = message_lines(&message, 100, "")
+        let rendered = message_lines(&message, 100, "", "you")
             .iter()
             .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
             .collect::<String>();
@@ -3566,7 +3646,7 @@ mod tests {
             attachments: Vec::new(),
             created_at: chrono::Utc::now(),
         };
-        let lines = message_lines(&message, 72, "");
+        let lines = message_lines(&message, 72, "", "you");
         let rendered = lines
             .iter()
             .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
@@ -4232,7 +4312,7 @@ four",
             attachments: Vec::new(),
             created_at: chrono::Utc::now(),
         };
-        let rendered = message_lines(&message, 80, "")
+        let rendered = message_lines(&message, 80, "", "you")
             .iter()
             .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
             .collect::<String>();
