@@ -5093,6 +5093,53 @@ fn agent_popup_suggestions_show_selectable_agent_profiles() -> anyhow::Result<()
 }
 
 #[test]
+fn new_harness_command_suggestions_are_discoverable() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+
+    app.input.set_buffer("/runs ");
+    let runs = app.build_suggestions();
+    assert!(
+        runs.iter()
+            .any(|suggestion| suggestion.value == "replay-plan")
+    );
+    assert!(
+        runs.iter()
+            .any(|suggestion| suggestion.value == "memory-used")
+    );
+
+    app.input.set_buffer("/memory w");
+    let memory = app.build_suggestions();
+    assert!(memory.iter().any(|suggestion| suggestion.value == "why"));
+    assert!(
+        memory
+            .iter()
+            .any(|suggestion| suggestion.value == "writes-this-session")
+    );
+
+    app.input.set_buffer("/provider c");
+    let providers = app.build_suggestions();
+    assert!(
+        providers
+            .iter()
+            .any(|suggestion| suggestion.value == "compare")
+    );
+
+    app.input.set_buffer("/model c");
+    let models = app.build_suggestions();
+    assert!(
+        models
+            .iter()
+            .any(|suggestion| suggestion.value == "compare")
+    );
+
+    app.input.set_buffer("/auto l");
+    let auto = app.build_suggestions();
+    assert!(auto.iter().any(|suggestion| suggestion.value == "level"));
+    Ok(())
+}
+
+#[test]
 fn agent_list_shows_valid_agents_when_one_profile_is_invalid() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let home = tmp.path().join("home");

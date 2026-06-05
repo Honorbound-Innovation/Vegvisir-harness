@@ -2653,7 +2653,7 @@ mod tests {
 
     #[test]
     fn autonomous_contract_wraps_user_task_for_model_turn() {
-        let wrapped = crate::app::runtime::apply_autonomous_mode_contract("build the feature");
+        let wrapped = crate::app::runtime::apply_autonomous_mode_contract("build the feature", 3);
         assert!(wrapped.contains("Vegvisir autonomous working mode is ENABLED"));
         assert!(wrapped.contains("unattended project-work mode"));
         assert!(wrapped.contains("User task:\nbuild the feature"));

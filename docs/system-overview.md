@@ -16,7 +16,6 @@ Vegvisir-harness/
 │   ├── solarium/                # First-party Playwright browser automation / evidence runtime
 │   ├── usrl/                    # TypeScript USRL parser/validator/runtime CLI
 │   ├── ghidra/                  # Vendored Ghidra source tree for reverse-engineering tooling
-│   ├── ghidra-mcp/              # Ghidra UI MCP bridge component
 │   └── ghidra-headless-mcp/     # Headless Ghidra MCP bridge component
 ├── docs/                        # System documentation
 ├── scripts/                     # Helper scripts, including HBSE provider onboarding
@@ -203,7 +202,6 @@ Solarium is not a license to target third parties without permission. Scope poli
 The monorepo also carries binary-intelligence tooling components:
 
 - `components/ghidra` — vendored Ghidra source tree
-- `components/ghidra-mcp` — UI-oriented Ghidra MCP bridge
 - `components/ghidra-headless-mcp` — headless Ghidra MCP bridge
 
 These components support reverse-engineering workflows, MCP surfaces, and future/active binary-analysis integrations. Runtime caches, venvs, Gradle outputs, installed distributions, and generated artifacts should live under the user runtime tool root, not in source control.

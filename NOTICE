@@ -38,10 +38,6 @@ The remaining portions are copyright their respective authors and have been
 contributed under the terms of one or more open source licenses, and made
 available to you under the terms of those licenses. (See LICENSE)
 
-GhidraMCP
----------
-The vendored GhidraMCP source under components/ghidra-mcp is licensed under the
-Apache License, Version 2.0. See licenses/third-party/ghidra-mcp/LICENSE.
 
 Ghidra GPL support components
 -----------------------------

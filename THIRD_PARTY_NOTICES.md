@@ -34,7 +34,6 @@ Vegvisir/
     third-party/
       ghidra/
       ghidra-gpl/
-      ghidra-mcp/
 ```
 
 ## Component summary
@@ -46,7 +45,6 @@ Vegvisir/
 | GhidraHeadlessMCP | `components/ghidra-headless-mcp/` | First-party Vegvisir component; covered by Vegvisir MIT License |
 | Ghidra | `components/ghidra/` | Apache License 2.0, plus upstream `NOTICE` and third-party license files |
 | Ghidra GPL support programs | `components/ghidra/GPL/` | GPL/LGPL-family support materials as provided by upstream Ghidra |
-| GhidraMCP | `components/ghidra-mcp/` | Apache License 2.0 |
 
 ## First-party components
 
@@ -118,20 +116,6 @@ licenses/third-party/ghidra-gpl/licenses/
 
 Do not assume the root MIT license applies to these files.
 
-## GhidraMCP
-
-The vendored GhidraMCP source is under:
-
-```text
-components/ghidra-mcp/
-```
-
-It is licensed under Apache License 2.0:
-
-```text
-components/ghidra-mcp/LICENSE
-licenses/third-party/ghidra-mcp/LICENSE
-```
 
 ## Redistribution note
 

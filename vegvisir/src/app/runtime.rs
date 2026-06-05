@@ -60,6 +60,7 @@ impl TuiApplication {
         let data_root = self.data_root.clone();
         let lsl_config = self.lsl_runtime_config();
         let autonomous_mode_enabled = self.autonomous_mode_enabled;
+        let autonomy_level = self.autonomous_level.min(6) as u8;
         let (stream_tx, stream_rx) = mpsc::channel();
         let (steering_tx, steering_rx) = mpsc::channel();
         let cancel_token = Arc::new(AtomicBool::new(false));
@@ -126,7 +127,7 @@ impl TuiApplication {
                 apply_user_profile_context(profile_context.as_deref(), &model_content);
             let model_content = apply_subagent_delegation_context(&model_content);
             let model_content = if autonomous_mode_enabled {
-                apply_autonomous_mode_contract(&model_content)
+                apply_autonomous_mode_contract(&model_content, autonomy_level)
             } else {
                 model_content
             };
@@ -1377,10 +1378,13 @@ pub(crate) fn apply_user_profile_context(profile_context: Option<&str>, content:
     format!("{profile_context}\n\nUser request:\n{content}")
 }
 
-pub(crate) fn apply_autonomous_mode_contract(content: &str) -> String {
+pub(crate) fn apply_autonomous_mode_contract(content: &str, level: u8) -> String {
     format!(
         "{contract}\n\nUser task:\n{content}",
-        contract = r#"[Vegvisir autonomous working mode is ENABLED]
+        contract = format!(
+            r#"[Vegvisir autonomous working mode is ENABLED]
+Autonomy level: {level} - {description}
+
 You are operating in an unattended project-work mode for this turn.
 
 Runtime contract:
@@ -1393,6 +1397,24 @@ Runtime contract:
 - Stop and request approval for destructive operations, privileged actions, secret use, external side effects, ambiguous scope, or policy-required approvals.
 - Never ask for plaintext secrets; use HBSE secret refs when credentials are required.
 - End with a concise completion report: changed files, tests/checks run, unresolved risks, and exact next steps if blocked."#,
+            level = level.min(6),
+            description = autonomy_level_runtime_description(level.min(6))
+        ),
         content = content
     )
+}
+
+fn autonomy_level_runtime_description(level: u8) -> &'static str {
+    match level {
+        0 => "off; interactive only",
+        1 => "assist; plan and ask before execution-heavy work",
+        2 => "supervised execution; run safe reads/edits/checks inside scope",
+        3 => {
+            "bounded implementation; pursue requested change until blocked or verification complete"
+        }
+        4 => "extended implementation; use subagents and broader verification when useful",
+        5 => "high-autonomy project work; aggressive but approval-bound execution",
+        6 => "maximum local autonomy; still approval-, secret-, sandbox-, and workspace-bound",
+        _ => "maximum local autonomy; still approval-, secret-, sandbox-, and workspace-bound",
+    }
 }

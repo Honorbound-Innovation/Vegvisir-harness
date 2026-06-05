@@ -16,6 +16,12 @@ Options:
   --hbse-rust-root <path>   HBSE rust source root. Default: /mnt/storage/Projects/HBSE/rust
   --usrl-root <path>        USRL source root. Default: /mnt/storage/Projects/USRL
   -h, --help                Show this help.
+
+Bundle contents:
+  The app tree includes first-class component sources for Skiller, Solarium,
+  Binary Intelligence Workbench, Ghidra, Ghidra headless MCP,
+  and Desktop. The generated install.sh builds/materializes those components,
+  including the vendored Ghidra Gradle buildGhidra distribution step.
 USAGE
 }
 
@@ -112,7 +118,9 @@ perl -0pi -e 's#cms-v2\s*=\s*\{\s*path\s*=\s*"[^"]+"\s*\}#cms-v2 = { path = "../
 cat >"$package_dir/README-INSTALL.md" <<'README'
 # Vegvisir System Install Bundle
 
-This bundle contains Vegvisir, CMS-v2, HBSE Rust, USRL, Binary Intelligence Workbench, and optional vendored Cargo dependencies.
+This bundle contains the full Vegvisir system-install source set: Vegvisir, CMS-v2, HBSE Rust, Skiller, USRL, Solarium, Binary Intelligence Workbench, Ghidra, Ghidra headless MCP, Desktop assets, and optional vendored Cargo dependencies.
+
+The installer materializes component wrappers and build products. In particular, when Ghidra is enabled and `--no-build` is not used, it runs the vendored Ghidra Gradle `buildGhidra` task and installs the generated distribution under `$PREFIX/share/vegvisir/components/ghidra/current`.
 
 Install:
 
@@ -156,8 +164,13 @@ Vegvisir source: app
 CMS-v2 source: third_party/CMS-v2
 HBSE Rust source: third_party/HBSE/rust
 USRL source: third_party/USRL
+Skiller source: app/components/skiller
 Binary Intelligence Workbench source: app/components/binary-intelligence-workbench
 Solarium source: app/components/solarium
+Ghidra source: app/components/ghidra
+Ghidra headless MCP source: app/components/ghidra-headless-mcp
+Desktop source: app/components/desktop
+Ghidra build: install.sh runs ./gradlew buildGhidra unless --no-ghidra or --no-build is used
 Cargo vendor: $([[ "$vendor" -eq 1 ]] && echo vendor || echo not included)
 Installer: install.sh
 Uninstaller: uninstall.sh

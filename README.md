@@ -34,7 +34,6 @@ Vegvisir-harness/
 │   ├── solarium/                # Playwright browser automation and evidence runtime
 │   ├── usrl/                    # USRL parser, validator, and contract runtime
 │   ├── ghidra/                  # Vendored Ghidra source tree for binary-analysis workflows
-│   ├── ghidra-mcp/              # Ghidra UI MCP bridge component
 │   └── ghidra-headless-mcp/     # Headless Ghidra MCP bridge component
 ├── docs/                        # Architecture, usage references, and component documentation
 ├── scripts/                     # Helper scripts, including HBSE/provider onboarding helpers
@@ -59,7 +58,7 @@ The Rust workspace currently includes the Vegvisir harness, CMS-v2, HBSE, and Sk
 - Supports Linked Skill Libraries and USRL contracts for routeable workflows, policy-bound behavior, eval hooks, approvals, and reusable skill execution.
 - Supports bounded subagents for reconnaissance, documentation review, test investigation, compatibility checks, security review, and design critique, with durable board records, explicit file scopes, work budgets, status inspection, cancellation, and active scope-conflict protection.
 - Integrates Solarium as the first-party browser automation/evidence runtime for screenshots, observations, scoped crawls, audits, GraphQL audit workflows, profiles, auth-session references, replay, and workflow seed generation.
-- Carries Ghidra and Ghidra MCP components for binary-intelligence and reverse-engineering workflows.
+- Carries Ghidra and headless Ghidra MCP components for binary-intelligence and reverse-engineering workflows.
 - Includes verification, eval, trace, audit, approval, sandbox-status, subagent-board, and tool-inventory surfaces for keeping high-capability sessions inspectable.
 
 ## Runtime Model
@@ -114,17 +113,18 @@ Useful TUI commands:
 ```text
 /help                 show commands and controls
 /models               list or refresh models for the active provider
-/provider             inspect or switch provider
-/model                inspect or switch model
+/provider             inspect, switch, compare, or diagnose providers
+/model                inspect, switch, or compare models
 /workspace            switch project workspace and restore its active session
 /tools                inspect or adjust tool permissions
 /tools commands       list, add, remove, or reset allowed shell commands
 /tool-limit           show or set max tool-call rounds per model turn
-/approvals            inspect pending tool approvals
+/approvals            inspect, explain, and manage pending tool approvals
+/runs                 inspect local run artifact bundles
 /diff                 show current workspace diff
 /work                 show recent activity, tool calls, and command events
 /system               print the active system prompt
-/context              inspect prepared context and memory behavior
+/context              inspect prepared context and latest captured context
 /agent                create, select, and inspect persistent custom agents
 ```
 
@@ -138,6 +138,9 @@ Recent Vegvisir builds make high-capability sessions more controllable and easie
 - Filesystem tools are workspace-scoped and hardened against path traversal and unsafe symlink escapes.
 - Optional command OS sandboxing is configured with `VEGVISIR_COMMAND_SANDBOX=path|none|bwrap|strict-bwrap`, with network and mount controls for hardened local sessions.
 - `--dangerously-bypass-approvals-and-sandbox` remains startup-only and is reported in `/tools status`, `/verify runtime`, and app-server status payloads.
+- Run artifacts can be browsed from the TUI with `/runs list`, `/runs show <id>`, `/runs diff <id>`, `/runs replay-plan <id>`, plus `/context last`, `/memory used-this-turn`, `/memory writes-this-session`, and `/memory why <id>`.
+- Provider/model surfaces include `/provider compare`, `/provider diagnose`, and `/model compare` for local capability inspection without exposing plaintext secrets.
+- `/auto level <0-6>` records explicit operator autonomy posture while preserving approvals, workspace containment, secret boundaries, and sandbox policy.
 - Subagents are tracked as bounded workers with durable board records. Use `/subagents list`, `/subagents show <id-or-name>`, `/subagents cancel <id-or-name>`, and `/subagents policy`.
 - Provider reasoning summaries, when surfaced by a provider/model, are hidden from the chat transcript so only the assistant answer is displayed and persisted.
 - STDIO MCP calls are timeout-bound and can restart once after an initial failure, making local MCP integrations less fragile.
@@ -149,8 +152,12 @@ See [New runtime features](docs/new-runtime-features.md), [Command sandboxing an
 Prerequisites:
 
 - Rust toolchain with Cargo.
-- Node.js and npm for USRL and Solarium.
+- Node.js and npm for USRL, Solarium, and desktop web assets.
+- Python 3 with `venv` for Python-backed binary-intelligence components.
+- JDK 21, `unzip`, and `zip` for the vendored Ghidra Gradle `buildGhidra` install step.
 - Linux for the full HBSE broker service workflow.
+
+On Debian-like systems, `./install.sh --install-system-deps` installs the native packages the installer knows how to provision, including JDK 21 and archive tools for Ghidra.
 
 Install the full system:
 
@@ -188,7 +195,7 @@ Uninstall:
 ./uninstall.sh
 ```
 
-The installer places these commands under `$prefix/bin` where applicable:
+The installer places these commands under `$prefix/bin` where applicable. Optional component flags such as `--no-solarium`, `--no-biw`, `--no-ghidra`, `--no-ghidra-headless-mcp`, `--no-desktop`, `--no-skiller`, `--no-usrl`, `--no-hbse`, and `--no-cms-cli` can omit individual systems. When Ghidra is enabled and builds are not disabled, the installer runs the vendored Ghidra Gradle `buildGhidra` task, unpacks the generated `build/dist/ghidra*.zip` distribution under `$prefix/share/vegvisir/components/ghidra/current`, and points the `ghidra`/`analyzeHeadless` wrappers there. The upgrade script reruns `install.sh` from the upgraded source, and the uninstall script removes these installed commands and component trees unless data is explicitly kept.
 
 - `vegvisir`
 - `vegvisir-rust`
@@ -197,6 +204,13 @@ The installer places these commands under `$prefix/bin` where applicable:
 - `hbse-broker`
 - `skiller`
 - `usrl`
+- `solarium`
+- `biw`
+- `ghidra`
+- `analyzeHeadless`
+- `ghidra-headless`
+- `ghidra-headless-mcp`
+- `vegvisir-desktop`
 
 ## Build And Test From Source
 

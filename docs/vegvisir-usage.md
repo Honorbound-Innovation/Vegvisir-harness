@@ -499,6 +499,18 @@ Provider/TUI/headless `run` bundles include `context.md`, `context-sources.json`
 
 Artifact writers redact secret-like JSON keys and common token-shaped text before data is persisted. Treat artifacts as operational evidence, not as a secret store.
 
+TUI artifact inspection commands:
+
+```text
+/runs [list|show <id>|open <id>|diff <id>|result <id>|context <id>|memory-used <id>|memory-written <id>|approvals <id>|subagents <id>|verification <id>|failure <id>|export <id>|replay-plan <id>]
+/context last
+/memory used-this-turn
+/memory writes-this-session
+/memory why <memory-id>
+```
+
+`/runs open <id>` prints the local artifact directory instead of launching an external program. `/runs export <id>` reports the portable bundle path; archive creation is left to the operator. `/runs replay-plan <id>` prints an evidence-backed manual replay checklist rather than automatically re-executing prior tool calls.
+
 ## TUI Slash Commands
 
 Run `/help` inside the TUI to print the live command reference. The current tree is:
@@ -529,16 +541,17 @@ Run `/help` inside the TUI to print the live command reference. The current tree
 /tools [status|allow-risky|deny-risky|require-approval|no-approval|commands|max-rounds]
 /tools commands [list|add <cmd...>|remove <cmd...>|reset]
 /tool-limit [show|<rounds>|unlimited|default]
-/approvals [list|show <id>|approve <id>|session <id>|edit <id> <json-args>|deny <id>]
+/approvals [list|show <id>|explain <id>|approve <id>|session <id>|edit <id> <json-args>|deny <id>]
+/runs [list|show <id>|open <id>|diff <id>|result <id>|context <id>|memory-used <id>|memory-written <id>|approvals <id>|subagents <id>|verification <id>|failure <id>|export <id>|replay-plan <id>]
 /skills
 /recall [--limit N] [--global] <query>
-/memory [status|recent|import-chatgpt <path>] [--global] [--limit N]
+/memory [status|recent|used-this-turn|writes-this-session|why <memory-id>|import-chatgpt <path>] [--global] [--limit N]
 /remember <title> | <content>
-/context <message>
+/context [last|show-last|<message>]
 /model-request <message>
 /models
-/model [name]
-/provider [name]
+/model [name|compare [model ...]]
+/provider [name|compare [provider ...]|diagnose [provider]]
 /providers
 /auth [provider]
 /verify [all|auth|mcp|agent|memory|runtime|evals]
@@ -608,9 +621,9 @@ Examples:
 
 ```text
 /providers
-/provider [name]
+/provider [name|compare [provider ...]|diagnose [provider]]
 /models
-/model [name]
+/model [name|compare [model ...]]
 /effort [minimal|low|medium|high|default]
 /fast [on|off|status]
 /auth [provider]
@@ -624,8 +637,11 @@ Examples:
 ```text
 /providers
 /provider openai-hbse
+/provider compare demo openai-hbse
+/provider diagnose openai-hbse
 /models
 /model gpt-5.5
+/model compare
 /effort high
 /fast on
 /config status
@@ -638,10 +654,13 @@ Provider and model choices can be global defaults or agent-specific defaults dep
 ```text
 /memory status
 /memory recent [--global] [--limit N]
+/memory used-this-turn
+/memory writes-this-session
+/memory why <memory-id>
 /memory import-chatgpt <export-dir-or-conversations.json> [--messages-per-memory N] [--max-chars-per-memory N]
 /remember [--global] <title> | <content>
 /recall [--limit N] [--global] <query>
-/context <message>
+/context [last|show-last|<message>]
 /model-request <message>
 ```
 
@@ -653,6 +672,8 @@ Examples:
 /remember --global Preference | Default to streaming provider responses.
 /recall --limit 5 provider secrets
 /recall --global agent preferences
+/memory used-this-turn
+/memory why mem_...
 /memory import-chatgpt ~/Downloads/chatgpt-export/conversations.json --messages-per-memory 8
 ```
 
@@ -677,6 +698,7 @@ CMS-v2 is scoped by user, project/workspace, session, and active agent. Vegvisir
 /approvals
 /approvals list
 /approvals show <id>
+/approvals explain <id>
 /approvals approve <id>
 /approvals session <id>
 /approvals edit <id> <json-args>

@@ -501,7 +501,7 @@ Support two modes:
    - Best for deterministic CLI automation.
 
 2. **MCP bridge mode**
-   - Use the Ghidra MCP bridge for interactive function-level operations.
+   - Use the headless Ghidra MCP bridge for function-level operations.
    - Best for live Solarium and agent workflows.
 
 ### 8.3 Extraction Stages
@@ -1661,7 +1661,7 @@ Mitigation:
 1. Should BIW be a separate repo/module or integrated into the main Vegvisir CLI?
 2. Should Solarium communicate with Vegvisir through a local HTTP API, IPC, or direct plugin bridge?
 3. What is the canonical case ID format: ULID, hash prefix, or slug plus hash?
-4. How much of Ghidra MCP should be reused versus direct headless execution?
+4. How much of the headless Ghidra MCP bridge should be reused versus direct headless execution?
 5. Should decompiled function artifacts be stored by default or only on demand?
 6. What is the best schema validation mechanism in the current stack?
 7. Should Skiller skills write artifacts directly or return outputs for Vegvisir to persist?

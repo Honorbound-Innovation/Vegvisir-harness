@@ -79,30 +79,155 @@ impl TuiApplication {
             return suggestions;
         }
         if raw.starts_with("/provider ") || raw == "/provider " {
-            if trailing_space && parts.len() >= 2 {
-                return Vec::new();
-            }
             let prefix = if trailing_space {
                 ""
             } else {
                 parts.get(1).copied().unwrap_or("")
             };
-            return self
-                .provider_registry
-                .list()
-                .into_iter()
-                .filter(|provider| provider.name.starts_with(prefix))
-                .map(|provider| {
+            if parts.len() <= 2 && !matches!(parts.get(1), Some(&"compare" | &"diagnose")) {
+                let mut suggestions = [
                     Suggestion::new(
-                        provider.name.clone(),
-                        provider
-                            .display_name
-                            .clone()
-                            .unwrap_or_else(|| provider.name.clone()),
-                        Some(format!("/provider {}", provider.name)),
-                    )
-                })
-                .collect();
+                        "compare".to_string(),
+                        "compare provider readiness/auth/model catalog".to_string(),
+                        Some("/provider compare ".to_string()),
+                    ),
+                    Suggestion::new(
+                        "diagnose".to_string(),
+                        "diagnose provider auth and catalog state".to_string(),
+                        Some("/provider diagnose ".to_string()),
+                    ),
+                ]
+                .into_iter()
+                .filter(|suggestion| suggestion.value.starts_with(prefix))
+                .collect::<Vec<_>>();
+                suggestions.extend(
+                    self.provider_registry
+                        .list()
+                        .into_iter()
+                        .filter(|provider| provider.name.starts_with(prefix))
+                        .map(|provider| {
+                            Suggestion::new(
+                                provider.name.clone(),
+                                provider
+                                    .display_name
+                                    .clone()
+                                    .unwrap_or_else(|| provider.name.clone()),
+                                Some(format!("/provider {}", provider.name)),
+                            )
+                        }),
+                );
+                return suggestions;
+            }
+            if matches!(parts.get(1), Some(&"compare" | &"diagnose")) {
+                let provider_prefix = if trailing_space {
+                    ""
+                } else {
+                    parts.get(2).copied().unwrap_or("")
+                };
+                return self
+                    .provider_registry
+                    .list()
+                    .into_iter()
+                    .filter(|provider| provider.name.starts_with(provider_prefix))
+                    .map(|provider| {
+                        Suggestion::new(
+                            provider.name.clone(),
+                            provider
+                                .display_name
+                                .clone()
+                                .unwrap_or_else(|| provider.name.clone()),
+                            Some(format!("/provider {} {}", parts[1], provider.name)),
+                        )
+                    })
+                    .collect();
+            }
+        }
+        if raw.starts_with("/runs ") || raw == "/runs " {
+            let prefix = if trailing_space {
+                ""
+            } else {
+                parts.get(1).copied().unwrap_or("")
+            };
+            return [
+                ("list", "list recent run artifact bundles"),
+                ("show", "show run manifest JSON"),
+                ("open", "print run artifact directory"),
+                ("diff", "show captured diff.patch"),
+                ("result", "show captured result.md"),
+                ("context", "show captured context.md"),
+                ("memory-used", "show memory-used.json"),
+                ("memory-written", "show memory-written.json"),
+                ("approvals", "show approvals.json"),
+                ("subagents", "show subagents.json"),
+                ("verification", "show verification.json"),
+                ("failure", "show failure.json"),
+                ("export", "print portable bundle path"),
+                ("replay-plan", "print manual replay checklist"),
+            ]
+            .into_iter()
+            .filter(|(command, _)| command.starts_with(prefix))
+            .map(|(command, description)| {
+                Suggestion::new(
+                    command.to_string(),
+                    description.to_string(),
+                    Some(format!("/runs {command} ")),
+                )
+            })
+            .collect();
+        }
+        if raw.starts_with("/memory ") || raw == "/memory " {
+            let prefix = if trailing_space {
+                ""
+            } else {
+                parts.get(1).copied().unwrap_or("")
+            };
+            return [
+                ("status", "show active CMS-v2 scope"),
+                ("recent", "list recent memories"),
+                ("used-this-turn", "show latest memory-used artifact"),
+                ("writes-this-session", "show latest memory-written artifact"),
+                ("why", "explain memory id provenance from run artifacts"),
+                (
+                    "search-chatgpt",
+                    "explicitly search imported ChatGPT archive",
+                ),
+                ("import-chatgpt", "import ChatGPT export archive"),
+            ]
+            .into_iter()
+            .filter(|(command, _)| command.starts_with(prefix))
+            .map(|(command, description)| {
+                Suggestion::new(
+                    command.to_string(),
+                    description.to_string(),
+                    Some(if command == "why" {
+                        "/memory why ".to_string()
+                    } else {
+                        format!("/memory {command}")
+                    }),
+                )
+            })
+            .collect();
+        }
+        if raw.starts_with("/context ") || raw == "/context " {
+            let prefix = if trailing_space {
+                ""
+            } else {
+                parts.get(1).copied().unwrap_or("")
+            };
+            return [
+                ("last", "show latest captured context artifact"),
+                ("show-last", "show latest captured context artifact"),
+            ]
+            .into_iter()
+            .filter(|(command, _)| command.starts_with(prefix))
+            .map(|(command, description)| {
+                Suggestion::new(
+                    command.to_string(),
+                    description.to_string(),
+                    Some(format!("/context {command}")),
+                )
+            })
+            .collect();
         }
         if raw.starts_with("/fast ") || raw == "/fast " {
             if trailing_space && parts.len() >= 2 {
@@ -152,14 +277,42 @@ impl TuiApplication {
                 })
                 .collect();
         }
+        if raw.starts_with("/auto ")
+            || raw == "/auto "
+            || raw.starts_with("/autonomous ")
+            || raw == "/autonomous "
+        {
+            let prefix = if trailing_space {
+                ""
+            } else {
+                parts.get(1).copied().unwrap_or("")
+            };
+            return ["status", "on", "off", "level"]
+                .into_iter()
+                .filter(|mode| mode.starts_with(prefix))
+                .map(|mode| {
+                    Suggestion::new(
+                        mode.to_string(),
+                        match mode {
+                            "level" => "set autonomy level 0-6".to_string(),
+                            "on" => "enable autonomous prompt-contract mode".to_string(),
+                            "off" => "disable autonomous prompt-contract mode".to_string(),
+                            _ => "show autonomous mode status".to_string(),
+                        },
+                        Some(if mode == "level" {
+                            "/auto level ".to_string()
+                        } else {
+                            format!("/auto {mode}")
+                        }),
+                    )
+                })
+                .collect();
+        }
         if raw.starts_with("/model ")
             || raw == "/model "
             || raw.starts_with("/models ")
             || raw == "/models "
         {
-            if trailing_space && parts.len() >= 2 {
-                return Vec::new();
-            }
             let prefix = if trailing_space {
                 ""
             } else {
@@ -170,40 +323,28 @@ impl TuiApplication {
             } else {
                 "/model"
             };
-            let provider = &self.session.current_provider;
-            let mut models = self.models.by_provider(provider);
-            if provider.ends_with("-hbse") {
-                let direct_provider = provider.trim_end_matches("-hbse");
-                let has_hbse_specific_models =
-                    models.iter().any(|model| model.provider == *provider);
-                if has_hbse_specific_models {
-                    models.retain(|model| {
-                        model.provider == *provider || model.provider != direct_provider
-                    });
-                }
+            if command == "/model" && parts.len() <= 2 && parts.get(1) != Some(&"compare") {
+                let mut suggestions = if "compare".starts_with(prefix) {
+                    vec![Suggestion::new(
+                        "compare".to_string(),
+                        "compare model context/streaming/reasoning/fast support".to_string(),
+                        Some("/model compare ".to_string()),
+                    )]
+                } else {
+                    Vec::new()
+                };
+                suggestions.extend(self.model_suggestions_for_prefix(prefix, command));
+                return suggestions;
             }
-            return models
-                .into_iter()
-                .filter(|model| model.name.starts_with(prefix))
-                .map(|model| {
-                    Suggestion::new(
-                        model.name.clone(),
-                        format!(
-                            "{} · {} ctx",
-                            model.provider,
-                            model
-                                .context_window
-                                .map(|value| value.to_string())
-                                .unwrap_or_else(|| "unknown".to_string())
-                        ),
-                        Some(if command == "/models" {
-                            format!("/models {}", model.name)
-                        } else {
-                            format!("/model {}", model.name)
-                        }),
-                    )
-                })
-                .collect();
+            if command == "/model" && parts.get(1) == Some(&"compare") {
+                let model_prefix = if trailing_space {
+                    ""
+                } else {
+                    parts.get(2).copied().unwrap_or("")
+                };
+                return self.model_suggestions_for_prefix(model_prefix, "/model compare");
+            }
+            return self.model_suggestions_for_prefix(prefix, command);
         }
         self.commands
             .all()
@@ -216,6 +357,38 @@ impl TuiApplication {
                     command.name.clone(),
                     command.description.clone(),
                     Some(command.name.clone()),
+                )
+            })
+            .collect()
+    }
+
+    fn model_suggestions_for_prefix(&self, prefix: &str, command: &str) -> Vec<Suggestion> {
+        let provider = &self.session.current_provider;
+        let mut models = self.models.by_provider(provider);
+        if provider.ends_with("-hbse") {
+            let direct_provider = provider.trim_end_matches("-hbse");
+            let has_hbse_specific_models = models.iter().any(|model| model.provider == *provider);
+            if has_hbse_specific_models {
+                models.retain(|model| {
+                    model.provider == *provider || model.provider != direct_provider
+                });
+            }
+        }
+        models
+            .into_iter()
+            .filter(|model| model.name.starts_with(prefix))
+            .map(|model| {
+                Suggestion::new(
+                    model.name.clone(),
+                    format!(
+                        "{} · {} ctx",
+                        model.provider,
+                        model
+                            .context_window
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| "unknown".to_string())
+                    ),
+                    Some(format!("{command} {}", model.name)),
                 )
             })
             .collect()
@@ -261,7 +434,6 @@ impl TuiApplication {
             "/history" => self.history(),
             "/status" => self.session_status_command(&args),
             "/diff" => self.diff_command(&args)?,
-            "/runs" => self.runs_command(&args)?,
             "/save" => format!(
                 "Saved session to {}",
                 self.sessions.save(&self.session)?.display()
@@ -293,6 +465,7 @@ impl TuiApplication {
             "/tools" => self.tools_command(&args),
             "/tool-limit" => self.tool_limit_command(&args),
             "/approvals" => self.approvals_command(&args),
+            "/runs" => self.runs_command(&args)?,
             "/skills" => self.skills_command(&args)?,
             "/recall" => self.recall_command(&args)?,
             "/memory" => self.memory_command(&args)?,

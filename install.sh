@@ -14,7 +14,13 @@ Options:
   --install-system-deps              Install native build/runtime packages on Debian-like systems.
   --no-cms-cli                       Do not install the CMS-v2 CLI.
   --no-hbse                          Do not install HBSE binaries.
+  --no-skiller                       Do not install the Skiller CLI.
   --no-usrl                          Do not build/install the USRL CLI wrapper.
+  --no-solarium                      Do not install the Solarium component.
+  --no-biw                           Do not install Binary Intelligence Workbench.
+  --no-ghidra                        Do not build/install the vendored Ghidra distribution and runtime wrappers.
+  --no-ghidra-headless-mcp           Do not install the Ghidra headless MCP bridge wrapper.
+  --no-desktop                       Do not install the desktop component source/web assets.
   --hbse-service <none|user|system>  Install HBSE broker service. Default: none
   --enable-hbse-service              Enable HBSE broker service/socket.
   --start-hbse-service               Start HBSE broker service/socket.
@@ -41,7 +47,13 @@ build=1
 install_system_deps=0
 install_cms_cli=1
 install_hbse=1
+install_skiller=1
 install_usrl=1
+install_solarium=1
+install_biw=1
+install_ghidra=1
+install_ghidra_headless_mcp=1
+install_desktop=1
 hbse_service="none"
 enable_hbse_service=0
 start_hbse_service=0
@@ -75,8 +87,32 @@ while [[ $# -gt 0 ]]; do
       install_hbse=0
       shift
       ;;
+    --no-skiller)
+      install_skiller=0
+      shift
+      ;;
     --no-usrl)
       install_usrl=0
+      shift
+      ;;
+    --no-solarium)
+      install_solarium=0
+      shift
+      ;;
+    --no-biw)
+      install_biw=0
+      shift
+      ;;
+    --no-ghidra)
+      install_ghidra=0
+      shift
+      ;;
+    --no-ghidra-headless-mcp)
+      install_ghidra_headless_mcp=0
+      shift
+      ;;
+    --no-desktop)
+      install_desktop=0
       shift
       ;;
     --hbse-service)
@@ -143,6 +179,10 @@ bin_dir="$prefix/bin"
 etc_dir="$prefix/etc/vegvisir"
 share_dir="$prefix/share/vegvisir"
 usrl_share_dir="$share_dir/usrl"
+component_share_dir="$share_dir/components"
+ghidra_share_dir="$component_share_dir/ghidra"
+ghidra_headless_mcp_share_dir="$component_share_dir/ghidra-headless-mcp"
+desktop_share_dir="$component_share_dir/desktop"
 
 install_debian_deps() {
   if ! command -v apt-get >/dev/null 2>&1; then
@@ -161,6 +201,12 @@ install_debian_deps() {
     curl \
     nodejs \
     npm \
+    python3 \
+    python3-pip \
+    python3-venv \
+    unzip \
+    zip \
+    openjdk-21-jdk \
     pkg-config \
     libtss2-dev
 }
@@ -210,10 +256,32 @@ require_file() {
 require_file "$repo_root/Cargo.toml"
 require_file "$repo_root/vegvisir/Cargo.toml"
 require_file "$repo_root/components/cms-v2/Cargo.toml"
-require_file "$repo_root/components/HBSE/Cargo.toml"
-require_file "$repo_root/components/usrl/package.json"
-require_file "$repo_root/components/solarium/package.json"
-require_file "$repo_root/components/binary-intelligence-workbench/pyproject.toml"
+if [[ "$install_hbse" -eq 1 ]]; then
+  require_file "$repo_root/components/HBSE/Cargo.toml"
+fi
+if [[ "$install_skiller" -eq 1 ]]; then
+  require_file "$repo_root/components/skiller/Cargo.toml"
+fi
+if [[ "$install_usrl" -eq 1 ]]; then
+  require_file "$repo_root/components/usrl/package.json"
+fi
+if [[ "$install_solarium" -eq 1 ]]; then
+  require_file "$repo_root/components/solarium/package.json"
+fi
+if [[ "$install_biw" -eq 1 ]]; then
+  require_file "$repo_root/components/binary-intelligence-workbench/pyproject.toml"
+fi
+if [[ "$install_ghidra" -eq 1 ]]; then
+  require_file "$repo_root/components/ghidra/gradlew"
+  require_file "$repo_root/components/ghidra/build.gradle"
+fi
+if [[ "$install_ghidra_headless_mcp" -eq 1 ]]; then
+  require_file "$repo_root/components/ghidra-headless-mcp/bin/ghidra-headless"
+  require_file "$repo_root/components/ghidra-headless-mcp/bridge_mcp_ghidra_headless.py"
+fi
+if [[ "$install_desktop" -eq 1 ]]; then
+  require_file "$repo_root/components/desktop/package.json"
+fi
 
 if [[ "$install_system_deps" -eq 1 ]]; then
   install_debian_deps
@@ -228,7 +296,7 @@ if ! command -v cargo >/dev/null 2>&1; then
   exit 1
 fi
 
-install -d "$bin_dir" "$etc_dir" "$share_dir"
+install -d "$bin_dir" "$etc_dir" "$share_dir" "$component_share_dir"
 
 if [[ "$build" -eq 1 ]]; then
   cargo build --manifest-path "$repo_root/Cargo.toml" --release -p vegvisir-rust
@@ -239,6 +307,9 @@ if [[ "$build" -eq 1 ]]; then
     cargo build --manifest-path "$repo_root/Cargo.toml" --release -p hbse --bin hbse
     cargo build --manifest-path "$repo_root/Cargo.toml" --release -p hbse --bin hbse-broker
   fi
+  if [[ "$install_skiller" -eq 1 ]]; then
+    cargo build --manifest-path "$repo_root/Cargo.toml" --release -p skiller --bin skiller
+  fi
 fi
 
 install -m 0755 "$repo_root/target/release/vegvisir-rust" "$bin_dir/vegvisir-rust"
@@ -246,6 +317,10 @@ ln -sfn "vegvisir-rust" "$bin_dir/vegvisir"
 
 if [[ "$install_cms_cli" -eq 1 ]]; then
   install -m 0755 "$repo_root/target/release/cms" "$bin_dir/cms-v2"
+fi
+
+if [[ "$install_skiller" -eq 1 ]]; then
+  install -m 0755 "$repo_root/target/release/skiller" "$bin_dir/skiller"
 fi
 
 if [[ "$install_hbse" -eq 1 ]]; then
@@ -284,7 +359,8 @@ if [[ "$install_hbse" -eq 1 ]]; then
   fi
 fi
 
-biw_share_dir="$share_dir/binary-intelligence-workbench"
+if [[ "$install_biw" -eq 1 ]]; then
+biw_share_dir="$component_share_dir/binary-intelligence-workbench"
 rm -rf "$biw_share_dir"
 mkdir -p "$biw_share_dir"
 tar -C "$repo_root/components/binary-intelligence-workbench" \
@@ -297,13 +373,15 @@ tar -C "$repo_root/components/binary-intelligence-workbench" \
 cat >"$bin_dir/biw" <<EOF
 #!/usr/bin/env bash
 export PYTHONPATH="$biw_share_dir:\${PYTHONPATH:-}"
-if [[ -z "\${BIW_GHIDRA_WRAPPER:-}" && -x "\${HOME}/.vegvisir/tools/bin/ghidra-headless" ]]; then
-  export BIW_GHIDRA_WRAPPER="\${HOME}/.vegvisir/tools/bin/ghidra-headless"
+if [[ -z "\${BIW_GHIDRA_WRAPPER:-}" && -x "$bin_dir/ghidra-headless" ]]; then
+  export BIW_GHIDRA_WRAPPER="$bin_dir/ghidra-headless"
 fi
 exec python3 -m biw.cli "\$@"
 EOF
 chmod 0755 "$bin_dir/biw"
+fi
 
+if [[ "$install_solarium" -eq 1 ]]; then
 solarium_share_dir="$share_dir/solarium"
 rm -rf "$solarium_share_dir"
 mkdir -p "$solarium_share_dir"
@@ -325,6 +403,146 @@ cat >"$bin_dir/solarium" <<EOF
 exec node "$solarium_share_dir/dist/cli/index.js" "\$@"
 EOF
 chmod 0755 "$bin_dir/solarium"
+fi
+
+
+
+build_and_install_ghidra() {
+  local src_dir="$1"
+  local dst_dir="$2"
+
+  if ! command -v java >/dev/null 2>&1; then
+    echo "java is required to build Ghidra. Install JDK 21 or rerun with --install-system-deps." >&2
+    exit 1
+  fi
+  if ! command -v unzip >/dev/null 2>&1; then
+    echo "unzip is required to install the built Ghidra distribution. Install unzip or rerun with --install-system-deps." >&2
+    exit 1
+  fi
+
+  chmod +x "$src_dir/gradlew"
+  if [[ ! -d "$src_dir/dependencies" ]]; then
+    echo "Fetching Ghidra Gradle build dependencies..."
+    (cd "$src_dir" && ./gradlew -I gradle/support/fetchDependencies.gradle)
+  fi
+
+  echo "Building Ghidra distribution with Gradle buildGhidra..."
+  (cd "$src_dir" && ./gradlew buildGhidra)
+
+  local dist_zip
+  dist_zip="$(find "$src_dir/build/dist" -maxdepth 1 -type f -name 'ghidra_*_PUBLIC_*.zip' -print | sort | tail -n 1)"
+  if [[ -z "$dist_zip" ]]; then
+    dist_zip="$(find "$src_dir/build/dist" -maxdepth 1 -type f -name 'ghidra*.zip' -print | sort | tail -n 1)"
+  fi
+  if [[ -z "$dist_zip" ]]; then
+    echo "Ghidra build completed but no distribution zip was found under $src_dir/build/dist" >&2
+    exit 1
+  fi
+
+  rm -rf "$dst_dir"
+  mkdir -p "$dst_dir"
+  unzip -q "$dist_zip" -d "$dst_dir"
+
+  local unpacked_dir
+  unpacked_dir="$(find "$dst_dir" -mindepth 1 -maxdepth 1 -type d -name 'ghidra*' -print | sort | tail -n 1)"
+  if [[ -z "$unpacked_dir" ]]; then
+    echo "Ghidra distribution did not unpack to a ghidra* directory under $dst_dir" >&2
+    exit 1
+  fi
+
+  rm -rf "$dst_dir/current"
+  ln -s "$(basename "$unpacked_dir")" "$dst_dir/current"
+
+  if [[ ! -f "$dst_dir/current/ghidraRun" ]]; then
+    echo "Ghidra distribution is missing ghidraRun: $dst_dir/current/ghidraRun" >&2
+    exit 1
+  fi
+  if [[ ! -f "$dst_dir/current/support/analyzeHeadless" ]]; then
+    echo "Ghidra distribution is missing analyzeHeadless: $dst_dir/current/support/analyzeHeadless" >&2
+    exit 1
+  fi
+}
+
+install_python_venv() {
+  local venv_dir="$1"
+  shift
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "python3 is required for Python component wrappers. Install python3 or rerun with the related --no-* option." >&2
+    exit 1
+  fi
+  python3 -m venv "$venv_dir"
+  "$venv_dir/bin/python" -m pip install --upgrade pip >/dev/null
+  if [[ $# -gt 0 ]]; then
+    "$venv_dir/bin/python" -m pip install "$@"
+  fi
+}
+
+if [[ "$install_ghidra" -eq 1 ]]; then
+  if [[ "$build" -eq 1 ]]; then
+    build_and_install_ghidra "$repo_root/components/ghidra" "$ghidra_share_dir"
+  elif [[ ! -f "$ghidra_share_dir/current/ghidraRun" || ! -f "$ghidra_share_dir/current/support/analyzeHeadless" ]]; then
+    echo "--no-build requires an existing installed Ghidra distribution at $ghidra_share_dir/current" >&2
+    exit 1
+  fi
+  cat >"$bin_dir/ghidra" <<EOF
+#!/usr/bin/env bash
+exec "$ghidra_share_dir/current/ghidraRun" "\$@"
+EOF
+  chmod 0755 "$bin_dir/ghidra"
+  cat >"$bin_dir/analyzeHeadless" <<EOF
+#!/usr/bin/env bash
+exec "$ghidra_share_dir/current/support/analyzeHeadless" "\$@"
+EOF
+  chmod 0755 "$bin_dir/analyzeHeadless"
+fi
+
+if [[ "$install_ghidra_headless_mcp" -eq 1 ]]; then
+  rm -rf "$ghidra_headless_mcp_share_dir"
+  mkdir -p "$ghidra_headless_mcp_share_dir"
+  tar -C "$repo_root/components/ghidra-headless-mcp" \
+    --exclude='.git' \
+    --exclude='.venv' \
+    --exclude='__pycache__' \
+    --exclude='*.pyc' \
+    -cf - . | tar -C "$ghidra_headless_mcp_share_dir" -xf -
+  install_python_venv "$ghidra_headless_mcp_share_dir/.venv" "mcp==1.5.0"
+  cat >"$bin_dir/ghidra-headless" <<EOF
+#!/usr/bin/env bash
+export GHIDRA_HEADLESS="\${GHIDRA_HEADLESS:-$bin_dir/analyzeHeadless}"
+exec "$ghidra_headless_mcp_share_dir/bin/ghidra-headless" "\$@"
+EOF
+  chmod 0755 "$bin_dir/ghidra-headless"
+  cat >"$bin_dir/ghidra-headless-mcp" <<EOF
+#!/usr/bin/env bash
+export GHIDRA_HEADLESS="\${GHIDRA_HEADLESS:-$bin_dir/analyzeHeadless}"
+exec "$ghidra_headless_mcp_share_dir/.venv/bin/python" "$ghidra_headless_mcp_share_dir/bridge_mcp_ghidra_headless.py" "\$@"
+EOF
+  chmod 0755 "$bin_dir/ghidra-headless-mcp"
+fi
+
+
+if [[ "$install_desktop" -eq 1 ]]; then
+  rm -rf "$desktop_share_dir"
+  mkdir -p "$desktop_share_dir"
+  tar -C "$repo_root/components/desktop" \
+    --exclude='.git' \
+    --exclude='node_modules' \
+    --exclude='dist' \
+    --exclude='src-tauri/target' \
+    -cf - . | tar -C "$desktop_share_dir" -xf -
+  if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+    echo "node and npm are required for the desktop component. Install nodejs/npm or rerun with --no-desktop." >&2
+    exit 1
+  fi
+  npm --prefix "$desktop_share_dir" ci
+  npm --prefix "$desktop_share_dir" run web:build
+  cat >"$bin_dir/vegvisir-desktop" <<EOF
+#!/usr/bin/env bash
+export VEGVISIR_DESKTOP_BRIDGE="\${VEGVISIR_DESKTOP_BRIDGE:-$bin_dir/vegvisir}"
+exec npm --prefix "$desktop_share_dir" run dev -- "\$@"
+EOF
+  chmod 0755 "$bin_dir/vegvisir-desktop"
+fi
 
 if [[ "$install_usrl" -eq 1 ]]; then
   if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
@@ -395,14 +613,32 @@ EOF
 if [[ "$install_cms_cli" -eq 1 ]]; then
   echo "  $bin_dir/cms-v2"
 fi
-echo "  $bin_dir/solarium"
+if [[ "$install_skiller" -eq 1 ]]; then
+  echo "  $bin_dir/skiller"
+fi
+if [[ "$install_solarium" -eq 1 ]]; then
+  echo "  $bin_dir/solarium"
+fi
 if [[ "$install_hbse" -eq 1 ]]; then
   echo "  $bin_dir/hbse"
   echo "  $bin_dir/hbse-broker"
 fi
-echo "  $bin_dir/biw"
+if [[ "$install_biw" -eq 1 ]]; then
+  echo "  $bin_dir/biw"
+fi
 if [[ "$install_usrl" -eq 1 ]]; then
   echo "  $bin_dir/usrl"
+fi
+if [[ "$install_ghidra" -eq 1 ]]; then
+  echo "  $bin_dir/ghidra"
+  echo "  $bin_dir/analyzeHeadless"
+fi
+if [[ "$install_ghidra_headless_mcp" -eq 1 ]]; then
+  echo "  $bin_dir/ghidra-headless"
+  echo "  $bin_dir/ghidra-headless-mcp"
+fi
+if [[ "$install_desktop" -eq 1 ]]; then
+  echo "  $bin_dir/vegvisir-desktop"
 fi
 if [[ "$install_vegvisir_user" -eq 1 ]]; then
   echo "  runtime user: $vegvisir_service_user"

@@ -11,7 +11,7 @@ GhidraScripts and a Python MCP bridge.
 - Default launcher path used by this project:
   `/mnt/storage/Vegvisir-Projects/ghidra/Ghidra/RuntimeScripts/Linux/support/analyzeHeadless`
 - Python 3.
-- MCP Python package for the bridge. The existing `GhidraMCP/.venv` works.
+- MCP Python package for the bridge. The installer creates a dedicated `ghidra-headless-mcp` virtual environment.
 
 Override launcher with:
 
@@ -221,7 +221,7 @@ bin/ghidra-headless patch-bytes \
 Stdio:
 
 ```bash
-/mnt/storage/Vegvisir-Projects/GhidraMCP/.venv/bin/python \
+$HOME/.local/share/vegvisir/components/ghidra-headless-mcp/.venv/bin/python \
   bridge_mcp_ghidra_headless.py \
   --transport stdio
 ```
@@ -229,7 +229,7 @@ Stdio:
 SSE:
 
 ```bash
-/mnt/storage/Vegvisir-Projects/GhidraMCP/.venv/bin/python \
+$HOME/.local/share/vegvisir/components/ghidra-headless-mcp/.venv/bin/python \
   bridge_mcp_ghidra_headless.py \
   --transport sse \
   --mcp-host 127.0.0.1 \

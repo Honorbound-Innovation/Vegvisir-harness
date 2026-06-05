@@ -46,6 +46,15 @@ impl TuiApplication {
             }
             Some("validate") => self.autonomy_validate_command(args.get(1)),
             Some("resume") => self.autonomy_resume_command(args.get(1)),
+            Some("level") => {
+                let Some(raw) = args.get(1) else {
+                    return format!(
+                        "Current /auto autonomy level: {}. Usage: /autonomy level <0-6>",
+                        self.autonomous_level
+                    );
+                };
+                self.autonomous_command(&["level".to_string(), raw.clone()])
+            }
             Some("max-attempts") | Some("attempts") => {
                 let Some(raw) = args.get(1) else {
                     return format!(
@@ -74,14 +83,15 @@ impl TuiApplication {
                 }
             }
             Some(other) => format!(
-                "Unknown autonomy command: {other}\nUsage: /autonomy [on|off|status|stop|validate [plan]|resume <plan>|max-steps <n>|max-attempts <n>]"
+                "Unknown autonomy command: {other}\nUsage: /autonomy [on|off|status|stop|level <0-6>|validate [plan]|resume <plan>|max-steps <n>|max-attempts <n>]"
             ),
         }
     }
 
     fn autonomy_status(&self) -> String {
         format!(
-            "TUI autonomy\nenabled={}\nactive={}\nstatus={}\nstep={}\nmax_steps={}\nobjective={}\nplan_path={}\ncll_path={}\npll_path={}\nmanifest_path={}\nstate_path={}\njournal_path={}\ncurrent_node={}\nevidence_path={}\nevidence_status={}\nevidence_valid={}\nevidence_blocked={}\nevidence_partial={}\nnode_attempts={}/{}\nnodes={}/{}\nchecklist={}/{}\nevidence_errors={}\nno_progress_count={}",
+            "TUI autonomy\nlevel={}\nenabled={}\nactive={}\nstatus={}\nstep={}\nmax_steps={}\nobjective={}\nplan_path={}\ncll_path={}\npll_path={}\nmanifest_path={}\nstate_path={}\njournal_path={}\ncurrent_node={}\nevidence_path={}\nevidence_status={}\nevidence_valid={}\nevidence_blocked={}\nevidence_partial={}\nnode_attempts={}/{}\nnodes={}/{}\nchecklist={}/{}\nevidence_errors={}\nno_progress_count={}",
+            self.autonomous_level,
             self.autonomy.enabled,
             self.autonomy.active,
             self.autonomy.last_status,
