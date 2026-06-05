@@ -522,11 +522,22 @@ fn apply_scroll_delta(current: usize, delta: isize) -> usize {
 }
 
 fn command_response_is_chat_suppressed(command: &str) -> bool {
-    matches!(command, "/load" | "/status" | "/sessions")
+    matches!(
+        command,
+        "/load"
+            | "/status"
+            | "/sessions"
+            | "/agent"
+            | "/agents"
+            | "/model"
+            | "/models"
+            | "/provider"
+            | "/providers"
+    )
 }
 
 fn should_show_info_overlay(command: &str, response: &str) -> bool {
-    if response.trim().is_empty() || response.lines().count() < 3 {
+    if response.trim().is_empty() {
         return false;
     }
     matches!(
@@ -534,9 +545,13 @@ fn should_show_info_overlay(command: &str, response: &str) -> bool {
         "/tools"
             | "/skills"
             | "/context"
+            | "/agent"
+            | "/agents"
+            | "/model"
             | "/models"
             | "/effort"
             | "/fast"
+            | "/provider"
             | "/providers"
             | "/projects"
             | "/approvals"
@@ -2625,6 +2640,47 @@ mod tests {
                 .iter()
                 .all(|message| !message.content.contains("pending_approvals:"))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn agent_and_model_submit_open_overlay_without_chat_pollution() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        let profile = crate::core::AgentProfile::new(
+            "overlay-agent",
+            "Overlay Agent",
+            "You are an overlay formatting test agent.",
+        )?;
+        app.agents.save(&profile)?;
+        app.session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "hello".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        let message_count_before = app.session.messages.len();
+
+        app.input.set_buffer("/agent show overlay-agent");
+        app.handle_submit();
+        let overlay = app
+            .info_overlay
+            .as_ref()
+            .expect("agent show overlay should open");
+        assert_eq!(overlay.title, "agents");
+        assert!(overlay.body.contains("# Agent: Overlay Agent"));
+        assert!(overlay.body.contains("```text"));
+        assert_eq!(app.session.messages.len(), message_count_before);
+
+        app.input.set_buffer("/model");
+        app.handle_submit();
+        let overlay = app
+            .info_overlay
+            .as_ref()
+            .expect("model overlay should open");
+        assert_eq!(overlay.title, "model");
+        assert!(overlay.body.contains("Current model:"));
+        assert_eq!(app.session.messages.len(), message_count_before);
         Ok(())
     }
 

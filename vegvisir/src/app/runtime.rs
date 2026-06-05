@@ -1086,6 +1086,17 @@ Next step: I should retry or continue from the last successful step instead of l
             let live_trimmed = live_content.trim();
             if completed_trimmed.is_empty() {
                 completed_message.content = live_content;
+            } else if let Some(artifact_prefix) = live_content.find("**Code/Diff update from `") {
+                // Tool-observation code/diff artifacts are injected only into
+                // the live TUI assistant message. A later final worker response
+                // can be longer than the live partial, so preserve these
+                // assistant-visible artifacts before applying length/subset
+                // merge heuristics.
+                let artifacts = live_content[artifact_prefix..].trim();
+                if !artifacts.is_empty() && !completed_content.contains(artifacts) {
+                    completed_message.content =
+                        format!("{}\n\n{}", artifacts, completed_content.trim_start());
+                }
             } else if live_trimmed.is_empty()
                 || completed_trimmed == live_trimmed
                 || completed_content.len() > live_content.len()

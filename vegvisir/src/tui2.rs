@@ -2655,6 +2655,13 @@ fn trace_event_line_style(raw: &str) -> Option<Style> {
 }
 
 fn info_overlay_lines(info: &InfoOverlay, width: usize) -> Vec<Line<'static>> {
+    if info.title.trim().eq_ignore_ascii_case("trace") {
+        return trace_info_overlay_lines(info, width);
+    }
+    render_chat_content(&info.body, width, Style::default().fg(FG))
+}
+
+fn trace_info_overlay_lines(info: &InfoOverlay, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for raw in info.body.lines() {
         if raw.trim().is_empty() {
@@ -4390,6 +4397,39 @@ four",
         assert!(rendered.contains("Models for provider openai"));
         assert!(rendered.contains("/model gpt-5.5"));
         assert!(rendered.contains("context: 400000"));
+    }
+
+    #[test]
+    fn ratatui_info_overlay_renders_markdown_code_and_diffs() {
+        let overlay = InfoOverlay {
+            title: "agent".to_string(),
+            body: [
+                "# Agent: Formatter",
+                "",
+                "| Field | Value |",
+                "| --- | --- |",
+                "| model | `gpt-5.4-mini` |",
+                "",
+                "```diff",
+                "diff --git a/src/lib.rs b/src/lib.rs",
+                "--- a/src/lib.rs",
+                "+++ b/src/lib.rs",
+                "@@ -1 +1 @@",
+                "-old",
+                "+new",
+                "```",
+            ]
+            .join("\n"),
+        };
+        let lines = info_overlay_lines(&overlay, 100);
+        let rendered = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect::<String>();
+        assert!(rendered.contains("Agent: Formatter"));
+        assert!(rendered.contains("gpt-5.4-mini"));
+        assert!(rendered.contains("diff"));
+        assert!(rendered.contains("+new"));
     }
 
     #[test]
