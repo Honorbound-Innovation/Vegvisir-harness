@@ -11,7 +11,7 @@ Usage:
 Options:
   --prefix <path>                    Install prefix. Default: $HOME/.local
   --no-build                         Reuse existing release artifacts.
-  --install-system-deps              Install native build/runtime packages on Debian-like systems.
+  --install-system-deps              Install native build/runtime packages for the full project.
   --no-cms-cli                       Do not install the CMS-v2 CLI.
   --no-hbse                          Do not install HBSE binaries.
   --no-skiller                       Do not install the Skiller CLI.
@@ -183,29 +183,18 @@ component_share_dir="$share_dir/components"
 ghidra_headless_mcp_share_dir="$component_share_dir/ghidra-headless-mcp"
 desktop_share_dir="$component_share_dir/desktop"
 
-install_debian_deps() {
-  if ! command -v apt-get >/dev/null 2>&1; then
-    echo "--install-system-deps currently supports Debian-like systems with apt-get." >&2
-    exit 1
+install_native_system_deps() {
+  local args=()
+  if [[ "$install_desktop" -eq 0 ]]; then
+    args+=(--no-desktop)
   fi
-  local apt=(apt-get)
-  if [[ "$(id -u)" -ne 0 ]]; then
-    apt=(sudo apt-get)
+  if [[ "$install_solarium" -eq 0 ]]; then
+    args+=(--no-browser)
   fi
-  "${apt[@]}" update
-  "${apt[@]}" install -y \
-    build-essential \
-    ca-certificates \
-    bubblewrap \
-    curl \
-    nodejs \
-    npm \
-    python3 \
-    python3-pip \
-    python3-venv \
-    openjdk-21-jdk \
-    pkg-config \
-    libtss2-dev
+  if [[ "$install_ghidra" -eq 0 && "$install_ghidra_headless_mcp" -eq 0 ]]; then
+    args+=(--no-ghidra)
+  fi
+  "$repo_root/scripts/install-system-deps.sh" "${args[@]}"
 }
 
 run_as_root() {
@@ -277,7 +266,7 @@ if [[ "$install_desktop" -eq 1 ]]; then
 fi
 
 if [[ "$install_system_deps" -eq 1 ]]; then
-  install_debian_deps
+  install_native_system_deps
 fi
 
 if [[ "$install_vegvisir_user" -eq 1 ]]; then

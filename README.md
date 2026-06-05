@@ -156,7 +156,13 @@ Prerequisites:
 - JDK 21 for running an installed Ghidra runtime when Ghidra integrations are enabled.
 - Linux for the full HBSE broker service workflow.
 
-On Debian-like systems, `./install.sh --install-system-deps` installs the native packages the installer knows how to provision, including JDK 21 for Ghidra runtime support.
+Install native/system dependencies first when building from a fresh Linux system:
+
+```bash
+sudo bash scripts/install-system-deps.sh
+```
+
+This installs the core Rust/Node/Python build tools plus Tauri/WebKit/GTK desktop dependencies such as `glib-2.0`, Playwright/Solarium runtime libraries, and Java/Ghidra support packages where available. On Debian-like systems, `./install.sh --install-system-deps` delegates to the same script.
 
 Install the full system:
 
