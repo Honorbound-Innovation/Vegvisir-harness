@@ -55,5 +55,28 @@ else
   echo "Skipping Solarium install because npm is not available." >&2
 fi
 
-echo "Installed vegvisir, hbse, hbse-broker, biw, and solarium into $HOME/.local/bin"
+desktop_share_dir="$HOME/.local/share/vegvisir/desktop"
+rm -rf "$desktop_share_dir"
+mkdir -p "$desktop_share_dir"
+tar -C components/desktop \
+  --exclude='.git' \
+  --exclude='node_modules' \
+  --exclude='dist' \
+  --exclude='src-tauri/target' \
+  --exclude='.vegvisir' \
+  -cf - . | tar -C "$desktop_share_dir" -xf -
+if command -v npm >/dev/null 2>&1; then
+  npm --prefix "$desktop_share_dir" ci
+  npm --prefix "$desktop_share_dir" run web:build
+  cat >"$HOME/.local/bin/vegvisir-desktop" <<EOF
+#!/usr/bin/env bash
+export VEGVISIR_DESKTOP_RESOURCE_DIR="$desktop_share_dir/resources"
+exec npm --prefix "$desktop_share_dir" run dev -- "\$@"
+EOF
+  chmod 0755 "$HOME/.local/bin/vegvisir-desktop"
+else
+  echo "Skipping Vegvisir Desktop install because npm is not available." >&2
+fi
+
+echo "Installed vegvisir, hbse, hbse-broker, biw, solarium, and vegvisir-desktop into $HOME/.local/bin"
 

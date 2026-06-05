@@ -24,6 +24,7 @@ Commands:
   model-request
   eval
   verify
+  desktop                Launch the Vegvisir Desktop app
   app-server
   open-ai-compat-server
   setup                  Run first-time setup or inspect setup status
@@ -402,6 +403,59 @@ Notes:
 - `--agent` applies a persistent custom agent profile.
 - `--dangerously-bypass-approvals-and-sandbox` is startup-only and should be used only for explicitly trusted sessions.
 
+
+
+#### desktop
+
+Purpose:
+
+Launches the Vegvisir Desktop app from the main Vegvisir CLI. It first honors an explicit packaged binary path, then `VEGVISIR_DESKTOP_BINARY`, then installed `vegvisir-desktop` helpers on `PATH` or source-adjacent desktop launchers, and finally falls back to launching the source checkout with `npm run dev` when `components/desktop` is available.
+
+Exact help:
+
+```text
+Usage: vegvisir desktop [OPTIONS]
+
+Options:
+      --binary <BINARY>
+          Path to a packaged Vegvisir Desktop executable/AppImage
+      --dev
+          Force launching the source checkout with `npm run dev`
+      --provider <PROVIDER>
+      --model <MODEL>
+      --agent <AGENT>
+      --json
+      --scripted
+      --artifacts
+      --artifact-dir <ARTIFACT_DIR>
+      --dangerously-bypass-approvals-and-sandbox
+  -h, --help
+          Print help
+```
+
+Examples:
+
+```bash
+vegvisir desktop
+```
+
+```bash
+vegvisir desktop --dev
+```
+
+```bash
+vegvisir desktop --binary /path/to/vegvisir-desktop.AppImage
+```
+
+```bash
+VEGVISIR_DESKTOP_BINARY=/path/to/vegvisir-desktop vegvisir desktop
+```
+
+Notes:
+
+- Installed Vegvisir packages may also provide a `vegvisir-desktop` helper. `vegvisir desktop` discovers that helper on `PATH` or when it is next to the Vegvisir CLI binary.
+- In a source checkout, `vegvisir desktop` falls back to `components/desktop` and runs `npm run dev`, which opens the Tauri desktop development app.
+- The desktop app remains a client for `vegvisir app-server`; provider credentials, CMS-v2, HBSE, approvals, tools, and policy remain owned by the harness.
 
 
 #### skiller

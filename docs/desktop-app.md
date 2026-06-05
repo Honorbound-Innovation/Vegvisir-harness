@@ -208,7 +208,27 @@ If the GUI needs a capability that the bridge does not expose yet, add a bridge 
 
 ## Development Commands
 
-From the desktop component directory:
+From the main Vegvisir CLI, launch the desktop shell with:
+
+```bash
+vegvisir desktop
+```
+
+Launch resolution order:
+
+1. `vegvisir desktop --binary <path>` for an explicit packaged executable/AppImage;
+2. `VEGVISIR_DESKTOP_BINARY=<path> vegvisir desktop`;
+3. installed `vegvisir-desktop` helpers on `PATH`;
+4. packaged desktop binaries near the Vegvisir CLI executable or source checkout;
+5. source checkout fallback: `components/desktop` is launched with `npm run dev`.
+
+Use this during development to force the source checkout path:
+
+```bash
+vegvisir desktop --dev
+```
+
+From the desktop component directory, the lower-level development commands remain:
 
 ```bash
 cd components/desktop
