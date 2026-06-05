@@ -1,3 +1,4 @@
+use inkjet::{constants::HIGHLIGHT_NAMES, tree_sitter_highlight::HighlightEvent};
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use ratatui::{
     Frame,
@@ -1813,7 +1814,7 @@ fn split_preserving_spaces(text: &str) -> Vec<String> {
 }
 
 fn render_code_block(out: &mut Vec<Line<'static>>, language: &str, code: &str, width: usize) {
-    let language = language.trim();
+    let language = normalize_code_language(language);
     let title = if language.is_empty() {
         " code ".to_string()
     } else {
@@ -1833,26 +1834,29 @@ fn render_code_block(out: &mut Vec<Line<'static>>, language: &str, code: &str, w
             Style::default().fg(BORDER),
         ),
     ]));
-    let is_diff = matches!(language, "diff" | "patch");
-    for (index, raw) in code.lines().enumerate() {
-        let line_style = if is_diff {
-            diff_line_style(raw)
-        } else {
-            code_line_style(language, raw)
-        };
+
+    let highlighted_lines = highlight_code_block_with_inkjet(&language, code)
+        .unwrap_or_else(|| fallback_highlight_code_block(&language, code));
+    let body_width = width.saturating_sub(7).max(1);
+    for (index, spans) in highlighted_lines.into_iter().enumerate() {
         let gutter = format!("{:>4} │ ", index + 1);
-        for (wrap_index, piece) in wrap_preserve(raw, width.saturating_sub(7).max(1))
-            .into_iter()
-            .enumerate()
-        {
+        let wrapped = wrap_spans(spans, body_width, "");
+        if wrapped.is_empty() {
+            out.push(Line::from(vec![Span::styled(
+                gutter,
+                Style::default().fg(DIM).bg(PANEL),
+            )]));
+            continue;
+        }
+        for (wrap_index, line) in wrapped.into_iter().enumerate() {
             let prefix = if wrap_index == 0 {
                 gutter.clone()
             } else {
                 "     │ ".to_string()
             };
-            let mut spans = vec![Span::styled(prefix, Style::default().fg(DIM).bg(PANEL))];
-            spans.extend(highlight_code_piece(language, &piece, line_style));
-            out.push(Line::from(spans));
+            let mut rendered = vec![Span::styled(prefix, Style::default().fg(DIM).bg(PANEL))];
+            rendered.extend(line.spans);
+            out.push(Line::from(rendered));
         }
     }
     out.push(Line::from(Span::styled(
@@ -1860,6 +1864,132 @@ fn render_code_block(out: &mut Vec<Line<'static>>, language: &str, code: &str, w
         Style::default().fg(BORDER),
     )));
     out.push(Line::from(""));
+}
+
+fn normalize_code_language(language: &str) -> String {
+    let language = language.trim().trim_start_matches('.').to_ascii_lowercase();
+    match language.as_str() {
+        "patch" => "diff".to_string(),
+        "c++" => "cpp".to_string(),
+        "c#" => "csharp".to_string(),
+        "shell" => "bash".to_string(),
+        "yml" => "yaml".to_string(),
+        "rs" => "rust".to_string(),
+        "py" => "python".to_string(),
+        "js" => "javascript".to_string(),
+        "jsx" => "jsx".to_string(),
+        "ts" => "typescript".to_string(),
+        "tsx" => "tsx".to_string(),
+        "cs" => "csharp".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn highlight_code_block_with_inkjet(language: &str, code: &str) -> Option<Vec<Vec<Span<'static>>>> {
+    if code.is_empty() {
+        return Some(vec![Vec::new()]);
+    }
+    let inkjet_language = inkjet::Language::from_token(if language.is_empty() {
+        "plaintext"
+    } else {
+        language
+    })?;
+    let mut highlighter = inkjet::Highlighter::new();
+    let events = highlighter.highlight_raw(inkjet_language, &code).ok()?;
+    let mut style_stack = vec![Style::default().fg(Color::Rgb(185, 190, 200)).bg(PANEL)];
+    let mut lines = vec![Vec::<Span<'static>>::new()];
+
+    for event in events {
+        match event.ok()? {
+            HighlightEvent::Source { start, end } => {
+                push_inkjet_source(&mut lines, &code[start..end], *style_stack.last().unwrap());
+            }
+            HighlightEvent::HighlightStart(highlight) => {
+                style_stack.push(inkjet_scope_style(highlight.0));
+            }
+            HighlightEvent::HighlightEnd => {
+                if style_stack.len() > 1 {
+                    style_stack.pop();
+                }
+            }
+        }
+    }
+
+    if code.ends_with('\n') {
+        while lines.last().is_some_and(|line| line.is_empty()) && lines.len() > 1 {
+            lines.pop();
+        }
+    }
+    Some(lines)
+}
+
+fn push_inkjet_source(lines: &mut Vec<Vec<Span<'static>>>, source: &str, style: Style) {
+    for (index, segment) in source.split('\n').enumerate() {
+        if index > 0 {
+            lines.push(Vec::new());
+        }
+        if !segment.is_empty() {
+            lines
+                .last_mut()
+                .expect("inkjet line accumulator is never empty")
+                .push(Span::styled(segment.to_string(), style));
+        }
+    }
+}
+
+fn inkjet_scope_style(highlight_index: usize) -> Style {
+    let scope = HIGHLIGHT_NAMES
+        .get(highlight_index)
+        .copied()
+        .unwrap_or_default();
+    let mut style = Style::default().bg(PANEL);
+    if scope.starts_with("comment") {
+        style = style.fg(DIM).add_modifier(Modifier::ITALIC);
+    } else if scope.starts_with("string") || scope == "escape" {
+        style = style.fg(GREEN);
+    } else if scope.starts_with("constant.numeric") || scope.starts_with("constant.builtin") {
+        style = style.fg(AMBER);
+    } else if scope.starts_with("constant") || scope == "special" {
+        style = style.fg(Color::Rgb(210, 150, 230));
+    } else if scope.starts_with("keyword") || scope == "operator" {
+        style = style.fg(CYAN).add_modifier(Modifier::BOLD);
+    } else if scope.starts_with("function") || scope == "constructor" {
+        style = style.fg(Color::Rgb(120, 200, 255));
+    } else if scope.starts_with("type") || scope == "namespace" {
+        style = style.fg(Color::Rgb(125, 220, 190));
+    } else if scope.starts_with("variable.parameter") || scope.starts_with("label") {
+        style = style.fg(Color::Rgb(235, 190, 120));
+    } else if scope.starts_with("tag") {
+        style = style.fg(Color::Rgb(255, 135, 170));
+    } else if scope.starts_with("punctuation") {
+        style = style.fg(Color::Rgb(150, 155, 165));
+    } else if scope == "diff.plus" {
+        style = style.fg(GREEN);
+    } else if scope == "diff.minus" {
+        style = style.fg(RED);
+    } else if scope.starts_with("diff.delta") || scope == "diff" {
+        style = style.fg(CYAN).add_modifier(Modifier::BOLD);
+    } else if scope.starts_with("markup.heading") {
+        style = style.fg(CYAN).add_modifier(Modifier::BOLD);
+    } else if scope.starts_with("markup") {
+        style = style.fg(AMBER);
+    } else {
+        style = style.fg(Color::Rgb(185, 190, 200));
+    }
+    style
+}
+
+fn fallback_highlight_code_block(language: &str, code: &str) -> Vec<Vec<Span<'static>>> {
+    code.lines()
+        .map(|raw| {
+            let line_style = if matches!(language, "diff" | "patch") {
+                diff_line_style(raw)
+            } else {
+                code_line_style(language, raw)
+            };
+            highlight_code_piece(language, raw, line_style)
+        })
+        .collect::<Vec<_>>()
 }
 
 fn diff_line_style(line: &str) -> Style {
@@ -4637,6 +4767,27 @@ four",
                 .any(|span| span.content.as_ref().contains("\"{value}\"")
                     && span.style.fg == Some(GREEN))
         );
+    }
+
+    #[test]
+    fn ratatui_inkjet_highlights_typescript_code_blocks() {
+        let markdown =
+            "```typescript\nexport function greet(name: string) { return \"hello \" + name; }\n```";
+        let lines = render_markdown(markdown, 100, Style::default().fg(FG));
+        let spans = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .collect::<Vec<_>>();
+
+        assert!(
+            spans
+                .iter()
+                .any(|span| span.content.as_ref() == "export" && span.style.fg == Some(CYAN))
+        );
+        assert!(spans.iter().any(|span| span.content.as_ref() == "name"
+            && span.style.fg == Some(Color::Rgb(235, 190, 120))));
+        assert!(spans.iter().any(|span| span.content.as_ref() == "string"
+            && span.style.fg == Some(Color::Rgb(125, 220, 190))));
     }
 
     #[test]
