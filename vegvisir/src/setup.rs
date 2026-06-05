@@ -16,7 +16,13 @@ use crate::{
 
 const PROVIDER_CHOICES: &[ProviderChoice] = &[
     ProviderChoice {
-        label: "OpenAI",
+        label: "OpenAI SSO",
+        provider_id: "openai-sso",
+        hbse_provider: "openai-sso",
+        default_model: "gpt-5.4-mini",
+    },
+    ProviderChoice {
+        label: "OpenAI via HBSE",
         provider_id: "openai",
         hbse_provider: "openai-hbse",
         default_model: "gpt-5.2",
@@ -68,6 +74,7 @@ pub struct SetupOptions {
     pub non_interactive: bool,
     pub force: bool,
     pub provider: Option<String>,
+    pub model: Option<String>,
     pub skip_hbse: bool,
 }
 
@@ -126,7 +133,15 @@ fn apply_setup(options: SetupOptions, choice: ProviderChoice) -> anyhow::Result<
     if options.force || !config.contains_key("current_model") {
         config.insert(
             "current_model".to_string(),
-            Value::String(choice.default_model.to_string()),
+            Value::String(
+                options
+                    .model
+                    .as_deref()
+                    .filter(|model| !model.trim().is_empty())
+                    .unwrap_or(choice.default_model)
+                    .trim()
+                    .to_string(),
+            ),
         );
     }
     config
@@ -279,6 +294,7 @@ pub fn default_setup_options(workspace: impl AsRef<Path>) -> SetupOptions {
         non_interactive: false,
         force: false,
         provider: None,
+        model: None,
         skip_hbse: false,
     }
 }
@@ -330,6 +346,7 @@ mod tests {
             non_interactive: true,
             force: false,
             provider: Some("anthropic".to_string()),
+            model: None,
             skip_hbse: false,
         })?;
 
@@ -351,6 +368,29 @@ mod tests {
     }
 
     #[test]
+    fn forced_setup_honors_explicit_sso_provider_and_model() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let data_root = tmp.path().join("data");
+        let summary = run_setup(SetupOptions {
+            data_root: data_root.clone(),
+            workspace: tmp.path().join("workspace"),
+            non_interactive: true,
+            force: true,
+            provider: Some("openai-sso".to_string()),
+            model: Some("gpt-5.4-mini".to_string()),
+            skip_hbse: true,
+        })?;
+
+        assert_eq!(summary.current_provider, "openai-sso");
+        assert_eq!(summary.current_model, "gpt-5.4-mini");
+
+        let status = setup_status(&data_root)?;
+        assert_eq!(status.current_provider, "openai-sso");
+        assert_eq!(status.current_model, "gpt-5.4-mini");
+        Ok(())
+    }
+
+    #[test]
     fn setup_status_reports_existing_config() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let data_root = tmp.path().join("data");
@@ -360,6 +400,7 @@ mod tests {
             non_interactive: true,
             force: false,
             provider: Some("openai".to_string()),
+            model: None,
             skip_hbse: true,
         })?;
 
