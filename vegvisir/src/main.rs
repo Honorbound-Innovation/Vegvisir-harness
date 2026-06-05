@@ -283,6 +283,7 @@ fn main() -> anyhow::Result<()> {
                 force,
                 skip_hbse,
                 cli.provider,
+                cli.model,
                 cli.json,
             ),
             Some(Command::Skiller { args }) => run_skiller(args),
@@ -572,6 +573,7 @@ fn run_setup_command(
     force: bool,
     skip_hbse: bool,
     provider: Option<String>,
+    model: Option<String>,
     json_output: bool,
 ) -> anyhow::Result<()> {
     let data_root = data_root.unwrap_or_else(default_vegvisir_data_root);
@@ -584,6 +586,7 @@ fn run_setup_command(
             non_interactive: non_interactive || json_output,
             force,
             provider,
+            model,
             skip_hbse,
         })?
     };
