@@ -183,14 +183,14 @@ Provider-native streaming is forwarded as one or more `content.delta` events. No
 
 If a risky tool call needs approval, the bridge emits `approval.required` and then `turn.failed`. The client should show the approval request and let the user approve once, approve for session, edit, or deny.
 
-### `command.run`
+### `command.run` / `command.invoke`
 
-Runs a Vegvisir slash command and returns the output.
+Runs a Vegvisir slash command and returns the output. `command.invoke` is an alias intended for GUI command palettes. This is the full fallback surface: if a feature exists as a Vegvisir slash command, the desktop app can expose it without direct provider calls, direct tool execution, or secret handling.
 
 ```json
 {
   "id": "4",
-  "method": "command.run",
+  "method": "command.invoke",
   "params": {
     "command": "/approvals"
   }
@@ -211,12 +211,52 @@ Response event:
 }
 ```
 
+### `commands.list`
+
+Returns every registered Vegvisir slash command with description, usage, aliases, and delegation metadata. This is the desktop parity inventory for sessions, providers, models, tools, approvals, memory, skills, MCP, HBSE, subagents, traces, evals, verification, and configuration.
+
+```json
+{"id":"commands","method":"commands.list","params":{}}
+```
+
+### `commands.suggest`
+
+Returns command-name suggestions for a prefix.
+
+```json
+{"id":"suggest","method":"commands.suggest","params":{"prefix":"/pro"}}
+```
+
+### `commands.describe`
+
+Returns one canonical command definition.
+
+```json
+{"id":"describe","method":"commands.describe","params":{"name":"providers"}}
+```
+
 ### `session.status`
 
 Returns the current session snapshot.
 
 ```json
 {"id":"5","method":"session.status","params":{}}
+```
+
+### `runtime.status`
+
+Returns a structured session snapshot plus human-readable `/status` and `/tools status` output, risky-tool state, human-approval policy, dangerous-bypass state, and pending approvals.
+
+```json
+{"id":"runtime","method":"runtime.status","params":{}}
+```
+
+### `toolLimit.status` / `toolLimit.set`
+
+Reads or sets the maximum provider tool-call rounds through Vegvisir's existing `/tool-limit` command path.
+
+```json
+{"id":"tool-limit","method":"toolLimit.set","params":{"value":8}}
 ```
 
 ### `tools.list`
@@ -276,12 +316,60 @@ The payload includes:
 - `current_model`
 - `models`
 
+### `provider.select`
+
+Selects the active provider through the same Vegvisir provider command path used by the TUI. Optional `global: true` applies the existing global provider behavior.
+
+```json
+{"id":"provider","method":"provider.select","params":{"provider":"openai-sso-hbse"}}
+```
+
+### `model.select`
+
+Selects the active model through Vegvisir model validation and config/session behavior.
+
+```json
+{"id":"model","method":"model.select","params":{"model":"gpt-5.4-mini"}}
+```
+
+### `effort.status` / `effort.set`
+
+Reads or sets the active reasoning-effort override for supported providers/models.
+
+```json
+{"id":"effort","method":"effort.set","params":{"effort":"minimal"}}
+```
+
+### `fast.status` / `fast.set`
+
+Reads or toggles fast mode for supported OpenAI/Anthropic models.
+
+```json
+{"id":"fast","method":"fast.set","params":{"enabled":true}}
+```
+
+### `openai.compat.info`
+
+Returns metadata for the local OpenAI-compatible Vegvisir HTTP bridge (`vegvisir open-ai-compat-server`). The response includes a base URL, supported endpoints, and a launch command. It does not return provider credentials. OpenAI-compatible clients should point at this local bridge while provider credentials remain behind Vegvisir/HBSE.
+
+```json
+{"id":"openai","method":"openai.compat.info","params":{"host":"127.0.0.1","port":11435}}
+```
+
 ### `agents.list`
 
 Returns persisted custom agents and the active agent selection.
 
 ```json
 {"id":"agents","method":"agents.list","params":{}}
+```
+
+### `agent.select`
+
+Selects a persistent custom agent through Vegvisir's existing agent runtime.
+
+```json
+{"id":"agent","method":"agent.select","params":{"agent":"agent-red"}}
 ```
 
 ### `approvals.list`

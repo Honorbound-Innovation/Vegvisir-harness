@@ -32,7 +32,32 @@ type StartBridgeRequest = {
   autoStart?: boolean;
 };
 
-type PanelId = 'chat' | 'work' | 'approvals' | 'tools' | 'providers' | 'diff' | 'memory' | 'system' | 'settings';
+type BridgeStatus = {
+  running: boolean;
+  pid?: number;
+};
+
+type BridgeStopResult = {
+  wasRunning: boolean;
+  graceful: boolean;
+  killed: boolean;
+  status?: string | null;
+};
+
+type BridgeMethodDraft = {
+  raw: string;
+  query: string;
+  id: string;
+  name: string;
+  path: string;
+  value: string;
+  target: string;
+  scope: string;
+  limit: string;
+  global: boolean;
+};
+
+type PanelId = 'chat' | 'work' | 'approvals' | 'tools' | 'providers' | 'capabilities' | 'commands' | 'runtime' | 'openai' | 'diff' | 'memory' | 'skills' | 'integrations' | 'evidence' | 'system' | 'settings';
 
 const appElement = document.querySelector<HTMLDivElement>('#app');
 if (!appElement) throw new Error('missing #app root');
@@ -44,8 +69,15 @@ const panels: Array<{ id: PanelId; label: string; icon: string; hint: string }> 
   { id: 'approvals', label: 'Approvals', icon: '◇', hint: 'Risk gates' },
   { id: 'tools', label: 'Tools', icon: '⌘', hint: 'Harness capabilities' },
   { id: 'providers', label: 'Providers', icon: '⬡', hint: 'Models and agents' },
+  { id: 'capabilities', label: 'Capabilities', icon: '◬', hint: 'Bridge parity map' },
+  { id: 'commands', label: 'Commands', icon: '⌁', hint: 'Full slash surface' },
+  { id: 'runtime', label: 'Runtime', icon: '◍', hint: 'Policy and limits' },
+  { id: 'openai', label: 'OpenAI bridge', icon: '◒', hint: 'Compat endpoint' },
   { id: 'diff', label: 'Diff', icon: '±', hint: 'Workspace changes' },
   { id: 'memory', label: 'Memory', icon: '◎', hint: 'CMS/ECM state' },
+  { id: 'skills', label: 'Skills', icon: '✧', hint: 'Skiller/LSL workflows' },
+  { id: 'integrations', label: 'Integrations', icon: '⌬', hint: 'MCP, HBSE, subagents' },
+  { id: 'evidence', label: 'Evidence', icon: '◫', hint: 'Runs, trace, verify' },
   { id: 'system', label: 'System', icon: '◈', hint: 'Prompt and policy' },
   { id: 'settings', label: 'Settings', icon: '⚙', hint: 'Bridge launch config' },
 ];
@@ -54,7 +86,9 @@ const state = {
   requestCounter: 0,
   bridgeRunning: false,
   bridgePid: null as number | null,
+  bridgeStopping: false,
   autoStartAttempted: false,
+  lastStopResult: null as BridgeStopResult | null,
   session: null as any,
   events: [] as BridgeEvent[],
   messages: [] as Message[],
@@ -64,6 +98,14 @@ const state = {
   providers: [] as any[],
   models: [] as any[],
   agents: [] as any[],
+  commands: [] as any[],
+  capabilities: null as any,
+  methodOutputs: {} as Record<string, any>,
+  selectedBridgeMethod: '',
+  bridgeDraft: emptyBridgeMethodDraft(),
+  runtimeStatus: null as any,
+  hbseOnboarding: null as any,
+  openaiCompat: null as any,
   diff: '',
   memory: '',
   systemPrompt: '',
@@ -72,6 +114,21 @@ const state = {
   error: '',
   settings: loadSettings(),
 };
+
+function emptyBridgeMethodDraft(): BridgeMethodDraft {
+  return {
+    raw: '',
+    query: '',
+    id: '',
+    name: '',
+    path: '',
+    value: '',
+    target: '',
+    scope: '',
+    limit: '',
+    global: false,
+  };
+}
 
 function loadSettings(): StartBridgeRequest {
   const raw = localStorage.getItem('vegvisir.desktop.settings');
@@ -110,12 +167,8 @@ async function startBridge(): Promise<void> {
   state.error = '';
   saveSettings();
   try {
-    const status = await invoke<{ running: boolean; pid?: number }>('bridge_start', { request: compactSettings() });
-    state.bridgeRunning = status.running;
-    state.bridgePid = status.pid ?? null;
-    render();
-    await send('initialize', {}, 'initialize');
-    await refreshEverything();
+    const status = await invoke<BridgeStatus>('bridge_start', { request: compactSettings() });
+    await activateBridge(status);
   } catch (error) {
     state.bridgeRunning = false;
     state.bridgePid = null;
@@ -123,6 +176,38 @@ async function startBridge(): Promise<void> {
     state.activePanel = 'settings';
     render();
   }
+}
+
+async function restartBridge(): Promise<void> {
+  state.error = '';
+  state.bridgeStopping = true;
+  saveSettings();
+  render();
+  try {
+    const status = await invoke<BridgeStatus>('bridge_restart', { request: compactSettings() });
+    state.bridgeStopping = false;
+    state.session = null;
+    state.messages = [];
+    state.pendingAssistant = '';
+    state.busy = false;
+    await activateBridge(status);
+  } catch (error) {
+    state.bridgeStopping = false;
+    state.bridgeRunning = false;
+    state.bridgePid = null;
+    state.error = String(error);
+    state.activePanel = 'settings';
+    render();
+  }
+}
+
+async function activateBridge(status: BridgeStatus): Promise<void> {
+  state.bridgeRunning = status.running;
+  state.bridgePid = status.pid ?? null;
+  if (!status.running) return;
+  render();
+  await send('initialize', {}, 'initialize');
+  await refreshEverything();
 }
 
 function compactSettings(): StartBridgeRequest {
@@ -136,19 +221,28 @@ function compactSettings(): StartBridgeRequest {
 }
 
 async function stopBridge(): Promise<void> {
-  await invoke('bridge_stop');
+  state.bridgeStopping = true;
+  render();
+  try {
+    const result = await invoke<BridgeStopResult>('bridge_stop');
+    state.lastStopResult = result;
+    state.events.push({ type: 'desktop.bridge.stopped', payload: result });
+  } catch (error) {
+    state.error = String(error);
+  }
+  state.bridgeStopping = false;
   state.bridgeRunning = false;
   state.bridgePid = null;
   state.session = null;
-  state.events = [];
   state.messages = [];
   state.pendingAssistant = '';
+  state.busy = false;
   render();
 }
 
 async function refreshStatus(): Promise<void> {
   try {
-    const status = await invoke<{ running: boolean; pid?: number }>('bridge_status');
+    const status = await invoke<BridgeStatus>('bridge_status');
     state.bridgeRunning = status.running;
     state.bridgePid = status.pid ?? null;
   } catch (error) {
@@ -168,6 +262,11 @@ async function refreshEverything(): Promise<void> {
     send('providers.list', {}, 'providers'),
     send('models.list', {}, 'models'),
     send('agents.list', {}, 'agents'),
+    send('commands.list', {}, 'commands'),
+    send('bridge.capabilities', {}, 'capabilities'),
+    send('runtime.status', {}, 'runtime'),
+    send('hbse.onboarding.providers', {}, 'hbse'),
+    send('openai.compat.info', {}, 'openai'),
     send('memory.status', {}, 'memory'),
   ]);
 }
@@ -195,6 +294,10 @@ async function pollBridge(): Promise<void> {
 function handleEvent(event: BridgeEvent): void {
   state.events.push(event);
   if (state.events.length > 600) state.events.splice(0, state.events.length - 600);
+  const bridgedMethod = event.payload?.method;
+  if (typeof bridgedMethod === 'string' && bridgedMethod.trim()) {
+    state.methodOutputs[bridgedMethod] = event.payload;
+  }
 
   switch (event.type) {
     case 'desktop.bridge.spawned':
@@ -202,11 +305,13 @@ function handleEvent(event: BridgeEvent): void {
     case 'desktop.bridge.exited':
       state.bridgeRunning = false;
       state.bridgePid = null;
+      state.busy = false;
       state.error = `Bridge exited: ${event.payload?.status ?? 'unknown status'}`;
       break;
     case 'desktop.bridge.error':
       state.bridgeRunning = false;
       state.bridgePid = null;
+      state.busy = false;
       state.error = event.payload?.message ?? 'bridge error';
       break;
     case 'server.ready':
@@ -256,6 +361,30 @@ function handleEvent(event: BridgeEvent): void {
       break;
     case 'agents.list':
       state.agents = event.payload?.agents ?? [];
+      break;
+    case 'commands.list':
+      state.commands = event.payload?.commands ?? [];
+      break;
+    case 'bridge.capabilities':
+      state.capabilities = event.payload ?? null;
+      break;
+    case 'runtime.status':
+      state.runtimeStatus = event.payload ?? null;
+      break;
+    case 'hbse.onboarding.providers':
+      state.hbseOnboarding = event.payload ?? null;
+      break;
+    case 'openai.compat.info':
+      state.openaiCompat = event.payload ?? null;
+      break;
+    case 'provider.selected':
+    case 'model.selected':
+    case 'agent.selected':
+    case 'effort.updated':
+    case 'fast.updated':
+    case 'toolLimit.updated':
+      state.session = event.payload?.session ?? state.session;
+      void refreshEverything();
       break;
     case 'diff.current':
       state.diff = event.payload?.diff ?? event.payload?.markdown ?? event.payload?.output ?? JSON.stringify(event.payload, null, 2);
@@ -320,12 +449,80 @@ function setPanel(panel: string): void {
   if (panel === 'diff') void send('diff.current', {}, 'diff');
   if (panel === 'memory') void send('memory.status', {}, 'memory');
   if (panel === 'system') void send('system.prompt', {}, 'system');
+  if (panel === 'commands') void send('commands.list', {}, 'commands');
+  if (panel === 'capabilities') void send('bridge.capabilities', {}, 'capabilities');
+  if (panel === 'runtime') void send('runtime.status', {}, 'runtime');
+  if (panel === 'openai') void send('openai.compat.info', {}, 'openai');
+  if (panel === 'skills') void send('skills.status', {}, 'skills');
+  if (panel === 'integrations') {
+    void send('mcp.status', {}, 'mcp');
+    void send('hbse.status', {}, 'hbse');
+    void send('subagents.list', {}, 'subagents');
+  }
+  if (panel === 'evidence') {
+    void send('runs.list', {}, 'runs');
+    void send('trace.list', {}, 'trace');
+  }
   render();
 }
 
 async function approve(id: string, method: string): Promise<void> {
   await send(method, { id }, 'approval');
   await send('approvals.list', {}, 'approvals');
+}
+
+async function selectProvider(provider: string): Promise<void> {
+  await send('provider.select', { provider }, 'provider');
+}
+
+async function selectModel(model: string): Promise<void> {
+  await send('model.select', { model }, 'model');
+}
+
+async function selectAgent(agent: string): Promise<void> {
+  await send('agent.select', { agent }, 'agent');
+}
+
+async function runCommandValue(command: string): Promise<void> {
+  if (!command.trim()) return;
+  await send('command.invoke', { command }, 'command');
+}
+
+async function callBridgeMethod(method: string, params: Record<string, unknown> = {}): Promise<void> {
+  if (!method.trim() || !state.bridgeRunning) return;
+  state.selectedBridgeMethod = method;
+  await send(method, params, method);
+}
+
+async function callBridgeMethodFromWorkbench(method: string): Promise<void> {
+  state.selectedBridgeMethod = method;
+  const params = bridgeMethodParamsFromDraft();
+  await callBridgeMethod(method, params);
+}
+
+function bridgeMethodParamsFromDraft(): Record<string, unknown> {
+  const draft = state.bridgeDraft;
+  const params: Record<string, unknown> = {};
+  for (const key of ['raw', 'query', 'id', 'name', 'path', 'value', 'target', 'scope'] as const) {
+    const value = draft[key].trim();
+    if (value) params[key] = value;
+  }
+  const limit = Number.parseInt(draft.limit, 10);
+  if (Number.isFinite(limit) && limit > 0) params.limit = limit;
+  if (draft.global) params.global = true;
+  return params;
+}
+
+async function setFastMode(enabled: boolean): Promise<void> {
+  await send('fast.set', { enabled }, 'fast');
+}
+
+async function setEffort(effort: string): Promise<void> {
+  await send('effort.set', { effort }, 'effort');
+}
+
+async function setToolLimit(value: string): Promise<void> {
+  await send('toolLimit.set', { value }, 'tool-limit');
 }
 
 function render(): void {
@@ -398,6 +595,7 @@ function renderTopBar(): string {
       </div>
       <div class="flex shrink-0 items-center gap-1.5">
         <button class="vv-action" id="refresh-all">Refresh</button>
+        <button class="vv-action" id="restart-bridge" ${state.bridgeStopping ? 'disabled' : ''}>${state.bridgeStopping ? 'Restarting…' : 'Restart bridge'}</button>
         <button class="vv-action" data-panel="approvals">Approvals</button>
         <button class="vv-action vv-action-primary" data-panel="diff">Open diff</button>
         <div class="vv-pill ${state.bridgeRunning ? 'text-vv-green' : 'text-vv-red'}"><span class="h-2 w-2 rounded-full ${state.bridgeRunning ? 'bg-vv-green' : 'bg-vv-red'}"></span>${state.bridgeRunning ? `Bridge online${state.bridgePid ? ` · ${state.bridgePid}` : ''}` : 'Bridge offline'}</div>
@@ -417,7 +615,7 @@ function renderFooterRail(): string {
 }
 
 function renderError(): string {
-  return `<div class="mx-auto mt-3 max-w-5xl rounded-xl border border-vv-red/45 bg-vv-red/10 p-3 text-red-100 shadow-danger"><strong>Bridge problem</strong><pre class="vv-code mt-2 whitespace-pre-wrap">${escapeHtml(state.error)}</pre></div>`;
+  return `<div class="mx-auto mt-3 max-w-5xl rounded-xl border border-vv-red/45 bg-vv-red/10 p-3 text-red-100 shadow-danger"><div class="flex flex-wrap items-center justify-between gap-2"><strong>Bridge problem</strong><button class="vv-action vv-action-danger" id="restart-bridge-from-error">Restart bridge</button></div><pre class="vv-code mt-2 whitespace-pre-wrap">${escapeHtml(state.error)}</pre></div>`;
 }
 
 function renderPanel(): string {
@@ -431,8 +629,15 @@ function renderNonChatPanel(): string {
     case 'approvals': return renderApprovals();
     case 'tools': return renderTools();
     case 'providers': return renderProviders();
+    case 'capabilities': return renderCapabilities();
+    case 'commands': return renderCommands();
+    case 'runtime': return renderRuntime();
+    case 'openai': return renderOpenAiBridge();
     case 'diff': return renderPre(state.diff || 'No diff loaded.');
-    case 'memory': return renderPre(state.memory || 'No memory status loaded.');
+    case 'memory': return renderMemoryWorkbench();
+    case 'skills': return renderSkillsWorkbench();
+    case 'integrations': return renderIntegrationsWorkbench();
+    case 'evidence': return renderEvidenceWorkbench();
     case 'system': return renderSystem();
     case 'settings': return renderSettings();
     default: return renderChat();
@@ -533,7 +738,318 @@ function renderTools(): string {
 }
 
 function renderProviders(): string {
-  return `<div class="grid gap-4 lg:grid-cols-2"><section><h2 class="mb-3 text-base font-black">Providers</h2>${renderPre(JSON.stringify(state.providers, null, 2))}</section><section><h2 class="mb-3 text-base font-black">Models</h2>${renderPre(JSON.stringify(state.models, null, 2))}<h2 class="mb-3 mt-5 text-base font-black">Agents</h2>${renderPre(JSON.stringify(state.agents, null, 2))}</section></div>`;
+  const providers = Array.isArray(state.providers) ? state.providers : [];
+  const models = Array.isArray(state.models) ? state.models : [];
+  const agents = Array.isArray(state.agents) ? state.agents : [];
+  return `
+    <div class="space-y-4">
+      <div class="vv-panel p-4">
+        <h2 class="mb-2 text-base font-black">Provider / model control</h2>
+        <p class="mb-3 text-xs leading-5 text-vv-muted">Selections are sent through Vegvisir bridge methods. The desktop app never calls OpenAI directly and never handles plaintext provider secrets.</p>
+        <div class="grid gap-3 lg:grid-cols-3">
+          <section>${renderSelectorCards('Providers', providers, 'provider')}</section>
+          <section>${renderSelectorCards('Models', models, 'model')}</section>
+          <section>${renderSelectorCards('Agents', agents, 'agent')}</section>
+        </div>
+      </div>
+      <div class="grid gap-4 lg:grid-cols-2">
+        <section><h2 class="mb-3 text-base font-black">Provider JSON</h2>${renderPre(JSON.stringify(state.providers, null, 2))}</section>
+        <section><h2 class="mb-3 text-base font-black">Model / agent JSON</h2>${renderPre(JSON.stringify({ models: state.models, agents: state.agents }, null, 2))}</section>
+      </div>
+    </div>`;
+}
+
+function renderSelectorCards(title: string, items: any[], kind: 'provider' | 'model' | 'agent'): string {
+  const currentProvider = state.session?.provider ?? state.session?.current_provider;
+  const currentModel = state.session?.model ?? state.session?.current_model;
+  const activeAgent = state.session?.agent ?? state.session?.active_agent;
+  const visible = items.slice(0, 24);
+  const cards = visible.map((item) => {
+    const id = String(item.name ?? item.id ?? item.model ?? item.provider ?? 'unknown');
+    const label = String(item.display_name ?? item.displayName ?? item.display_name ?? item.name ?? item.id ?? id);
+    const meta = kind === 'model'
+      ? `${item.provider ?? item.modelProvider ?? ''}${item.contextWindow || item.context_window ? ` · ${item.contextWindow ?? item.context_window} ctx` : ''}`
+      : kind === 'provider'
+        ? `${item.kind ?? ''}${item.auth_type ? ` · ${item.auth_type}` : ''}`
+        : `${item.mode ?? item.description ?? ''}`;
+    const active = (kind === 'provider' && id === currentProvider) || (kind === 'model' && id === currentModel) || (kind === 'agent' && id === activeAgent);
+    return `
+      <button class="vv-soft-panel w-full p-3 text-left ${active ? 'border-vv-cyan bg-vv-cyan/10' : ''}" data-select-${kind}="${escapeHtml(id)}">
+        <div class="flex items-center justify-between gap-2"><span class="truncate font-black">${escapeHtml(label)}</span>${active ? '<span class="vv-pill text-vv-cyan">active</span>' : ''}</div>
+        <div class="mt-1 truncate text-xs text-vv-muted">${escapeHtml(meta)}</div>
+      </button>`;
+  }).join('');
+  return `<h3 class="mb-2 font-black">${escapeHtml(title)}</h3><div class="space-y-2">${cards || '<p class="text-xs text-vv-muted">Not loaded.</p>'}</div>`;
+}
+
+
+function renderCapabilities(): string {
+  const capabilities = state.capabilities ?? {};
+  const nativeMethods = Array.isArray(capabilities.native_methods) ? capabilities.native_methods : [];
+  const commandBacked = Array.isArray(capabilities.command_backed_methods) ? capabilities.command_backed_methods : [];
+  const commandCount = Array.isArray(capabilities.commands) ? capabilities.commands.length : state.commands.length;
+  return `
+    <div class="space-y-4">
+      <section class="vv-panel p-4">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 class="text-base font-black">Bridge parity map</h2>
+            <p class="mt-2 max-w-3xl text-xs leading-5 text-vv-muted">The desktop app consumes Vegvisir through <code class="text-vv-cyan">vegvisir app-server</code>. Native methods carry typed UI data; command-backed methods provide named parity endpoints for the full harness command families.</p>
+          </div>
+          <button class="vv-action" data-bridge-method="bridge.capabilities">Refresh capabilities</button>
+        </div>
+        <div class="mt-4 grid gap-3 md:grid-cols-3">
+          ${metricCard('Native methods', nativeMethods.length, 'typed bridge surface')}
+          ${metricCard('Command-backed methods', commandBacked.length, 'slash-command parity')}
+          ${metricCard('Slash commands', commandCount, 'registered TUI surface')}
+        </div>
+      </section>
+      <div class="grid gap-4 lg:grid-cols-2">
+        <section class="vv-panel p-4">
+          <h3 class="mb-3 font-black">Native methods</h3>
+          <div class="flex flex-wrap gap-2">${nativeMethods.map((method: string) => `<span class="vv-pill">${escapeHtml(method)}</span>`).join('') || '<span class="text-xs text-vv-muted">Not loaded.</span>'}</div>
+        </section>
+        <section class="vv-panel p-4">
+          <h3 class="mb-3 font-black">Command-backed parity methods</h3>
+          <div class="vv-scrollbar max-h-[38rem] space-y-2 overflow-auto pr-1">${commandBacked.map(renderBridgeMethodRow).join('') || '<p class="text-xs text-vv-muted">Not loaded.</p>'}</div>
+        </section>
+      </div>
+      <section><h3 class="mb-2 font-black">Raw capability payload</h3>${renderPre(JSON.stringify(capabilities, null, 2))}</section>
+    </div>`;
+}
+
+function metricCard(label: string, value: number | string, hint: string): string {
+  return `<div class="vv-soft-panel p-4"><div class="text-2xl font-black text-vv-cyan">${escapeHtml(String(value))}</div><div class="mt-1 text-sm font-bold">${escapeHtml(label)}</div><div class="mt-1 text-xs text-vv-muted">${escapeHtml(hint)}</div></div>`;
+}
+
+function renderBridgeMethodRow(spec: any): string {
+  const method = String(spec.method ?? '');
+  const command = String(spec.command ?? '');
+  const subcommand = spec.default_subcommand ? ` ${spec.default_subcommand}` : '';
+  return `<button class="vv-soft-panel w-full p-3 text-left hover:border-vv-line2" data-bridge-method="${escapeHtml(method)}">
+    <div class="font-mono text-xs font-black text-vv-cyan">${escapeHtml(method)}</div>
+    <div class="mt-1 text-xs text-vv-muted">${escapeHtml(command + subcommand)}</div>
+  </button>`;
+}
+
+function renderMemoryWorkbench(): string {
+  const actions = [
+    ['memory.status', 'Status', 'Active CMS-v2 user/project scope'],
+    ['memory.recent', 'Recent', 'Recent project-scoped memories'],
+    ['memory.usedThisTurn', 'Used this turn', 'Latest context artifact'],
+    ['memory.writesThisSession', 'Writes this session', 'Memory writeback audit'],
+    ['memory.context', 'Prepare context', 'ECM context for a message'],
+    ['memory.recall', 'Recall', 'Retrieve CMS memories by query'],
+    ['memory.searchChatGpt', 'Search ChatGPT archive', 'Explicit imported archive search'],
+    ['memory.export', 'Export', 'Export memories through Vegvisir'],
+  ];
+  return renderMethodWorkbench('Memory / CMS / ECM', 'Memory operations remain owned by CMS-v2 and Vegvisir. The desktop app only sends structured bridge requests and displays returned evidence.', actions, 'memory.status', state.memory || methodOutputText('memory.status'));
+}
+
+function renderSkillsWorkbench(): string {
+  const actions = [
+    ['skills.status', 'Status', 'Skill registry and bundle status'],
+    ['skills.compile', 'Compile', 'Compile local source/help into skill draft'],
+    ['skills.route', 'Route', 'Route a task to matching skills'],
+    ['skills.load', 'Load', 'Load skill body/context'],
+    ['skills.eval', 'Eval', 'Run deterministic skill evals'],
+    ['skills.forge', 'Forge', 'Prepare/refine skill bundle'],
+    ['skills.patch', 'Patch', 'Patch curated skills'],
+    ['skills.curate', 'Curate', 'Curate registry candidates'],
+    ['skills.detect', 'Detect', 'Detect skill opportunities'],
+    ['skills.trace', 'Trace', 'Inspect skill routing traces'],
+    ['skills.promote', 'Promote', 'Promote bundle to registry'],
+    ['skills.archive', 'Archive', 'Archive bundle'],
+  ];
+  return renderMethodWorkbench('Skills / Skiller / LSL', 'These entry points expose the skill system without reimplementing Skiller in the GUI.', actions, 'skills.status', methodOutputText('skills.status'));
+}
+
+function renderIntegrationsWorkbench(): string {
+  const actions = [
+    ['mcp.status', 'MCP status', 'Configured MCP servers'],
+    ['mcp.tools', 'MCP tools', 'Available MCP tools'],
+    ['mcp.authMap', 'Auth map', 'MCP/HBSE auth mapping'],
+    ['mcp.reload', 'Reload MCP', 'Reload configured servers'],
+    ['hbse.status', 'HBSE status', 'Secret-ref broker state'],
+    ['hbse.services', 'HBSE services', 'Service-ref registry'],
+    ['hbse.usageThisSession', 'HBSE session usage', 'Secret-ref usage audit'],
+    ['subagents.list', 'Subagents', 'Durable worker board'],
+    ['subagents.timeline', 'Timeline', 'Subagent lifecycle events'],
+    ['subagents.policy', 'Policy', 'Subagent concurrency policy'],
+    ['agents.templates', 'Agent templates', 'Reusable agent templates'],
+    ['agents.show', 'Agent show', 'Inspect active/specified agent'],
+  ];
+  return renderMethodWorkbench('Integrations', 'MCP, HBSE, agents, and subagents stay behind Vegvisir policy. Do not paste plaintext secrets into any field.', actions, 'mcp.status', [methodOutputText('mcp.status'), methodOutputText('hbse.status'), methodOutputText('subagents.list')].filter(Boolean).join('\n\n'));
+}
+
+function renderEvidenceWorkbench(): string {
+  const actions = [
+    ['verify.run', 'Verify', 'Run readiness checks'],
+    ['eval.run', 'Eval', 'Run deterministic eval suite'],
+    ['trace.list', 'Trace', 'Recent harness trace events'],
+    ['work.list', 'Work log', 'Tool/activity timeline'],
+    ['runs.list', 'Runs', 'Run artifact bundles'],
+    ['runs.show', 'Show run', 'Inspect latest/specified run'],
+    ['runs.diff', 'Run diff', 'Captured run diff'],
+    ['runs.replayPlan', 'Replay plan', 'Manual replay checklist'],
+  ];
+  return renderMethodWorkbench('Evidence / verification', 'Use these controls before trusting or packaging changes. Outputs are generated by Vegvisir commands and artifacts.', actions, 'runs.list', [methodOutputText('runs.list'), methodOutputText('trace.list'), methodOutputText('verify.run')].filter(Boolean).join('\n\n'));
+}
+
+function renderMethodWorkbench(title: string, description: string, actions: string[][], primaryMethod: string, output: string): string {
+  const selected = state.selectedBridgeMethod || primaryMethod;
+  const selectedOutput = methodOutputText(selected);
+  return `
+    <div class="space-y-4">
+      <section class="vv-panel p-4">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 class="text-base font-black">${escapeHtml(title)}</h2>
+            <p class="mt-2 max-w-3xl text-xs leading-5 text-vv-muted">${escapeHtml(description)}</p>
+          </div>
+          <button class="vv-action" data-bridge-method="${escapeHtml(primaryMethod)}">Refresh</button>
+        </div>
+        ${renderBridgeMethodParameterForm(selected)}
+        <div class="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+          ${actions.map(([method, label, hint]) => `<button class="vv-soft-panel p-3 text-left hover:border-vv-line2 ${selected === method ? 'border-vv-cyan bg-vv-cyan/10' : ''}" data-bridge-method="${escapeHtml(method)}">
+            <div class="font-black">${escapeHtml(label)}</div>
+            <div class="mt-1 font-mono text-[0.68rem] text-vv-cyan">${escapeHtml(method)}</div>
+            <div class="mt-1 text-xs text-vv-muted">${escapeHtml(hint)}</div>
+          </button>`).join('')}
+        </div>
+      </section>
+      <section><h3 class="mb-2 font-black">Latest output${selected ? ` · ${escapeHtml(selected)}` : ''}</h3>${renderPre(selectedOutput || output || 'No output loaded yet. Run an action above.')}</section>
+    </div>`;
+}
+
+function renderBridgeMethodParameterForm(selectedMethod: string): string {
+  const draft = state.bridgeDraft;
+  return `
+    <div class="mt-4 rounded-2xl border border-vv-line bg-black/16 p-3">
+      <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 class="text-sm font-black">Parameterized method call</h3>
+          <p class="mt-1 text-xs text-vv-muted">Use raw for exact slash-command arguments, or fill common fields used by recall, runs, agents, subagents, skills, and memory methods.</p>
+        </div>
+        <button class="vv-action vv-action-primary" data-run-selected-bridge-method="${escapeHtml(selectedMethod)}">Run selected</button>
+      </div>
+      <div class="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+        ${bridgeDraftField('raw', 'Raw args', draft.raw, 'e.g. recent --global')}
+        ${bridgeDraftField('query', 'Query', draft.query, 'search or context query')}
+        ${bridgeDraftField('id', 'ID', draft.id, 'run/task/memory id')}
+        ${bridgeDraftField('name', 'Name', draft.name, 'agent/project/title')}
+        ${bridgeDraftField('path', 'Path', draft.path, 'file or bundle path')}
+        ${bridgeDraftField('value', 'Value', draft.value, 'setting/new value')}
+        ${bridgeDraftField('target', 'Target', draft.target, 'verify/eval target')}
+        ${bridgeDraftField('scope', 'Scope', draft.scope, 'all/runtime/global')}
+        ${bridgeDraftField('limit', 'Limit', draft.limit, 'numeric limit')}
+        <label class="flex items-center gap-2 rounded-xl border border-vv-line bg-black/20 px-3 py-2 text-xs text-vv-muted"><input type="checkbox" data-bridge-param="global" ${draft.global ? 'checked' : ''} /> Global</label>
+      </div>
+    </div>`;
+}
+
+function bridgeDraftField(name: keyof Omit<BridgeMethodDraft, 'global'>, label: string, value: string, placeholder: string): string {
+  return `<label class="grid gap-1"><span class="text-[0.68rem] text-vv-muted">${escapeHtml(label)}</span><input class="vv-focus rounded-xl border border-vv-line bg-black/20 px-3 py-2 text-xs text-vv-text placeholder:text-vv-dim" data-bridge-param="${escapeHtml(name)}" value="${escapeHtml(value)}" placeholder="${escapeHtml(placeholder)}" /></label>`;
+}
+
+function methodOutputText(method: string): string {
+  const payload = state.methodOutputs[method];
+  if (!payload) return '';
+  return payload.output ?? JSON.stringify(payload, null, 2);
+}
+
+function renderCommands(): string {
+  const commands = Array.isArray(state.commands) ? state.commands : [];
+  const groups = commandGroups(commands);
+  return `
+    <div class="space-y-4">
+      <div class="vv-panel p-4">
+        <h2 class="text-base font-black">Full Vegvisir command surface</h2>
+        <p class="mt-2 text-xs leading-5 text-vv-muted">Every registered Vegvisir slash command is discoverable here and can be invoked through <code class="text-vv-cyan">command.invoke</code>. Structured app panels are convenience wrappers, not a separate runtime.</p>
+        <div class="mt-3 flex gap-2">
+          <input id="command-palette-input" class="vv-focus min-w-0 flex-1 rounded-xl border border-vv-line bg-black/20 px-3 py-2 text-xs text-vv-text placeholder:text-vv-dim" placeholder="/subagents list, /mcp status, /skills status, /verify runtime..." />
+          <button id="run-palette-command" class="vv-action">Invoke</button>
+        </div>
+      </div>
+      ${Object.entries(groups).map(([group, items]) => `
+        <section class="vv-panel p-4">
+          <h3 class="mb-3 text-sm font-black uppercase tracking-[0.18em] text-vv-muted">${escapeHtml(group)}</h3>
+          <div class="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+            ${(items as any[]).map(renderCommandCard).join('')}
+          </div>
+        </section>`).join('')}
+    </div>`;
+}
+
+function commandGroups(commands: any[]): Record<string, any[]> {
+  const groups: Record<string, any[]> = {
+    Sessions: [], Runtime: [], Providers: [], Memory: [], Skills: [], Integrations: [], Evidence: [], Other: [],
+  };
+  for (const command of commands) {
+    const name = String(command.name ?? '');
+    const bucket = ['/new','/sessions','/load','/workspace','/projects','/save','/branch','/fork','/title'].includes(name) ? 'Sessions'
+      : ['/tools','/tool-limit','/approvals','/auto','/autonomy','/cancel','/turn-repair','/recover','/status'].includes(name) ? 'Runtime'
+      : ['/models','/model','/provider','/providers','/auth','/effort','/fast','/model-request'].includes(name) ? 'Providers'
+      : ['/memory','/recall','/remember','/context','/summary','/handoff'].includes(name) ? 'Memory'
+      : ['/skills'].includes(name) ? 'Skills'
+      : ['/mcp','/hbse','/subagents','/agent','/agents','/speech','/tts','/config','/profile','/ka'].includes(name) ? 'Integrations'
+      : ['/diff','/runs','/verify','/eval','/trace','/work','/history','/system','/system-prompt'].includes(name) ? 'Evidence'
+      : 'Other';
+    groups[bucket].push(command);
+  }
+  return Object.fromEntries(Object.entries(groups).filter(([, items]) => items.length));
+}
+
+function renderCommandCard(command: any): string {
+  const name = String(command.name ?? '');
+  return `
+    <article class="vv-soft-panel p-3">
+      <div class="flex items-center justify-between gap-2"><h4 class="font-mono text-sm font-black text-vv-cyan">${escapeHtml(name)}</h4><button class="vv-action px-2 py-1 text-[0.65rem]" data-command-run="${escapeHtml(name)}">Run</button></div>
+      <p class="mt-2 text-xs leading-5 text-vv-muted">${escapeHtml(command.description ?? '')}</p>
+      <pre class="vv-code mt-2 truncate text-[0.68rem] text-vv-dim">${escapeHtml(command.usage ?? name)}</pre>
+    </article>`;
+}
+
+function renderRuntime(): string {
+  const runtime = state.runtimeStatus ?? {};
+  return `
+    <div class="space-y-4">
+      <section class="vv-panel p-4">
+        <h2 class="mb-2 text-base font-black">Harness runtime and policy</h2>
+        <p class="mb-3 text-xs leading-5 text-vv-muted">These controls call structured bridge methods or Vegvisir slash commands; approvals, command allow-lists, HBSE, CMS, USRL, and dangerous-bypass policy remain enforced by the harness.</p>
+        <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <button class="vv-action" data-fast="true">Fast on</button>
+          <button class="vv-action" data-fast="false">Fast off</button>
+          <select id="effort-select" class="vv-focus rounded-xl border border-vv-line bg-black/30 px-3 py-2 text-sm text-vv-text">
+            <option value="default">effort: default</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option>
+          </select>
+          <div class="flex gap-2"><input id="tool-limit-input" class="vv-focus min-w-0 rounded-xl border border-vv-line bg-black/30 px-3 py-2 text-sm text-vv-text" placeholder="tool rounds/default" /><button id="set-tool-limit" class="vv-action">Set</button></div>
+        </div>
+      </section>
+      <div class="grid gap-4 lg:grid-cols-2"><section><h3 class="mb-2 font-black">Status</h3>${renderPre(JSON.stringify(runtime.session ?? state.session ?? {}, null, 2))}</section><section><h3 class="mb-2 font-black">Policy output</h3>${renderPre(`${runtime.status_output ?? ''}
+
+${runtime.tools_output ?? ''}`.trim() || 'No runtime status loaded.')}</section></div>
+    </div>`;
+}
+
+function renderOpenAiBridge(): string {
+  const info = state.openaiCompat ?? {};
+  const hbse = state.hbseOnboarding ?? {};
+  return `
+    <div class="space-y-4">
+      <section class="vv-panel p-4">
+        <h2 class="text-base font-black">OpenAI-compatible Vegvisir bridge</h2>
+        <p class="mt-2 text-xs leading-5 text-vv-muted">Use this only to point OpenAI-compatible clients at Vegvisir. Provider access still flows through Vegvisir/HBSE; the desktop app does not request or expose API keys.</p>
+        <div class="mt-3 grid gap-3 md:grid-cols-2">
+          <div><div class="text-xs text-vv-muted">Base URL</div><pre class="vv-code vv-panel mt-1 p-3">${escapeHtml(info.base_url ?? 'Not loaded')}</pre></div>
+          <div><div class="text-xs text-vv-muted">Launch command</div><pre class="vv-code vv-panel mt-1 p-3 whitespace-pre-wrap">${escapeHtml(info.launch_command ?? 'Not loaded')}</pre></div>
+        </div>
+      </section>
+      <div class="grid gap-4 lg:grid-cols-2">
+        <section><h3 class="mb-2 font-black">OpenAI compat metadata</h3>${renderPre(JSON.stringify(info, null, 2))}</section>
+        <section><h3 class="mb-2 font-black">HBSE onboarding metadata</h3>${renderPre(JSON.stringify(hbse, null, 2))}</section>
+      </div>
+    </div>`;
 }
 
 function renderSystem(): string {
@@ -550,7 +1066,7 @@ function renderSettings(): string {
       ${field('agent', 'Agent', state.settings.agent ?? '')}
       <label class="flex items-center gap-3 text-sm text-vv-muted"><input type="checkbox" name="autoStart" ${state.settings.autoStart === false ? '' : 'checked'} /> Auto-start bridge when the desktop app opens</label>
       <label class="flex items-center gap-3 text-sm text-vv-muted"><input type="checkbox" name="dangerousBypass" ${state.settings.dangerousBypass ? 'checked' : ''} /> Dangerous bypass at startup</label>
-      <p class="text-xs leading-5 text-vv-muted">Packaged AppImages may not inherit your shell PATH. If bridge start fails, set the Vegvisir binary to an absolute path such as <code class="text-vv-cyan">/home/malice/.local/bin/vegvisir</code>.</p>
+      <p class="text-xs leading-5 text-vv-muted">Packaged AppImages may not inherit your shell PATH. If bridge start fails, set the Vegvisir binary to an absolute path such as <code class="text-vv-cyan">/home/malice/.local/bin/vegvisir</code>. The backend also searches resource-adjacent <code class="text-vv-cyan">resources/bin</code> paths and <code class="text-vv-cyan">VEGVISIR_DESKTOP_RESOURCE_DIR</code> for future bundled binaries.</p>
       <p class="text-xs leading-5 text-vv-muted">Desktop does not bypass Vegvisir. It spawns <code class="text-vv-cyan">vegvisir app-server</code> so providers, HBSE, CMS, tools, approvals, and policy remain owned by the harness.</p>
       <button class="vv-action vv-action-primary w-fit" type="submit">Save settings</button>
     </form>
@@ -580,12 +1096,32 @@ function projectName(): string {
 
 function bindEvents(): void {
   document.querySelector('#start-stop')?.addEventListener('click', () => state.bridgeRunning ? void stopBridge() : void startBridge());
+  document.querySelector('#restart-bridge')?.addEventListener('click', () => void restartBridge());
+  document.querySelector('#restart-bridge-from-error')?.addEventListener('click', () => void restartBridge());
   document.querySelector('#refresh-all')?.addEventListener('click', () => void refreshEverything());
   document.querySelectorAll<HTMLButtonElement>('[data-panel]').forEach((button) => button.addEventListener('click', () => setPanel(button.dataset.panel ?? 'chat')));
   document.querySelector('#send-turn')?.addEventListener('click', () => void sendTurn());
   document.querySelector('#run-command')?.addEventListener('click', () => void runSlashCommand());
   document.querySelector('#refresh-system')?.addEventListener('click', () => void send('system.prompt', {}, 'system'));
   document.querySelectorAll<HTMLButtonElement>('[data-approval]').forEach((button) => button.addEventListener('click', () => void approve(button.dataset.approval ?? '', button.dataset.method ?? 'approvals.deny')));
+  document.querySelectorAll<HTMLButtonElement>('[data-select-provider]').forEach((button) => button.addEventListener('click', () => void selectProvider(button.dataset.selectProvider ?? '')));
+  document.querySelectorAll<HTMLButtonElement>('[data-select-model]').forEach((button) => button.addEventListener('click', () => void selectModel(button.dataset.selectModel ?? '')));
+  document.querySelectorAll<HTMLButtonElement>('[data-select-agent]').forEach((button) => button.addEventListener('click', () => void selectAgent(button.dataset.selectAgent ?? '')));
+  document.querySelectorAll<HTMLButtonElement>('[data-command-run]').forEach((button) => button.addEventListener('click', () => void runCommandValue(button.dataset.commandRun ?? '')));
+  document.querySelectorAll<HTMLInputElement>('[data-bridge-param]').forEach((input) => input.addEventListener('input', updateBridgeDraftFromForm));
+  document.querySelectorAll<HTMLInputElement>('[data-bridge-param]').forEach((input) => input.addEventListener('change', updateBridgeDraftFromForm));
+  document.querySelectorAll<HTMLButtonElement>('[data-bridge-method]').forEach((button) => button.addEventListener('click', () => void callBridgeMethodFromWorkbench(button.dataset.bridgeMethod ?? '')));
+  document.querySelectorAll<HTMLButtonElement>('[data-run-selected-bridge-method]').forEach((button) => button.addEventListener('click', () => void callBridgeMethodFromWorkbench(button.dataset.runSelectedBridgeMethod || state.selectedBridgeMethod || '')));
+  document.querySelector('#run-palette-command')?.addEventListener('click', () => {
+    const input = document.querySelector<HTMLInputElement>('#command-palette-input');
+    void runCommandValue(input?.value.trim() ?? '');
+  });
+  document.querySelectorAll<HTMLButtonElement>('[data-fast]').forEach((button) => button.addEventListener('click', () => void setFastMode(button.dataset.fast === 'true')));
+  document.querySelector('#effort-select')?.addEventListener('change', (event) => void setEffort((event.currentTarget as HTMLSelectElement).value));
+  document.querySelector('#set-tool-limit')?.addEventListener('click', () => {
+    const input = document.querySelector<HTMLInputElement>('#tool-limit-input');
+    void setToolLimit(input?.value.trim() || 'default');
+  });
   document.querySelector('#settings-form')?.addEventListener('submit', (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget as HTMLFormElement);
@@ -601,6 +1137,14 @@ function bindEvents(): void {
     saveSettings();
     render();
   });
+}
+
+function updateBridgeDraftFromForm(event: Event): void {
+  const input = event.currentTarget as HTMLInputElement;
+  const key = input.dataset.bridgeParam as keyof BridgeMethodDraft | undefined;
+  if (!key) return;
+  if (key === 'global') state.bridgeDraft.global = input.checked;
+  else state.bridgeDraft[key] = input.value;
 }
 
 function escapeHtml(value: string): string {

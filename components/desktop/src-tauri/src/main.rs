@@ -4,9 +4,10 @@ use std::{
     env,
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, Command, Stdio},
+    process::{Child, ChildStdin, Command, ExitStatus, Stdio},
     sync::{mpsc, Mutex},
     thread,
+    time::{Duration, Instant},
 };
 
 use serde::{Deserialize, Serialize};
@@ -31,11 +32,22 @@ struct BridgeStatus {
     pid: Option<u32>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BridgeStopResult {
+    was_running: bool,
+    graceful: bool,
+    killed: bool,
+    status: Option<String>,
+}
+
 struct BridgeProcess {
     child: Child,
     stdin: ChildStdin,
     events: mpsc::Receiver<String>,
 }
+
+const DEFAULT_GRACEFUL_STOP_TIMEOUT: Duration = Duration::from_millis(2_000);
 
 #[derive(Default)]
 struct BridgeState {
@@ -60,7 +72,10 @@ fn bridge_status_locked(process: &mut Option<BridgeProcess>) -> BridgeStatus {
         }
     }
 
-    BridgeStatus { running: false, pid: None }
+    BridgeStatus {
+        running: false,
+        pid: None,
+    }
 }
 
 fn is_executable_file(path: &Path) -> bool {
@@ -100,12 +115,31 @@ fn path_candidates(binary: &str) -> Vec<PathBuf> {
     candidates
 }
 
+fn bundled_binary_candidates(binary: &str) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(resource_dir) = env::var("VEGVISIR_DESKTOP_RESOURCE_DIR") {
+        let resource_dir = PathBuf::from(resource_dir);
+        candidates.push(resource_dir.join(binary));
+        candidates.push(resource_dir.join("bin").join(binary));
+    }
+    if let Ok(current_exe) = env::current_exe() {
+        if let Some(parent) = current_exe.parent() {
+            candidates.push(parent.join("resources").join(binary));
+            candidates.push(parent.join("resources").join("bin").join(binary));
+            candidates.push(parent.join("../Resources").join(binary));
+            candidates.push(parent.join("../Resources").join("bin").join(binary));
+        }
+    }
+    candidates
+}
+
 fn resolve_vegvisir_binary(requested: Option<String>) -> Result<PathBuf, String> {
     let binary = requested
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "vegvisir".to_string());
 
-    let candidates = path_candidates(binary.trim());
+    let mut candidates = bundled_binary_candidates(binary.trim());
+    candidates.extend(path_candidates(binary.trim()));
     for candidate in &candidates {
         if is_executable_file(candidate) {
             return Ok(candidate.to_path_buf());
@@ -129,18 +163,10 @@ fn bridge_status(state: State<'_, BridgeState>) -> Result<BridgeStatus, String> 
     Ok(bridge_status_locked(&mut guard))
 }
 
-#[tauri::command]
-fn bridge_start(request: StartBridgeRequest, state: State<'_, BridgeState>) -> Result<BridgeStatus, String> {
-    let mut guard = state.process.lock().map_err(|error| error.to_string())?;
-    let status = bridge_status_locked(&mut guard);
-    if status.running {
-        return Ok(status);
-    }
-
-    let binary = resolve_vegvisir_binary(request.vegvisir_binary)?;
-
-    let workspace = request
+fn workspace_from_request(request: &StartBridgeRequest) -> PathBuf {
+    request
         .workspace
+        .clone()
         .filter(|value| !value.trim().is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| {
@@ -148,7 +174,14 @@ fn bridge_start(request: StartBridgeRequest, state: State<'_, BridgeState>) -> R
                 .map(PathBuf::from)
                 .or_else(|| env::current_dir().ok())
                 .unwrap_or_else(|| PathBuf::from("."))
-        });
+        })
+}
+
+fn spawn_bridge_process(
+    request: StartBridgeRequest,
+) -> Result<(BridgeProcess, BridgeStatus), String> {
+    let binary = resolve_vegvisir_binary(request.vegvisir_binary.clone())?;
+    let workspace = workspace_from_request(&request);
 
     let mut command = Command::new(&binary);
     if let Some(provider) = request.provider.filter(|value| !value.trim().is_empty()) {
@@ -176,9 +209,18 @@ fn bridge_start(request: StartBridgeRequest, state: State<'_, BridgeState>) -> R
             binary.display()
         )
     })?;
-    let stdin = child.stdin.take().ok_or_else(|| "failed to open app-server stdin".to_string())?;
-    let stdout = child.stdout.take().ok_or_else(|| "failed to open app-server stdout".to_string())?;
-    let stderr = child.stderr.take().ok_or_else(|| "failed to open app-server stderr".to_string())?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "failed to open app-server stdin".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "failed to open app-server stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "failed to open app-server stderr".to_string())?;
     let (sender, receiver) = mpsc::channel::<String>();
 
     let start_event = json!({
@@ -212,17 +254,95 @@ fn bridge_start(request: StartBridgeRequest, state: State<'_, BridgeState>) -> R
     });
 
     let pid = child.id();
-    *guard = Some(BridgeProcess { child, stdin, events: receiver });
-    Ok(BridgeStatus { running: true, pid: Some(pid) })
+    Ok((
+        BridgeProcess {
+            child,
+            stdin,
+            events: receiver,
+        },
+        BridgeStatus {
+            running: true,
+            pid: Some(pid),
+        },
+    ))
+}
+
+fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> Result<Option<ExitStatus>, String> {
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(Some(status)),
+            Ok(None) if started.elapsed() >= timeout => return Ok(None),
+            Ok(None) => thread::sleep(Duration::from_millis(50)),
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+}
+
+fn stop_process(mut process: BridgeProcess, timeout: Duration) -> BridgeStopResult {
+    let _ = process
+        .stdin
+        .write_all(b"{\"id\":\"desktop-shutdown\",\"method\":\"shutdown\",\"params\":{}}\n");
+    let _ = process.stdin.flush();
+
+    match wait_for_child_exit(&mut process.child, timeout) {
+        Ok(Some(status)) => BridgeStopResult {
+            was_running: true,
+            graceful: true,
+            killed: false,
+            status: Some(status.to_string()),
+        },
+        Ok(None) => {
+            let _ = process.child.kill();
+            let status = process.child.wait().ok().map(|status| status.to_string());
+            BridgeStopResult {
+                was_running: true,
+                graceful: false,
+                killed: true,
+                status,
+            }
+        }
+        Err(error) => {
+            let _ = process.child.kill();
+            let status = process.child.wait().ok().map(|status| status.to_string());
+            BridgeStopResult {
+                was_running: true,
+                graceful: false,
+                killed: true,
+                status: status.or(Some(error)),
+            }
+        }
+    }
+}
+
+#[tauri::command]
+fn bridge_start(
+    request: StartBridgeRequest,
+    state: State<'_, BridgeState>,
+) -> Result<BridgeStatus, String> {
+    let mut guard = state.process.lock().map_err(|error| error.to_string())?;
+    let status = bridge_status_locked(&mut guard);
+    if status.running {
+        return Ok(status);
+    }
+
+    let (process, status) = spawn_bridge_process(request)?;
+    *guard = Some(process);
+    Ok(status)
 }
 
 #[tauri::command]
 fn bridge_send(request: Value, state: State<'_, BridgeState>) -> Result<(), String> {
     let mut guard = state.process.lock().map_err(|error| error.to_string())?;
-    let process = guard.as_mut().ok_or_else(|| "bridge is not running".to_string())?;
+    let process = guard
+        .as_mut()
+        .ok_or_else(|| "bridge is not running".to_string())?;
     let mut line = serde_json::to_string(&request).map_err(|error| error.to_string())?;
     line.push('\n');
-    process.stdin.write_all(line.as_bytes()).map_err(|error| error.to_string())?;
+    process
+        .stdin
+        .write_all(line.as_bytes())
+        .map_err(|error| error.to_string())?;
     process.stdin.flush().map_err(|error| error.to_string())?;
     Ok(())
 }
@@ -244,20 +364,26 @@ fn bridge_poll(state: State<'_, BridgeState>) -> Result<Vec<String>, String> {
 
     match process.child.try_wait() {
         Ok(Some(status)) => {
-            events.push(json!({
-                "type": "desktop.bridge.exited",
-                "id": null,
-                "payload": { "status": status.to_string() }
-            }).to_string());
+            events.push(
+                json!({
+                    "type": "desktop.bridge.exited",
+                    "id": null,
+                    "payload": { "status": status.to_string() }
+                })
+                .to_string(),
+            );
             *guard = None;
         }
         Ok(None) => {}
         Err(error) => {
-            events.push(json!({
-                "type": "desktop.bridge.error",
-                "id": null,
-                "payload": { "message": error.to_string() }
-            }).to_string());
+            events.push(
+                json!({
+                    "type": "desktop.bridge.error",
+                    "id": null,
+                    "payload": { "message": error.to_string() }
+                })
+                .to_string(),
+            );
             *guard = None;
         }
     }
@@ -266,15 +392,31 @@ fn bridge_poll(state: State<'_, BridgeState>) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-fn bridge_stop(state: State<'_, BridgeState>) -> Result<(), String> {
+fn bridge_stop(state: State<'_, BridgeState>) -> Result<BridgeStopResult, String> {
     let mut guard = state.process.lock().map_err(|error| error.to_string())?;
-    if let Some(mut process) = guard.take() {
-        let _ = process.stdin.write_all(b"{\"id\":\"desktop-shutdown\",\"method\":\"shutdown\",\"params\":{}}\n");
-        let _ = process.stdin.flush();
-        let _ = process.child.kill();
-        let _ = process.child.wait();
+    let Some(process) = guard.take() else {
+        return Ok(BridgeStopResult {
+            was_running: false,
+            graceful: true,
+            killed: false,
+            status: None,
+        });
+    };
+    Ok(stop_process(process, DEFAULT_GRACEFUL_STOP_TIMEOUT))
+}
+
+#[tauri::command]
+fn bridge_restart(
+    request: StartBridgeRequest,
+    state: State<'_, BridgeState>,
+) -> Result<BridgeStatus, String> {
+    let mut guard = state.process.lock().map_err(|error| error.to_string())?;
+    if let Some(process) = guard.take() {
+        let _ = stop_process(process, DEFAULT_GRACEFUL_STOP_TIMEOUT);
     }
-    Ok(())
+    let (process, status) = spawn_bridge_process(request)?;
+    *guard = Some(process);
+    Ok(status)
 }
 
 fn main() {
@@ -286,6 +428,7 @@ fn main() {
             bridge_send,
             bridge_poll,
             bridge_stop,
+            bridge_restart,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Vegvisir Desktop");

@@ -1,0 +1,20 @@
+/target/
+**/*.rs.bk
+
+# Local CMS databases and generated state
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+
+# Local archive/export artifacts
+*.bak
+*.tmp
+cms-archive*.json
+cms-export*.json
+
+# Editor/OS noise
+.DS_Store
+.idea/
+.vscode/
