@@ -81,6 +81,11 @@ struct CommandDescribeParams {
 }
 
 #[derive(Debug, Deserialize)]
+struct SessionLoadParams {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct ProviderSelectParams {
     provider: String,
     #[serde(default)]
@@ -522,6 +527,58 @@ fn handle_request(
                     payload: json!({
                         "session": snapshot(app),
                         "messages": app.session.messages,
+                    }),
+                },
+            )?;
+        }
+        "session.list" => {
+            let workspace = app.cwd.display().to_string();
+            let sessions = app
+                .sessions
+                .list()?
+                .into_iter()
+                .filter(|session| session.cwd == workspace)
+                .map(|session| {
+                    json!({
+                        "id": session.session_id,
+                        "session_id": session.session_id,
+                        "title": session.title,
+                        "created_at": session.created_at,
+                        "cwd": session.cwd,
+                        "message_count": session.messages.len(),
+                        "provider": session.current_provider,
+                        "model": session.current_model,
+                        "current": session.session_id == app.session.session_id,
+                        "status": session.status,
+                    })
+                })
+                .collect::<Vec<_>>();
+            emit_legacy(
+                stdout,
+                BridgeEvent {
+                    kind: "session.list",
+                    id: request.id,
+                    payload: json!({
+                        "session": snapshot(app),
+                        "workspace": workspace,
+                        "sessions": sessions,
+                    }),
+                },
+            )?;
+        }
+        "session.load" => {
+            let params: SessionLoadParams = serde_json::from_value(request.params)?;
+            let command = format!("/load {}", params.id);
+            let output = app.execute_command(&command)?.unwrap_or_default();
+            emit_legacy(
+                stdout,
+                BridgeEvent {
+                    kind: "session.loaded",
+                    id: request.id,
+                    payload: json!({
+                        "command": command,
+                        "output": output,
+                        "session": snapshot(app),
                     }),
                 },
             )?;
@@ -2073,6 +2130,8 @@ fn bridge_capabilities(app: &TuiApplication) -> Value {
             "session.start",
             "workspace.switch",
             "session.messages",
+            "session.list",
+            "session.load",
             "session.exportMarkdown",
             "turn.send",
             "command.run",
