@@ -628,7 +628,29 @@ impl TuiApplication {
                 };
                 let profile = self.agents.load(id)?;
                 Ok(format!(
-                    "agent: {}\nmode: {}\nname: {}\ndescription: {}\ncms_user_id: {}\ncms_project_id: {}\nprovider: {}\nmodel: {}\ntools: {}\nskills: {}\nmcp_servers: {}\nusrl_contracts: {}\nsystem_prompt:\n{}",
+                    "# Agent: {}
+
+| Field | Value |
+| --- | --- |
+| id | `{}` |
+| mode | `{}` |
+| name | {} |
+| description | {} |
+| cms_user_id | `{}` |
+| cms_project_id | `{}` |
+| provider | `{}` |
+| model | `{}` |
+| tools | {} |
+| skills | {} |
+| mcp_servers | {} |
+| usrl_contracts | {} |
+
+## System prompt
+
+```text
+{}
+```",
+                    profile.display_name,
                     profile.id,
                     profile.mode,
                     profile.display_name,
