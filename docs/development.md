@@ -4,6 +4,26 @@ This document covers the common development workflow for the Vegvisir monorepo.
 
 For architecture context, read [system overview](system-overview.md) and [runtime architecture](runtime-architecture.md) first.
 
+## System Dependencies
+
+On a fresh Linux workstation, install native/system dependencies before building the full monorepo:
+
+```bash
+sudo bash scripts/install-system-deps.sh
+```
+
+Useful narrower modes:
+
+```bash
+sudo bash scripts/install-system-deps.sh --core-only
+sudo bash scripts/install-system-deps.sh --no-browser --no-ghidra
+sudo bash scripts/install-system-deps.sh --dry-run
+```
+
+The full mode installs Rust/native build basics, Node/npm, Python/venv, Tauri/WebKit/GTK desktop prerequisites, Playwright/Solarium runtime libraries, Java/Ghidra support prerequisites, and optional debugging/reverse-engineering tools where available for the detected distro package manager.
+
+`./install.sh --install-system-deps` delegates to this same script.
+
 ## Build
 
 Build all Rust workspace crates:
@@ -244,11 +264,13 @@ components/desktop
 
 The desktop app is a Tauri/TypeScript shell over `vegvisir app-server`. It must preserve the existing harness boundary rather than reimplementing providers, tools, memory, secrets, approvals, or policy in the GUI.
 
-Linux desktop build prerequisites include Tauri/WebKit/DBus development packages. On Debian/Ubuntu-like systems install at least:
+Linux desktop build prerequisites include Tauri/WebKit/DBus/GLib/GTK development packages. The recommended path is:
 
 ```bash
-sudo apt install pkg-config libdbus-1-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+sudo bash scripts/install-system-deps.sh
 ```
+
+On Debian/Ubuntu-like systems, the specific package that provides `glib-2.0.pc` is `libglib2.0-dev`; the desktop dependency script also installs related packages such as `libgtk-3-dev`, `libwebkit2gtk-4.1-dev`, `libayatana-appindicator3-dev`, and `librsvg2-dev` where available.
 
 Run:
 

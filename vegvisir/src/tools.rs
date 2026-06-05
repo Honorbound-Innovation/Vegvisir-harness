@@ -3157,7 +3157,7 @@ echo '{"events":[]}'; exit 0
             cms_config,
             true,
             3,
-            SubagentProviderDefaults::new("openai-sso", "gpt-5.1"),
+            SubagentProviderDefaults::new("openai-sso", "gpt-5.4-mini"),
         )?;
         let mut executor = ToolExecutor {
             registry,
@@ -3185,14 +3185,14 @@ echo '{"events":[]}'; exit 0
 
         assert!(observation.ok, "{}", observation.content);
         assert_eq!(observation.data.get("provider"), Some(&json!("openai-sso")));
-        assert_eq!(observation.data.get("model"), Some(&json!("gpt-5.1")));
+        assert_eq!(observation.data.get("model"), Some(&json!("gpt-5.4-mini")));
         let records = load_subagent_board_records(&board_path)?;
         let record = records
             .iter()
             .find(|record| record.name == "defaults-check")
             .expect("spawned defaults-check record");
         assert_eq!(record.provider.as_deref(), Some("openai-sso"));
-        assert_eq!(record.model.as_deref(), Some("gpt-5.1"));
+        assert_eq!(record.model.as_deref(), Some("gpt-5.4-mini"));
         Ok(())
     }
 
