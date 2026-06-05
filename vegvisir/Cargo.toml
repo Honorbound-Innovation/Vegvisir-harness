@@ -13,6 +13,28 @@ clap = { version = "4", features = ["derive"] }
 libc = "0.2"
 cms-v2 = { path = "../components/cms-v2" }
 crossterm = "0.28"
+inkjet = { version = "0.11.1", default-features = false, features = [
+    "language-bash",
+    "language-c",
+    "language-cpp",
+    "language-c-sharp",
+    "language-css",
+    "language-diff",
+    "language-go",
+    "language-html",
+    "language-java",
+    "language-javascript",
+    "language-json",
+    "language-jsx",
+    "language-plaintext",
+    "language-python",
+    "language-rust",
+    "language-sql",
+    "language-toml",
+    "language-typescript",
+    "language-tsx",
+    "language-yaml",
+] }
 pulldown-cmark = "0.13"
 regex = "1"
 ratatui = "0.29"
