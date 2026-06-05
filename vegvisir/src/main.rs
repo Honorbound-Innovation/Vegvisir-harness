@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 use vegvisir_rust::{
@@ -16,7 +16,7 @@ use vegvisir_rust::{
 };
 
 #[derive(Parser)]
-#[command(name = "vegvisir")]
+#[command(name = "vegvisir", bin_name = "vegvisir")]
 struct Cli {
     #[arg(short, long)]
     prompt: Option<String>,
@@ -94,6 +94,15 @@ enum Command {
         scope: String,
         #[arg(long)]
         workspace: Option<PathBuf>,
+    },
+    /// Launch the Vegvisir Desktop app.
+    Desktop {
+        /// Path to a packaged Vegvisir Desktop executable/AppImage.
+        #[arg(long)]
+        binary: Option<PathBuf>,
+        /// Force launching the source checkout with `npm run dev`.
+        #[arg(long)]
+        dev: bool,
     },
     AppServer {
         #[arg(long)]
@@ -232,6 +241,7 @@ fn main() -> anyhow::Result<()> {
                 cli.artifact_dir,
                 cli.dangerously_bypass_approvals_and_sandbox,
             ),
+            Some(Command::Desktop { binary, dev }) => run_desktop(binary, dev),
             Some(Command::AppServer { workspace }) => run_app_server(BridgeOptions {
                 workspace: workspace.unwrap_or_else(|| root_workspace.clone()),
                 data_root: None,
@@ -286,6 +296,271 @@ fn main() -> anyhow::Result<()> {
 fn run_skiller(args: Vec<std::ffi::OsString>) -> anyhow::Result<()> {
     let argv = std::iter::once(std::ffi::OsString::from("skiller")).chain(args);
     skiller::run_cli_from(argv)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DesktopLaunchTarget {
+    Binary(PathBuf),
+    SourceDev(PathBuf),
+}
+
+fn run_desktop(binary: Option<PathBuf>, dev: bool) -> anyhow::Result<()> {
+    let target = resolve_desktop_launch_target(binary, dev)?;
+    match target {
+        DesktopLaunchTarget::Binary(path) => {
+            let mut child = std::process::Command::new(&path).spawn().map_err(|error| {
+                anyhow::anyhow!(
+                    "failed to launch Vegvisir Desktop at '{}': {error}",
+                    path.display()
+                )
+            })?;
+            println!(
+                "launched Vegvisir Desktop: {} (pid {})",
+                path.display(),
+                child.id()
+            );
+            // Reap immediately if the process exits during startup; otherwise return after launch.
+            if let Some(status) = child.try_wait()? {
+                if !status.success() {
+                    anyhow::bail!("Vegvisir Desktop exited during startup: {status}");
+                }
+            }
+            Ok(())
+        }
+        DesktopLaunchTarget::SourceDev(desktop_dir) => {
+            println!(
+                "launching Vegvisir Desktop from source: {}",
+                desktop_dir.display()
+            );
+            let status = std::process::Command::new("npm")
+                .args(["run", "dev"])
+                .current_dir(&desktop_dir)
+                .status()
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        "failed to run `npm run dev` in '{}': {error}",
+                        desktop_dir.display()
+                    )
+                })?;
+            if !status.success() {
+                anyhow::bail!("Vegvisir Desktop dev launcher exited with status {status}");
+            }
+            Ok(())
+        }
+    }
+}
+
+fn resolve_desktop_launch_target(
+    binary: Option<PathBuf>,
+    dev: bool,
+) -> anyhow::Result<DesktopLaunchTarget> {
+    if let Some(binary) = binary {
+        if is_runnable_file(&binary) {
+            return Ok(DesktopLaunchTarget::Binary(binary));
+        }
+        anyhow::bail!(
+            "desktop binary does not exist or is not a file: {}",
+            binary.display()
+        );
+    }
+
+    if !dev {
+        if let Some(path) = std::env::var_os("VEGVISIR_DESKTOP_BINARY") {
+            let path = PathBuf::from(path);
+            if is_runnable_file(&path) {
+                return Ok(DesktopLaunchTarget::Binary(path));
+            }
+        }
+
+        if let Some(path) = find_packaged_desktop_binary()? {
+            return Ok(DesktopLaunchTarget::Binary(path));
+        }
+    }
+
+    if let Some(path) = find_desktop_source_dir()? {
+        return Ok(DesktopLaunchTarget::SourceDev(path));
+    }
+
+    anyhow::bail!(
+        "could not find Vegvisir Desktop. Set VEGVISIR_DESKTOP_BINARY, pass `vegvisir desktop --binary <path>`, or run from a source checkout containing components/desktop."
+    )
+}
+
+fn find_packaged_desktop_binary() -> anyhow::Result<Option<PathBuf>> {
+    let mut roots = Vec::new();
+    if let Ok(current_exe) = std::env::current_exe() {
+        roots.extend(ancestor_dirs(&current_exe));
+    }
+    roots.push(std::env::current_dir()?);
+
+    let names = desktop_binary_names();
+    for candidate in desktop_path_candidates(&names) {
+        if is_runnable_file(&candidate) {
+            return Ok(Some(candidate));
+        }
+    }
+    for root in dedupe_paths(roots) {
+        for candidate in desktop_binary_candidates_for_root(&root, &names) {
+            if is_runnable_file(&candidate) {
+                return Ok(Some(candidate));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn find_desktop_source_dir() -> anyhow::Result<Option<PathBuf>> {
+    let mut roots = vec![std::env::current_dir()?];
+    if let Ok(current_exe) = std::env::current_exe() {
+        roots.extend(ancestor_dirs(&current_exe));
+    }
+
+    for root in dedupe_paths(roots) {
+        let candidate = root.join("components").join("desktop");
+        if candidate.join("package.json").is_file()
+            && candidate
+                .join("src-tauri")
+                .join("tauri.conf.json")
+                .is_file()
+        {
+            return Ok(Some(candidate));
+        }
+    }
+    Ok(None)
+}
+
+fn ancestor_dirs(path: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let mut current = if path.is_dir() {
+        Some(path)
+    } else {
+        path.parent()
+    };
+    while let Some(dir) = current {
+        dirs.push(dir.to_path_buf());
+        current = dir.parent();
+    }
+    dirs
+}
+
+fn desktop_binary_candidates_for_root(root: &Path, names: &[&str]) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let dirs = [
+        root.to_path_buf(),
+        root.join("bin"),
+        root.join("resources"),
+        root.join("resources").join("bin"),
+        root.join("../Resources"),
+        root.join("../Resources").join("bin"),
+        root.join("components")
+            .join("desktop")
+            .join("src-tauri")
+            .join("target")
+            .join("release"),
+        root.join("components")
+            .join("desktop")
+            .join("src-tauri")
+            .join("target")
+            .join("debug"),
+    ];
+    for dir in dirs {
+        for name in names {
+            candidates.push(dir.join(name));
+        }
+    }
+    candidates
+}
+
+fn desktop_path_candidates(names: &[&str]) -> Vec<PathBuf> {
+    let Some(paths) = std::env::var_os("PATH") else {
+        return Vec::new();
+    };
+    let mut candidates = Vec::new();
+    for dir in std::env::split_paths(&paths) {
+        for name in names {
+            candidates.push(dir.join(name));
+        }
+    }
+    candidates
+}
+
+fn desktop_binary_names() -> Vec<&'static str> {
+    let mut names = vec![
+        "vegvisir-desktop",
+        "vegvisir_desktop",
+        "Vegvisir Desktop",
+        "VegvisirDesktop",
+        "vegvisir-desktop.AppImage",
+        "Vegvisir Desktop.AppImage",
+    ];
+    if cfg!(windows) {
+        names.extend([
+            "vegvisir-desktop.exe",
+            "Vegvisir Desktop.exe",
+            "VegvisirDesktop.exe",
+        ]);
+    }
+    names
+}
+
+fn dedupe_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut deduped = Vec::new();
+    for path in paths {
+        let key = path.to_string_lossy().to_string();
+        if seen.insert(key) {
+            deduped.push(path);
+        }
+    }
+    deduped
+}
+
+fn is_runnable_file(path: &Path) -> bool {
+    path.is_file()
+}
+
+#[cfg(test)]
+mod desktop_launcher_tests {
+    use super::*;
+
+    #[test]
+    fn explicit_desktop_binary_resolves_to_binary_target() {
+        let temp = tempfile::NamedTempFile::new().expect("temp file");
+        let target = resolve_desktop_launch_target(Some(temp.path().to_path_buf()), false)
+            .expect("explicit binary should resolve");
+        assert_eq!(
+            target,
+            DesktopLaunchTarget::Binary(temp.path().to_path_buf())
+        );
+    }
+
+    #[test]
+    fn invalid_explicit_desktop_binary_fails() {
+        let missing =
+            std::env::temp_dir().join(format!("missing-vegvisir-desktop-{}", uuid::Uuid::new_v4()));
+        let error = resolve_desktop_launch_target(Some(missing), false)
+            .expect_err("missing explicit binary should fail");
+        assert!(error.to_string().contains("desktop binary does not exist"));
+    }
+
+    #[test]
+    fn desktop_binary_candidate_roots_include_packaged_and_source_build_paths() {
+        let root = PathBuf::from("/opt/vegvisir");
+        let names = desktop_binary_names();
+        let candidates = desktop_binary_candidates_for_root(&root, &names);
+        assert!(candidates.contains(&root.join("bin").join("vegvisir-desktop")));
+        assert!(
+            candidates.contains(
+                &root
+                    .join("components")
+                    .join("desktop")
+                    .join("src-tauri")
+                    .join("target")
+                    .join("release")
+                    .join("vegvisir-desktop")
+            )
+        );
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
