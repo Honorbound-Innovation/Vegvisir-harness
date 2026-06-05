@@ -69,7 +69,7 @@ The current visual pass uses TailwindCSS and a T3Code-inspired workbench layout 
 - top title/action bar for current task, bridge state, and high-value actions;
 - central transcript/workbench with low-noise message cards;
 - translucent tool/event cards for operational evidence;
-- large bottom composer plus slash-command row;
+- large bottom composer that accepts both natural-language turns and slash commands;
 - compact footer rail for local/workspace/status hints.
 
 The compass/stave design direction should remain practical: rails, panels, focus glow, and telemetry density are good; decorative radial controls that hurt transcript, diff, or log reading are not.
@@ -92,6 +92,8 @@ The frontend then uses the bridge methods documented in [overlay integration](ov
 - `initialize`
 - `session.status`
 - `session.messages`
+- `session.list`
+- `session.load`
 - `turn.send`
 - `command.run`
 - `tools.list`
@@ -123,8 +125,8 @@ The desktop app must preserve these Vegvisir feature areas.
 
 | Feature area | Desktop requirement | Authority |
 | --- | --- | --- |
-| Chat/session turns | Send user turns, stream assistant deltas, display transcript, cancel or stop work when bridge support exists. | Vegvisir app-server |
-| Workspace selection | Select/switch project workspace and restore workspace-scoped session/memory. | Vegvisir app-server |
+| Chat/session turns | Send user turns, stream assistant deltas, display transcript, run slash commands from the same input box, cancel or stop work when bridge support exists. | Vegvisir app-server |
+| Workspace/session selection | Select/switch project workspace, list saved sessions, load prior sessions, and restore workspace-scoped session/memory. | Vegvisir app-server |
 | Providers/models | List and select configured providers/models without exposing plaintext secrets. | Vegvisir provider layer / HBSE |
 | Agents | List/select persistent custom agents and show active agent context. | Vegvisir agent/profile system |
 | Tools | Show tool inventory, risky state, command allow-list surfaces, and tool-call progress. | Vegvisir tool registry/policy |
@@ -145,7 +147,8 @@ The desktop app must preserve these Vegvisir feature areas.
 
 The first scaffold includes these panels:
 
-- **Chat** — transcript, assistant streaming buffer, user turn composer, slash command runner.
+- **Chat** — transcript, assistant streaming buffer, and one composer that sends natural-language turns or slash commands typed with `/`.
+- **Sessions** — saved-session loader for the active workspace using structured `session.list` and `session.load` bridge methods.
 - **Work log** — raw bridge events for tool/progress/debug visibility.
 - **Approvals** — pending approval queue and approve/deny actions.
 - **Tools** — tool inventory and risky marker display.
@@ -258,6 +261,8 @@ If the AppImage opens but cannot start the bridge, open **Settings** and set **V
 ```
 
 Bridge startup failures are shown in the UI instead of silently disappearing. Bridge exits clear the busy state and show a restart action; manual stop records whether shutdown was graceful or required a forced kill.
+
+The Chat composer handles both normal turns and slash commands. Type a prompt normally to call `turn.send`; type `/tools`, `/sessions`, `/load <session-id>`, `/diff`, or another registered slash command to call `command.invoke`. Press `Enter` to send and `Shift+Enter` for a newline. The **Sessions** panel provides a button-driven loader for saved sessions in the active workspace.
 
 ## Verification
 

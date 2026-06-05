@@ -57,7 +57,7 @@ type BridgeMethodDraft = {
   global: boolean;
 };
 
-type PanelId = 'chat' | 'work' | 'approvals' | 'tools' | 'providers' | 'capabilities' | 'commands' | 'runtime' | 'openai' | 'diff' | 'memory' | 'skills' | 'integrations' | 'evidence' | 'system' | 'settings';
+type PanelId = 'chat' | 'sessions' | 'work' | 'approvals' | 'tools' | 'providers' | 'capabilities' | 'commands' | 'runtime' | 'openai' | 'diff' | 'memory' | 'skills' | 'integrations' | 'evidence' | 'system' | 'settings';
 
 const appElement = document.querySelector<HTMLDivElement>('#app');
 if (!appElement) throw new Error('missing #app root');
@@ -65,6 +65,7 @@ const app = appElement;
 
 const panels: Array<{ id: PanelId; label: string; icon: string; hint: string }> = [
   { id: 'chat', label: 'Chat', icon: '✦', hint: 'Active agent transcript' },
+  { id: 'sessions', label: 'Sessions', icon: '▤', hint: 'Load saved work' },
   { id: 'work', label: 'Work log', icon: '◌', hint: 'Bridge and tool events' },
   { id: 'approvals', label: 'Approvals', icon: '◇', hint: 'Risk gates' },
   { id: 'tools', label: 'Tools', icon: '⌘', hint: 'Harness capabilities' },
@@ -92,6 +93,8 @@ const state = {
   session: null as any,
   events: [] as BridgeEvent[],
   messages: [] as Message[],
+  sessions: [] as any[],
+  sessionListWorkspace: '',
   pendingAssistant: '',
   approvals: [] as any[],
   tools: [] as any[],
@@ -257,6 +260,7 @@ async function refreshEverything(): Promise<void> {
   await Promise.allSettled([
     send('session.status', {}, 'status'),
     send('session.messages', {}, 'messages'),
+    send('session.list', {}, 'sessions'),
     send('approvals.list', {}, 'approvals'),
     send('tools.list', {}, 'tools'),
     send('providers.list', {}, 'providers'),
@@ -323,6 +327,20 @@ function handleEvent(event: BridgeEvent): void {
       state.messages = normalizeMessages(event.payload?.messages ?? event.payload ?? []);
       state.pendingAssistant = '';
       break;
+    case 'session.list':
+      state.sessions = Array.isArray(event.payload?.sessions) ? event.payload.sessions : [];
+      state.sessionListWorkspace = event.payload?.workspace ?? '';
+      break;
+    case 'session.loaded':
+      state.session = event.payload?.session ?? state.session;
+      state.pendingAssistant = '';
+      state.error = '';
+      state.activePanel = 'chat';
+      state.messages.push({ role: 'system', content: event.payload?.output ?? 'Session loaded.' });
+      void send('session.messages', {}, 'messages');
+      void send('session.status', {}, 'status');
+      void send('session.list', {}, 'sessions');
+      break;
     case 'turn.started':
       state.busy = true;
       state.pendingAssistant = '';
@@ -377,6 +395,16 @@ function handleEvent(event: BridgeEvent): void {
     case 'openai.compat.info':
       state.openaiCompat = event.payload ?? null;
       break;
+    case 'command.completed':
+      state.session = event.payload?.session ?? state.session;
+      state.messages.push({
+        role: 'command',
+        content: `${event.payload?.command ?? 'command'}\n\n${event.payload?.output ?? ''}`.trim(),
+      });
+      state.pendingAssistant = '';
+      void send('session.status', {}, 'status');
+      void send('session.list', {}, 'sessions');
+      break;
     case 'provider.selected':
     case 'model.selected':
     case 'agent.selected':
@@ -430,22 +458,26 @@ async function sendTurn(): Promise<void> {
   const content = input?.value.trim() ?? '';
   if (!content || !state.bridgeRunning || state.busy) return;
   input!.value = '';
-  state.messages.push({ role: 'user', content });
   state.error = '';
+  if (content.startsWith('/')) {
+    state.messages.push({ role: 'command', content });
+    render();
+    await send('command.invoke', { command: content }, 'command');
+    return;
+  }
+  state.messages.push({ role: 'user', content });
   render();
   await send('turn.send', { content }, 'turn');
 }
 
-async function runSlashCommand(): Promise<void> {
-  const input = document.querySelector<HTMLInputElement>('#command-input');
-  const command = input?.value.trim() ?? '';
-  if (!command || !state.bridgeRunning) return;
-  input!.value = '';
-  await send('command.run', { command }, 'command');
+async function loadSession(id: string): Promise<void> {
+  if (!id.trim() || !state.bridgeRunning || state.busy) return;
+  await send('session.load', { id: id.trim() }, 'session-load');
 }
 
 function setPanel(panel: string): void {
   state.activePanel = panel as PanelId;
+  if (panel === 'sessions') void send('session.list', {}, 'sessions');
   if (panel === 'diff') void send('diff.current', {}, 'diff');
   if (panel === 'memory') void send('memory.status', {}, 'memory');
   if (panel === 'system') void send('system.prompt', {}, 'system');
@@ -594,6 +626,7 @@ function renderTopBar(): string {
         </div>
       </div>
       <div class="flex shrink-0 items-center gap-1.5">
+        <button class="vv-action" data-panel="sessions">Sessions</button>
         <button class="vv-action" id="refresh-all">Refresh</button>
         <button class="vv-action" id="restart-bridge" ${state.bridgeStopping ? 'disabled' : ''}>${state.bridgeStopping ? 'Restarting…' : 'Restart bridge'}</button>
         <button class="vv-action" data-panel="approvals">Approvals</button>
@@ -625,6 +658,7 @@ function renderPanel(): string {
 
 function renderNonChatPanel(): string {
   switch (state.activePanel) {
+    case 'sessions': return renderSessions();
     case 'work': return renderWork();
     case 'approvals': return renderApprovals();
     case 'tools': return renderTools();
@@ -675,20 +709,20 @@ function renderComposer(): string {
   return `
     <div class="mx-auto w-full max-w-4xl">
       <div class="rounded-[1.15rem] border border-vv-line2 bg-vv-panel/90 p-2.5 shadow-[0_18px_56px_rgba(0,0,0,0.30)]">
-        <textarea id="turn-input" class="vv-focus vv-scrollbar h-16 max-h-16 min-h-16 w-full resize-none rounded-xl border border-transparent bg-transparent px-2.5 py-1.5 text-[0.92rem] leading-6 text-vv-text placeholder:text-vv-dim" placeholder="Ask Vegvisir anything, @tag files/folders, or use /command" ${state.bridgeRunning ? '' : 'disabled'}></textarea>
+        <textarea id="turn-input" class="vv-focus vv-scrollbar h-16 max-h-16 min-h-16 w-full resize-none rounded-xl border border-transparent bg-transparent px-2.5 py-1.5 text-[0.92rem] leading-6 text-vv-text placeholder:text-vv-dim" placeholder="Ask Vegvisir anything, or type /sessions, /load <id>, /tools, /diff..." ${state.bridgeRunning ? '' : 'disabled'}></textarea>
         <div class="mt-1.5 flex items-center justify-between gap-2 border-t border-vv-line pt-2">
           <div class="flex min-w-0 items-center gap-1.5 overflow-hidden text-xs text-vv-muted">
             <span class="vv-pill">${escapeHtml(state.settings.model || 'model default')}</span>
             <span class="vv-pill">${state.busy ? 'High activity' : 'Ready'}</span>
-            <span class="vv-pill">Chat</span>
+            <span class="vv-pill">Chat + slash commands</span>
             <span class="vv-pill">${state.settings.dangerousBypass ? 'Bypass startup' : 'Policy gated'}</span>
           </div>
           <button id="send-turn" class="vv-focus grid h-9 w-9 shrink-0 place-items-center rounded-full ${state.busy ? 'bg-vv-red' : 'bg-vv-pink'} text-lg font-black text-white shadow-[0_0_28px_rgba(255,46,126,0.28)]" ${state.bridgeRunning && !state.busy ? '' : 'disabled'}>${state.busy ? '■' : '➤'}</button>
         </div>
       </div>
-      <div class="mt-2 flex gap-2">
-        <input id="command-input" class="vv-focus min-w-0 flex-1 rounded-xl border border-vv-line bg-black/20 px-3 py-2 text-xs text-vv-text placeholder:text-vv-dim" placeholder="Run slash command, e.g. /tools or /diff" ${state.bridgeRunning ? '' : 'disabled'} />
-        <button id="run-command" class="vv-action" ${state.bridgeRunning ? '' : 'disabled'}>Run command</button>
+      <div class="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-vv-muted">
+        <span>Slash commands run from this same input. Press <kbd class="rounded border border-vv-line px-1 text-vv-dim">Enter</kbd> to send, <kbd class="rounded border border-vv-line px-1 text-vv-dim">Shift+Enter</kbd> for newline.</span>
+        <button class="vv-action" data-panel="sessions" ${state.bridgeRunning ? '' : 'disabled'}>Load session</button>
       </div>
     </div>
   `;
@@ -697,14 +731,69 @@ function renderComposer(): string {
 function renderMessage(message: Message): string {
   const role = message.role ?? 'message';
   const isUser = role === 'user';
+  const isCommand = role === 'command';
   const isTool = role.includes('tool') || role.includes('event');
-  const cardClass = isUser ? 'ml-auto max-w-3xl bg-white/[0.07]' : isTool ? 'max-w-4xl border-vv-line bg-black/18 opacity-75' : 'max-w-4xl bg-white/[0.035]';
+  const cardClass = isUser ? 'ml-auto max-w-3xl bg-white/[0.07]' : isCommand ? 'max-w-4xl border-vv-cyan/35 bg-vv-cyan/5' : isTool ? 'max-w-4xl border-vv-line bg-black/18 opacity-75' : 'max-w-4xl bg-white/[0.035]';
   return `
     <article class="vv-soft-panel ${cardClass}">
-      <header class="flex items-center gap-3 border-b border-vv-line px-4 py-2 text-[0.68rem] uppercase tracking-[0.22em] text-vv-muted"><span class="h-2 w-2 rounded-full ${isUser ? 'bg-vv-green' : 'bg-vv-cyan'}"></span>${escapeHtml(role)}</header>
+      <header class="flex items-center gap-3 border-b border-vv-line px-4 py-2 text-[0.68rem] uppercase tracking-[0.22em] text-vv-muted"><span class="h-2 w-2 rounded-full ${isUser ? 'bg-vv-green' : isCommand ? 'bg-vv-cyan' : 'bg-vv-cyan'}"></span>${escapeHtml(role)}</header>
       <pre class="vv-code whitespace-pre-wrap break-words px-4 py-3">${escapeHtml(message.content ?? message.text ?? '')}</pre>
     </article>
   `;
+}
+
+function renderSessions(): string {
+  const sessions = Array.isArray(state.sessions) ? state.sessions : [];
+  return `
+    <div class="space-y-4">
+      <section class="vv-panel p-4">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 class="text-base font-black">Session loader</h2>
+            <p class="mt-2 text-xs leading-5 text-vv-muted">Load saved Vegvisir sessions for the active workspace without leaving the desktop UI. This uses the same harness session store and <code class="text-vv-cyan">/load</code> path as the TUI.</p>
+          </div>
+          <button id="refresh-sessions" class="vv-action" ${state.bridgeRunning ? '' : 'disabled'}>Refresh sessions</button>
+        </div>
+        <div class="mt-3 rounded-xl border border-vv-line bg-black/18 p-3 text-xs text-vv-muted">Workspace: <span class="font-mono text-vv-text">${escapeHtml(state.sessionListWorkspace || state.session?.workspace || state.settings.workspace || 'current')}</span></div>
+      </section>
+      <section class="grid gap-3">
+        ${sessions.length ? sessions.map(renderSessionCard).join('') : '<div class="vv-panel p-4 text-sm text-vv-muted">No saved sessions loaded for this workspace. Click refresh or type <code class="text-vv-cyan">/sessions</code> in chat.</div>'}
+      </section>
+    </div>`;
+}
+
+function renderSessionCard(session: any): string {
+  const id = String(session.session_id ?? session.id ?? '');
+  const title = String(session.title ?? 'untitled');
+  const current = Boolean(session.current);
+  const messages = Number(session.message_count ?? 0);
+  const created = formatTimestamp(session.created_at);
+  return `
+    <article class="vv-soft-panel p-4 ${current ? 'border-vv-cyan/45 bg-vv-cyan/5' : ''}">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div class="min-w-0">
+          <div class="flex flex-wrap items-center gap-2">
+            <h3 class="truncate text-sm font-black text-vv-text">${escapeHtml(title)}</h3>
+            ${current ? '<span class="vv-pill text-vv-cyan">Current</span>' : ''}
+          </div>
+          <div class="mt-2 flex flex-wrap gap-2 text-xs text-vv-muted">
+            <span class="vv-pill">${messages} messages</span>
+            <span class="vv-pill">${escapeHtml(session.provider ?? 'provider')}</span>
+            <span class="vv-pill">${escapeHtml(session.model ?? 'model')}</span>
+            <span class="vv-pill">${escapeHtml(created)}</span>
+          </div>
+          <pre class="vv-code mt-3 truncate text-vv-dim">${escapeHtml(id)}</pre>
+        </div>
+        <button class="vv-action vv-action-primary" data-session-load="${escapeHtml(id)}" ${state.bridgeRunning && !state.busy && !current ? '' : 'disabled'}>${current ? 'Loaded' : 'Load'}</button>
+      </div>
+    </article>`;
+}
+
+function formatTimestamp(value: unknown): string {
+  if (typeof value !== 'string' || !value.trim()) return 'unknown time';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
 }
 
 function renderWork(): string {
@@ -1101,7 +1190,15 @@ function bindEvents(): void {
   document.querySelector('#refresh-all')?.addEventListener('click', () => void refreshEverything());
   document.querySelectorAll<HTMLButtonElement>('[data-panel]').forEach((button) => button.addEventListener('click', () => setPanel(button.dataset.panel ?? 'chat')));
   document.querySelector('#send-turn')?.addEventListener('click', () => void sendTurn());
-  document.querySelector('#run-command')?.addEventListener('click', () => void runSlashCommand());
+  document.querySelector('#turn-input')?.addEventListener('keydown', (event) => {
+    const key = event as KeyboardEvent;
+    if (key.key === 'Enter' && !key.shiftKey) {
+      key.preventDefault();
+      void sendTurn();
+    }
+  });
+  document.querySelector('#refresh-sessions')?.addEventListener('click', () => void send('session.list', {}, 'sessions'));
+  document.querySelectorAll<HTMLButtonElement>('[data-session-load]').forEach((button) => button.addEventListener('click', () => void loadSession(button.dataset.sessionLoad ?? '')));
   document.querySelector('#refresh-system')?.addEventListener('click', () => void send('system.prompt', {}, 'system'));
   document.querySelectorAll<HTMLButtonElement>('[data-approval]').forEach((button) => button.addEventListener('click', () => void approve(button.dataset.approval ?? '', button.dataset.method ?? 'approvals.deny')));
   document.querySelectorAll<HTMLButtonElement>('[data-select-provider]').forEach((button) => button.addEventListener('click', () => void selectProvider(button.dataset.selectProvider ?? '')));
