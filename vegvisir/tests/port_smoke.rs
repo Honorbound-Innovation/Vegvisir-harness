@@ -10204,3 +10204,260 @@ fn openai_tool_loop_applies_model_reasoning_effort() -> anyhow::Result<()> {
     assert_eq!(captured[0].get("reasoning_effort"), Some(&json!("minimal")));
     Ok(())
 }
+
+#[test]
+fn app_server_bridge_exposes_full_command_and_openai_control_surface() -> anyhow::Result<()> {
+    let workspace = tempdir()?;
+    let data_root = tempdir()?;
+    let input = [
+        json!({
+            "id": "commands",
+            "method": "commands.list",
+            "params": {}
+        })
+        .to_string(),
+        json!({
+            "id": "suggest",
+            "method": "commands.suggest",
+            "params": { "prefix": "/pro" }
+        })
+        .to_string(),
+        json!({
+            "id": "describe",
+            "method": "commands.describe",
+            "params": { "name": "providers" }
+        })
+        .to_string(),
+        json!({
+            "id": "capabilities",
+            "method": "bridge.capabilities",
+            "params": {}
+        })
+        .to_string(),
+        json!({
+            "id": "memory-recent",
+            "method": "memory.recent",
+            "params": { "limit": 2 }
+        })
+        .to_string(),
+        json!({
+            "id": "skills-status",
+            "method": "skills.status",
+            "params": {}
+        })
+        .to_string(),
+        json!({
+            "id": "mcp-list",
+            "method": "mcp.list",
+            "params": {}
+        })
+        .to_string(),
+        json!({
+            "id": "verify-runtime",
+            "method": "verify.run",
+            "params": { "scope": "runtime" }
+        })
+        .to_string(),
+        json!({
+            "id": "provider",
+            "method": "provider.select",
+            "params": { "provider": "demo" }
+        })
+        .to_string(),
+        json!({
+            "id": "model",
+            "method": "model.select",
+            "params": { "model": "demo-local" }
+        })
+        .to_string(),
+        json!({
+            "id": "effort",
+            "method": "effort.set",
+            "params": { "effort": "default" }
+        })
+        .to_string(),
+        json!({
+            "id": "fast",
+            "method": "fast.status",
+            "params": {}
+        })
+        .to_string(),
+        json!({
+            "id": "limit",
+            "method": "toolLimit.status",
+            "params": {}
+        })
+        .to_string(),
+        json!({
+            "id": "runtime",
+            "method": "runtime.status",
+            "params": {}
+        })
+        .to_string(),
+        json!({
+            "id": "openai",
+            "method": "openai.compat.info",
+            "params": { "host": "127.0.0.1", "port": 11435 }
+        })
+        .to_string(),
+        json!({
+            "id": "invoke",
+            "method": "command.invoke",
+            "params": { "command": "/providers" }
+        })
+        .to_string(),
+        json!({
+            "id": "bye",
+            "method": "shutdown",
+            "params": {}
+        })
+        .to_string(),
+    ]
+    .join("\n");
+    let mut output = Vec::new();
+    run_app_server_with_io(
+        std::io::Cursor::new(input),
+        &mut output,
+        BridgeOptions {
+            workspace: workspace.path().to_path_buf(),
+            data_root: Some(data_root.path().to_path_buf()),
+            provider: Some("demo".to_string()),
+            model: Some("demo-local".to_string()),
+            agent: None,
+            dangerously_bypass_approvals_and_sandbox: false,
+        },
+    )?;
+
+    let output = String::from_utf8(output)?;
+    let events = output
+        .lines()
+        .map(serde_json::from_str::<Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let commands = events
+        .iter()
+        .find(|event| event["type"] == "commands.list")
+        .expect("commands.list event");
+    let command_list = commands["payload"]["commands"].as_array().unwrap();
+    assert!(
+        command_list
+            .iter()
+            .any(|command| command["name"] == "/subagents")
+    );
+    assert!(command_list.iter().any(|command| command["name"] == "/mcp"));
+    assert!(
+        command_list
+            .iter()
+            .any(|command| command["name"] == "/skills")
+    );
+
+    let suggest = events
+        .iter()
+        .find(|event| event["type"] == "commands.suggest")
+        .expect("commands.suggest event");
+    assert!(
+        suggest["payload"]["suggestions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "/providers")
+    );
+
+    let describe = events
+        .iter()
+        .find(|event| event["type"] == "commands.describe")
+        .expect("commands.describe event");
+    assert_eq!(describe["payload"]["canonical"], "/providers");
+    assert_eq!(describe["payload"]["command"]["name"], "/providers");
+
+    let capabilities = events
+        .iter()
+        .find(|event| event["type"] == "bridge.capabilities")
+        .expect("bridge.capabilities event");
+    assert!(
+        capabilities["payload"]["native_methods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|method| method == "command.invoke")
+    );
+    assert!(
+        capabilities["payload"]["command_backed_methods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|method| method["method"] == "skills.status" && method["command"] == "/skills")
+    );
+
+    for (event_type, command_prefix) in [
+        ("memory.recent", "/memory recent"),
+        ("skills.status", "/skills status"),
+        ("mcp.list", "/mcp list"),
+        ("verify.run", "/verify runtime"),
+    ] {
+        let event = events
+            .iter()
+            .find(|event| event["type"] == event_type)
+            .unwrap_or_else(|| panic!("{event_type} event"));
+        assert!(
+            event["payload"]["command"]
+                .as_str()
+                .unwrap()
+                .starts_with(command_prefix),
+            "unexpected command-backed bridge command for {event_type}: {event:?}"
+        );
+        assert!(event["payload"]["output"].is_string());
+    }
+
+    let provider = events
+        .iter()
+        .find(|event| event["type"] == "provider.selected")
+        .expect("provider.selected event");
+    assert_eq!(provider["payload"]["current_provider"], "demo");
+
+    let model = events
+        .iter()
+        .find(|event| event["type"] == "model.selected")
+        .expect("model.selected event");
+    assert_eq!(model["payload"]["current_model"], "demo-local");
+
+    assert!(events.iter().any(|event| event["type"] == "effort.updated"));
+    assert!(events.iter().any(|event| event["type"] == "fast.status"));
+    assert!(
+        events
+            .iter()
+            .any(|event| event["type"] == "toolLimit.status")
+    );
+
+    let runtime = events
+        .iter()
+        .find(|event| event["type"] == "runtime.status")
+        .expect("runtime.status event");
+    assert_eq!(runtime["payload"]["session"]["provider"], "demo");
+    assert!(
+        runtime["payload"]["status_output"]
+            .as_str()
+            .unwrap()
+            .contains("Session")
+    );
+
+    let openai = events
+        .iter()
+        .find(|event| event["type"] == "openai.compat.info")
+        .expect("openai.compat.info event");
+    assert_eq!(openai["payload"]["base_url"], "http://127.0.0.1:11435/v1");
+    assert!(openai["payload"]["note"].as_str().unwrap().contains("HBSE"));
+
+    let invoked = events
+        .iter()
+        .find(|event| event["type"] == "command.completed" && event["id"] == "invoke")
+        .expect("command.invoke event");
+    assert_eq!(invoked["payload"]["command"], "/providers");
+    assert!(
+        invoked["payload"]["output"]
+            .as_str()
+            .unwrap()
+            .contains("demo")
+    );
+    Ok(())
+}

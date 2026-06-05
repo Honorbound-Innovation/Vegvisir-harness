@@ -71,6 +71,56 @@ struct CommandParams {
 }
 
 #[derive(Debug, Deserialize)]
+struct CommandsSuggestParams {
+    prefix: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CommandDescribeParams {
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProviderSelectParams {
+    provider: String,
+    #[serde(default)]
+    global: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelSelectParams {
+    model: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentSelectParams {
+    agent: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct EffortSetParams {
+    effort: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct FastSetParams {
+    enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ToolLimitSetParams {
+    value: Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiCompatInfoParams {
+    #[serde(default = "default_openai_compat_host")]
+    host: String,
+    #[serde(default = "default_openai_compat_port")]
+    port: u16,
+}
+
+#[derive(Debug, Deserialize)]
 struct ApprovalIdParams {
     id: String,
 }
@@ -99,6 +149,29 @@ struct ModelsListParams {
     refresh: Option<bool>,
     #[serde(alias = "modelProvider")]
     provider: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CommandBackedParams {
+    #[serde(default)]
+    args: Vec<String>,
+    raw: Option<String>,
+    query: Option<String>,
+    id: Option<String>,
+    name: Option<String>,
+    path: Option<String>,
+    value: Option<String>,
+    field: Option<String>,
+    scope: Option<String>,
+    target: Option<String>,
+    command: Option<String>,
+    provider: Option<String>,
+    model: Option<String>,
+    agent: Option<String>,
+    #[serde(default)]
+    global: bool,
+    limit: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -560,7 +633,7 @@ fn handle_request(
                 }
             }
         }
-        "command.run" => {
+        "command.run" | "command.invoke" => {
             let params: CommandParams = serde_json::from_value(request.params)?;
             let output = app.execute_command(&params.command)?.unwrap_or_default();
             emit_legacy(
@@ -570,6 +643,295 @@ fn handle_request(
                     id: request.id,
                     payload: json!({
                         "command": params.command,
+                        "output": output,
+                        "session": snapshot(app),
+                    }),
+                },
+            )?;
+        }
+        "commands.list" => {
+            let commands = app.commands.all().into_iter().collect::<Vec<_>>();
+            emit_legacy(
+                stdout,
+                BridgeEvent {
+                    kind: "commands.list",
+                    id: request.id,
+                    payload: json!({
+                        "commands": commands,
+                        "session": snapshot(app),
+                    }),
+                },
+            )?;
+        }
+        "commands.suggest" => {
+            let params: CommandsSuggestParams = serde_json::from_value(request.params)?;
+            emit_legacy(
+                stdout,
+                BridgeEvent {
+                    kind: "commands.suggest",
+                    id: request.id,
+                    payload: json!({
+                        "prefix": params.prefix,
+                        "suggestions": app.commands.suggest(&params.prefix),
+                    }),
+                },
+            )?;
+        }
+        "commands.describe" => {
+            let params: CommandDescribeParams = serde_json::from_value(request.params)?;
+            let canonical = app.commands.canonical(&params.name);
+            emit_legacy(
+                stdout,
+                BridgeEvent {
+                    kind: "commands.describe",
+                    id: request.id,
+                    payload: json!({
+                        "name": params.name,
+                        "canonical": canonical,
+                        "command": app.commands.get(&canonical),
+                    }),
+                },
+            )?;
+        }
+        "bridge.capabilities" => {
+            emit_legacy(
+                stdout,
+                BridgeEvent {
+                    kind: "bridge.capabilities",
+                    id: request.id,
+                    payload: bridge_capabilities(app),
+                },
+            )?;
+        }
+        "provider.select" => {
+            let params: ProviderSelectParams = serde_json::from_value(request.params)?;
+            let command = if params.global {
+                format!("/provider --global {}", params.provider)
+            } else {
+                format!("/provider {}", params.provider)
+            };
+            let output = app.execute_command(&command)?.unwrap_or_default();
+            emit_legacy(
+                stdout,
+                BridgeEvent {
+                    kind: "provider.selected",
+                    id: request.id,
+                    payload: json!({
+                        "command": command,
+                        "output": output,
+                        "session": snapshot(app),
+                        "current_provider": app.session.current_provider,
+                    }),
+                },
+            )?;
+        }
+        "model.select" => {
+            let params: ModelSelectParams = serde_json::from_value(request.params)?;
+            let command = format!("/model {}", params.model);
+            let output = app.execute_command(&command)?.unwrap_or_default();
+            emit_legacy(
+                stdout,
+                BridgeEvent {
+                    kind: "model.selected",
+                    id: request.id,
+                    payload: json!({
+                        "command": command,
+                        "output": output,
+                        "session": snapshot(app),
+                        "current_model": app.session.current_model,
+                    }),
+                },
+            )?;
+        }
+        "agent.select" => {
+            let params: AgentSelectParams = serde_json::from_value(request.params)?;
+            let command = format!("/agent use {}", params.agent);
+            let output = app.execute_command(&command)?.unwrap_or_default();
+            emit_legacy(
+                stdout,
+                BridgeEvent {
+                    kind: "agent.selected",
+                    id: request.id,
+                    payload: json!({
+                        "command": command,
+                        "output": output,
+                        "session": snapshot(app),
+                        "active_agent": app.session.active_agent_id,
+                    }),
+                },
+            )?;
+        }
+        "effort.status" => {
+            let output = app.execute_command("/effort")?.unwrap_or_default();
+            emit_legacy(
+                stdout,
+                BridgeEvent {
+                    kind: "effort.status",
+                    id: request.id,
+                    payload: json!({
+                        "output": output,
+                        "current_reasoning_level": app.session.current_reasoning_level,
+                        "session": snapshot(app),
+                    }),
+                },
+            )?;
+        }
+        "effort.set" => {
+            let params: EffortSetParams = serde_json::from_value(request.params)?;
+            let command = format!("/effort {}", params.effort);
+            let output = app.execute_command(&command)?.unwrap_or_default();
+            emit_legacy(
+                stdout,
+                BridgeEvent {
+                    kind: "effort.updated",
+                    id: request.id,
+                    payload: json!({
+                        "command": command,
+                        "output": output,
+                        "current_reasoning_level": app.session.current_reasoning_level,
+                        "session": snapshot(app),
+                    }),
+                },
+            )?;
+        }
+        "fast.status" => {
+            let output = app.execute_command("/fast status")?.unwrap_or_default();
+            emit_legacy(
+                stdout,
+                BridgeEvent {
+                    kind: "fast.status",
+                    id: request.id,
+                    payload: json!({
+                        "output": output,
+                        "fast_mode": app.session.fast_mode,
+                        "session": snapshot(app),
+                    }),
+                },
+            )?;
+        }
+        "fast.set" => {
+            let params: FastSetParams = serde_json::from_value(request.params)?;
+            let command = if params.enabled {
+                "/fast on"
+            } else {
+                "/fast off"
+            };
+            let output = app.execute_command(command)?.unwrap_or_default();
+            emit_legacy(
+                stdout,
+                BridgeEvent {
+                    kind: "fast.updated",
+                    id: request.id,
+                    payload: json!({
+                        "command": command,
+                        "output": output,
+                        "fast_mode": app.session.fast_mode,
+                        "session": snapshot(app),
+                    }),
+                },
+            )?;
+        }
+        "toolLimit.status" => {
+            let output = app.execute_command("/tool-limit")?.unwrap_or_default();
+            emit_legacy(
+                stdout,
+                BridgeEvent {
+                    kind: "toolLimit.status",
+                    id: request.id,
+                    payload: json!({
+                        "output": output,
+                        "session": snapshot(app),
+                    }),
+                },
+            )?;
+        }
+        "toolLimit.set" => {
+            let params: ToolLimitSetParams = serde_json::from_value(request.params)?;
+            let raw_value = match params.value {
+                Value::Number(number) => number.to_string(),
+                Value::String(value) => value,
+                Value::Null => "default".to_string(),
+                other => anyhow::bail!(
+                    "toolLimit.set value must be a number, string, or null; got {other}"
+                ),
+            };
+            let command = format!("/tool-limit {raw_value}");
+            let output = app.execute_command(&command)?.unwrap_or_default();
+            emit_legacy(
+                stdout,
+                BridgeEvent {
+                    kind: "toolLimit.updated",
+                    id: request.id,
+                    payload: json!({
+                        "command": command,
+                        "output": output,
+                        "session": snapshot(app),
+                    }),
+                },
+            )?;
+        }
+        "runtime.status" => {
+            let status_output = app.execute_command("/status")?.unwrap_or_default();
+            let tools_output = app.execute_command("/tools status")?.unwrap_or_default();
+            emit_legacy(
+                stdout,
+                BridgeEvent {
+                    kind: "runtime.status",
+                    id: request.id,
+                    payload: json!({
+                        "session": snapshot(app),
+                        "status_output": status_output,
+                        "tools_output": tools_output,
+                        "risky_tools_enabled": app.risky_tools_enabled,
+                        "human_approval_required": app.tool_executor.guardrails.policy.require_human_approval,
+                        "dangerously_bypass_approvals_and_sandbox": app.dangerously_bypass_approvals_and_sandbox,
+                        "pending_approvals": pending_approvals(app),
+                    }),
+                },
+            )?;
+        }
+        "openai.compat.info" => {
+            let params: OpenAiCompatInfoParams =
+                serde_json::from_value(request.params).unwrap_or(OpenAiCompatInfoParams {
+                    host: default_openai_compat_host(),
+                    port: default_openai_compat_port(),
+                });
+            let base_url = format!("http://{}:{}/v1", params.host, params.port);
+            emit_legacy(
+                stdout,
+                BridgeEvent {
+                    kind: "openai.compat.info",
+                    id: request.id,
+                    payload: json!({
+                        "base_url": base_url,
+                        "endpoints": [
+                            "/v1/models",
+                            "/v1/chat/completions",
+                            "/v1/responses"
+                        ],
+                        "launch_command": format!(
+                            "vegvisir --provider {} --model {} open-ai-compat-server --host {} --port {} --workspace {}",
+                            app.session.current_provider,
+                            app.session.current_model,
+                            params.host,
+                            params.port,
+                            app.cwd.display()
+                        ),
+                        "note": "OpenAI-compatible clients must point at this local Vegvisir bridge. Provider credentials remain behind Vegvisir/HBSE; clients should not receive plaintext secrets.",
+                        "session": snapshot(app),
+                    }),
+                },
+            )?;
+        }
+        "workspace.status" => {
+            let output = app.execute_command("/workspace")?.unwrap_or_default();
+            emit_legacy(
+                stdout,
+                BridgeEvent {
+                    kind: "workspace.status",
+                    id: request.id,
+                    payload: json!({
+                        "workspace": app.cwd.display().to_string(),
                         "output": output,
                         "session": snapshot(app),
                     }),
@@ -854,6 +1216,24 @@ fn handle_request(
                 },
             )?;
         }
+        method if command_backed_bridge_spec(method).is_some() => {
+            let spec = command_backed_bridge_spec(method).expect("checked above");
+            let command = bridge_command_from_params(spec, request.params)?;
+            let output = app.execute_command(&command)?.unwrap_or_default();
+            emit_legacy(
+                stdout,
+                BridgeEvent {
+                    kind: spec.event_kind,
+                    id: request.id,
+                    payload: json!({
+                        "method": method,
+                        "command": command,
+                        "output": output,
+                        "session": snapshot(app),
+                    }),
+                },
+            )?;
+        }
         "shutdown" => {
             emit_legacy(
                 stdout,
@@ -875,6 +1255,928 @@ fn handle_request(
         }
     }
     Ok(BridgeControl::Continue)
+}
+
+#[derive(Clone, Copy)]
+struct CommandBackedBridgeSpec {
+    method: &'static str,
+    event_kind: &'static str,
+    command: &'static str,
+    default_subcommand: Option<&'static str>,
+}
+
+const COMMAND_BACKED_BRIDGE_SPECS: &[CommandBackedBridgeSpec] = &[
+    CommandBackedBridgeSpec {
+        method: "sessions.list",
+        event_kind: "sessions.list",
+        command: "/sessions",
+        default_subcommand: None,
+    },
+    CommandBackedBridgeSpec {
+        method: "session.new",
+        event_kind: "session.new",
+        command: "/new",
+        default_subcommand: None,
+    },
+    CommandBackedBridgeSpec {
+        method: "session.save",
+        event_kind: "session.save",
+        command: "/save",
+        default_subcommand: None,
+    },
+    CommandBackedBridgeSpec {
+        method: "session.load",
+        event_kind: "session.load",
+        command: "/load",
+        default_subcommand: None,
+    },
+    CommandBackedBridgeSpec {
+        method: "session.reset",
+        event_kind: "session.reset",
+        command: "/reset",
+        default_subcommand: None,
+    },
+    CommandBackedBridgeSpec {
+        method: "session.retry",
+        event_kind: "session.retry",
+        command: "/retry",
+        default_subcommand: None,
+    },
+    CommandBackedBridgeSpec {
+        method: "session.undo",
+        event_kind: "session.undo",
+        command: "/undo",
+        default_subcommand: None,
+    },
+    CommandBackedBridgeSpec {
+        method: "session.title",
+        event_kind: "session.title",
+        command: "/title",
+        default_subcommand: None,
+    },
+    CommandBackedBridgeSpec {
+        method: "session.branch",
+        event_kind: "session.branch",
+        command: "/branch",
+        default_subcommand: None,
+    },
+    CommandBackedBridgeSpec {
+        method: "session.fork",
+        event_kind: "session.fork",
+        command: "/fork",
+        default_subcommand: None,
+    },
+    CommandBackedBridgeSpec {
+        method: "session.history",
+        event_kind: "session.history",
+        command: "/history",
+        default_subcommand: None,
+    },
+    CommandBackedBridgeSpec {
+        method: "session.compress",
+        event_kind: "session.compress",
+        command: "/compress",
+        default_subcommand: None,
+    },
+    CommandBackedBridgeSpec {
+        method: "session.summary",
+        event_kind: "session.summary",
+        command: "/summary",
+        default_subcommand: None,
+    },
+    CommandBackedBridgeSpec {
+        method: "session.handoff",
+        event_kind: "session.handoff",
+        command: "/handoff",
+        default_subcommand: None,
+    },
+    CommandBackedBridgeSpec {
+        method: "projects.list",
+        event_kind: "projects.list",
+        command: "/projects",
+        default_subcommand: Some("list"),
+    },
+    CommandBackedBridgeSpec {
+        method: "projects.use",
+        event_kind: "projects.use",
+        command: "/projects",
+        default_subcommand: Some("use"),
+    },
+    CommandBackedBridgeSpec {
+        method: "projects.name",
+        event_kind: "projects.name",
+        command: "/projects",
+        default_subcommand: Some("name"),
+    },
+    CommandBackedBridgeSpec {
+        method: "projects.forget",
+        event_kind: "projects.forget",
+        command: "/projects",
+        default_subcommand: Some("forget"),
+    },
+    CommandBackedBridgeSpec {
+        method: "runtime.cancel",
+        event_kind: "runtime.cancel",
+        command: "/cancel",
+        default_subcommand: None,
+    },
+    CommandBackedBridgeSpec {
+        method: "runtime.turnRepair",
+        event_kind: "runtime.turnRepair",
+        command: "/turn-repair",
+        default_subcommand: None,
+    },
+    CommandBackedBridgeSpec {
+        method: "runtime.recover",
+        event_kind: "runtime.recover",
+        command: "/recover",
+        default_subcommand: None,
+    },
+    CommandBackedBridgeSpec {
+        method: "runtime.auto",
+        event_kind: "runtime.auto",
+        command: "/auto",
+        default_subcommand: None,
+    },
+    CommandBackedBridgeSpec {
+        method: "runtime.autonomy",
+        event_kind: "runtime.autonomy",
+        command: "/autonomy",
+        default_subcommand: None,
+    },
+    CommandBackedBridgeSpec {
+        method: "tools.status",
+        event_kind: "tools.status",
+        command: "/tools",
+        default_subcommand: Some("status"),
+    },
+    CommandBackedBridgeSpec {
+        method: "tools.explain",
+        event_kind: "tools.explain",
+        command: "/tools",
+        default_subcommand: Some("explain"),
+    },
+    CommandBackedBridgeSpec {
+        method: "tools.allowRisky",
+        event_kind: "tools.allowRisky",
+        command: "/tools",
+        default_subcommand: Some("allow-risky"),
+    },
+    CommandBackedBridgeSpec {
+        method: "tools.denyRisky",
+        event_kind: "tools.denyRisky",
+        command: "/tools",
+        default_subcommand: Some("deny-risky"),
+    },
+    CommandBackedBridgeSpec {
+        method: "tools.requireApproval",
+        event_kind: "tools.requireApproval",
+        command: "/tools",
+        default_subcommand: Some("require-approval"),
+    },
+    CommandBackedBridgeSpec {
+        method: "tools.noApproval",
+        event_kind: "tools.noApproval",
+        command: "/tools",
+        default_subcommand: Some("no-approval"),
+    },
+    CommandBackedBridgeSpec {
+        method: "memory.recent",
+        event_kind: "memory.recent",
+        command: "/memory",
+        default_subcommand: Some("recent"),
+    },
+    CommandBackedBridgeSpec {
+        method: "memory.recall",
+        event_kind: "memory.recall",
+        command: "/recall",
+        default_subcommand: None,
+    },
+    CommandBackedBridgeSpec {
+        method: "memory.remember",
+        event_kind: "memory.remember",
+        command: "/remember",
+        default_subcommand: None,
+    },
+    CommandBackedBridgeSpec {
+        method: "memory.context",
+        event_kind: "memory.context",
+        command: "/context",
+        default_subcommand: None,
+    },
+    CommandBackedBridgeSpec {
+        method: "memory.modelRequest",
+        event_kind: "memory.modelRequest",
+        command: "/model-request",
+        default_subcommand: None,
+    },
+    CommandBackedBridgeSpec {
+        method: "memory.usedThisTurn",
+        event_kind: "memory.usedThisTurn",
+        command: "/memory",
+        default_subcommand: Some("used-this-turn"),
+    },
+    CommandBackedBridgeSpec {
+        method: "memory.writesThisSession",
+        event_kind: "memory.writesThisSession",
+        command: "/memory",
+        default_subcommand: Some("writes-this-session"),
+    },
+    CommandBackedBridgeSpec {
+        method: "memory.why",
+        event_kind: "memory.why",
+        command: "/memory",
+        default_subcommand: Some("why"),
+    },
+    CommandBackedBridgeSpec {
+        method: "memory.diff",
+        event_kind: "memory.diff",
+        command: "/memory",
+        default_subcommand: Some("diff"),
+    },
+    CommandBackedBridgeSpec {
+        method: "memory.quarantine",
+        event_kind: "memory.quarantine",
+        command: "/memory",
+        default_subcommand: Some("quarantine"),
+    },
+    CommandBackedBridgeSpec {
+        method: "memory.forget",
+        event_kind: "memory.forget",
+        command: "/memory",
+        default_subcommand: Some("forget"),
+    },
+    CommandBackedBridgeSpec {
+        method: "memory.export",
+        event_kind: "memory.export",
+        command: "/memory",
+        default_subcommand: Some("export"),
+    },
+    CommandBackedBridgeSpec {
+        method: "memory.importChatGpt",
+        event_kind: "memory.importChatGpt",
+        command: "/memory",
+        default_subcommand: Some("import-chatgpt"),
+    },
+    CommandBackedBridgeSpec {
+        method: "memory.searchChatGpt",
+        event_kind: "memory.searchChatGpt",
+        command: "/memory",
+        default_subcommand: Some("search-chatgpt"),
+    },
+    CommandBackedBridgeSpec {
+        method: "skills.status",
+        event_kind: "skills.status",
+        command: "/skills",
+        default_subcommand: Some("status"),
+    },
+    CommandBackedBridgeSpec {
+        method: "skills.compile",
+        event_kind: "skills.compile",
+        command: "/skills",
+        default_subcommand: Some("compile"),
+    },
+    CommandBackedBridgeSpec {
+        method: "skills.route",
+        event_kind: "skills.route",
+        command: "/skills",
+        default_subcommand: Some("route"),
+    },
+    CommandBackedBridgeSpec {
+        method: "skills.load",
+        event_kind: "skills.load",
+        command: "/skills",
+        default_subcommand: Some("load"),
+    },
+    CommandBackedBridgeSpec {
+        method: "skills.eval",
+        event_kind: "skills.eval",
+        command: "/skills",
+        default_subcommand: Some("eval"),
+    },
+    CommandBackedBridgeSpec {
+        method: "skills.forge",
+        event_kind: "skills.forge",
+        command: "/skills",
+        default_subcommand: Some("forge"),
+    },
+    CommandBackedBridgeSpec {
+        method: "skills.patch",
+        event_kind: "skills.patch",
+        command: "/skills",
+        default_subcommand: Some("patch"),
+    },
+    CommandBackedBridgeSpec {
+        method: "skills.curate",
+        event_kind: "skills.curate",
+        command: "/skills",
+        default_subcommand: Some("curate"),
+    },
+    CommandBackedBridgeSpec {
+        method: "skills.detect",
+        event_kind: "skills.detect",
+        command: "/skills",
+        default_subcommand: Some("detect"),
+    },
+    CommandBackedBridgeSpec {
+        method: "skills.trace",
+        event_kind: "skills.trace",
+        command: "/skills",
+        default_subcommand: Some("trace"),
+    },
+    CommandBackedBridgeSpec {
+        method: "skills.promote",
+        event_kind: "skills.promote",
+        command: "/skills",
+        default_subcommand: Some("promote"),
+    },
+    CommandBackedBridgeSpec {
+        method: "skills.archive",
+        event_kind: "skills.archive",
+        command: "/skills",
+        default_subcommand: Some("archive"),
+    },
+    CommandBackedBridgeSpec {
+        method: "skills.config",
+        event_kind: "skills.config",
+        command: "/skills",
+        default_subcommand: Some("config"),
+    },
+    CommandBackedBridgeSpec {
+        method: "skills.explain",
+        event_kind: "skills.explain",
+        command: "/skills",
+        default_subcommand: Some("explain"),
+    },
+    CommandBackedBridgeSpec {
+        method: "skills.invoke",
+        event_kind: "skills.invoke",
+        command: "/skills",
+        default_subcommand: Some("invoke"),
+    },
+    CommandBackedBridgeSpec {
+        method: "agents.templates",
+        event_kind: "agents.templates",
+        command: "/agent",
+        default_subcommand: Some("templates"),
+    },
+    CommandBackedBridgeSpec {
+        method: "agents.create",
+        event_kind: "agents.create",
+        command: "/agent",
+        default_subcommand: Some("create"),
+    },
+    CommandBackedBridgeSpec {
+        method: "agents.design",
+        event_kind: "agents.design",
+        command: "/agent",
+        default_subcommand: Some("design"),
+    },
+    CommandBackedBridgeSpec {
+        method: "agents.show",
+        event_kind: "agents.show",
+        command: "/agent",
+        default_subcommand: Some("show"),
+    },
+    CommandBackedBridgeSpec {
+        method: "agents.delete",
+        event_kind: "agents.delete",
+        command: "/agent",
+        default_subcommand: Some("delete"),
+    },
+    CommandBackedBridgeSpec {
+        method: "agents.clear",
+        event_kind: "agents.clear",
+        command: "/agent",
+        default_subcommand: Some("clear"),
+    },
+    CommandBackedBridgeSpec {
+        method: "subagents.list",
+        event_kind: "subagents.list",
+        command: "/subagents",
+        default_subcommand: Some("list"),
+    },
+    CommandBackedBridgeSpec {
+        method: "subagents.show",
+        event_kind: "subagents.show",
+        command: "/subagents",
+        default_subcommand: Some("show"),
+    },
+    CommandBackedBridgeSpec {
+        method: "subagents.cancel",
+        event_kind: "subagents.cancel",
+        command: "/subagents",
+        default_subcommand: Some("cancel"),
+    },
+    CommandBackedBridgeSpec {
+        method: "subagents.timeline",
+        event_kind: "subagents.timeline",
+        command: "/subagents",
+        default_subcommand: Some("timeline"),
+    },
+    CommandBackedBridgeSpec {
+        method: "subagents.events",
+        event_kind: "subagents.events",
+        command: "/subagents",
+        default_subcommand: Some("events"),
+    },
+    CommandBackedBridgeSpec {
+        method: "subagents.artifacts",
+        event_kind: "subagents.artifacts",
+        command: "/subagents",
+        default_subcommand: Some("artifacts"),
+    },
+    CommandBackedBridgeSpec {
+        method: "subagents.ownership",
+        event_kind: "subagents.ownership",
+        command: "/subagents",
+        default_subcommand: Some("ownership"),
+    },
+    CommandBackedBridgeSpec {
+        method: "subagents.policy",
+        event_kind: "subagents.policy",
+        command: "/subagents",
+        default_subcommand: Some("policy"),
+    },
+    CommandBackedBridgeSpec {
+        method: "subagents.max",
+        event_kind: "subagents.max",
+        command: "/subagents",
+        default_subcommand: Some("max"),
+    },
+    CommandBackedBridgeSpec {
+        method: "mcp.list",
+        event_kind: "mcp.list",
+        command: "/mcp",
+        default_subcommand: Some("list"),
+    },
+    CommandBackedBridgeSpec {
+        method: "mcp.status",
+        event_kind: "mcp.status",
+        command: "/mcp",
+        default_subcommand: Some("status"),
+    },
+    CommandBackedBridgeSpec {
+        method: "mcp.authMap",
+        event_kind: "mcp.authMap",
+        command: "/mcp",
+        default_subcommand: Some("auth-map"),
+    },
+    CommandBackedBridgeSpec {
+        method: "mcp.show",
+        event_kind: "mcp.show",
+        command: "/mcp",
+        default_subcommand: Some("show"),
+    },
+    CommandBackedBridgeSpec {
+        method: "mcp.tools",
+        event_kind: "mcp.tools",
+        command: "/mcp",
+        default_subcommand: Some("tools"),
+    },
+    CommandBackedBridgeSpec {
+        method: "mcp.reload",
+        event_kind: "mcp.reload",
+        command: "/mcp",
+        default_subcommand: Some("reload"),
+    },
+    CommandBackedBridgeSpec {
+        method: "mcp.addHttp",
+        event_kind: "mcp.addHttp",
+        command: "/mcp",
+        default_subcommand: Some("add-http"),
+    },
+    CommandBackedBridgeSpec {
+        method: "mcp.addHttpService",
+        event_kind: "mcp.addHttpService",
+        command: "/mcp",
+        default_subcommand: Some("add-http-service"),
+    },
+    CommandBackedBridgeSpec {
+        method: "mcp.addStdio",
+        event_kind: "mcp.addStdio",
+        command: "/mcp",
+        default_subcommand: Some("add-stdio"),
+    },
+    CommandBackedBridgeSpec {
+        method: "mcp.addTool",
+        event_kind: "mcp.addTool",
+        command: "/mcp",
+        default_subcommand: Some("add-tool"),
+    },
+    CommandBackedBridgeSpec {
+        method: "mcp.removeTool",
+        event_kind: "mcp.removeTool",
+        command: "/mcp",
+        default_subcommand: Some("remove-tool"),
+    },
+    CommandBackedBridgeSpec {
+        method: "mcp.remove",
+        event_kind: "mcp.remove",
+        command: "/mcp",
+        default_subcommand: Some("remove"),
+    },
+    CommandBackedBridgeSpec {
+        method: "mcp.enable",
+        event_kind: "mcp.enable",
+        command: "/mcp",
+        default_subcommand: Some("enable"),
+    },
+    CommandBackedBridgeSpec {
+        method: "mcp.disable",
+        event_kind: "mcp.disable",
+        command: "/mcp",
+        default_subcommand: Some("disable"),
+    },
+    CommandBackedBridgeSpec {
+        method: "hbse.status",
+        event_kind: "hbse.status",
+        command: "/hbse",
+        default_subcommand: Some("status"),
+    },
+    CommandBackedBridgeSpec {
+        method: "hbse.usageThisSession",
+        event_kind: "hbse.usageThisSession",
+        command: "/hbse",
+        default_subcommand: Some("usage-this-session"),
+    },
+    CommandBackedBridgeSpec {
+        method: "hbse.usageThisRun",
+        event_kind: "hbse.usageThisRun",
+        command: "/hbse",
+        default_subcommand: Some("usage-this-run"),
+    },
+    CommandBackedBridgeSpec {
+        method: "hbse.provider",
+        event_kind: "hbse.provider",
+        command: "/hbse",
+        default_subcommand: Some("provider"),
+    },
+    CommandBackedBridgeSpec {
+        method: "hbse.mcp",
+        event_kind: "hbse.mcp",
+        command: "/hbse",
+        default_subcommand: Some("mcp"),
+    },
+    CommandBackedBridgeSpec {
+        method: "hbse.services",
+        event_kind: "hbse.services",
+        command: "/hbse",
+        default_subcommand: Some("services"),
+    },
+    CommandBackedBridgeSpec {
+        method: "hbse.service",
+        event_kind: "hbse.service",
+        command: "/hbse",
+        default_subcommand: Some("service"),
+    },
+    CommandBackedBridgeSpec {
+        method: "verify.run",
+        event_kind: "verify.run",
+        command: "/verify",
+        default_subcommand: None,
+    },
+    CommandBackedBridgeSpec {
+        method: "eval.run",
+        event_kind: "eval.run",
+        command: "/eval",
+        default_subcommand: None,
+    },
+    CommandBackedBridgeSpec {
+        method: "trace.list",
+        event_kind: "trace.list",
+        command: "/trace",
+        default_subcommand: None,
+    },
+    CommandBackedBridgeSpec {
+        method: "work.list",
+        event_kind: "work.list",
+        command: "/work",
+        default_subcommand: None,
+    },
+    CommandBackedBridgeSpec {
+        method: "runs.list",
+        event_kind: "runs.list",
+        command: "/runs",
+        default_subcommand: Some("list"),
+    },
+    CommandBackedBridgeSpec {
+        method: "runs.show",
+        event_kind: "runs.show",
+        command: "/runs",
+        default_subcommand: Some("show"),
+    },
+    CommandBackedBridgeSpec {
+        method: "runs.open",
+        event_kind: "runs.open",
+        command: "/runs",
+        default_subcommand: Some("open"),
+    },
+    CommandBackedBridgeSpec {
+        method: "runs.export",
+        event_kind: "runs.export",
+        command: "/runs",
+        default_subcommand: Some("export"),
+    },
+    CommandBackedBridgeSpec {
+        method: "runs.diff",
+        event_kind: "runs.diff",
+        command: "/runs",
+        default_subcommand: Some("diff"),
+    },
+    CommandBackedBridgeSpec {
+        method: "runs.replayPlan",
+        event_kind: "runs.replayPlan",
+        command: "/runs",
+        default_subcommand: Some("replay-plan"),
+    },
+    CommandBackedBridgeSpec {
+        method: "config.status",
+        event_kind: "config.status",
+        command: "/config",
+        default_subcommand: Some("status"),
+    },
+    CommandBackedBridgeSpec {
+        method: "config.user",
+        event_kind: "config.user",
+        command: "/config",
+        default_subcommand: Some("user"),
+    },
+    CommandBackedBridgeSpec {
+        method: "config.path",
+        event_kind: "config.path",
+        command: "/config",
+        default_subcommand: Some("path"),
+    },
+    CommandBackedBridgeSpec {
+        method: "profile.show",
+        event_kind: "profile.show",
+        command: "/profile",
+        default_subcommand: Some("show"),
+    },
+    CommandBackedBridgeSpec {
+        method: "profile.path",
+        event_kind: "profile.path",
+        command: "/profile",
+        default_subcommand: Some("path"),
+    },
+    CommandBackedBridgeSpec {
+        method: "profile.init",
+        event_kind: "profile.init",
+        command: "/profile",
+        default_subcommand: Some("init"),
+    },
+    CommandBackedBridgeSpec {
+        method: "profile.set",
+        event_kind: "profile.set",
+        command: "/profile",
+        default_subcommand: Some("set"),
+    },
+    CommandBackedBridgeSpec {
+        method: "profile.add",
+        event_kind: "profile.add",
+        command: "/profile",
+        default_subcommand: Some("add"),
+    },
+    CommandBackedBridgeSpec {
+        method: "profile.remove",
+        event_kind: "profile.remove",
+        command: "/profile",
+        default_subcommand: Some("remove"),
+    },
+    CommandBackedBridgeSpec {
+        method: "profile.clear",
+        event_kind: "profile.clear",
+        command: "/profile",
+        default_subcommand: Some("clear"),
+    },
+    CommandBackedBridgeSpec {
+        method: "persona.list",
+        event_kind: "persona.list",
+        command: "/ka",
+        default_subcommand: Some("list"),
+    },
+    CommandBackedBridgeSpec {
+        method: "persona.show",
+        event_kind: "persona.show",
+        command: "/ka",
+        default_subcommand: Some("show"),
+    },
+    CommandBackedBridgeSpec {
+        method: "persona.set",
+        event_kind: "persona.set",
+        command: "/ka",
+        default_subcommand: Some("set"),
+    },
+    CommandBackedBridgeSpec {
+        method: "persona.create",
+        event_kind: "persona.create",
+        command: "/ka",
+        default_subcommand: Some("create"),
+    },
+    CommandBackedBridgeSpec {
+        method: "persona.import",
+        event_kind: "persona.import",
+        command: "/ka",
+        default_subcommand: Some("import"),
+    },
+    CommandBackedBridgeSpec {
+        method: "persona.edit",
+        event_kind: "persona.edit",
+        command: "/ka",
+        default_subcommand: Some("edit"),
+    },
+    CommandBackedBridgeSpec {
+        method: "persona.clear",
+        event_kind: "persona.clear",
+        command: "/ka",
+        default_subcommand: Some("clear"),
+    },
+    CommandBackedBridgeSpec {
+        method: "persona.default",
+        event_kind: "persona.default",
+        command: "/ka",
+        default_subcommand: Some("default"),
+    },
+    CommandBackedBridgeSpec {
+        method: "speech.status",
+        event_kind: "speech.status",
+        command: "/speech",
+        default_subcommand: Some("status"),
+    },
+    CommandBackedBridgeSpec {
+        method: "speech.transcribe",
+        event_kind: "speech.transcribe",
+        command: "/speech",
+        default_subcommand: Some("transcribe"),
+    },
+    CommandBackedBridgeSpec {
+        method: "speech.ptt",
+        event_kind: "speech.ptt",
+        command: "/speech",
+        default_subcommand: Some("ptt"),
+    },
+    CommandBackedBridgeSpec {
+        method: "speech.pttKey",
+        event_kind: "speech.pttKey",
+        command: "/speech",
+        default_subcommand: Some("ptt-key"),
+    },
+    CommandBackedBridgeSpec {
+        method: "speech.pttSeconds",
+        event_kind: "speech.pttSeconds",
+        command: "/speech",
+        default_subcommand: Some("ptt-seconds"),
+    },
+    CommandBackedBridgeSpec {
+        method: "tts.speak",
+        event_kind: "tts.speak",
+        command: "/tts",
+        default_subcommand: None,
+    },
+    CommandBackedBridgeSpec {
+        method: "auth.status",
+        event_kind: "auth.status",
+        command: "/auth",
+        default_subcommand: None,
+    },
+];
+
+fn command_backed_bridge_spec(method: &str) -> Option<CommandBackedBridgeSpec> {
+    COMMAND_BACKED_BRIDGE_SPECS
+        .iter()
+        .copied()
+        .find(|spec| spec.method == method)
+}
+
+fn bridge_capabilities(app: &TuiApplication) -> Value {
+    let command_backed_methods = COMMAND_BACKED_BRIDGE_SPECS
+        .iter()
+        .map(|spec| {
+            json!({
+                "method": spec.method,
+                "event": spec.event_kind,
+                "command": spec.command,
+                "default_subcommand": spec.default_subcommand,
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "session": snapshot(app),
+        "native_methods": [
+            "initialize",
+            "initialized",
+            "thread/start",
+            "turn/start",
+            "model/list",
+            "session.status",
+            "session.start",
+            "workspace.switch",
+            "session.messages",
+            "session.exportMarkdown",
+            "turn.send",
+            "command.run",
+            "command.invoke",
+            "commands.list",
+            "commands.suggest",
+            "commands.describe",
+            "bridge.capabilities",
+            "provider.select",
+            "model.select",
+            "agent.select",
+            "effort.status",
+            "effort.set",
+            "fast.status",
+            "fast.set",
+            "toolLimit.status",
+            "toolLimit.set",
+            "runtime.status",
+            "openai.compat.info",
+            "workspace.status",
+            "tools.list",
+            "providers.list",
+            "models.list",
+            "hbse.onboarding.providers",
+            "agents.list",
+            "approvals.list",
+            "approvals.approveOnce",
+            "approvals.approveOnceAndExecute",
+            "approvals.approveSession",
+            "approvals.approveSessionAndExecute",
+            "approvals.deny",
+            "approvals.edit",
+            "diff.current",
+            "memory.status",
+            "system.prompt",
+            "system.prompt.set",
+            "shutdown"
+        ],
+        "command_backed_methods": command_backed_methods,
+        "commands": app.commands.all().into_iter().collect::<Vec<_>>(),
+        "note": "command-backed methods execute the same Vegvisir slash-command handlers as the TUI and return structured envelope metadata plus command text output; command.invoke remains the universal escape hatch.",
+    })
+}
+
+fn bridge_command_from_params(
+    spec: CommandBackedBridgeSpec,
+    params: Value,
+) -> anyhow::Result<String> {
+    let params: CommandBackedParams = if params.is_null() {
+        CommandBackedParams::default()
+    } else {
+        serde_json::from_value(params)?
+    };
+    if let Some(raw) = params.raw.filter(|raw| !raw.trim().is_empty()) {
+        let raw = raw.trim();
+        if raw.starts_with(spec.command) {
+            return Ok(raw.to_string());
+        }
+        return Ok(format!("{} {raw}", spec.command));
+    }
+
+    let mut args = Vec::new();
+    if let Some(subcommand) = spec.default_subcommand {
+        args.push(subcommand.to_string());
+    }
+    if params.global {
+        args.push("--global".to_string());
+    }
+    if let Some(limit) = params.limit {
+        args.push("--limit".to_string());
+        args.push(limit.to_string());
+    }
+    for value in [
+        params.scope,
+        params.target,
+        params.id,
+        params.name,
+        params.field,
+        params.value,
+        params.path,
+        params.provider,
+        params.model,
+        params.agent,
+        params.command,
+        params.query,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !value.trim().is_empty() {
+            args.push(value);
+        }
+    }
+    args.extend(params.args.into_iter().filter(|arg| !arg.trim().is_empty()));
+
+    Ok(join_command_args(spec.command, &args))
+}
+
+fn join_command_args(command: &str, args: &[String]) -> String {
+    if args.is_empty() {
+        command.to_string()
+    } else {
+        format!("{command} {}", args.join(" "))
+    }
 }
 
 fn emit_approval_mutation(
@@ -908,6 +2210,14 @@ fn default_data_root_path() -> String {
     crate::memory::default_vegvisir_data_root()
         .display()
         .to_string()
+}
+
+fn default_openai_compat_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_openai_compat_port() -> u16 {
+    11435
 }
 
 fn unix_now() -> i64 {

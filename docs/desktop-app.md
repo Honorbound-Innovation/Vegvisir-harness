@@ -82,9 +82,10 @@ The Tauri backend exposes commands to the frontend:
 - `bridge_send` — send one JSON request to the app-server stdin.
 - `bridge_poll` — collect stdout/stderr JSONL events from the app-server and report fast bridge exits.
 - `bridge_status` — report whether the bridge process is still running and clear dead child state.
-- `bridge_stop` — request shutdown and terminate the bridge process.
+- `bridge_stop` — request app-server shutdown, wait briefly for a graceful exit, and only then kill the child if needed. Returns whether the stop was graceful or forced.
+- `bridge_restart` — stop the current app-server with the same graceful-first policy, then spawn a fresh bridge with the current settings.
 
-The frontend auto-starts the bridge on launch by default. Users can disable auto-start in Settings.
+The frontend auto-starts the bridge on launch by default. Users can disable auto-start in Settings. It also exposes top-bar and error-card restart actions so a dead or misconfigured bridge can be restarted without closing the desktop app.
 
 The frontend then uses the bridge methods documented in [overlay integration](overlay-integration.md), including:
 
@@ -96,7 +97,17 @@ The frontend then uses the bridge methods documented in [overlay integration](ov
 - `tools.list`
 - `providers.list`
 - `models.list`
+- `provider.select`
+- `model.select`
+- `effort.status` / `effort.set`
+- `fast.status` / `fast.set`
 - `agents.list`
+- `agent.select`
+- `commands.list` / `commands.suggest` / `commands.describe`
+- `command.invoke`
+- `runtime.status`
+- `toolLimit.status` / `toolLimit.set`
+- `openai.compat.info`
 - `approvals.list`
 - `approvals.approveOnce`
 - `approvals.approveSession`
@@ -138,13 +149,33 @@ The first scaffold includes these panels:
 - **Work log** — raw bridge events for tool/progress/debug visibility.
 - **Approvals** — pending approval queue and approve/deny actions.
 - **Tools** — tool inventory and risky marker display.
-- **Providers** — provider/model/agent data.
+- **Providers** — provider/model/agent data plus structured selection controls.
+- **Capabilities** — `bridge.capabilities` parity map for native bridge methods, command-backed bridge methods, and registered slash commands.
+- **Commands** — discover and invoke the full registered Vegvisir slash-command surface.
+- **Runtime** — policy, approval, fast mode, effort, and tool-round controls exposed through bridge methods.
+- **OpenAI bridge** — metadata for the local OpenAI-compatible Vegvisir HTTP bridge, with HBSE/secret boundaries intact.
 - **Diff** — current diff view.
-- **Memory** — memory status view.
+- **Memory** — CMS/ECM workbench for status, recent memories, recall/context/search/export entry points.
+- **Skills** — Skiller/LSL workbench for status, compile, route, load, eval, Forge, patch, curate, detect, trace, promote, and archive entry points.
+- **Integrations** — MCP, HBSE, agent, and subagent entry points without exposing plaintext secrets.
+- **Evidence** — verify/eval/trace/work/runs entry points for readiness and operational evidence.
 - **System** — effective system prompt view.
 - **Settings** — app-server binary, workspace, provider, model, agent, and startup dangerous-bypass flag.
 
 This is intentionally broad because the desktop shell must be feature-preserving from the beginning.
+
+
+### Parameterized Command-Backed Methods
+
+The desktop workbench includes a shared parameter form for command-backed bridge methods. It can send common `CommandBackedParams` fields to the app-server:
+
+- `raw` for exact slash-command arguments;
+- `query` for recall/context/search style methods;
+- `id` / `name` / `path` / `value` / `target` / `scope` for run, agent, memory, skill, and configuration methods;
+- `limit` for bounded list/search methods;
+- `global` for methods that support global memory or broader scope.
+
+This keeps advanced command families usable from the GUI while the bridge continues to own argument parsing and policy enforcement.
 
 ## What The Desktop App Must Not Do
 
@@ -166,7 +197,7 @@ If the GUI needs a capability that the bridge does not expose yet, add a bridge 
 
 1. Stabilize the Tauri scaffold and build pipeline.
 2. Add structured bridge events for tool calls, checkpoints, subagent updates, and verification progress.
-3. Add bridge methods for provider/model switching after session start.
+3. Expand specialized structured methods for high-value commands that currently rely on `command.invoke`.
 4. Add bridge methods for subagent board listing and detail inspection.
 5. Add bridge methods for Skiller workflows beyond slash-command passthrough.
 6. Add bridge methods for Solarium jobs and evidence artifacts.
@@ -196,7 +227,9 @@ The desktop app auto-starts the bridge on launch and expects a `vegvisir` binary
 - `/usr/local/bin/vegvisir`;
 - `/usr/bin/vegvisir`;
 - `/bin/vegvisir`;
-- directories near the desktop executable.
+- directories near the desktop executable;
+- resource-adjacent `resources/vegvisir`, `resources/bin/vegvisir`, `../Resources/vegvisir`, and `../Resources/bin/vegvisir` locations;
+- `VEGVISIR_DESKTOP_RESOURCE_DIR` and `VEGVISIR_DESKTOP_RESOURCE_DIR/bin` for packager/testing overrides.
 
 If the AppImage opens but cannot start the bridge, open **Settings** and set **Vegvisir binary** to an absolute path, for example:
 
@@ -204,7 +237,7 @@ If the AppImage opens but cannot start the bridge, open **Settings** and set **V
 /home/malice/.local/bin/vegvisir
 ```
 
-Bridge startup failures are shown in the UI instead of silently disappearing.
+Bridge startup failures are shown in the UI instead of silently disappearing. Bridge exits clear the busy state and show a restart action; manual stop records whether shutdown was graceful or required a forced kill.
 
 ## Verification
 
