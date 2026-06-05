@@ -33,8 +33,7 @@ Vegvisir-harness/
 │   ├── skiller/                 # Governed skill compiler, Forge workflow, registry, lifecycle, agent packs
 │   ├── solarium/                # Playwright browser automation and evidence runtime
 │   ├── usrl/                    # USRL parser, validator, and contract runtime
-│   ├── ghidra/                  # Vendored Ghidra source tree for binary-analysis workflows
-│   └── ghidra-headless-mcp/     # Headless Ghidra MCP bridge component
+│   └── ghidra-headless-mcp/     # Headless Ghidra MCP bridge for an installed Ghidra runtime
 ├── docs/                        # Architecture, usage references, and component documentation
 ├── scripts/                     # Helper scripts, including HBSE/provider onboarding helpers
 ├── install.sh                   # Full-system installer
@@ -43,7 +42,7 @@ Vegvisir-harness/
 └── LICENSE                      # MIT license for included project code
 ```
 
-The Rust workspace currently includes the Vegvisir harness, CMS-v2, HBSE, and Skiller. Solarium and USRL are Node/TypeScript components. The Ghidra components are source/runtime integrations for reverse-engineering workflows.
+The Rust workspace currently includes the Vegvisir harness, CMS-v2, HBSE, and Skiller. Solarium and USRL are Node/TypeScript components. Ghidra support uses an installed Ghidra runtime plus the first-party headless MCP bridge.
 
 ## What Vegvisir Does
 
@@ -58,7 +57,7 @@ The Rust workspace currently includes the Vegvisir harness, CMS-v2, HBSE, and Sk
 - Supports Linked Skill Libraries and USRL contracts for routeable workflows, policy-bound behavior, eval hooks, approvals, and reusable skill execution.
 - Supports bounded subagents for reconnaissance, documentation review, test investigation, compatibility checks, security review, and design critique, with durable board records, explicit file scopes, work budgets, status inspection, cancellation, and active scope-conflict protection.
 - Integrates Solarium as the first-party browser automation/evidence runtime for screenshots, observations, scoped crawls, audits, GraphQL audit workflows, profiles, auth-session references, replay, and workflow seed generation.
-- Carries Ghidra and headless Ghidra MCP components for binary-intelligence and reverse-engineering workflows.
+- Carries a headless Ghidra MCP bridge for binary-intelligence and reverse-engineering workflows against an installed Ghidra runtime.
 - Includes verification, eval, trace, audit, approval, sandbox-status, subagent-board, and tool-inventory surfaces for keeping high-capability sessions inspectable.
 
 ## Runtime Model
@@ -154,10 +153,10 @@ Prerequisites:
 - Rust toolchain with Cargo.
 - Node.js and npm for USRL, Solarium, and desktop web assets.
 - Python 3 with `venv` for Python-backed binary-intelligence components.
-- JDK 21, `unzip`, and `zip` for the vendored Ghidra Gradle `buildGhidra` install step.
+- JDK 21 for running an installed Ghidra runtime when Ghidra integrations are enabled.
 - Linux for the full HBSE broker service workflow.
 
-On Debian-like systems, `./install.sh --install-system-deps` installs the native packages the installer knows how to provision, including JDK 21 and archive tools for Ghidra.
+On Debian-like systems, `./install.sh --install-system-deps` installs the native packages the installer knows how to provision, including JDK 21 for Ghidra runtime support.
 
 Install the full system:
 
@@ -195,7 +194,7 @@ Uninstall:
 ./uninstall.sh
 ```
 
-The installer places these commands under `$prefix/bin` where applicable. Optional component flags such as `--no-solarium`, `--no-biw`, `--no-ghidra`, `--no-ghidra-headless-mcp`, `--no-desktop`, `--no-skiller`, `--no-usrl`, `--no-hbse`, and `--no-cms-cli` can omit individual systems. When Ghidra is enabled and builds are not disabled, the installer runs the vendored Ghidra Gradle `buildGhidra` task, unpacks the generated `build/dist/ghidra*.zip` distribution under `$prefix/share/vegvisir/components/ghidra/current`, and points the `ghidra`/`analyzeHeadless` wrappers there. The upgrade script reruns `install.sh` from the upgraded source, and the uninstall script removes these installed commands and component trees unless data is explicitly kept.
+The installer places these commands under `$prefix/bin` where applicable. Optional component flags such as `--no-solarium`, `--no-biw`, `--no-ghidra`, `--no-ghidra-headless-mcp`, `--no-desktop`, `--no-skiller`, `--no-usrl`, `--no-hbse`, and `--no-cms-cli` can omit individual systems. When Ghidra is enabled, the installer discovers an existing Ghidra installation from `GHIDRA_HOME`, `GHIDRA_HEADLESS`, or PATH and creates `ghidra`/`analyzeHeadless` wrappers that point to that installation. The upgrade script reruns `install.sh` from the upgraded source, and the uninstall script removes these installed commands and component trees unless data is explicitly kept.
 
 - `vegvisir`
 - `vegvisir-rust`

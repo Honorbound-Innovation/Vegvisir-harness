@@ -18,7 +18,7 @@ Options:
   --no-usrl                          Do not build/install the USRL CLI wrapper.
   --no-solarium                      Do not install the Solarium component.
   --no-biw                           Do not install Binary Intelligence Workbench.
-  --no-ghidra                        Do not build/install the vendored Ghidra distribution and runtime wrappers.
+  --no-ghidra                        Do not install wrappers for an existing Ghidra installation.
   --no-ghidra-headless-mcp           Do not install the Ghidra headless MCP bridge wrapper.
   --no-desktop                       Do not install the desktop component source/web assets.
   --hbse-service <none|user|system>  Install HBSE broker service. Default: none
@@ -180,7 +180,6 @@ etc_dir="$prefix/etc/vegvisir"
 share_dir="$prefix/share/vegvisir"
 usrl_share_dir="$share_dir/usrl"
 component_share_dir="$share_dir/components"
-ghidra_share_dir="$component_share_dir/ghidra"
 ghidra_headless_mcp_share_dir="$component_share_dir/ghidra-headless-mcp"
 desktop_share_dir="$component_share_dir/desktop"
 
@@ -204,8 +203,6 @@ install_debian_deps() {
     python3 \
     python3-pip \
     python3-venv \
-    unzip \
-    zip \
     openjdk-21-jdk \
     pkg-config \
     libtss2-dev
@@ -270,10 +267,6 @@ if [[ "$install_solarium" -eq 1 ]]; then
 fi
 if [[ "$install_biw" -eq 1 ]]; then
   require_file "$repo_root/components/binary-intelligence-workbench/pyproject.toml"
-fi
-if [[ "$install_ghidra" -eq 1 ]]; then
-  require_file "$repo_root/components/ghidra/gradlew"
-  require_file "$repo_root/components/ghidra/build.gradle"
 fi
 if [[ "$install_ghidra_headless_mcp" -eq 1 ]]; then
   require_file "$repo_root/components/ghidra-headless-mcp/bin/ghidra-headless"
@@ -407,58 +400,37 @@ fi
 
 
 
-build_and_install_ghidra() {
-  local src_dir="$1"
-  local dst_dir="$2"
+discover_ghidra_install() {
+  GHIDRA_RUN_PATH=""
+  GHIDRA_HEADLESS_PATH=""
 
-  if ! command -v java >/dev/null 2>&1; then
-    echo "java is required to build Ghidra. Install JDK 21 or rerun with --install-system-deps." >&2
-    exit 1
-  fi
-  if ! command -v unzip >/dev/null 2>&1; then
-    echo "unzip is required to install the built Ghidra distribution. Install unzip or rerun with --install-system-deps." >&2
-    exit 1
-  fi
-
-  chmod +x "$src_dir/gradlew"
-  if [[ ! -d "$src_dir/dependencies" ]]; then
-    echo "Fetching Ghidra Gradle build dependencies..."
-    (cd "$src_dir" && ./gradlew -I gradle/support/fetchDependencies.gradle)
+  if [[ -n "${GHIDRA_HOME:-}" ]]; then
+    if [[ -x "$GHIDRA_HOME/ghidraRun" ]]; then
+      GHIDRA_RUN_PATH="$GHIDRA_HOME/ghidraRun"
+    fi
+    if [[ -x "$GHIDRA_HOME/support/analyzeHeadless" ]]; then
+      GHIDRA_HEADLESS_PATH="$GHIDRA_HOME/support/analyzeHeadless"
+    fi
   fi
 
-  echo "Building Ghidra distribution with Gradle buildGhidra..."
-  (cd "$src_dir" && ./gradlew buildGhidra)
-
-  local dist_zip
-  dist_zip="$(find "$src_dir/build/dist" -maxdepth 1 -type f -name 'ghidra_*_PUBLIC_*.zip' -print | sort | tail -n 1)"
-  if [[ -z "$dist_zip" ]]; then
-    dist_zip="$(find "$src_dir/build/dist" -maxdepth 1 -type f -name 'ghidra*.zip' -print | sort | tail -n 1)"
-  fi
-  if [[ -z "$dist_zip" ]]; then
-    echo "Ghidra build completed but no distribution zip was found under $src_dir/build/dist" >&2
-    exit 1
+  if [[ -z "$GHIDRA_HEADLESS_PATH" && -n "${GHIDRA_HEADLESS:-}" && -x "$GHIDRA_HEADLESS" ]]; then
+    GHIDRA_HEADLESS_PATH="$GHIDRA_HEADLESS"
+    local inferred_home
+    inferred_home="$(cd "$(dirname "$GHIDRA_HEADLESS")/.." && pwd)"
+    if [[ -z "$GHIDRA_RUN_PATH" && -x "$inferred_home/ghidraRun" ]]; then
+      GHIDRA_RUN_PATH="$inferred_home/ghidraRun"
+    fi
   fi
 
-  rm -rf "$dst_dir"
-  mkdir -p "$dst_dir"
-  unzip -q "$dist_zip" -d "$dst_dir"
-
-  local unpacked_dir
-  unpacked_dir="$(find "$dst_dir" -mindepth 1 -maxdepth 1 -type d -name 'ghidra*' -print | sort | tail -n 1)"
-  if [[ -z "$unpacked_dir" ]]; then
-    echo "Ghidra distribution did not unpack to a ghidra* directory under $dst_dir" >&2
-    exit 1
+  if [[ -z "$GHIDRA_HEADLESS_PATH" ]] && command -v analyzeHeadless >/dev/null 2>&1; then
+    GHIDRA_HEADLESS_PATH="$(command -v analyzeHeadless)"
   fi
-
-  rm -rf "$dst_dir/current"
-  ln -s "$(basename "$unpacked_dir")" "$dst_dir/current"
-
-  if [[ ! -f "$dst_dir/current/ghidraRun" ]]; then
-    echo "Ghidra distribution is missing ghidraRun: $dst_dir/current/ghidraRun" >&2
-    exit 1
+  if [[ -z "$GHIDRA_RUN_PATH" ]] && command -v ghidraRun >/dev/null 2>&1; then
+    GHIDRA_RUN_PATH="$(command -v ghidraRun)"
   fi
-  if [[ ! -f "$dst_dir/current/support/analyzeHeadless" ]]; then
-    echo "Ghidra distribution is missing analyzeHeadless: $dst_dir/current/support/analyzeHeadless" >&2
+  if [[ -z "$GHIDRA_HEADLESS_PATH" ]]; then
+    echo "Ghidra analyzeHeadless was not found." >&2
+    echo "Install Ghidra separately and set GHIDRA_HOME=/path/to/ghidra_<version> or GHIDRA_HEADLESS=/path/to/support/analyzeHeadless." >&2
     exit 1
   fi
 }
@@ -478,20 +450,17 @@ install_python_venv() {
 }
 
 if [[ "$install_ghidra" -eq 1 ]]; then
-  if [[ "$build" -eq 1 ]]; then
-    build_and_install_ghidra "$repo_root/components/ghidra" "$ghidra_share_dir"
-  elif [[ ! -f "$ghidra_share_dir/current/ghidraRun" || ! -f "$ghidra_share_dir/current/support/analyzeHeadless" ]]; then
-    echo "--no-build requires an existing installed Ghidra distribution at $ghidra_share_dir/current" >&2
-    exit 1
-  fi
-  cat >"$bin_dir/ghidra" <<EOF
+  discover_ghidra_install
+  if [[ -n "$GHIDRA_RUN_PATH" ]]; then
+    cat >"$bin_dir/ghidra" <<EOF
 #!/usr/bin/env bash
-exec "$ghidra_share_dir/current/ghidraRun" "\$@"
+exec "$GHIDRA_RUN_PATH" "\$@"
 EOF
-  chmod 0755 "$bin_dir/ghidra"
+    chmod 0755 "$bin_dir/ghidra"
+  fi
   cat >"$bin_dir/analyzeHeadless" <<EOF
 #!/usr/bin/env bash
-exec "$ghidra_share_dir/current/support/analyzeHeadless" "\$@"
+exec "$GHIDRA_HEADLESS_PATH" "\$@"
 EOF
   chmod 0755 "$bin_dir/analyzeHeadless"
 fi
@@ -575,6 +544,10 @@ export VEGVISIR_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/vegvisir"
 
 # Production mode blocks direct provider API-key fallbacks.
 export VEGVISIR_PRODUCTION=1
+
+# Optional installed Ghidra discovery for wrappers and Ghidra headless MCP.
+# export GHIDRA_HOME="/path/to/ghidra_<version>"
+# export GHIDRA_HEADLESS="$GHIDRA_HOME/support/analyzeHeadless"
 ENV
 
 if [[ "$install_vegvisir_user" -eq 1 ]]; then
@@ -630,7 +603,9 @@ if [[ "$install_usrl" -eq 1 ]]; then
   echo "  $bin_dir/usrl"
 fi
 if [[ "$install_ghidra" -eq 1 ]]; then
-  echo "  $bin_dir/ghidra"
+  if [[ -n "${GHIDRA_RUN_PATH:-}" ]]; then
+    echo "  $bin_dir/ghidra"
+  fi
   echo "  $bin_dir/analyzeHeadless"
 fi
 if [[ "$install_ghidra_headless_mcp" -eq 1 ]]; then

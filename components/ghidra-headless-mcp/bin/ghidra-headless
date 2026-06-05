@@ -7,20 +7,34 @@ import subprocess
 import sys
 import tempfile
 import shlex
+import shutil
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-DEFAULT_GHIDRA = pathlib.Path('/mnt/storage/Vegvisir-Projects/ghidra/Ghidra/RuntimeScripts/Linux/support/analyzeHeadless')
-
-
 def ghidra_headless():
-    path = pathlib.Path(os.environ.get('GHIDRA_HEADLESS', str(DEFAULT_GHIDRA)))
-    if not path.exists():
-        raise SystemExit(json.dumps({
-            'ok': False,
-            'error': f'analyzeHeadless not found: {path}',
-            'hint': 'Set GHIDRA_HEADLESS=/path/to/support/analyzeHeadless'
-        }))
-    return path
+    configured = os.environ.get('GHIDRA_HEADLESS')
+    candidates = []
+    if configured:
+        candidates.append(pathlib.Path(configured))
+
+    ghidra_home = os.environ.get('GHIDRA_HOME')
+    if ghidra_home:
+        candidates.append(pathlib.Path(ghidra_home) / 'support' / 'analyzeHeadless')
+
+    path_candidate = shutil.which('analyzeHeadless')
+    if path_candidate:
+        candidates.append(pathlib.Path(path_candidate))
+
+    for path in candidates:
+        if path.exists():
+            return path
+
+    attempted = [str(path) for path in candidates]
+    raise SystemExit(json.dumps({
+        'ok': False,
+        'error': 'analyzeHeadless not found',
+        'attempted': attempted,
+        'hint': 'Install Ghidra and set GHIDRA_HOME=/path/to/ghidra_<version> or GHIDRA_HEADLESS=/path/to/support/analyzeHeadless'
+    }))
 
 
 def run(cmd, timeout=600):

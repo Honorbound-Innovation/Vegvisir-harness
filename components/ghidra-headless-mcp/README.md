@@ -7,16 +7,16 @@ GhidraScripts and a Python MCP bridge.
 
 ## Requirements
 
-- Local Ghidra source/distribution prepared for headless execution.
-- Default launcher path used by this project:
-  `/mnt/storage/Vegvisir-Projects/ghidra/Ghidra/RuntimeScripts/Linux/support/analyzeHeadless`
+- Installed Ghidra distribution prepared for headless execution.
+- `analyzeHeadless` available through `GHIDRA_HEADLESS`, `GHIDRA_HOME`, or PATH.
 - Python 3.
 - MCP Python package for the bridge. The installer creates a dedicated `ghidra-headless-mcp` virtual environment.
 
-Override launcher with:
+Configure the launcher with either:
 
 ```bash
-export GHIDRA_HEADLESS=/path/to/support/analyzeHeadless
+export GHIDRA_HOME=/path/to/ghidra_<version>
+export GHIDRA_HEADLESS="$GHIDRA_HOME/support/analyzeHeadless"
 ```
 
 ## CLI

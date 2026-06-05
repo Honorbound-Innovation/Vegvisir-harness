@@ -15,8 +15,7 @@ Vegvisir-harness/
 │   ├── skiller/                 # Rust skill compiler, Forge workflow, registry, lifecycle, agent-pack tooling
 │   ├── solarium/                # First-party Playwright browser automation / evidence runtime
 │   ├── usrl/                    # TypeScript USRL parser/validator/runtime CLI
-│   ├── ghidra/                  # Vendored Ghidra source tree for reverse-engineering tooling
-│   └── ghidra-headless-mcp/     # Headless Ghidra MCP bridge component
+│   └── ghidra-headless-mcp/     # Headless Ghidra MCP bridge for an installed Ghidra runtime
 ├── docs/                        # System documentation
 ├── scripts/                     # Helper scripts, including HBSE provider onboarding
 ├── install.sh / uninstall.sh    # Full-system install and removal helpers
@@ -31,7 +30,7 @@ The Rust workspace currently includes:
 - `components/HBSE/hbse`
 - `components/skiller`
 
-`components/solarium` and `components/usrl` are Node/TypeScript components. The Ghidra-related components are source/runtime integrations rather than Rust workspace crates.
+`components/solarium` and `components/usrl` are Node/TypeScript components. Ghidra support uses an installed Ghidra runtime plus the first-party headless MCP bridge rather than vendored Ghidra source.
 
 ## High-Level Architecture
 
@@ -201,10 +200,9 @@ Solarium is not a license to target third parties without permission. Scope poli
 
 The monorepo also carries binary-intelligence tooling components:
 
-- `components/ghidra` — vendored Ghidra source tree
-- `components/ghidra-headless-mcp` — headless Ghidra MCP bridge
+- `components/ghidra-headless-mcp` — headless Ghidra MCP bridge for an installed Ghidra runtime
 
-These components support reverse-engineering workflows, MCP surfaces, and future/active binary-analysis integrations. Runtime caches, venvs, Gradle outputs, installed distributions, and generated artifacts should live under the user runtime tool root, not in source control.
+This component supports reverse-engineering workflows, MCP surfaces, and future/active binary-analysis integrations. Ghidra itself should be installed separately and exposed with `GHIDRA_HOME`, `GHIDRA_HEADLESS`, or PATH. Runtime caches, venvs, Ghidra project data, and generated artifacts should live under the user runtime tool root or project workspace, not in source control.
 
 ## Verification And Diagnostics
 

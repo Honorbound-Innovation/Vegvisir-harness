@@ -39,3 +39,6 @@ hardend-plan.md
 
 # Tauri-generated schema/cache output.
 components/desktop/src-tauri/gen/
+
+# Ghidra is an external installed runtime; do not vendor local source/build trees.
+components/ghidra/

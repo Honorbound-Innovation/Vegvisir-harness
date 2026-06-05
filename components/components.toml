@@ -2,12 +2,11 @@
 # This manifest records source components vendored into the monorepo. Runtime
 # installers should build/materialize executable artifacts under ~/.vegvisir/tools.
 #
-# External vendored-code policy:
-# - Ghidra is a third-party source snapshot.
-# - It must never be automatically updated, fetched, pulled, or synchronized
-#   from its originating upstream repository by installer/package/runtime
-#   workflows.
-# - Future updates are manual-only and require explicit user direction.
+# External runtime policy:
+# - Ghidra itself is not vendored in this repository.
+# - Vegvisir integrates with a separately installed Ghidra distribution through
+#   GHIDRA_HOME, GHIDRA_HEADLESS, or PATH discovery.
+# - Installers must not fetch, clone, update, or build upstream Ghidra source.
 
 [components.solarium]
 name = "Solarium"
@@ -20,19 +19,16 @@ install_root = "~/.vegvisir/tools/src/Solarium"
 wrapper = "solarium"
 excluded = [".git", "node_modules", "dist", ".solarium", ".vegvisir"]
 
-[components.ghidra]
+[external.ghidra]
 name = "Ghidra"
 ownership = "third-party"
 license = "Apache-2.0"
-kind = "java-gradle-source"
-path = "components/ghidra"
-source_snapshot = "/mnt/storage/Vegvisir-Projects/ghidra"
-runtime_root = "~/.vegvisir/tools/ghidra"
+kind = "installed-runtime"
+required_for = ["components/ghidra-headless-mcp"]
+discovery = ["GHIDRA_HOME", "GHIDRA_HEADLESS", "PATH:analyzeHeadless", "PATH:ghidraRun"]
 wrappers = ["ghidra", "analyzeHeadless"]
-update_policy = "manual-only; never auto-update from upstream"
 upstream_auto_update = false
-excluded = [".git", ".gradle", "build", "**/build", "dependencies"]
-
+installer_policy = "discover installed runtime only; never fetch, clone, update, or build upstream Ghidra source"
 
 [components.ghidra_headless_mcp]
 name = "GhidraHeadlessMCP"
@@ -44,6 +40,7 @@ source_snapshot = "/mnt/storage/Vegvisir-Projects/GhidraHeadlessMCP"
 runtime_root = "~/.vegvisir/tools/src/GhidraHeadlessMCP"
 wrappers = ["ghidra-headless", "ghidra-headless-mcp"]
 mcp_servers = ["ghidra-headless"]
+requires_external_runtime = "Ghidra"
 excluded = []
 
 [components.binary_intelligence_workbench]
