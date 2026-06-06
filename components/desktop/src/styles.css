@@ -128,22 +128,6 @@ input:disabled {
     @apply max-h-[34rem] overflow-auto whitespace-pre p-3;
   }
 
-  .vv-syntax-comment {
-    @apply text-slate-500 italic;
-  }
-
-  .vv-syntax-keyword {
-    @apply font-semibold text-vv-pink;
-  }
-
-  .vv-syntax-number {
-    @apply text-vv-amber;
-  }
-
-  .vv-syntax-string {
-    @apply text-vv-green;
-  }
-
   .vv-canvas-module {
     box-shadow: 0 20px 70px rgba(0, 0, 0, 0.34);
     transition: border-color 120ms ease, box-shadow 120ms ease, background-color 120ms ease;
@@ -184,3 +168,60 @@ input:disabled {
     touch-action: none;
   }
 }
+
+/* Runtime-generated syntax classes must stay outside Tailwind @layer so purge does not remove them. */
+.vv-syntax-comment {
+  color: #64748b;
+  font-style: italic;
+}
+
+.vv-syntax-keyword {
+  color: #ff2e7e;
+  font-weight: 650;
+}
+
+.vv-syntax-number {
+  color: #ffc857;
+}
+
+.vv-syntax-string {
+  color: #5dffa2;
+}
+
+.vv-syntax-function {
+  color: #75d7ff;
+}
+
+.vv-syntax-type,
+.vv-syntax-builtin {
+  color: #c4b5fd;
+}
+
+.vv-syntax-property,
+.vv-syntax-attr {
+  color: #93c5fd;
+}
+
+.vv-syntax-operator,
+.vv-syntax-punctuation {
+  color: #94a3b8;
+}
+
+.vv-syntax-diff-add {
+  color: #5dffa2;
+}
+
+.vv-syntax-diff-delete {
+  color: #ff5d6c;
+}
+
+.vv-syntax-diff-meta {
+  color: #75d7ff;
+  font-weight: 650;
+}
+
+.vv-syntax-tag {
+  color: #ff2e7e;
+  font-weight: 650;
+}
+

@@ -1135,12 +1135,49 @@ type MarkdownSegment =
 
 const CODE_FENCE_RE = /```([^\n`]*)\n?([\s\S]*?)(?:```|$)/g;
 const INLINE_CODE_RE = /`([^`]+)`/g;
+type SyntaxKind =
+  | 'comment'
+  | 'keyword'
+  | 'number'
+  | 'string'
+  | 'function'
+  | 'type'
+  | 'property'
+  | 'builtin'
+  | 'operator'
+  | 'punctuation'
+  | 'diff-add'
+  | 'diff-delete'
+  | 'diff-meta'
+  | 'tag'
+  | 'attr';
+
 const COMMON_CODE_KEYWORDS = new Set([
-  'abstract', 'async', 'await', 'bool', 'boolean', 'break', 'case', 'catch', 'char', 'class', 'const', 'continue', 'def', 'default',
+  'abstract', 'as', 'async', 'await', 'bool', 'boolean', 'break', 'case', 'catch', 'char', 'class', 'const', 'continue', 'def', 'default',
   'do', 'else', 'enum', 'export', 'extends', 'false', 'final', 'finally', 'float', 'fn', 'for', 'from', 'function', 'if', 'impl',
   'import', 'in', 'int', 'interface', 'let', 'match', 'mod', 'mut', 'namespace', 'new', 'none', 'null', 'package', 'pass', 'private',
   'protected', 'public', 'return', 'self', 'static', 'struct', 'super', 'switch', 'this', 'throw', 'trait', 'true', 'try', 'type',
-  'undefined', 'use', 'using', 'var', 'void', 'while', 'yield',
+  'undefined', 'use', 'using', 'var', 'void', 'while', 'yield', 'where', 'with', 'readonly', 'record', 'sealed', 'virtual', 'override',
+]);
+
+const LANGUAGE_CODE_KEYWORDS: Record<string, string[]> = {
+  csharp: ['base', 'decimal', 'delegate', 'dynamic', 'event', 'get', 'global', 'internal', 'is', 'lock', 'object', 'out', 'params', 'partial', 'ref', 'required', 'set', 'sizeof', 'stackalloc', 'string', 'typeof', 'uint', 'ulong', 'unchecked', 'unsafe'],
+  css: ['and', 'from', 'important', 'media', 'not', 'or', 'supports', 'to'],
+  html: ['doctype'],
+  java: ['assert', 'byte', 'double', 'implements', 'instanceof', 'long', 'native', 'short', 'strictfp', 'synchronized', 'throws', 'transient', 'volatile'],
+  javascript: ['debugger', 'delete', 'instanceof', 'of'],
+  json: [],
+  markdown: [],
+  python: ['and', 'assert', 'del', 'elif', 'except', 'global', 'is', 'lambda', 'nonlocal', 'not', 'or', 'raise'],
+  rust: ['crate', 'dyn', 'extern', 'loop', 'move', 'pub', 'ref', 'unsafe'],
+  shell: ['alias', 'case', 'cd', 'done', 'elif', 'esac', 'eval', 'exec', 'exit', 'fi', 'local', 'read', 'then'],
+  typescript: ['declare', 'keyof', 'satisfies', 'symbol', 'unique'],
+  yaml: ['true', 'false', 'null'],
+};
+
+const CODE_BUILTINS = new Set([
+  'Array', 'Boolean', 'Console', 'Date', 'Dict', 'Error', 'Exception', 'JSON', 'List', 'Map', 'Math', 'Number', 'Object', 'Promise', 'Record',
+  'Regex', 'RegExp', 'Set', 'String', 'Vec', 'console', 'dict', 'enumerate', 'len', 'list', 'map', 'print', 'range', 'str', 'sum', 'println',
 ]);
 
 function renderMessage(message: Message): string {
@@ -1214,53 +1251,128 @@ function renderCodeFence(code: string, language: string): string {
 
 function highlightCode(code: string, language: string): string {
   const mode = normalizeCodeLanguage(language);
+  if (mode === 'diff') return highlightDiffCode(code);
+  if (mode === 'html' || mode === 'xml') return highlightMarkupCode(code);
+
+  const keywords = keywordsForLanguage(mode);
   let output = '';
   for (let index = 0; index < code.length;) {
     const rest = code.slice(index);
+
     const blockComment = rest.match(/^\/\*[\s\S]*?\*\//);
     if (blockComment) {
       output += syntaxToken(blockComment[0], 'comment');
       index += blockComment[0].length;
       continue;
     }
+
     const lineComment = rest.match(lineCommentPattern(mode));
     if (lineComment) {
       output += syntaxToken(lineComment[0], 'comment');
       index += lineComment[0].length;
       continue;
     }
-    const stringLiteral = rest.match(/^(["'`])(?:\\.|(?!\1)[^\\])*\1/);
+
+    const stringLiteral = rest.match(stringLiteralPattern(mode));
     if (stringLiteral) {
-      output += syntaxToken(stringLiteral[0], 'string');
-      index += stringLiteral[0].length;
+      const token = stringLiteral[0];
+      const after = code.slice(index + token.length).match(/^\s*:/);
+      output += (after && ['json', 'yaml'].includes(mode)) ? syntaxToken(token, 'property') : syntaxToken(token, 'string');
+      index += token.length;
       continue;
     }
-    const numberLiteral = rest.match(/^\b(?:0x[0-9a-fA-F]+|\d+(?:\.\d+)?)(?:[eE][+-]?\d+)?\b/);
+
+    const numberLiteral = rest.match(/^\b(?:0b[01_]+|0o[0-7_]+|0x[0-9a-fA-F_]+|\d[\d_]*(?:\.\d[\d_]*)?)(?:[eE][+-]?\d[\d_]*)?\b/);
     if (numberLiteral) {
       output += syntaxToken(numberLiteral[0], 'number');
       index += numberLiteral[0].length;
       continue;
     }
-    const identifier = rest.match(/^[A-Za-z_][A-Za-z0-9_]*/);
+
+    const decorator = rest.match(/^@[A-Za-z_][A-Za-z0-9_.-]*/);
+    if (decorator) {
+      output += syntaxToken(decorator[0], 'attr');
+      index += decorator[0].length;
+      continue;
+    }
+
+    const identifier = rest.match(/^[A-Za-z_$][A-Za-z0-9_$]*/);
     if (identifier) {
       const token = identifier[0];
-      output += COMMON_CODE_KEYWORDS.has(token.toLowerCase()) ? syntaxToken(token, 'keyword') : escapeHtml(token);
+      const previous = code[index - 1] ?? '';
+      const next = code.slice(index + token.length);
+      if (keywords.has(token.toLowerCase())) output += syntaxToken(token, 'keyword');
+      else if (CODE_BUILTINS.has(token)) output += syntaxToken(token, 'builtin');
+      else if (previous === '.') output += syntaxToken(token, 'property');
+      else if (/^\s*[:<]/.test(next) && /^[A-Z]/.test(token)) output += syntaxToken(token, 'type');
+      else if (/^[A-Z][A-Za-z0-9_]*$/.test(token)) output += syntaxToken(token, 'type');
+      else if (/^\s*\(/.test(next)) output += syntaxToken(token, 'function');
+      else output += escapeHtml(token);
       index += token.length;
       continue;
     }
+
+    const operator = rest.match(/^(?:=>|->|::|\.\.|\.\.=|===|!==|==|!=|<=|>=|&&|\|\||\+\+|--|[+\-*\/%=!<>&|^~?:]+)/);
+    if (operator) {
+      output += syntaxToken(operator[0], 'operator');
+      index += operator[0].length;
+      continue;
+    }
+
+    const punctuation = rest.match(/^[{}()[\].,;]/);
+    if (punctuation) {
+      output += syntaxToken(punctuation[0], 'punctuation');
+      index += punctuation[0].length;
+      continue;
+    }
+
     output += escapeHtml(code[index]);
     index += 1;
   }
   return output;
 }
 
+function highlightDiffCode(code: string): string {
+  return code.split(/(\n)/).map((line) => {
+    if (line === '\n') return line;
+    if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@')) return syntaxToken(line, 'diff-meta');
+    if (line.startsWith('+')) return syntaxToken(line, 'diff-add');
+    if (line.startsWith('-')) return syntaxToken(line, 'diff-delete');
+    return escapeHtml(line);
+  }).join('');
+}
+
+function highlightMarkupCode(code: string): string {
+  return code.replace(/(<!--[\s\S]*?-->)|(<\/?)([A-Za-z][A-Za-z0-9:-]*)([^>]*)(>)/g, (...args: any[]) => {
+    const [match, comment, open, tag, attrs, close] = args as [string, string | undefined, string | undefined, string | undefined, string | undefined, string | undefined];
+    void match;
+    if (comment) return syntaxToken(comment, 'comment');
+    return `${syntaxToken(open ?? '', 'punctuation')}${syntaxToken(tag ?? '', 'tag')}${highlightMarkupAttrs(attrs ?? '')}${syntaxToken(close ?? '', 'punctuation')}`;
+  });
+}
+
+function highlightMarkupAttrs(attrs: string): string {
+  return attrs.replace(/([A-Za-z_:][-A-Za-z0-9_:.]*)(\s*=\s*)("[^"]*"|'[^']*'|[^\s>]+)/g, (_match, name: string, equals: string, value: string) => (
+    `${syntaxToken(name, 'attr')}${syntaxToken(equals, 'operator')}${syntaxToken(value, 'string')}`
+  ));
+}
+
+function keywordsForLanguage(language: string): Set<string> {
+  return new Set([...COMMON_CODE_KEYWORDS, ...(LANGUAGE_CODE_KEYWORDS[language] ?? [])]);
+}
+
+function stringLiteralPattern(language: string): RegExp {
+  if (['shell', 'bash'].includes(language)) return /^(?:\$?'(?:\\.|[^'\\])*'|\$?"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`)/;
+  if (language === 'python') return /^(?:(?:[rbu]|br|rb|fr|rf)?(?:'{3}[\s\S]*?'{3}|"{3}[\s\S]*?"{3}|'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"))/i;
+  return /^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)/;
+}
+
 function lineCommentPattern(language: string): RegExp {
   if (['python', 'shell', 'yaml', 'toml', 'ruby'].includes(language)) return /^#[^\n]*/;
-  if (language === 'diff') return /^(?:[+\-].*|@@.*)/;
   return /^\/\/[^\n]*/;
 }
 
-function syntaxToken(value: string, kind: 'comment' | 'keyword' | 'number' | 'string'): string {
+function syntaxToken(value: string, kind: SyntaxKind): string {
   return `<span class="vv-syntax-${kind}">${escapeHtml(value)}</span>`;
 }
 
