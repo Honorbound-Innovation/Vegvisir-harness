@@ -766,9 +766,17 @@ async function sendTurn(): Promise<void> {
     return;
   }
   state.messages.push({ role: 'user', content });
+  state.busy = true;
+  state.pendingAssistant = '';
   scrollChatToBottomOnNextRender();
   render();
-  await send('turn.send', { content }, 'turn');
+  try {
+    await send('turn.send', { content }, 'turn');
+  } catch (error) {
+    state.busy = false;
+    state.error = String(error);
+    render();
+  }
 }
 
 async function loadSession(id: string): Promise<void> {
@@ -1095,6 +1103,7 @@ function renderTopBar(): string {
         <div class="flex items-center gap-3">
           <h1 class="truncate text-[1.04rem] font-black tracking-tight">${escapeHtml(activeTitle())}</h1>
           <span class="rounded-md border border-vv-line bg-white/[0.045] px-2 py-0.5 font-mono text-[0.7rem] text-vv-muted">${escapeHtml(projectName())}</span>
+          ${renderModelWorkingPill()}
         </div>
         <div class="mt-0.5 flex min-w-0 items-center gap-2 text-[0.7rem] text-vv-muted">
           <span>${escapeHtml(state.settings.provider || state.session?.provider || 'default provider')}</span>
@@ -1119,13 +1128,40 @@ function renderFooterRail(): string {
     <footer class="flex items-center justify-between border-t border-vv-line bg-black/20 px-5 font-mono text-[0.66rem] text-vv-muted">
       <span>${state.bridgeRunning ? 'Local bridge active' : 'Local bridge offline'}</span>
       <span>${escapeHtml(state.settings.workspace || 'workspace defaults to home/current dir')}</span>
-      <span>${state.busy ? 'working' : 'ready'} · main</span>
+      <span class="inline-flex items-center gap-1.5 ${state.busy ? 'text-vv-cyan' : ''}">${state.busy ? '<span class="vv-mini-spinner" aria-hidden="true"></span>' : ''}${state.busy ? modelWorkingLabel().toLowerCase() : 'ready'} · main</span>
     </footer>
   `;
 }
 
 function renderError(): string {
   return `<div class="mx-auto mt-3 max-w-5xl rounded-xl border border-vv-red/45 bg-vv-red/10 p-3 text-red-100 shadow-danger"><div class="flex flex-wrap items-center justify-between gap-2"><strong>Bridge problem</strong><button class="vv-action vv-action-danger" id="restart-bridge-from-error">Restart bridge</button></div><pre class="vv-code mt-2 whitespace-pre-wrap">${escapeHtml(state.error)}</pre></div>`;
+}
+
+function modelWorkingLabel(): string {
+  return state.pendingAssistant.trim() ? 'Streaming response' : 'Model working';
+}
+
+function renderModelWorkingPill(label = modelWorkingLabel()): string {
+  if (!state.busy) return '';
+  return `<span class="vv-pill vv-working-pill text-vv-cyan" role="status" aria-live="polite"><span class="vv-mini-spinner" aria-hidden="true"></span>${escapeHtml(label)}</span>`;
+}
+
+function renderModelWorkingIndicator(): string {
+  if (!state.busy) return '';
+  const label = modelWorkingLabel();
+  const detail = state.pendingAssistant.trim()
+    ? 'Tokens are streaming into the assistant response.'
+    : 'Waiting for the provider, tools, or approval-aware continuation to produce the next chat update.';
+  return `
+    <article class="vv-soft-panel vv-working-card max-w-4xl border-vv-cyan/35 bg-vv-cyan/5" role="status" aria-live="polite" aria-label="${escapeHtml(label)}">
+      <div class="flex items-center gap-3 px-4 py-3">
+        <span class="vv-chat-spinner" aria-hidden="true"></span>
+        <div class="min-w-0">
+          <div class="flex items-center gap-2 text-sm font-black text-vv-cyan">${escapeHtml(label)}<span class="vv-working-dots" aria-hidden="true"><span></span><span></span><span></span></span></div>
+          <div class="mt-1 text-xs leading-5 text-vv-muted">${escapeHtml(detail)}</div>
+        </div>
+      </div>
+    </article>`;
 }
 
 function renderApprovalToast(): string {
@@ -1317,11 +1353,13 @@ function moduleSummary(panelId: PanelId): string {
 function renderChat(): string {
   const messages = [...state.messages];
   if (state.pendingAssistant) messages.push({ role: 'assistant', content: state.pendingAssistant });
+  const transcript = messages.length ? messages.map(renderMessage).join('') : renderEmptyTranscript();
   return `
     <div class="grid h-full max-h-full min-h-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden">
       <div id="chat-scroll-surface" class="vv-scrollbar min-h-0 overflow-y-auto overflow-x-hidden px-5 py-5">
         <div class="mx-auto max-w-4xl space-y-5 pb-4">
-          ${messages.length ? messages.map(renderMessage).join('') : renderEmptyTranscript()}
+          ${transcript}
+          ${renderModelWorkingIndicator()}
         </div>
       </div>
       <div id="chat-composer-surface" class="max-h-[13rem] min-h-0 overflow-hidden border-t border-vv-line bg-vv-bg2/70 px-5 py-3 backdrop-blur-xl">
@@ -1349,7 +1387,7 @@ function renderComposer(): string {
         <div class="mt-1.5 flex items-center justify-between gap-2 border-t border-vv-line pt-2">
           <div class="flex min-w-0 items-center gap-1.5 overflow-hidden text-xs text-vv-muted">
             <span class="vv-pill">${escapeHtml(state.settings.model || 'model default')}</span>
-            <span class="vv-pill">${state.busy ? 'High activity' : 'Ready'}</span>
+            ${state.busy ? renderModelWorkingPill() : '<span class="vv-pill">Ready</span>'}
             <span class="vv-pill">Chat + slash commands</span>
             <span class="vv-pill">${startupDangerousBypassRequested() || runtimeDangerousBypassEnabled() ? 'Bypass startup' : 'Policy gated'}</span>
           </div>
