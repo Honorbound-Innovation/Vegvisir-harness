@@ -31,7 +31,7 @@ pub struct FileExplorerListing {
     limit: usize,
 }
 
-const FILE_EXPLORER_ENTRY_LIMIT: usize = 800;
+const FILE_EXPLORER_ENTRY_LIMIT: usize = 300;
 
 fn default_browser_path() -> PathBuf {
     env::var_os("HOME")

@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import './styles.css';
-import { APPROVAL_REFRESH_THROTTLE_MS, CHAT_SCROLL_STICKY_THRESHOLD_PX, EXPLORER_INITIAL_VISIBLE_ENTRIES, EXPLORER_VISIBLE_INCREMENT, GLOBAL_LAYOUT_STORAGE_KEY, LAYOUT_SCHEMA_VERSION, SETTINGS_SCHEMA_VERSION } from './config';
+import { APPROVAL_REFRESH_THROTTLE_MS, CHAT_RENDER_MESSAGE_LIMIT, CHAT_SCROLL_STICKY_THRESHOLD_PX, EXPLORER_INITIAL_VISIBLE_ENTRIES, EXPLORER_VISIBLE_INCREMENT, GLOBAL_LAYOUT_STORAGE_KEY, LAYOUT_SCHEMA_VERSION, SETTINGS_SCHEMA_VERSION, WORK_RENDER_EVENT_LIMIT } from './config';
 import { cssEscape, escapeHtml } from './html';
 import { renderMessage } from './markdown';
 import { panelDefinition, panels } from './panels';
@@ -18,9 +18,12 @@ let lastApprovalRefreshAt = 0;
 let renderScheduled = false;
 let streamingRenderScheduled = false;
 let lastStatusRefreshAt = 0;
+let canvasInteractionFrame = 0;
+let canvasInteractionDirty = false;
 
 const BRIDGE_STATUS_REFRESH_MS = 2_500;
 const STREAMING_RENDER_THROTTLE_MS = 120;
+const SLOW_RENDER_WARN_MS = 80;
 
 function defaultLayoutState(): CanvasLayoutState {
   return {
@@ -434,21 +437,7 @@ async function refreshStatus(): Promise<void> {
 
 async function refreshEverything(): Promise<void> {
   if (!state.bridgeRunning) return;
-  await Promise.allSettled([
-    send('session.status', {}, 'status'),
-    send('session.messages', {}, 'messages'),
-    send('approvals.list', {}, 'approvals'),
-    send('tools.list', {}, 'tools'),
-    send('providers.list', {}, 'providers'),
-    send('models.list', {}, 'models'),
-    send('agents.list', {}, 'agents'),
-    send('commands.list', {}, 'commands'),
-    send('bridge.capabilities', {}, 'capabilities'),
-    send('runtime.status', {}, 'runtime'),
-    send('hbse.onboarding.providers', {}, 'hbse'),
-    send('openai.compat.info', {}, 'openai'),
-    send('memory.status', {}, 'memory'),
-  ]);
+  await refreshSessionIndependentState();
 }
 
 async function refreshSessionIndependentState(): Promise<void> {
@@ -457,14 +446,12 @@ async function refreshSessionIndependentState(): Promise<void> {
     send('session.status', {}, 'status'),
     send('session.messages', {}, 'messages'),
     send('approvals.list', {}, 'approvals'),
-    send('providers.list', {}, 'providers'),
-    send('models.list', {}, 'models'),
-    send('agents.list', {}, 'agents'),
     send('runtime.status', {}, 'runtime'),
   ]);
 }
 
 async function pollBridge(): Promise<void> {
+  if (canvasInteraction) return;
   if (!state.bridgeRunning) {
     await refreshStatus();
     if (state.autoStartAttempted) requestRender();
@@ -1050,6 +1037,7 @@ function scrollChatToBottomOnNextRender(): void {
 }
 
 function render(): void {
+  const renderStartedAt = performance.now();
   const chatScrollSnapshot = captureChatScrollSnapshot();
   const canvasScrollSnapshot = captureCanvasScrollSnapshot();
   refreshLayoutStorageScope();
@@ -1069,6 +1057,8 @@ function render(): void {
   `;
   restoreChatScroll(chatScrollSnapshot);
   restoreCanvasScroll(canvasScrollSnapshot);
+  const elapsedMs = Math.round(performance.now() - renderStartedAt);
+  if (elapsedMs >= SLOW_RENDER_WARN_MS) recordDesktopPerf('render_slow', { elapsedMs, activePanel: state.activePanel, modules: currentLayout().modules.length });
 }
 
 function requestRender(): void {
@@ -1406,8 +1396,13 @@ function moduleSummary(panelId: PanelId): string {
 }
 
 function renderChat(): string {
-  const transcript = state.messages.length || state.pendingAssistant
-    ? `${state.messages.map(renderMessage).join('')}${state.pendingAssistant ? renderPendingAssistantMessage() : ''}`
+  const hiddenMessageCount = Math.max(0, state.messages.length - CHAT_RENDER_MESSAGE_LIMIT);
+  const visibleMessages = hiddenMessageCount ? state.messages.slice(-CHAT_RENDER_MESSAGE_LIMIT) : state.messages;
+  const transcriptPrefix = hiddenMessageCount
+    ? `<div class="vv-soft-panel mx-auto max-w-4xl p-3 text-center text-xs text-vv-muted">Showing latest ${visibleMessages.length} of ${state.messages.length} messages to keep Desktop responsive.</div>`
+    : '';
+  const transcript = visibleMessages.length || state.pendingAssistant
+    ? `${transcriptPrefix}${visibleMessages.map(renderMessage).join('')}${state.pendingAssistant ? renderPendingAssistantMessage() : ''}`
     : renderEmptyTranscript();
   return `
     <div class="grid h-full max-h-full min-h-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden">
@@ -1524,7 +1519,12 @@ function formatTimestamp(value: unknown): string {
 }
 
 function renderWork(): string {
-  return `<div class="space-y-3">${state.events.slice().reverse().map((event) => `
+  const visibleEvents = state.events.slice(-WORK_RENDER_EVENT_LIMIT).reverse();
+  const hiddenCount = Math.max(0, state.events.length - visibleEvents.length);
+  const prefix = hiddenCount
+    ? `<div class="vv-soft-panel p-3 text-xs text-vv-muted">Showing latest ${visibleEvents.length} of ${state.events.length} bridge events. Older events are retained but not rendered.</div>`
+    : '';
+  return `<div class="space-y-3">${prefix}${visibleEvents.map((event) => `
     <article class="vv-soft-panel p-3 opacity-80">
       <div class="mb-2 flex items-center gap-2 font-mono text-[0.68rem] uppercase tracking-[0.2em] text-vv-muted"><span class="h-2 w-2 rounded-full bg-vv-cyan"></span>${escapeHtml(event.type)}</div>
       <pre class="vv-code whitespace-pre-wrap break-words rounded-xl bg-black/18 p-3">${escapeHtml(JSON.stringify(event.payload ?? {}, null, 2))}</pre>
@@ -1931,10 +1931,18 @@ function renderExplorer(): string {
     </div>`;
 }
 
+function updateExplorerDom(): boolean {
+  const roots = document.querySelectorAll<HTMLElement>('[data-panel-root="explorer"]');
+  if (!roots.length) return false;
+  const explorerHtml = renderExplorer();
+  roots.forEach((root) => { root.innerHTML = explorerHtml; });
+  return true;
+}
+
 function renderExplorerEntries(): string {
   const explorer = state.fileExplorer;
   if (!explorer.entries.length) {
-    return `<div class="p-4 text-sm text-vv-muted">${explorer.loading ? 'Loading directory…' : 'No entries loaded. Click Home, Current workspace, or Go.'}</div>`;
+    return `<div class="p-4 text-sm text-vv-muted">${explorer.loading ? 'Loading directory…' : 'No entries loaded. Click Home, Current workspace, Go, or Refresh.'}</div>`;
   }
   const visibleLimit = Math.max(1, explorer.visibleLimit || EXPLORER_INITIAL_VISIBLE_ENTRIES);
   const visibleEntries = explorer.entries.slice(0, visibleLimit);
@@ -2005,6 +2013,7 @@ function formatModifiedTime(value: unknown): string {
 
 async function loadExplorerDirectory(path?: string): Promise<void> {
   const token = state.fileExplorer.requestToken + 1;
+  const startedAt = performance.now();
   state.fileExplorer = {
     ...state.fileExplorer,
     loading: true,
@@ -2028,6 +2037,11 @@ async function loadExplorerDirectory(path?: string): Promise<void> {
       totalEntries: Number(listing.totalEntries ?? listing.entries?.length ?? 0),
       requestToken: token,
     };
+    recordDesktopPerf('explorer_directory_loaded', {
+      elapsedMs: Math.round(performance.now() - startedAt),
+      entries: state.fileExplorer.entries.length,
+      truncated: state.fileExplorer.truncated,
+    });
   } catch (error) {
     if (state.fileExplorer.requestToken !== token) return;
     state.fileExplorer = {
@@ -2037,7 +2051,7 @@ async function loadExplorerDirectory(path?: string): Promise<void> {
       requestToken: token,
     };
   }
-  render();
+  if (!updateExplorerDom()) requestRender();
 }
 
 function updateExplorerLoadingIndicator(): void {
@@ -2249,7 +2263,7 @@ function resetLayoutTab(): void {
 }
 
 function refreshPanelData(panel: PanelId): void {
-  if (panel === 'explorer') void loadExplorerDirectory(state.fileExplorer.path || state.settings.workspace || undefined);
+  if (panel === 'explorer') return;
   if (panel === 'sessions') void refreshSessions();
   if (panel === 'diff') void send('diff.current', {}, 'diff');
   if (panel === 'memory') void send('memory.status', {}, 'memory');
@@ -2286,7 +2300,8 @@ function startCanvasInteraction(event: PointerEvent, id: string, mode: 'move' | 
     startWidth: module.width,
     startHeight: module.height,
   };
-  render();
+  const frame = document.querySelector<HTMLElement>(`[data-module-frame="${cssEscape(module.id)}"]`);
+  if (frame) frame.style.zIndex = String(module.z);
 }
 
 function updateCanvasInteraction(event: PointerEvent): void {
@@ -2301,7 +2316,21 @@ function updateCanvasInteraction(event: PointerEvent): void {
   } else {
     updateModuleBounds(interaction.id, module.x, module.y, interaction.startWidth + deltaX, interaction.startHeight + deltaY);
   }
-  applyCanvasInteractionDomUpdate(module);
+  scheduleCanvasInteractionDomUpdate();
+}
+
+function scheduleCanvasInteractionDomUpdate(): void {
+  canvasInteractionDirty = true;
+  if (canvasInteractionFrame) return;
+  canvasInteractionFrame = requestAnimationFrame(() => {
+    canvasInteractionFrame = 0;
+    if (!canvasInteractionDirty) return;
+    canvasInteractionDirty = false;
+    const interaction = canvasInteraction;
+    if (!interaction) return;
+    const module = currentLayout().modules.find((item) => item.id === interaction.id);
+    if (module) applyCanvasInteractionDomUpdate(module);
+  });
 }
 
 function applyCanvasInteractionDomUpdate(module: CanvasModuleInstance): void {
@@ -2322,9 +2351,16 @@ function applyCanvasInteractionDomUpdate(module: CanvasModuleInstance): void {
 
 function finishCanvasInteraction(): void {
   if (!canvasInteraction) return;
+  const interaction = canvasInteraction;
   canvasInteraction = null;
+  canvasInteractionDirty = false;
+  if (canvasInteractionFrame) {
+    cancelAnimationFrame(canvasInteractionFrame);
+    canvasInteractionFrame = 0;
+  }
+  const module = currentLayout().modules.find((item) => item.id === interaction.id);
+  if (module) applyCanvasInteractionDomUpdate(module);
   saveLayouts();
-  render();
 }
 
 function handleExplorerClick(event: Event): void {
@@ -2333,7 +2369,7 @@ function handleExplorerClick(event: Event): void {
   if (showMore) {
     event.preventDefault();
     state.fileExplorer.visibleLimit += EXPLORER_VISIBLE_INCREMENT;
-    render();
+    if (!updateExplorerDom()) requestRender();
     return;
   }
   const switchButton = target?.closest<HTMLElement>('[data-explorer-switch-workspace]');
