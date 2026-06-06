@@ -139,6 +139,15 @@ const LAYOUT_SCHEMA_VERSION = 1;
 const GLOBAL_LAYOUT_STORAGE_KEY = 'vegvisir.desktop.layouts.global';
 let loadedLayoutStorageKey = '';
 let canvasInteraction: CanvasInteraction | null = null;
+let forceChatScrollToBottom = false;
+
+type ChatScrollSnapshot = {
+  scrollTop: number;
+  bottomOffset: number;
+  shouldStickToBottom: boolean;
+};
+
+const CHAT_SCROLL_STICKY_THRESHOLD_PX = 96;
 
 function panelDefinition(panelId: PanelId): PanelDefinition {
   return panels.find((panel) => panel.id === panelId) ?? panels[0];
@@ -685,6 +694,7 @@ async function sendTurn(): Promise<void> {
     return;
   }
   state.messages.push({ role: 'user', content });
+  scrollChatToBottomOnNextRender();
   render();
   await send('turn.send', { content }, 'turn');
 }
@@ -788,7 +798,36 @@ async function setToolLimit(value: string): Promise<void> {
   await send('toolLimit.set', { value }, 'tool-limit');
 }
 
+function captureChatScrollSnapshot(): ChatScrollSnapshot | null {
+  const surface = document.querySelector<HTMLDivElement>('#chat-scroll-surface');
+  if (!surface) return null;
+  const bottomOffset = surface.scrollHeight - surface.scrollTop - surface.clientHeight;
+  return {
+    scrollTop: surface.scrollTop,
+    bottomOffset,
+    shouldStickToBottom: forceChatScrollToBottom || bottomOffset <= CHAT_SCROLL_STICKY_THRESHOLD_PX,
+  };
+}
+
+function restoreChatScroll(snapshot: ChatScrollSnapshot | null): void {
+  requestAnimationFrame(() => {
+    const surface = document.querySelector<HTMLDivElement>('#chat-scroll-surface');
+    if (!surface) return;
+    if (!snapshot || snapshot.shouldStickToBottom) {
+      surface.scrollTop = surface.scrollHeight;
+    } else {
+      surface.scrollTop = Math.max(0, Math.min(snapshot.scrollTop, surface.scrollHeight - surface.clientHeight));
+    }
+    forceChatScrollToBottom = false;
+  });
+}
+
+function scrollChatToBottomOnNextRender(): void {
+  forceChatScrollToBottom = true;
+}
+
 function render(): void {
+  const chatScrollSnapshot = captureChatScrollSnapshot();
   refreshLayoutStorageScope();
   app.innerHTML = `
     <div class="grid h-screen grid-cols-[18rem_minmax(0,1fr)] overflow-hidden bg-vv-bg bg-vv-radial text-vv-text selection:bg-vv-cyan/25 max-[980px]:grid-cols-1">
@@ -804,6 +843,7 @@ function render(): void {
     </div>
   `;
   bindEvents();
+  restoreChatScroll(chatScrollSnapshot);
 }
 
 function renderLeftRail(): string {
