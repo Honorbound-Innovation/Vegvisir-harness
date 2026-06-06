@@ -1880,6 +1880,7 @@ function renderIntegrationsWorkbench(): string {
     ['hbse.services', 'HBSE services', 'Service-ref registry'],
     ['hbse.usageThisSession', 'HBSE session usage', 'Secret-ref usage audit'],
     ['subagents.list', 'Subagents', 'Durable worker board'],
+    ['subagents.config', 'Subagent config', 'Default provider/model/limit for child agents'],
     ['subagents.timeline', 'Timeline', 'Subagent lifecycle events'],
     ['subagents.policy', 'Policy', 'Subagent concurrency policy'],
     ['agents.templates', 'Agent templates', 'Reusable agent templates'],

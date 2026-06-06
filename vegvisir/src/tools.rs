@@ -10,7 +10,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::Context;
 use chrono::Utc;
 use serde_json::{Map, Value, json};
 use skiller::{
@@ -500,23 +499,15 @@ impl SubagentProviderDefaults {
         let provider = provider.trim();
         let model = model.trim();
         Self {
-            provider: if provider.is_empty() {
-                "demo".to_string()
-            } else {
-                provider.to_string()
-            },
-            model: if model.is_empty() {
-                "demo-local".to_string()
-            } else {
-                model.to_string()
-            },
+            provider: provider.to_string(),
+            model: model.to_string(),
         }
     }
 }
 
 impl Default for SubagentProviderDefaults {
     fn default() -> Self {
-        Self::new("demo", "demo-local")
+        Self::new("", "")
     }
 }
 
@@ -2143,14 +2134,11 @@ fn run_spawned_subagent(
         let _ = upsert_subagent_record(&board_path, record.clone());
         let output = Command::new(&executable)
             .args(&argv)
+            .current_dir(&workspace)
             .envs(env.iter().map(|(key, value)| (key, value)))
             .output()
-            .with_context(|| {
-                format!(
-                    "spawning subagent command failed: {} {}",
-                    executable.display(),
-                    argv.join(" ")
-                )
+            .map_err(|error| {
+                format_subagent_spawn_os_error(&executable, &argv, &workspace, &env, &error)
             })?;
         let mut text = String::new();
         text.push_str(&String::from_utf8_lossy(&output.stdout));
@@ -2196,6 +2184,49 @@ fn run_spawned_subagent(
         }
     }
     let _ = upsert_subagent_record(&board_path, record);
+}
+
+fn format_subagent_spawn_os_error(
+    executable: &Path,
+    argv: &[String],
+    workspace: &Path,
+    env: &[(String, String)],
+    error: &std::io::Error,
+) -> anyhow::Error {
+    let os_code = error
+        .raw_os_error()
+        .map(|code| code.to_string())
+        .unwrap_or_else(|| "none".to_string());
+    let kind = format!("{:?}", error.kind());
+    let path_value = std::env::var_os("PATH")
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|| "<unset>".to_string());
+    let env_keys = env
+        .iter()
+        .map(|(key, _)| key.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    let remediation = match error.kind() {
+        std::io::ErrorKind::NotFound => {
+            "Executable was not found from the child process environment. Set VEGVISIR_BIN to an absolute vegvisir/vegvisir-rust binary, verify the binary exists, and verify Desktop inherited PATH."
+        }
+        std::io::ErrorKind::PermissionDenied => {
+            "Executable exists but is not runnable. Check chmod +x, filesystem mount noexec flags, and launcher permissions."
+        }
+        _ => "Inspect executable, workspace cwd, PATH, and child environment shown above.",
+    };
+    anyhow::anyhow!(
+        "subagent process spawn failed\n  executable: {}\n  argv: {}\n  cwd: {}\n  os_error_kind: {}\n  os_error_code: {}\n  os_error: {}\n  PATH: {}\n  child_env_keys: {}\n  remediation: {}",
+        executable.display(),
+        argv.join(" "),
+        workspace.display(),
+        kind,
+        os_code,
+        error,
+        path_value,
+        env_keys,
+        remediation
+    )
 }
 
 fn parse_subagent_json_observability(output: &str) -> Vec<SubAgentObservedEvent> {
@@ -2808,8 +2839,8 @@ mod skiller_tool_tests {
         assert_eq!(optional_nonempty_string(Some(&json!("none"))), None);
         assert_eq!(optional_nonempty_string(Some(&json!("null"))), None);
         assert_eq!(
-            optional_nonempty_string(Some(&json!("openai-sso"))),
-            Some("openai-sso".to_string())
+            optional_nonempty_string(Some(&json!("provider-a"))),
+            Some("provider-a".to_string())
         );
     }
 
@@ -2893,8 +2924,8 @@ mod skiller_tool_tests {
             goal: "inspect only".to_string(),
             workspace: workspace.clone(),
             max_steps: "2".to_string(),
-            provider: "openai-sso".to_string(),
-            model: "gpt-5.5".to_string(),
+            provider: "provider-a".to_string(),
+            model: "model-a".to_string(),
             agent: None,
             bypass_sandbox: false,
             work_budget: SubAgentWorkBudget::default(),
@@ -2909,8 +2940,8 @@ mod skiller_tool_tests {
             goal: "inspect only".to_string(),
             workspace,
             max_steps: "2".to_string(),
-            provider: "openai-sso".to_string(),
-            model: "gpt-5.5".to_string(),
+            provider: "provider-a".to_string(),
+            model: "model-a".to_string(),
             agent: None,
             bypass_sandbox: true,
             work_budget: SubAgentWorkBudget::default(),
@@ -3152,12 +3183,21 @@ echo '{"events":[]}'; exit 0
             .parent()
             .expect("cms db parent")
             .join("subagents.json");
+        let defaults = serde_json::from_str::<Value>(include_str!("defaults/subagents.json"))?;
+        let provider = defaults
+            .get("default_provider")
+            .and_then(Value::as_str)
+            .expect("default subagent provider configured");
+        let model = defaults
+            .get("default_model")
+            .and_then(Value::as_str)
+            .expect("default subagent model configured");
         let registry = build_builtin_registry_with_cms_mode_subagent_limit_and_provider_defaults(
             workspace.path(),
             cms_config,
             true,
             3,
-            SubagentProviderDefaults::new("openai-sso", "gpt-5.4-mini"),
+            SubagentProviderDefaults::new(provider, model),
         )?;
         let mut executor = ToolExecutor {
             registry,
@@ -3184,15 +3224,15 @@ echo '{"events":[]}'; exit 0
         });
 
         assert!(observation.ok, "{}", observation.content);
-        assert_eq!(observation.data.get("provider"), Some(&json!("openai-sso")));
-        assert_eq!(observation.data.get("model"), Some(&json!("gpt-5.4-mini")));
+        assert_eq!(observation.data.get("provider"), Some(&json!(provider)));
+        assert_eq!(observation.data.get("model"), Some(&json!(model)));
         let records = load_subagent_board_records(&board_path)?;
         let record = records
             .iter()
             .find(|record| record.name == "defaults-check")
             .expect("spawned defaults-check record");
-        assert_eq!(record.provider.as_deref(), Some("openai-sso"));
-        assert_eq!(record.model.as_deref(), Some("gpt-5.4-mini"));
+        assert_eq!(record.provider.as_deref(), Some(provider));
+        assert_eq!(record.model.as_deref(), Some(model));
         Ok(())
     }
 

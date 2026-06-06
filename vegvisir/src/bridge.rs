@@ -1861,6 +1861,12 @@ const COMMAND_BACKED_BRIDGE_SPECS: &[CommandBackedBridgeSpec] = &[
         default_subcommand: Some("max"),
     },
     CommandBackedBridgeSpec {
+        method: "subagents.config",
+        event_kind: "subagents.config",
+        command: "/subagents",
+        default_subcommand: Some("config"),
+    },
+    CommandBackedBridgeSpec {
         method: "mcp.list",
         event_kind: "mcp.list",
         command: "/mcp",

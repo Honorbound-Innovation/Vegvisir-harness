@@ -47,7 +47,6 @@ use crate::{
     subagents::{SubAgentStatus, SubAgentTaskRecord},
     tools::{
         DEFAULT_ACTIVE_SUBAGENT_LIMIT, SubagentProviderDefaults, ToolExecutor, ToolRegistry,
-        build_builtin_registry_with_cms_mode_and_subagent_limit,
         build_builtin_registry_with_cms_mode_subagent_limit_and_provider_defaults,
     },
     types::ToolCall,
@@ -100,6 +99,7 @@ pub struct TuiApplication {
     pub autonomous_mode_enabled: bool,
     pub autonomous_level: usize,
     pub active_subagent_limit: usize,
+    pub subagent_provider_defaults: SubagentProviderDefaults,
     pub mcp_servers: Vec<crate::core::McpServerConfig>,
     pub hbse_services: Vec<HbseServiceRef>,
     pub pending_send: Option<JoinHandle<anyhow::Result<SessionState>>>,
@@ -644,13 +644,31 @@ impl TuiApplication {
             context_mode: cms_v2::ecm::ContextMode::Project,
             commit_writebacks: true,
         };
-        let active_subagent_limit = DEFAULT_ACTIVE_SUBAGENT_LIMIT;
-        let tool_registry = build_builtin_registry_with_cms_mode_and_subagent_limit(
-            &cwd,
-            cms_config,
-            dangerously_bypass_approvals_and_sandbox,
-            active_subagent_limit,
-        )?;
+        let subagent_defaults_config = default_subagent_provider_defaults();
+        let active_subagent_limit = defaults
+            .get("subagent_active_limit")
+            .and_then(Value::as_u64)
+            .map(|value| value as usize)
+            .unwrap_or_else(default_subagent_active_limit)
+            .max(1);
+        let subagent_provider_defaults = SubagentProviderDefaults::new(
+            defaults
+                .get("subagent_provider")
+                .and_then(Value::as_str)
+                .unwrap_or(&subagent_defaults_config.provider),
+            defaults
+                .get("subagent_model")
+                .and_then(Value::as_str)
+                .unwrap_or(&subagent_defaults_config.model),
+        );
+        let tool_registry =
+            build_builtin_registry_with_cms_mode_subagent_limit_and_provider_defaults(
+                &cwd,
+                cms_config,
+                dangerously_bypass_approvals_and_sandbox,
+                active_subagent_limit,
+                subagent_provider_defaults.clone(),
+            )?;
         let profile_store = UserProfileStore::new(&data_root);
         let user_profile = profile_store.load()?;
         let mcp_servers = load_mcp_servers(&data_root)?;
@@ -757,6 +775,7 @@ impl TuiApplication {
             autonomous_mode_enabled: false,
             autonomous_level: 1,
             active_subagent_limit,
+            subagent_provider_defaults,
             mcp_servers,
             hbse_services,
             pending_send: None,
@@ -1033,10 +1052,7 @@ impl TuiApplication {
                 self.cms.config.clone(),
                 bypass,
                 self.active_subagent_limit,
-                SubagentProviderDefaults::new(
-                    self.session.current_provider.clone(),
-                    self.session.current_model.clone(),
-                ),
+                self.subagent_provider_defaults.clone(),
             )?;
         let mcp_servers = self.active_mcp_servers();
         register_mcp_tools(
@@ -1198,6 +1214,34 @@ pub(crate) fn strip_persona_from_system_prompt(prompt: &str) -> String {
         }
     }
     prompt.to_string()
+}
+
+fn default_subagent_config_value() -> serde_json::Value {
+    serde_json::from_str::<serde_json::Value>(include_str!("defaults/subagents.json"))
+        .unwrap_or_else(|_| serde_json::json!({}))
+}
+
+fn default_subagent_provider_defaults() -> SubagentProviderDefaults {
+    let parsed = default_subagent_config_value();
+    SubagentProviderDefaults::new(
+        parsed
+            .get("default_provider")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(""),
+        parsed
+            .get("default_model")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(""),
+    )
+}
+
+fn default_subagent_active_limit() -> usize {
+    default_subagent_config_value()
+        .get("active_limit")
+        .and_then(serde_json::Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(DEFAULT_ACTIVE_SUBAGENT_LIMIT)
+        .max(1)
 }
 
 #[cfg(test)]
@@ -2764,6 +2808,58 @@ mod tests {
         assert_eq!(app.active_subagent_limit, 7);
         assert!(response.contains("Active subagent limit set to 7"));
         assert!(response.contains("YOLO mode"));
+        Ok(())
+    }
+
+    #[test]
+    fn subagent_defaults_load_from_default_config_file() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        let defaults = super::default_subagent_provider_defaults();
+
+        assert_eq!(app.subagent_provider_defaults, defaults);
+        assert_eq!(
+            app.active_subagent_limit,
+            super::default_subagent_active_limit()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn subagents_config_command_persists_provider_model_and_limit() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+
+        let response = app
+            .execute_command("/subagents config provider provider-x model model-x max 6")?
+            .expect("command response");
+
+        assert!(response.contains("provider=provider-x"));
+        assert!(response.contains("model=model-x"));
+        assert!(response.contains("active_limit=6"));
+        assert_eq!(app.subagent_provider_defaults.provider, "provider-x");
+        assert_eq!(app.subagent_provider_defaults.model, "model-x");
+        assert_eq!(app.active_subagent_limit, 6);
+
+        let saved = app.config.load()?;
+        assert_eq!(
+            saved
+                .get("subagent_provider")
+                .and_then(serde_json::Value::as_str),
+            Some("provider-x")
+        );
+        assert_eq!(
+            saved
+                .get("subagent_model")
+                .and_then(serde_json::Value::as_str),
+            Some("model-x")
+        );
+        assert_eq!(
+            saved
+                .get("subagent_active_limit")
+                .and_then(serde_json::Value::as_u64),
+            Some(6)
+        );
         Ok(())
     }
 

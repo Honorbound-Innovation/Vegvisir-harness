@@ -481,13 +481,15 @@ impl TuiApplication {
             None | Some("status") | Some("show") => {
                 let defaults = self.config.load().unwrap_or_default();
                 Ok(format!(
-                    "Vegvisir configuration\npath={}\nsessions={}\ndefault_user_id={}\nactive_cms_user_id={}\nprovider={}\nmodel={}\nworkspace={}",
+                    "Vegvisir configuration\npath={}\nsessions={}\ndefault_user_id={}\nactive_cms_user_id={}\nprovider={}\nmodel={}\nsubagent_provider={}\nsubagent_model={}\nworkspace={}",
                     self.config.path.display(),
                     self.sessions.store.root.display(),
                     configured_user_id(&defaults),
                     self.cms.config.user_id,
                     self.session.current_provider,
                     self.session.current_model,
+                    self.subagent_provider_defaults.provider,
+                    self.subagent_provider_defaults.model,
                     self.cwd.display()
                 ))
             }
@@ -545,6 +547,7 @@ impl TuiApplication {
                 };
                 self.select_model(&["--global".to_string(), model.clone()])
             }
+            Some("subagents") | Some("subagent") => self.subagents_config_command(&args[1..]),
             Some("skills") | Some("lsl") => self.skills_config_command(&args[1..]),
             Some("path") => Ok(self.config.path.display().to_string()),
             Some(other) => Ok(format!("Unknown /config command: {other}")),
@@ -569,9 +572,11 @@ impl TuiApplication {
             return Ok(response);
         }
         match args.first().map(String::as_str) {
-            Some("policy") | Some("help") => {
-                Ok(Self::subagent_policy_help(self.active_subagent_limit))
-            }
+            Some("policy") | Some("help") => Ok(Self::subagent_policy_help(
+                self.active_subagent_limit,
+                &self.subagent_provider_defaults,
+            )),
+            Some("config") | Some("defaults") => self.subagents_config_command(&args[1..]),
             None | Some("list") | Some("tasks") => {
                 let records = self.load_subagent_records()?;
                 if records.is_empty() {
@@ -790,7 +795,130 @@ impl TuiApplication {
         )))
     }
 
-    fn subagent_policy_help(active_subagent_limit: usize) -> String {
+    pub(crate) fn subagents_config_command(&mut self, args: &[String]) -> anyhow::Result<String> {
+        match args.first().map(String::as_str) {
+            None | Some("show") | Some("status") => Ok(format!(
+                "Subagent configuration
+provider={}
+model={}
+active_limit={}
+config_path={}
+
+Set with:
+  /subagents config provider <provider>
+  /subagents config model <model>
+  /subagents config provider <provider> model <model>
+  /subagents config max <n>",
+                self.subagent_provider_defaults.provider,
+                self.subagent_provider_defaults.model,
+                self.active_subagent_limit,
+                self.config.path.display()
+            )),
+            Some("provider") | Some("model") | Some("set") | Some("max") | Some("limit") => {
+                let mut provider = self.subagent_provider_defaults.provider.clone();
+                let mut model = self.subagent_provider_defaults.model.clone();
+                let mut active_limit = self.active_subagent_limit;
+                let mut index = 0usize;
+                while index < args.len() {
+                    match args[index].as_str() {
+                        "set" => index += 1,
+                        "provider" => {
+                            let Some(value) = args.get(index + 1) else {
+                                return Ok(
+                                    "Usage: /subagents config provider <provider> [model <model>]"
+                                        .to_string(),
+                                );
+                            };
+                            provider = value.clone();
+                            index += 2;
+                        }
+                        "model" => {
+                            let Some(value) = args.get(index + 1) else {
+                                return Ok(
+                                    "Usage: /subagents config model <model> [provider <provider>]"
+                                        .to_string(),
+                                );
+                            };
+                            model = value.clone();
+                            index += 2;
+                        }
+                        "max" | "limit" => {
+                            let Some(value) = args.get(index + 1) else {
+                                return Ok("Usage: /subagents config max <n>".to_string());
+                            };
+                            active_limit = value
+                                .parse::<usize>()
+                                .map_err(|_| anyhow::anyhow!("Usage: /subagents config max <n>"))?
+                                .max(1);
+                            index += 2;
+                        }
+                        other if other.starts_with("provider=") => {
+                            provider = other.trim_start_matches("provider=").to_string();
+                            index += 1;
+                        }
+                        other if other.starts_with("model=") => {
+                            model = other.trim_start_matches("model=").to_string();
+                            index += 1;
+                        }
+                        other if other.starts_with("max=") || other.starts_with("limit=") => {
+                            let (_, value) = other.split_once('=').unwrap_or(("max", ""));
+                            active_limit = value
+                                .parse::<usize>()
+                                .map_err(|_| anyhow::anyhow!("Usage: /subagents config max <n>"))?
+                                .max(1);
+                            index += 1;
+                        }
+                        other => {
+                            return Ok(format!(
+                                "Unknown /subagents config token: {other}
+Usage: /subagents config provider <provider> model <model>"
+                            ));
+                        }
+                    }
+                }
+                self.subagent_provider_defaults =
+                    crate::tools::SubagentProviderDefaults::new(provider, model);
+                self.active_subagent_limit = active_limit;
+                let mut defaults = self.config.load().unwrap_or_default();
+                defaults.insert(
+                    "subagent_provider".to_string(),
+                    serde_json::json!(self.subagent_provider_defaults.provider),
+                );
+                defaults.insert(
+                    "subagent_model".to_string(),
+                    serde_json::json!(self.subagent_provider_defaults.model),
+                );
+                defaults.insert(
+                    "subagent_active_limit".to_string(),
+                    serde_json::json!(self.active_subagent_limit),
+                );
+                self.config.save(&defaults)?;
+                self.rebuild_tooling_for_cms()?;
+                self.logger.emit(
+                    "subagent.config_updated",
+                    serde_json::json!({
+                        "provider": self.subagent_provider_defaults.provider,
+                        "model": self.subagent_provider_defaults.model,
+                        "active_limit": self.active_subagent_limit,
+                        "source": "tui-command",
+                    }),
+                );
+                Ok(format!(
+                    "Subagent defaults set to provider={} model={} active_limit={}. New spawn_subagent calls inherit these unless provider/model is specified explicitly.",
+                    self.subagent_provider_defaults.provider, self.subagent_provider_defaults.model, self.active_subagent_limit
+                ))
+            }
+            Some(other) => Ok(format!(
+                "Unknown /subagents config command: {other}
+Usage: /subagents config [show|provider <provider>|model <model>|max <n>|provider <provider> model <model>]"
+            )),
+        }
+    }
+
+    fn subagent_policy_help(
+        active_subagent_limit: usize,
+        defaults: &crate::tools::SubagentProviderDefaults,
+    ) -> String {
         r#"Subagent delegation policy
 
 Vegvisir exposes `spawn_subagent` as a normal bounded delegation tool. The model receives hidden task-local orchestration guidance encouraging subagents for complex, multi-part, evidence-seeking work.
@@ -814,7 +942,9 @@ Boundaries:
 - assign explicit non-overlapping file_scope values for file-touching work
 - never let two active subagents own/edit the same files at the same time
 - default active subagent limit is 3; current session limit is {active_subagent_limit}
+- default provider/model is {subagent_provider}/{subagent_model} unless a subagent request explicitly sets provider/model
 - change the session limit with /agents max=<n> or /subagents max <n>
+- change default subagent provider/model with /subagents config provider <provider> model <model>
 - subagent spawning remains locked to YOLO mode for now
 
 Commands:
@@ -828,8 +958,12 @@ Commands:
 /subagents cancel <id-or-name>
 /subagents policy
 /subagents max <n>
+/subagents config
+/subagents config provider <provider> model <model>
 /agents max=<n>"#
         .replace("{active_subagent_limit}", &active_subagent_limit.to_string())
+        .replace("{subagent_provider}", &defaults.provider)
+        .replace("{subagent_model}", &defaults.model)
     }
 
     pub(crate) fn subagent_board_path(&self) -> PathBuf {
