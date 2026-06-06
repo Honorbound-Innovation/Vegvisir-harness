@@ -22,6 +22,14 @@ type Message = {
   timestamp?: string;
 };
 
+type ApprovalFeedback = {
+  id: string;
+  status: 'pending' | 'success' | 'error' | 'denied';
+  message: string;
+  method: string;
+  updatedAt: number;
+};
+
 type StartBridgeRequest = {
   workspace?: string;
   provider?: string;
@@ -324,6 +332,8 @@ const state = {
   sessionListWorkspace: '',
   pendingAssistant: '',
   approvals: [] as any[],
+  approvalFeedback: null as ApprovalFeedback | null,
+  approvalActions: {} as Record<string, ApprovalFeedback>,
   tools: [] as any[],
   providers: [] as any[],
   models: [] as any[],
@@ -626,30 +636,35 @@ function handleEvent(event: BridgeEvent): void {
       } else {
         state.error = eventMessage(event, 'turn failed');
       }
-      void send('approvals.list', {}, 'approvals');
+      void refreshApprovalRelatedState();
       break;
     case 'approval.required':
       state.busy = false;
       state.error = '';
       state.approvals = event.payload?.approvals ?? state.approvals;
       state.session = event.payload?.session ?? state.session;
-      void send('approvals.list', {}, 'approvals');
+      if (state.approvals.length) {
+        const first = state.approvals[0];
+        state.approvalFeedback = {
+          id: String(first?.id ?? 'approval'),
+          status: 'pending',
+          method: 'approval.required',
+          message: `${state.approvals.length} approval${state.approvals.length === 1 ? '' : 's'} waiting for your decision.`,
+          updatedAt: Date.now(),
+        };
+      }
+      void refreshApprovalRelatedState();
       break;
     case 'approvals.list':
-    case 'approvals.updated':
       state.approvals = event.payload?.approvals ?? [];
       state.session = event.payload?.session ?? state.session;
+      pruneApprovalActionState();
+      break;
+    case 'approvals.updated':
+      handleApprovalsUpdated(event.payload);
       break;
     case 'approval.executed':
-      state.approvals = event.payload?.approvals ?? [];
-      state.session = event.payload?.session ?? state.session;
-      state.error = approvalExecutionError(event.payload?.observation) ?? '';
-      state.messages.push({
-        role: 'system',
-        content: approvalExecutionMessage(event.payload),
-      });
-      void send('session.status', {}, 'status');
-      void send('approvals.list', {}, 'approvals');
+      handleApprovalExecuted(event.payload);
       break;
     case 'tools.list':
       state.tools = event.payload?.tools ?? [];
@@ -771,8 +786,105 @@ function setPanel(panel: string): void {
 async function approve(id: string, method: string): Promise<void> {
   if (!id.trim() || !state.bridgeRunning) return;
   state.error = '';
-  await send(method, { id }, 'approval');
-  await send('approvals.list', {}, 'approvals');
+  const approval = state.approvals.find((item) => String(item?.id ?? '') === id);
+  const feedback: ApprovalFeedback = {
+    id,
+    method,
+    status: 'pending',
+    message: approvalActionStartedMessage(method, approval),
+    updatedAt: Date.now(),
+  };
+  state.approvalActions[id] = feedback;
+  state.approvalFeedback = feedback;
+  render();
+  try {
+    await send(method, { id }, 'approval');
+    await refreshApprovalRelatedState();
+  } catch (error) {
+    const failed: ApprovalFeedback = {
+      id,
+      method,
+      status: 'error',
+      message: `Approval request failed before reaching the bridge: ${String(error)}`,
+      updatedAt: Date.now(),
+    };
+    state.approvalActions[id] = failed;
+    state.approvalFeedback = failed;
+    state.error = failed.message;
+    render();
+  }
+}
+
+function approvalActionStartedMessage(method: string, approval: any): string {
+  const toolName = approval?.tool_name ?? approval?.toolName ?? 'approval request';
+  if (method === 'approvals.deny') return `Denying ${toolName}…`;
+  if (method === 'approvals.approveSessionAndExecute') return `Approving ${toolName} for this session and executing it…`;
+  if (method === 'approvals.approveOnceAndExecute') return `Approving ${toolName} once and executing it…`;
+  return `Updating ${toolName}…`;
+}
+
+async function refreshApprovalRelatedState(): Promise<void> {
+  await Promise.allSettled([
+    send('approvals.list', {}, 'approvals'),
+    send('session.status', {}, 'status'),
+    send('runtime.status', {}, 'runtime'),
+    send('tools.list', {}, 'tools'),
+  ]);
+}
+
+function pruneApprovalActionState(): void {
+  const pendingIds = new Set(state.approvals.map((approval) => String(approval?.id ?? '')).filter(Boolean));
+  for (const [id, feedback] of Object.entries(state.approvalActions)) {
+    if (!pendingIds.has(id) && feedback.status === 'pending') continue;
+    if (!pendingIds.has(id) && Date.now() - feedback.updatedAt > 30_000) delete state.approvalActions[id];
+  }
+}
+
+function handleApprovalExecuted(payload: any): void {
+  const approval = payload?.approval;
+  const active = mostRecentApprovalAction();
+  const id = String(approval?.id ?? payload?.id ?? active?.id ?? 'approval');
+  const error = approvalExecutionError(payload?.observation);
+  const feedback: ApprovalFeedback = {
+    id,
+    method: 'approval.executed',
+    status: payload?.ok && !error ? 'success' : 'error',
+    message: approvalExecutionMessage(payload),
+    updatedAt: Date.now(),
+  };
+  state.approvals = payload?.approvals ?? [];
+  state.session = payload?.session ?? state.session;
+  state.error = error ?? '';
+  state.approvalActions[id] = feedback;
+  state.approvalFeedback = feedback;
+  state.messages.push({
+    role: feedback.status === 'error' ? 'system' : 'assistant',
+    content: feedback.message,
+  });
+  scrollChatToBottomOnNextRender();
+  void refreshApprovalRelatedState();
+}
+
+function handleApprovalsUpdated(payload: any): void {
+  state.approvals = payload?.approvals ?? [];
+  state.session = payload?.session ?? state.session;
+  const active = mostRecentApprovalAction();
+  if (active && active.method === 'approvals.deny') {
+    const feedback: ApprovalFeedback = {
+      ...active,
+      status: payload?.ok === false ? 'error' : 'denied',
+      message: payload?.ok === false ? 'Approval denial was not applied.' : 'Approval denied. Pending approval list refreshed.',
+      updatedAt: Date.now(),
+    };
+    state.approvalActions[feedback.id] = feedback;
+    state.approvalFeedback = feedback;
+  }
+  pruneApprovalActionState();
+}
+
+function mostRecentApprovalAction(): ApprovalFeedback | null {
+  return Object.values(state.approvalActions)
+    .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null;
 }
 
 function hasPendingApprovals(event: BridgeEvent): boolean {
@@ -927,6 +1039,7 @@ function render(): void {
         ${renderTopBar()}
         <section class="flex min-h-0 flex-col overflow-hidden bg-vv-grid [background-size:42px_42px]">
           ${state.error ? renderError() : ''}
+          ${renderApprovalToast()}
           ${renderPanel()}
         </section>
         ${renderFooterRail()}
@@ -1012,6 +1125,35 @@ function renderFooterRail(): string {
 
 function renderError(): string {
   return `<div class="mx-auto mt-3 max-w-5xl rounded-xl border border-vv-red/45 bg-vv-red/10 p-3 text-red-100 shadow-danger"><div class="flex flex-wrap items-center justify-between gap-2"><strong>Bridge problem</strong><button class="vv-action vv-action-danger" id="restart-bridge-from-error">Restart bridge</button></div><pre class="vv-code mt-2 whitespace-pre-wrap">${escapeHtml(state.error)}</pre></div>`;
+}
+
+function renderApprovalToast(): string {
+  const feedback = state.approvalFeedback;
+  if (!feedback) return '';
+  const tone = feedback.status === 'success'
+    ? 'border-vv-green/45 bg-vv-green/10 text-green-100'
+    : feedback.status === 'error'
+      ? 'border-vv-red/45 bg-vv-red/10 text-red-100 shadow-danger'
+      : feedback.status === 'denied'
+        ? 'border-vv-amber/45 bg-vv-amber/10 text-amber-100'
+        : 'border-vv-cyan/45 bg-vv-cyan/10 text-cyan-100 shadow-glow';
+  const dot = feedback.status === 'success'
+    ? 'bg-vv-green'
+    : feedback.status === 'error'
+      ? 'bg-vv-red'
+      : feedback.status === 'denied'
+        ? 'bg-vv-amber'
+        : 'bg-vv-cyan animate-pulse';
+  return `
+    <div class="mx-auto mt-3 w-[calc(100%-2rem)] max-w-5xl rounded-xl border ${tone} p-3 text-sm">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div class="flex min-w-0 items-center gap-2">
+          <span class="h-2.5 w-2.5 shrink-0 rounded-full ${dot}"></span>
+          <span class="font-semibold">${escapeHtml(feedback.message)}</span>
+        </div>
+        <button class="vv-action px-2 py-1 text-[0.68rem]" id="clear-approval-feedback">Dismiss</button>
+      </div>
+    </div>`;
 }
 
 function renderPanel(): string {
@@ -1532,18 +1674,36 @@ function renderWork(): string {
 }
 
 function renderApprovals(): string {
-  if (!state.approvals.length) return '<div class="vv-panel p-4 text-sm text-vv-muted">No pending approvals. The beast is behaving.</div>';
-  return `<div class="grid gap-4">${state.approvals.map((approval) => `
+  const last = state.approvalFeedback;
+  const lastResult = last && last.status !== 'pending'
+    ? `<div class="vv-panel mb-4 p-4 text-sm ${last.status === 'success' ? 'border-vv-green/45 text-green-100' : last.status === 'error' ? 'border-vv-red/45 text-red-100' : 'border-vv-amber/45 text-amber-100'}">
+        <div class="font-black">Last approval result</div>
+        <p class="mt-2 leading-6">${escapeHtml(last.message)}</p>
+      </div>`
+    : '';
+  if (!state.approvals.length) return `${lastResult}<div class="vv-panel p-4 text-sm text-vv-muted">No pending approvals. ${last?.status === 'success' ? 'Last approval executed successfully.' : 'The beast is behaving.'}</div>`;
+  return `${lastResult}<div class="grid gap-4">${state.approvals.map(renderApprovalCard).join('')}</div>`;
+}
+
+function renderApprovalCard(approval: any): string {
+  const id = String(approval.id ?? '');
+  const feedback = id ? state.approvalActions[id] : undefined;
+  const busy = feedback?.status === 'pending';
+  const statusLine = feedback
+    ? `<div class="mt-3 rounded-xl border border-vv-cyan/35 bg-vv-cyan/10 px-3 py-2 text-xs text-cyan-100"><span class="inline-block h-2 w-2 rounded-full bg-vv-cyan ${busy ? 'animate-pulse' : ''}"></span> ${escapeHtml(feedback.message)}</div>`
+    : '';
+  return `
     <article class="rounded-[1.05rem] border border-vv-red/45 bg-vv-red/10 p-4 shadow-danger">
       <h3 class="text-base font-black text-red-100">${escapeHtml(approval.tool_name ?? approval.toolName ?? 'approval')}</h3>
       <p class="mt-2 text-sm text-red-100/75">${escapeHtml(approval.reason ?? approval.risk_label ?? 'Risky action requires approval.')}</p>
       <pre class="vv-code mt-3 whitespace-pre-wrap rounded-xl bg-black/20 p-3">${escapeHtml(JSON.stringify(approval.args ?? {}, null, 2))}</pre>
+      ${statusLine}
       <div class="mt-3 flex flex-wrap gap-2">
-        <button class="vv-action" data-approval="${escapeHtml(approval.id)}" data-method="approvals.approveOnceAndExecute">Approve once</button>
-        <button class="vv-action" data-approval="${escapeHtml(approval.id)}" data-method="approvals.approveSessionAndExecute">Approve session</button>
-        <button class="vv-action vv-action-danger" data-approval="${escapeHtml(approval.id)}" data-method="approvals.deny">Deny</button>
+        <button class="vv-action" data-approval="${escapeHtml(id)}" data-method="approvals.approveOnceAndExecute" ${busy ? 'disabled' : ''}>${busy ? 'Working…' : 'Approve once'}</button>
+        <button class="vv-action" data-approval="${escapeHtml(id)}" data-method="approvals.approveSessionAndExecute" ${busy ? 'disabled' : ''}>Approve session</button>
+        <button class="vv-action vv-action-danger" data-approval="${escapeHtml(id)}" data-method="approvals.deny" ${busy ? 'disabled' : ''}>Deny</button>
       </div>
-    </article>`).join('')}</div>`;
+    </article>`;
 }
 
 function renderTools(): string {
@@ -2130,6 +2290,7 @@ function bindEvents(): void {
   document.querySelector('#start-stop')?.addEventListener('click', () => state.bridgeRunning ? void stopBridge() : void startBridge());
   document.querySelector('#restart-bridge')?.addEventListener('click', () => void restartBridge());
   document.querySelector('#restart-bridge-from-error')?.addEventListener('click', () => void restartBridge());
+  document.querySelector('#clear-approval-feedback')?.addEventListener('click', () => { state.approvalFeedback = null; render(); });
   document.querySelector('#refresh-all')?.addEventListener('click', () => void refreshEverything());
   document.querySelectorAll<HTMLButtonElement>('[data-panel]').forEach((button) => button.addEventListener('click', () => setPanel(button.dataset.panel ?? 'chat')));
   document.querySelectorAll<HTMLButtonElement>('[data-module-add]').forEach((button) => button.addEventListener('click', () => {
