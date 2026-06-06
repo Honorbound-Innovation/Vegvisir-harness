@@ -937,8 +937,7 @@ function renderCanvas(): string {
   return `
     <div class="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
       ${renderLayoutTabs()}
-      <div class="grid min-h-0 grid-cols-[15rem_minmax(0,1fr)] overflow-hidden max-[980px]:grid-cols-1">
-        ${renderModulePalette()}
+      <div class="grid min-h-0 grid-cols-1 overflow-hidden">
         <div id="canvas-surface" class="vv-scrollbar relative min-h-0 overflow-auto bg-vv-grid [background-size:42px_42px]">
           <div class="relative" style="width:${bounds.width}px;height:${bounds.height}px;min-width:100%;min-height:100%;">
             ${layout.modules.map(renderModuleFrame).join('')}
@@ -976,22 +975,6 @@ function renderLayoutTabs(): string {
         <label class="flex items-center gap-2"><input id="layout-snap" type="checkbox" ${state.layout.snapToGrid ? 'checked' : ''} /> snap ${state.layout.gridSize}px grid</label>
       </div>
     </div>`;
-}
-
-function renderModulePalette(): string {
-  return `
-    <aside class="vv-scrollbar min-h-0 overflow-auto border-r border-vv-line bg-vv-rail/88 p-3 max-[980px]:hidden">
-      <div class="mb-3">
-        <h2 class="text-sm font-black">Module palette</h2>
-        <p class="mt-1 text-xs leading-5 text-vv-muted">Only repo-verified desktop panels are available. Click to add or focus a module.</p>
-      </div>
-      <div class="space-y-1">
-        ${panels.map((panel) => `<button class="vv-rail-button" data-module-add="${panel.id}">
-          <span class="grid h-6 w-6 shrink-0 place-items-center rounded-lg border border-vv-line bg-white/[0.035] text-vv-cyan">${panel.icon}</span>
-          <span class="min-w-0"><span class="block font-semibold text-current">${escapeHtml(panel.label)}</span><span class="block truncate text-xs text-vv-dim">${escapeHtml(panel.hint)}</span></span>
-        </button>`).join('')}
-      </div>
-    </aside>`;
 }
 
 function canvasBounds(modules: CanvasModuleInstance[]): { width: number; height: number } {
@@ -1591,7 +1574,7 @@ function renderPre(value: string): string {
 function activeTitle(): string {
   const label = panels.find((panel) => panel.id === state.activePanel)?.label ?? 'Workbench';
   if (state.activePanel === 'chat') return state.busy ? 'Vegvisir is working…' : 'Ask Vegvisir to work';
-  return `Canvas · ${label}`;
+  return label;
 }
 
 function projectName(): string {
