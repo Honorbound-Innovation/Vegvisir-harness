@@ -516,7 +516,7 @@ async function pollBridge(): Promise<void> {
       catch { handleEvent({ type: 'bridge.raw', payload: { line } }); }
     }
     await refreshStatus();
-    if (lines.length) render();
+    if (lines.length && !canvasInteraction) render();
   } catch (error) {
     state.error = String(error);
     render();
@@ -939,7 +939,7 @@ function renderCanvas(): string {
       ${renderLayoutTabs()}
       <div class="grid min-h-0 grid-cols-1 overflow-hidden">
         <div id="canvas-surface" class="vv-scrollbar relative min-h-0 overflow-auto bg-vv-grid [background-size:42px_42px]">
-          <div class="relative" style="width:${bounds.width}px;height:${bounds.height}px;min-width:100%;min-height:100%;">
+          <div id="canvas-content" class="relative" style="width:${bounds.width}px;height:${bounds.height}px;min-width:100%;min-height:100%;">
             ${layout.modules.map(renderModuleFrame).join('')}
             ${layout.modules.length ? '' : renderBlankCanvasEmpty()}
           </div>
@@ -978,9 +978,10 @@ function renderLayoutTabs(): string {
 }
 
 function canvasBounds(modules: CanvasModuleInstance[]): { width: number; height: number } {
-  const maxX = modules.reduce((max, module) => Math.max(max, module.x + module.width), 1320);
-  const maxY = modules.reduce((max, module) => Math.max(max, module.y + module.height), 880);
-  return { width: maxX + 160, height: maxY + 160 };
+  if (!modules.length) return { width: 1, height: 1 };
+  const maxX = modules.reduce((max, module) => Math.max(max, module.x + module.width), 0);
+  const maxY = modules.reduce((max, module) => Math.max(max, module.y + module.height), 0);
+  return { width: Math.max(1, Math.ceil(maxX)), height: Math.max(1, Math.ceil(maxY)) };
 }
 
 function renderBlankCanvasEmpty(): string {
@@ -1003,7 +1004,7 @@ function renderModuleFrame(instance: CanvasModuleInstance): string {
   const isApproval = instance.panelId === 'approvals' && state.approvals.length > 0;
   const isRuntimeDanger = instance.panelId === 'runtime' && Boolean(state.settings.dangerousBypass || state.runtimeStatus?.dangerous_bypass || state.runtimeStatus?.dangerousBypass);
   return `
-    <article class="vv-canvas-module vv-panel absolute overflow-hidden ${selected ? 'vv-canvas-module-selected' : ''} ${instance.locked ? 'vv-canvas-module-locked' : ''} ${mode === 'compact' ? 'vv-canvas-module-compact' : ''} ${mode === 'collapsed' ? 'vv-canvas-module-collapsed' : ''} ${isApproval || isRuntimeDanger ? 'border-vv-red/60 shadow-danger' : ''}" style="left:${instance.x}px;top:${instance.y}px;width:${instance.width}px;height:${instance.height}px;z-index:${instance.z};">
+    <article data-module-frame="${escapeHtml(instance.id)}" class="vv-canvas-module vv-panel absolute overflow-hidden ${selected ? 'vv-canvas-module-selected' : ''} ${instance.locked ? 'vv-canvas-module-locked' : ''} ${mode === 'compact' ? 'vv-canvas-module-compact' : ''} ${mode === 'collapsed' ? 'vv-canvas-module-collapsed' : ''} ${isApproval || isRuntimeDanger ? 'border-vv-red/60 shadow-danger' : ''}" style="left:${instance.x}px;top:${instance.y}px;width:${instance.width}px;height:${instance.height}px;z-index:${instance.z};">
       <header class="vv-canvas-module-header ${draggable ? 'vv-canvas-module-draggable' : ''} flex select-none items-center justify-between gap-2 border-b border-vv-line bg-black/32 px-3 py-2" data-module-drag="${escapeHtml(instance.id)}">
         <div class="flex min-w-0 items-center gap-2">
           <span class="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-vv-line bg-white/[0.045] text-vv-cyan">${panel.icon}</span>
@@ -2008,13 +2009,30 @@ function updateCanvasInteraction(event: PointerEvent): void {
   } else {
     updateModuleBounds(interaction.id, module.x, module.y, interaction.startWidth + deltaX, interaction.startHeight + deltaY);
   }
-  render();
+  applyCanvasInteractionDomUpdate(module);
+}
+
+function applyCanvasInteractionDomUpdate(module: CanvasModuleInstance): void {
+  const frame = document.querySelector<HTMLElement>(`[data-module-frame="${cssEscape(module.id)}"]`);
+  if (frame) {
+    frame.style.left = `${module.x}px`;
+    frame.style.top = `${module.y}px`;
+    frame.style.width = `${module.width}px`;
+    frame.style.height = `${module.height}px`;
+  }
+  const canvasContent = document.querySelector<HTMLElement>('#canvas-content');
+  if (canvasContent) {
+    const bounds = canvasBounds(currentLayout().modules);
+    canvasContent.style.width = `${bounds.width}px`;
+    canvasContent.style.height = `${bounds.height}px`;
+  }
 }
 
 function finishCanvasInteraction(): void {
   if (!canvasInteraction) return;
   canvasInteraction = null;
   saveLayouts();
+  render();
 }
 
 function bindEvents(): void {
@@ -2102,6 +2120,11 @@ function updateBridgeDraftFromForm(event: Event): void {
   if (!key) return;
   if (key === 'global') state.bridgeDraft.global = input.checked;
   else state.bridgeDraft[key] = input.value;
+}
+
+function cssEscape(value: string): string {
+  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(value);
+  return String(value).replace(/[^a-zA-Z0-9_-]/g, (character) => `\\${character}`);
 }
 
 function escapeHtml(value: string): string {
