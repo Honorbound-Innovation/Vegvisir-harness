@@ -193,6 +193,10 @@ type CanvasScrollSnapshot = {
 };
 
 const CHAT_SCROLL_STICKY_THRESHOLD_PX = 96;
+const APPROVAL_REFRESH_THROTTLE_MS = 750;
+let approvalRefreshInFlight = false;
+let lastApprovalRefreshAt = 0;
+
 
 function panelDefinition(panelId: PanelId): PanelDefinition {
   return panels.find((panel) => panel.id === panelId) ?? panels[0];
@@ -367,6 +371,7 @@ const state = {
   sessionListWorkspace: '',
   pendingAssistant: '',
   approvals: [] as any[],
+  approvalPaused: false,
   approvalFeedback: null as ApprovalFeedback | null,
   approvalActions: {} as Record<string, ApprovalFeedback>,
   tools: [] as any[],
@@ -471,6 +476,23 @@ function startupDangerousBypassRequested(): boolean {
   return Boolean(state.settings.dangerousBypass);
 }
 
+function pendingApprovalCount(): number {
+  return Array.isArray(state.approvals) ? state.approvals.length : 0;
+}
+
+function isApprovalPaused(): boolean {
+  return state.approvalPaused || pendingApprovalCount() > 0;
+}
+
+function canSendChatTurn(): boolean {
+  return state.bridgeRunning && !state.busy && !isApprovalPaused();
+}
+
+function setApprovalsFromBridge(approvals: any[]): void {
+  state.approvals = Array.isArray(approvals) ? approvals : [];
+  state.approvalPaused = state.approvals.length > 0;
+}
+
 function nextId(prefix: string): string {
   state.requestCounter += 1;
   return `desktop-${prefix}-${state.requestCounter}`;
@@ -508,6 +530,7 @@ async function restartBridge(): Promise<void> {
     state.messages = [];
     state.pendingAssistant = '';
     state.busy = false;
+    setApprovalsFromBridge([]);
     await activateBridge(status);
   } catch (error) {
     state.bridgeStopping = false;
@@ -555,6 +578,7 @@ async function stopBridge(): Promise<void> {
   state.messages = [];
   state.pendingAssistant = '';
   state.busy = false;
+  setApprovalsFromBridge([]);
   render();
 }
 
@@ -647,7 +671,7 @@ function handleEvent(event: BridgeEvent): void {
       break;
     case 'session.messages':
       state.messages = normalizeMessages(event.payload?.messages ?? event.payload ?? []);
-      state.pendingAssistant = '';
+      if (!isApprovalPaused()) state.pendingAssistant = '';
       break;
     case 'session.list':
       state.sessions = Array.isArray(event.payload?.sessions) ? event.payload.sessions : [];
@@ -684,12 +708,12 @@ function handleEvent(event: BridgeEvent): void {
       } else {
         state.error = eventMessage(event, 'turn failed');
       }
-      void refreshApprovalRelatedState();
+      void refreshApprovalRelatedStateThrottled();
       break;
     case 'approval.required':
       state.busy = false;
       state.error = '';
-      state.approvals = event.payload?.approvals ?? state.approvals;
+      setApprovalsFromBridge(event.payload?.approvals ?? state.approvals);
       state.session = event.payload?.session ?? state.session;
       if (state.approvals.length) {
         const first = state.approvals[0];
@@ -701,10 +725,10 @@ function handleEvent(event: BridgeEvent): void {
           updatedAt: Date.now(),
         };
       }
-      void refreshApprovalRelatedState();
+      void refreshApprovalRelatedStateThrottled();
       break;
     case 'approvals.list':
-      state.approvals = event.payload?.approvals ?? [];
+      setApprovalsFromBridge(event.payload?.approvals ?? []);
       state.session = event.payload?.session ?? state.session;
       pruneApprovalActionState();
       break;
@@ -804,7 +828,7 @@ function normalizeMessages(value: any[]): Message[] {
 async function sendTurn(): Promise<void> {
   const input = document.querySelector<HTMLTextAreaElement>('#turn-input');
   const content = input?.value.trim() ?? '';
-  if (!content || !state.bridgeRunning || state.busy) return;
+  if (!content || !canSendChatTurn()) return;
   input!.value = '';
   state.error = '';
   if (content.startsWith('/')) {
@@ -883,9 +907,19 @@ async function refreshApprovalRelatedState(): Promise<void> {
   await Promise.allSettled([
     send('approvals.list', {}, 'approvals'),
     send('session.status', {}, 'status'),
-    send('runtime.status', {}, 'runtime'),
-    send('tools.list', {}, 'tools'),
   ]);
+}
+
+async function refreshApprovalRelatedStateThrottled(): Promise<void> {
+  const now = Date.now();
+  if (approvalRefreshInFlight || now - lastApprovalRefreshAt < APPROVAL_REFRESH_THROTTLE_MS) return;
+  approvalRefreshInFlight = true;
+  lastApprovalRefreshAt = now;
+  try {
+    await refreshApprovalRelatedState();
+  } finally {
+    approvalRefreshInFlight = false;
+  }
 }
 
 function pruneApprovalActionState(): void {
@@ -908,7 +942,7 @@ function handleApprovalExecuted(payload: any): void {
     message: approvalExecutionMessage(payload),
     updatedAt: Date.now(),
   };
-  state.approvals = payload?.approvals ?? [];
+  setApprovalsFromBridge(payload?.approvals ?? []);
   state.session = payload?.session ?? state.session;
   state.error = error ?? '';
   state.approvalActions[id] = feedback;
@@ -922,7 +956,7 @@ function handleApprovalExecuted(payload: any): void {
 }
 
 function handleApprovalsUpdated(payload: any): void {
-  state.approvals = payload?.approvals ?? [];
+  setApprovalsFromBridge(payload?.approvals ?? []);
   state.session = payload?.session ?? state.session;
   const active = mostRecentApprovalAction();
   if (active && active.method === 'approvals.deny') {
@@ -1200,7 +1234,7 @@ function renderFooterRail(): string {
     <footer class="flex items-center justify-between border-t border-vv-line bg-black/20 px-5 font-mono text-[0.66rem] text-vv-muted">
       <span>${state.bridgeRunning ? 'Local bridge active' : 'Local bridge offline'}</span>
       <span>${escapeHtml(state.settings.workspace || 'workspace defaults to home/current dir')}</span>
-      <span class="inline-flex items-center gap-1.5 ${state.busy ? 'text-vv-cyan' : ''}">${state.busy ? '<span class="vv-mini-spinner" aria-hidden="true"></span>' : ''}${state.busy ? modelWorkingLabel().toLowerCase() : 'ready'} · main</span>
+      <span class="inline-flex items-center gap-1.5 ${isApprovalPaused() ? 'text-vv-amber' : state.busy ? 'text-vv-cyan' : ''}">${state.busy || isApprovalPaused() ? '<span class="vv-mini-spinner" aria-hidden="true"></span>' : ''}${state.busy || isApprovalPaused() ? modelWorkingLabel().toLowerCase() : 'ready'} · main</span>
     </footer>
   `;
 }
@@ -1210,20 +1244,23 @@ function renderError(): string {
 }
 
 function modelWorkingLabel(): string {
+  if (isApprovalPaused()) return 'Paused for approval';
   return state.pendingAssistant.trim() ? 'Streaming response' : 'Model working';
 }
 
 function renderModelWorkingPill(label = modelWorkingLabel()): string {
-  if (!state.busy) return '';
-  return `<span class="vv-pill vv-working-pill text-vv-cyan" role="status" aria-live="polite"><span class="vv-mini-spinner" aria-hidden="true"></span>${escapeHtml(label)}</span>`;
+  if (!state.busy && !isApprovalPaused()) return '';
+  return `<span class="vv-pill vv-working-pill ${isApprovalPaused() ? 'text-vv-amber' : 'text-vv-cyan'}" role="status" aria-live="polite"><span class="vv-mini-spinner" aria-hidden="true"></span>${escapeHtml(label)}</span>`;
 }
 
 function renderModelWorkingIndicator(): string {
-  if (!state.busy) return '';
+  if (!state.busy && !isApprovalPaused()) return '';
   const label = modelWorkingLabel();
-  const detail = state.pendingAssistant.trim()
-    ? 'Tokens are streaming into the assistant response.'
-    : 'Waiting for the provider, tools, or approval-aware continuation to produce the next chat update.';
+  const detail = isApprovalPaused()
+    ? 'The model turn is stopped at a human approval gate. Decide the pending approval before sending another chat turn.'
+    : state.pendingAssistant.trim()
+      ? 'Tokens are streaming into the assistant response.'
+      : 'Waiting for the provider, tools, or approval-aware continuation to produce the next chat update.';
   return `
     <article class="vv-soft-panel vv-working-card max-w-4xl border-vv-cyan/35 bg-vv-cyan/5" role="status" aria-live="polite" aria-label="${escapeHtml(label)}">
       <div class="flex items-center gap-3 px-4 py-3">
@@ -1454,23 +1491,31 @@ function renderEmptyTranscript(): string {
 }
 
 function renderComposer(): string {
+  const approvalPaused = isApprovalPaused();
+  const canSend = canSendChatTurn();
+  const placeholder = approvalPaused
+    ? 'Approval required before the next chat turn can be sent.'
+    : 'Ask Vegvisir anything, or type /sessions, /load <id>, /tools, /diff...';
+  const readyPill = approvalPaused
+    ? `<span class="vv-pill text-vv-amber">Paused · ${pendingApprovalCount()} approval${pendingApprovalCount() === 1 ? '' : 's'}</span>`
+    : '<span class="vv-pill">Ready</span>';
   return `
     <div class="mx-auto w-full max-w-4xl">
       <div class="rounded-[1.15rem] border border-vv-line2 bg-vv-panel/90 p-2.5 shadow-[0_18px_56px_rgba(0,0,0,0.30)]">
-        <textarea id="turn-input" class="vv-focus vv-scrollbar h-16 max-h-16 min-h-16 w-full resize-none rounded-xl border border-transparent bg-transparent px-2.5 py-1.5 text-[0.92rem] leading-6 text-vv-text placeholder:text-vv-dim" placeholder="Ask Vegvisir anything, or type /sessions, /load <id>, /tools, /diff..." ${state.bridgeRunning ? '' : 'disabled'}></textarea>
+        <textarea id="turn-input" class="vv-focus vv-scrollbar h-16 max-h-16 min-h-16 w-full resize-none rounded-xl border border-transparent bg-transparent px-2.5 py-1.5 text-[0.92rem] leading-6 text-vv-text placeholder:text-vv-dim" placeholder="${escapeHtml(placeholder)}" ${state.bridgeRunning && !approvalPaused ? '' : 'disabled'}></textarea>
         <div class="mt-1.5 flex items-center justify-between gap-2 border-t border-vv-line pt-2">
           <div class="flex min-w-0 items-center gap-1.5 overflow-hidden text-xs text-vv-muted">
             <span class="vv-pill">${escapeHtml(state.settings.model || 'model default')}</span>
-            ${state.busy ? renderModelWorkingPill() : '<span class="vv-pill">Ready</span>'}
+            ${state.busy || approvalPaused ? renderModelWorkingPill() : readyPill}
             <span class="vv-pill">Chat + slash commands</span>
             <span class="vv-pill">${startupDangerousBypassRequested() || runtimeDangerousBypassEnabled() ? 'Bypass startup' : 'Policy gated'}</span>
           </div>
-          <button id="send-turn" class="vv-focus grid h-9 w-9 shrink-0 place-items-center rounded-full ${state.busy ? 'bg-vv-red' : 'bg-vv-pink'} text-lg font-black text-white shadow-[0_0_28px_rgba(255,46,126,0.28)]" ${state.bridgeRunning && !state.busy ? '' : 'disabled'}>${state.busy ? '■' : '➤'}</button>
+          <button id="send-turn" class="vv-focus grid h-9 w-9 shrink-0 place-items-center rounded-full ${state.busy || approvalPaused ? 'bg-vv-red' : 'bg-vv-pink'} text-lg font-black text-white shadow-[0_0_28px_rgba(255,46,126,0.28)]" ${canSend ? '' : 'disabled'}>${state.busy || approvalPaused ? '■' : '➤'}</button>
         </div>
       </div>
       <div class="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-vv-muted">
-        <span>Slash commands run from this same input. Press <kbd class="rounded border border-vv-line px-1 text-vv-dim">Enter</kbd> to send, <kbd class="rounded border border-vv-line px-1 text-vv-dim">Shift+Enter</kbd> for newline.</span>
-        <button class="vv-action" data-panel="sessions" ${state.bridgeRunning ? '' : 'disabled'}>Load session</button>
+        <span>${approvalPaused ? 'Approve or deny the pending risk gate before sending another turn. This prevents approval pile-ups.' : 'Slash commands run from this same input. Press <kbd class="rounded border border-vv-line px-1 text-vv-dim">Enter</kbd> to send, <kbd class="rounded border border-vv-line px-1 text-vv-dim">Shift+Enter</kbd> for newline.'}</span>
+        <button class="vv-action" data-panel="${approvalPaused ? 'approvals' : 'sessions'}" ${state.bridgeRunning ? '' : 'disabled'}>${approvalPaused ? 'Open approvals' : 'Load session'}</button>
       </div>
     </div>
   `;
@@ -2308,7 +2353,7 @@ function renderPre(value: string): string {
 
 function activeTitle(): string {
   const label = panels.find((panel) => panel.id === state.activePanel)?.label ?? 'Workbench';
-  if (state.activePanel === 'chat') return state.busy ? 'Vegvisir is working…' : 'Ask Vegvisir to work';
+  if (state.activePanel === 'chat') return isApprovalPaused() ? 'Vegvisir is paused for approval' : state.busy ? 'Vegvisir is working…' : 'Ask Vegvisir to work';
   return label;
 }
 

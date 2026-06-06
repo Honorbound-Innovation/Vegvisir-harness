@@ -1526,28 +1526,38 @@ fn anthropic_tool_loop(
             return Ok(text);
         }
         wire_messages.push(json!({"role": "assistant", "content": content}));
-        let results = tool_uses
-            .into_iter()
-            .enumerate()
-            .filter_map(|(index, tool_use)| {
-                let id = tool_use.get("id").and_then(Value::as_str)?.to_string();
-                let name = tool_use.get("name").and_then(Value::as_str)?.to_string();
-                let result = if index == 0 {
-                    let args = parse_tool_arguments(tool_use.get("input"));
-                    let result = completed_tool_observation(&name, &execute_tool(&name, args));
-                    let result = truncate_model_observation(&result);
-                    observations.push((name.clone(), result.clone()));
-                    result
-                } else {
-                    deferred_tool_observation(&name)
-                };
-                Some(json!({
-                    "type": "tool_result",
-                    "tool_use_id": id,
-                    "content": result,
-                }))
-            })
-            .collect::<Vec<_>>();
+        let mut results = Vec::new();
+        for (index, tool_use) in tool_uses.into_iter().enumerate() {
+            let Some(id) = tool_use
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+            else {
+                continue;
+            };
+            let Some(name) = tool_use
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+            else {
+                continue;
+            };
+            let result = if index == 0 {
+                let args = parse_tool_arguments(tool_use.get("input"));
+                let output = execute_tool_or_stop_for_approval(&name, args, execute_tool)?;
+                let result = completed_tool_observation(&name, &output);
+                let result = truncate_model_observation(&result);
+                observations.push((name.clone(), result.clone()));
+                result
+            } else {
+                deferred_tool_observation(&name)
+            };
+            results.push(json!({
+                "type": "tool_result",
+                "tool_use_id": id,
+                "content": result,
+            }));
+        }
         wire_messages.push(json!({"role": "user", "content": results}));
     }
     tool_round_limit_result(&observations, max_tool_rounds)
@@ -1993,28 +2003,28 @@ fn google_tool_loop(
             return Ok(text);
         }
         contents.push(json!({"role": "model", "parts": parts}));
-        let response_parts = calls
-            .into_iter()
-            .enumerate()
-            .filter_map(|(index, call)| {
-                let name = call.get("name").and_then(Value::as_str)?.to_string();
-                let result = if index == 0 {
-                    let args = parse_tool_arguments(call.get("args"));
-                    let result = completed_tool_observation(&name, &execute_tool(&name, args));
-                    let result = truncate_model_observation(&result);
-                    observations.push((name.clone(), result.clone()));
-                    result
-                } else {
-                    deferred_tool_observation(&name)
-                };
-                Some(json!({
-                    "functionResponse": {
-                        "name": name,
-                        "response": {"result": result},
-                    }
-                }))
-            })
-            .collect::<Vec<_>>();
+        let mut response_parts = Vec::new();
+        for (index, call) in calls.into_iter().enumerate() {
+            let Some(name) = call.get("name").and_then(Value::as_str).map(str::to_string) else {
+                continue;
+            };
+            let result = if index == 0 {
+                let args = parse_tool_arguments(call.get("args"));
+                let output = execute_tool_or_stop_for_approval(&name, args, execute_tool)?;
+                let result = completed_tool_observation(&name, &output);
+                let result = truncate_model_observation(&result);
+                observations.push((name.clone(), result.clone()));
+                result
+            } else {
+                deferred_tool_observation(&name)
+            };
+            response_parts.push(json!({
+                "functionResponse": {
+                    "name": name,
+                    "response": {"result": result},
+                }
+            }));
+        }
         contents.push(json!({"role": "user", "parts": response_parts}));
     }
     tool_round_limit_result(&observations, max_tool_rounds)
@@ -2122,10 +2132,9 @@ impl ProviderAdapter for OpenAISsoProfileAdapter {
             }
             for (index, call) in tool_calls.into_iter().enumerate() {
                 let result = if index == 0 {
-                    let result = completed_tool_observation(
-                        &call.name,
-                        &execute_tool(&call.name, call.args),
-                    );
+                    let output =
+                        execute_tool_or_stop_for_approval(&call.name, call.args, execute_tool)?;
+                    let result = completed_tool_observation(&call.name, &output);
                     let result = truncate_model_observation(&result);
                     observations.push((call.name.clone(), result.clone()));
                     result
@@ -2257,8 +2266,9 @@ fn responses_tool_loop_streaming(
         }
         for (index, call) in tool_calls.into_iter().enumerate() {
             let result = if index == 0 {
-                let result =
-                    completed_tool_observation(&call.name, &execute_tool(&call.name, call.args));
+                let output =
+                    execute_tool_or_stop_for_approval(&call.name, call.args, execute_tool)?;
+                let result = completed_tool_observation(&call.name, &output);
                 let result = truncate_model_observation(&result);
                 observations.push((call.name.clone(), result.clone()));
                 result
@@ -3891,7 +3901,8 @@ pub fn openai_tool_loop(
                 .to_string();
             let result = if index == 0 {
                 let args = parse_tool_arguments(tool_call.pointer("/function/arguments"));
-                let result = completed_tool_observation(&name, &execute_tool(&name, args));
+                let output = execute_tool_or_stop_for_approval(&name, args, execute_tool)?;
+                let result = completed_tool_observation(&name, &output);
                 let result = truncate_model_observation(&result);
                 observations.push((name.clone(), result.clone()));
                 result
@@ -3950,7 +3961,8 @@ pub fn openai_tool_loop_streaming(
                 .to_string();
             let result = if index == 0 {
                 let args = parse_tool_arguments(tool_call.pointer("/function/arguments"));
-                let result = completed_tool_observation(&name, &execute_tool(&name, args));
+                let output = execute_tool_or_stop_for_approval(&name, args, execute_tool)?;
+                let result = completed_tool_observation(&name, &output);
                 let result = truncate_model_observation(&result);
                 observations.push((name.clone(), result.clone()));
                 result
@@ -4061,6 +4073,25 @@ fn truncate_utf8(value: &str, max_bytes: usize) -> &str {
 
 fn truncate_model_observation(value: &str) -> String {
     compact_tool_observation(value, TOOL_OBSERVATION_MODEL_MAX_BYTES)
+}
+
+fn approval_required_tool_output(content: &str) -> bool {
+    let lower = content.to_ascii_lowercase();
+    lower.contains("approval_id=")
+        || lower.starts_with("approvalrequired:")
+        || lower.contains("risky tool requires permission:")
+}
+
+fn execute_tool_or_stop_for_approval(
+    name: &str,
+    args: Map<String, Value>,
+    execute_tool: &mut dyn FnMut(&str, Map<String, Value>) -> String,
+) -> anyhow::Result<String> {
+    let output = execute_tool(name, args);
+    if approval_required_tool_output(&output) {
+        anyhow::bail!(output);
+    }
+    Ok(output)
 }
 
 fn completed_tool_observation(name: &str, content: &str) -> String {
@@ -5056,6 +5087,17 @@ mod tests {
     fn completed_tool_observation_marks_tool_errors_failed() {
         let observation = completed_tool_observation("run_tests", "TestsFailed: one test failed");
         assert!(observation.contains("status: failed"));
+    }
+
+    #[test]
+    fn approval_required_tool_output_is_detected_before_model_followup() {
+        assert!(approval_required_tool_output(
+            "Risky tool requires human approval: write_file; approval_id=apr_123"
+        ));
+        assert!(approval_required_tool_output(
+            "ApprovalRequired: Human approval required; approval_id=apr_456"
+        ));
+        assert!(!approval_required_tool_output("normal tool output"));
     }
 
     #[test]
