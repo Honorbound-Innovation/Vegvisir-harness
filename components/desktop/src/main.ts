@@ -16,6 +16,11 @@ let forceChatScrollToBottom = false;
 let approvalRefreshInFlight = false;
 let lastApprovalRefreshAt = 0;
 let renderScheduled = false;
+let streamingRenderScheduled = false;
+let lastStatusRefreshAt = 0;
+
+const BRIDGE_STATUS_REFRESH_MS = 2_500;
+const STREAMING_RENDER_THROTTLE_MS = 120;
 
 function defaultLayoutState(): CanvasLayoutState {
   return {
@@ -457,19 +462,25 @@ async function pollBridge(): Promise<void> {
   }
   try {
     const lines = await invoke<string[]>('bridge_poll');
+    let shouldRender = false;
     for (const line of lines) {
-      try { handleEvent(JSON.parse(line)); }
-      catch { handleEvent({ type: 'bridge.raw', payload: { line } }); }
+      try { shouldRender = handleEvent(JSON.parse(line)) || shouldRender; }
+      catch { shouldRender = handleEvent({ type: 'bridge.raw', payload: { line } }) || shouldRender; }
     }
-    await refreshStatus();
-    if (lines.length && !canvasInteraction) requestRender();
+    const now = Date.now();
+    if (now - lastStatusRefreshAt >= BRIDGE_STATUS_REFRESH_MS) {
+      lastStatusRefreshAt = now;
+      await refreshStatus();
+    }
+    if (shouldRender && !canvasInteraction) requestRender();
   } catch (error) {
     state.error = String(error);
     requestRender();
   }
 }
 
-function handleEvent(event: BridgeEvent): void {
+function handleEvent(event: BridgeEvent): boolean {
+  let needsRender = true;
   if (!event.type && event.payload === undefined && (event as any).error) {
     event = {
       type: 'bridge.response.error',
@@ -486,6 +497,7 @@ function handleEvent(event: BridgeEvent): void {
 
   switch (event.type) {
     case 'desktop.bridge.spawned':
+      needsRender = false;
       break;
     case 'desktop.bridge.exited':
       state.bridgeRunning = false;
@@ -527,6 +539,8 @@ function handleEvent(event: BridgeEvent): void {
       break;
     case 'content.delta':
       state.pendingAssistant += event.payload?.text ?? '';
+      scheduleStreamingRender();
+      needsRender = false;
       break;
     case 'turn.completed':
       state.busy = false;
@@ -542,7 +556,6 @@ function handleEvent(event: BridgeEvent): void {
       } else {
         state.error = eventMessage(event, 'turn failed');
       }
-      void refreshApprovalRelatedStateThrottled();
       break;
     case 'approval.required':
       state.busy = false;
@@ -574,31 +587,40 @@ function handleEvent(event: BridgeEvent): void {
       break;
     case 'tools.list':
       state.tools = event.payload?.tools ?? [];
+      needsRender = state.activePanel === 'tools' || visiblePanelIds().has('tools');
       break;
     case 'providers.list':
       state.providers = event.payload?.providers ?? event.payload?.availability ?? [];
+      needsRender = state.activePanel === 'providers' || visiblePanelIds().has('providers');
       break;
     case 'models.list':
     case 'model.list':
       state.models = event.payload?.models ?? [];
+      needsRender = state.activePanel === 'providers' || visiblePanelIds().has('providers');
       break;
     case 'agents.list':
       state.agents = event.payload?.agents ?? [];
+      needsRender = state.activePanel === 'providers' || visiblePanelIds().has('providers');
       break;
     case 'commands.list':
       state.commands = event.payload?.commands ?? [];
+      needsRender = state.activePanel === 'commands' || visiblePanelIds().has('commands');
       break;
     case 'bridge.capabilities':
       state.capabilities = event.payload ?? null;
+      needsRender = state.activePanel === 'capabilities' || visiblePanelIds().has('capabilities');
       break;
     case 'runtime.status':
       state.runtimeStatus = event.payload ?? null;
+      needsRender = state.activePanel === 'runtime' || visiblePanelIds().has('runtime');
       break;
     case 'hbse.onboarding.providers':
       state.hbseOnboarding = event.payload ?? null;
+      needsRender = state.activePanel === 'openai' || visiblePanelIds().has('openai');
       break;
     case 'openai.compat.info':
       state.openaiCompat = event.payload ?? null;
+      needsRender = state.activePanel === 'openai' || visiblePanelIds().has('openai');
       break;
     case 'command.completed':
       state.session = event.payload?.session ?? state.session;
@@ -620,18 +642,22 @@ function handleEvent(event: BridgeEvent): void {
       break;
     case 'diff.current':
       state.diff = event.payload?.diff ?? event.payload?.markdown ?? event.payload?.output ?? JSON.stringify(event.payload, null, 2);
+      needsRender = state.activePanel === 'diff' || visiblePanelIds().has('diff');
       break;
     case 'memory.status':
       state.memory = event.payload?.output ?? event.payload?.status ?? JSON.stringify(event.payload, null, 2);
+      needsRender = state.activePanel === 'memory' || visiblePanelIds().has('memory');
       break;
     case 'system.prompt':
       state.systemPrompt = event.payload?.prompt ?? event.payload?.system_prompt ?? JSON.stringify(event.payload, null, 2);
+      needsRender = state.activePanel === 'system' || visiblePanelIds().has('system');
       break;
     case 'bridge.response.error':
     case 'error':
       state.error = eventMessage(event, JSON.stringify(event.payload));
       break;
   }
+  return needsRender;
 }
 
 function eventMessage(event: BridgeEvent, fallback: string): string {
@@ -725,6 +751,7 @@ function setPanel(panel: string): void {
 async function approve(id: string, method: string): Promise<void> {
   if (!id.trim() || !state.bridgeRunning) return;
   state.error = '';
+  const previousApprovals = state.approvals;
   const approval = state.approvals.find((item) => String(item?.id ?? '') === id);
   const feedback: ApprovalFeedback = {
     id,
@@ -735,11 +762,12 @@ async function approve(id: string, method: string): Promise<void> {
   };
   state.approvalActions[id] = feedback;
   state.approvalFeedback = feedback;
+  setApprovalsFromBridge(state.approvals.filter((item) => String(item?.id ?? '') !== id));
   render();
   try {
     await send(method, { id }, 'approval');
-    await refreshApprovalRelatedState();
   } catch (error) {
+    setApprovalsFromBridge(previousApprovals);
     const failed: ApprovalFeedback = {
       id,
       method,
@@ -811,7 +839,6 @@ function handleApprovalExecuted(payload: any): void {
     content: feedback.message,
   });
   scrollChatToBottomOnNextRender();
-  void refreshApprovalRelatedState();
 }
 
 function handleApprovalsUpdated(payload: any): void {
@@ -1030,6 +1057,35 @@ function requestRender(): void {
     renderScheduled = false;
     if (!canvasInteraction) render();
   });
+}
+
+function scheduleStreamingRender(): void {
+  if (!hasVisiblePanel('chat') || streamingRenderScheduled || canvasInteraction) return;
+  streamingRenderScheduled = true;
+  window.setTimeout(() => {
+    streamingRenderScheduled = false;
+    if (!state.pendingAssistant || canvasInteraction) return;
+    if (!updatePendingAssistantDom()) requestRender();
+  }, STREAMING_RENDER_THROTTLE_MS);
+}
+
+function updatePendingAssistantDom(): boolean {
+  const container = document.querySelector<HTMLElement>('#pending-assistant-message');
+  if (!container) return false;
+  const snapshot = captureChatScrollSnapshot();
+  container.innerHTML = renderMessage({ role: 'assistant', content: state.pendingAssistant });
+  restoreChatScroll(snapshot);
+  return true;
+}
+
+function visiblePanelIds(): Set<PanelId> {
+  return new Set(currentLayout().modules
+    .filter((module) => !module.collapsed)
+    .map((module) => module.panelId));
+}
+
+function hasVisiblePanel(panelId: PanelId): boolean {
+  return state.activePanel === panelId || visiblePanelIds().has(panelId);
 }
 
 function renderLeftRail(): string {
@@ -1329,9 +1385,9 @@ function moduleSummary(panelId: PanelId): string {
 }
 
 function renderChat(): string {
-  const messages = [...state.messages];
-  if (state.pendingAssistant) messages.push({ role: 'assistant', content: state.pendingAssistant });
-  const transcript = messages.length ? messages.map(renderMessage).join('') : renderEmptyTranscript();
+  const transcript = state.messages.length || state.pendingAssistant
+    ? `${state.messages.map(renderMessage).join('')}${state.pendingAssistant ? renderPendingAssistantMessage() : ''}`
+    : renderEmptyTranscript();
   return `
     <div class="grid h-full max-h-full min-h-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden">
       <div id="chat-scroll-surface" class="vv-scrollbar min-h-0 overflow-y-auto overflow-x-hidden px-5 py-5">
@@ -1345,6 +1401,10 @@ function renderChat(): string {
       </div>
     </div>
   `;
+}
+
+function renderPendingAssistantMessage(): string {
+  return `<div id="pending-assistant-message">${renderMessage({ role: 'assistant', content: state.pendingAssistant })}</div>`;
 }
 
 function renderEmptyTranscript(): string {
