@@ -192,6 +192,7 @@ struct BridgeEvent {
 struct BridgeState {
     initialized: bool,
     threads: HashMap<String, ThreadRuntime>,
+    pending_approval_turns: HashMap<String, PendingApprovalTurn>,
 }
 
 #[derive(Clone, Debug)]
@@ -200,6 +201,11 @@ struct ThreadRuntime {
     updated_at: i64,
     preview: String,
     ephemeral: bool,
+}
+
+#[derive(Clone, Debug)]
+struct PendingApprovalTurn {
+    content: String,
 }
 
 pub struct BridgeOptions {
@@ -598,97 +604,7 @@ fn handle_request(
         }
         "turn.send" => {
             let params: TurnParams = serde_json::from_value(request.params)?;
-            emit_legacy(
-                stdout,
-                BridgeEvent {
-                    kind: "turn.started",
-                    id: request.id.clone(),
-                    payload: json!({
-                        "session_id": app.session.session_id,
-                        "workspace": app.cwd.display().to_string(),
-                    }),
-                },
-            )?;
-            let response_result = {
-                let mut delta_emit_error = None::<anyhow::Error>;
-                let mut on_delta = |delta: &str| {
-                    if delta.is_empty() || delta_emit_error.is_some() {
-                        return;
-                    }
-                    if let Err(error) = emit_legacy(
-                        stdout,
-                        BridgeEvent {
-                            kind: "content.delta",
-                            id: request.id.clone(),
-                            payload: json!({
-                                "role": "assistant",
-                                "text": delta,
-                            }),
-                        },
-                    ) {
-                        delta_emit_error = Some(error);
-                    }
-                };
-                let response = app.send_headless_streaming(&params.content, &mut on_delta);
-                match (response, delta_emit_error) {
-                    (Ok(response), None) => Ok(response),
-                    (Ok(_), Some(error)) => Err(error),
-                    (Err(error), _) => Err(error),
-                }
-            };
-            match response_result {
-                Ok(response) => emit_legacy(
-                    stdout,
-                    BridgeEvent {
-                        kind: "turn.completed",
-                        id: request.id,
-                        payload: json!({
-                            "answer": response,
-                            "session": snapshot(app),
-                        }),
-                    },
-                )?,
-                Err(error) => {
-                    let message = error.to_string();
-                    let pending = pending_approvals(app);
-                    if !pending.is_empty() {
-                        if app
-                            .session
-                            .messages
-                            .last()
-                            .map(|message| {
-                                message.role == "user" && message.content == params.content
-                            })
-                            .unwrap_or(false)
-                        {
-                            app.session.messages.pop();
-                        }
-                        emit_legacy(
-                            stdout,
-                            BridgeEvent {
-                                kind: "approval.required",
-                                id: request.id.clone(),
-                                payload: json!({
-                                    "approvals": pending,
-                                    "session": snapshot(app),
-                                }),
-                            },
-                        )?;
-                    }
-                    emit_legacy(
-                        stdout,
-                        BridgeEvent {
-                            kind: "turn.failed",
-                            id: request.id,
-                            payload: json!({
-                                "error": message.clone(),
-                                "message": message,
-                                "session": snapshot(app),
-                            }),
-                        },
-                    )?;
-                }
-            }
+            emit_legacy_turn(app, state, request.id, params.content, stdout)?;
         }
         "command.run" | "command.invoke" => {
             let params: CommandParams = serde_json::from_value(request.params)?;
@@ -1118,26 +1034,7 @@ fn handle_request(
                 .guardrails
                 .approvals
                 .approve_once_request(&params.id);
-            let observation = approved.as_ref().map(|approval| {
-                app.tool_executor.execute(ToolCall {
-                    name: approval.tool_name.clone(),
-                    args: approval.args.clone(),
-                })
-            });
-            emit_legacy(
-                stdout,
-                BridgeEvent {
-                    kind: "approval.executed",
-                    id: request.id,
-                    payload: json!({
-                        "ok": approved.is_some(),
-                        "approval": approved,
-                        "observation": observation,
-                        "approvals": pending_approvals(app),
-                        "session": snapshot(app),
-                    }),
-                },
-            )?;
+            continue_or_execute_approved_request(app, state, request.id, approved, stdout)?;
         }
         "approvals.approveSession" => {
             let params: ApprovalIdParams = serde_json::from_value(request.params)?;
@@ -1161,30 +1058,14 @@ fn handle_request(
             if let Some(approval) = approved.as_ref() {
                 apply_session_approval_side_effects(app, approval);
             }
-            let observation = approved.as_ref().map(|approval| {
-                app.tool_executor.execute(ToolCall {
-                    name: approval.tool_name.clone(),
-                    args: approval.args.clone(),
-                })
-            });
-            emit_legacy(
-                stdout,
-                BridgeEvent {
-                    kind: "approval.executed",
-                    id: request.id,
-                    payload: json!({
-                        "ok": approved.is_some(),
-                        "approval": approved,
-                        "observation": observation,
-                        "approvals": pending_approvals(app),
-                        "session": snapshot(app),
-                    }),
-                },
-            )?;
+            continue_or_execute_approved_request(app, state, request.id, approved, stdout)?;
         }
         "approvals.deny" => {
             let params: ApprovalIdParams = serde_json::from_value(request.params)?;
             let ok = app.tool_executor.guardrails.approvals.deny(&params.id);
+            if ok {
+                state.pending_approval_turns.remove(&params.id);
+            }
             emit_approval_mutation(stdout, request.id, ok, app)?;
         }
         "approvals.edit" => {
@@ -1194,6 +1075,12 @@ fn handle_request(
                 .guardrails
                 .approvals
                 .edit(&params.id, params.args);
+            if let Some(edited) = edited.as_ref()
+                && edited.id != params.id
+                && let Some(turn) = state.pending_approval_turns.remove(&params.id)
+            {
+                state.pending_approval_turns.insert(edited.id.clone(), turn);
+            }
             emit_legacy(
                 stdout,
                 BridgeEvent {
@@ -1317,6 +1204,213 @@ fn handle_request(
         }
     }
     Ok(BridgeControl::Continue)
+}
+
+fn emit_legacy_turn(
+    app: &mut TuiApplication,
+    state: &mut BridgeState,
+    id: Option<BridgeRequestId>,
+    content: String,
+    stdout: &mut dyn Write,
+) -> anyhow::Result<()> {
+    emit_legacy(
+        stdout,
+        BridgeEvent {
+            kind: "turn.started",
+            id: id.clone(),
+            payload: json!({
+                "session_id": app.session.session_id,
+                "workspace": app.cwd.display().to_string(),
+            }),
+        },
+    )?;
+    let response_result = {
+        let mut delta_emit_error = None::<anyhow::Error>;
+        let mut on_delta = |delta: &str| {
+            if delta.is_empty() || delta_emit_error.is_some() {
+                return;
+            }
+            if let Err(error) = emit_legacy(
+                stdout,
+                BridgeEvent {
+                    kind: "content.delta",
+                    id: id.clone(),
+                    payload: json!({
+                        "role": "assistant",
+                        "text": delta,
+                    }),
+                },
+            ) {
+                delta_emit_error = Some(error);
+            }
+        };
+        let response = app.send_headless_streaming(&content, &mut on_delta);
+        match (response, delta_emit_error) {
+            (Ok(response), None) => Ok(response),
+            (Ok(_), Some(error)) => Err(error),
+            (Err(error), _) => Err(error),
+        }
+    };
+    match response_result {
+        Ok(response) => emit_legacy(
+            stdout,
+            BridgeEvent {
+                kind: "turn.completed",
+                id,
+                payload: json!({
+                    "answer": response,
+                    "session": snapshot(app),
+                }),
+            },
+        )?,
+        Err(error) => emit_legacy_turn_failure(app, state, id, &content, error, stdout)?,
+    }
+    Ok(())
+}
+
+fn emit_legacy_turn_failure(
+    app: &mut TuiApplication,
+    state: &mut BridgeState,
+    id: Option<BridgeRequestId>,
+    content: &str,
+    error: anyhow::Error,
+    stdout: &mut dyn Write,
+) -> anyhow::Result<()> {
+    let message = error.to_string();
+    let pending = pending_approvals(app);
+    if !pending.is_empty() {
+        if app
+            .session
+            .messages
+            .last()
+            .map(|message| message.role == "user" && message.content == content)
+            .unwrap_or(false)
+        {
+            app.session.messages.pop();
+        }
+        remember_pending_approval_turns(
+            state,
+            &pending,
+            content,
+            approval_id_from_message(&message),
+        );
+        app.session.status = "ready".to_string();
+        app.session.activity.clear();
+        app.autosave_session();
+        emit_legacy(
+            stdout,
+            BridgeEvent {
+                kind: "approval.required",
+                id: id.clone(),
+                payload: json!({
+                    "approvals": pending,
+                    "session": snapshot(app),
+                }),
+            },
+        )?;
+    }
+    emit_legacy(
+        stdout,
+        BridgeEvent {
+            kind: "turn.failed",
+            id,
+            payload: json!({
+                "error": message.clone(),
+                "message": message,
+                "session": snapshot(app),
+            }),
+        },
+    )
+}
+
+fn remember_pending_approval_turns(
+    state: &mut BridgeState,
+    approvals: &[Value],
+    content: &str,
+    requested_approval_id: Option<String>,
+) {
+    for approval in approvals {
+        let Some(id) = approval.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        if requested_approval_id
+            .as_deref()
+            .is_some_and(|requested| requested != id)
+        {
+            continue;
+        }
+        state.pending_approval_turns.insert(
+            id.to_string(),
+            PendingApprovalTurn {
+                content: content.to_string(),
+            },
+        );
+    }
+}
+
+fn approval_id_from_message(message: &str) -> Option<String> {
+    message
+        .split("approval_id=")
+        .nth(1)
+        .and_then(|tail| tail.split_whitespace().next())
+        .map(|id| {
+            id.trim_matches(|ch: char| ch == ',' || ch == ';' || ch == '.')
+                .to_string()
+        })
+        .filter(|id| !id.is_empty())
+}
+
+fn continue_or_execute_approved_request(
+    app: &mut TuiApplication,
+    state: &mut BridgeState,
+    id: Option<BridgeRequestId>,
+    approved: Option<crate::guardrails::ApprovalRequest>,
+    stdout: &mut dyn Write,
+) -> anyhow::Result<()> {
+    let continuation = approved
+        .as_ref()
+        .and_then(|approval| state.pending_approval_turns.remove(&approval.id));
+    if let Some(turn) = continuation {
+        emit_legacy(
+            stdout,
+            BridgeEvent {
+                kind: "approval.executed",
+                id: id.clone(),
+                payload: json!({
+                    "ok": true,
+                    "approval": approved,
+                    "observation": null,
+                    "continued": true,
+                    "message": "Approval applied; resuming model turn so the approved tool result is visible to the model.",
+                    "approvals": pending_approvals(app),
+                    "session": snapshot(app),
+                }),
+            },
+        )?;
+        return emit_legacy_turn(app, state, id, turn.content, stdout);
+    }
+
+    let observation = approved.as_ref().map(|approval| {
+        app.tool_executor.execute(ToolCall {
+            name: approval.tool_name.clone(),
+            args: approval.args.clone(),
+        })
+    });
+    emit_legacy(
+        stdout,
+        BridgeEvent {
+            kind: "approval.executed",
+            id,
+            payload: json!({
+                "ok": approved.is_some(),
+                "approval": approved,
+                "observation": observation,
+                "continued": false,
+                "approvals": pending_approvals(app),
+                "session": snapshot(app),
+            }),
+        },
+    )
 }
 
 #[derive(Clone, Copy)]

@@ -909,6 +909,7 @@ function approvalExecutionMessage(payload: any): string {
   const observation = payload?.observation;
   const toolName = approval?.tool_name ?? approval?.toolName ?? 'approved tool';
   if (!payload?.ok) return `Approval was not applied. The request may already be gone or was resolved elsewhere.`;
+  if (payload?.continued) return `Approved ${toolName}; resuming the model turn so the approved tool result goes back into chat.`;
   if (!observation || typeof observation !== 'object') return `Approved and executed ${toolName}.`;
   const status = observation.ok === false ? 'failed' : 'completed';
   const content = typeof observation.content === 'string' && observation.content.trim()
