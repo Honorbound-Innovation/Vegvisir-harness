@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use chrono::Utc;
 
-use crate::{app::TuiApplication, types::ToolCall};
+use crate::{app::TuiApplication, guardrails::command_name_from_args, types::ToolCall};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
@@ -1141,13 +1141,15 @@ fn handle_request(
         }
         "approvals.approveSession" => {
             let params: ApprovalIdParams = serde_json::from_value(request.params)?;
-            let ok = app
+            let approved = app
                 .tool_executor
                 .guardrails
                 .approvals
-                .approve_for_session(&params.id)
-                .is_some();
-            emit_approval_mutation(stdout, request.id, ok, app)?;
+                .approve_for_session(&params.id);
+            if let Some(approval) = approved.as_ref() {
+                apply_session_approval_side_effects(app, approval);
+            }
+            emit_approval_mutation(stdout, request.id, approved.is_some(), app)?;
         }
         "approvals.approveSessionAndExecute" => {
             let params: ApprovalIdParams = serde_json::from_value(request.params)?;
@@ -1156,6 +1158,9 @@ fn handle_request(
                 .guardrails
                 .approvals
                 .approve_for_session(&params.id);
+            if let Some(approval) = approved.as_ref() {
+                apply_session_approval_side_effects(app, approval);
+            }
             let observation = approved.as_ref().map(|approval| {
                 app.tool_executor.execute(ToolCall {
                     name: approval.tool_name.clone(),
@@ -2235,6 +2240,21 @@ fn join_command_args(command: &str, args: &[String]) -> String {
         command.to_string()
     } else {
         format!("{command} {}", args.join(" "))
+    }
+}
+
+fn apply_session_approval_side_effects(
+    app: &mut TuiApplication,
+    approval: &crate::guardrails::ApprovalRequest,
+) {
+    if approval.risk_label == "command-allow"
+        && let Some(command) = command_name_from_args(&approval.args)
+    {
+        app.tool_executor
+            .guardrails
+            .policy
+            .allowed_commands
+            .insert(command);
     }
 }
 

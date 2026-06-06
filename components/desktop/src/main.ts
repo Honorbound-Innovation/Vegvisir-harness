@@ -553,6 +553,13 @@ async function pollBridge(): Promise<void> {
 }
 
 function handleEvent(event: BridgeEvent): void {
+  if (!event.type && event.payload === undefined && (event as any).error) {
+    event = {
+      type: 'bridge.response.error',
+      id: event.id,
+      payload: (event as any).error,
+    };
+  }
   state.events.push(event);
   if (state.events.length > 600) state.events.splice(0, state.events.length - 600);
   const bridgedMethod = event.payload?.method;
@@ -614,15 +621,35 @@ function handleEvent(event: BridgeEvent): void {
       break;
     case 'turn.failed':
       state.busy = false;
-      state.error = eventMessage(event, 'turn failed');
+      if (hasPendingApprovals(event)) {
+        state.error = '';
+      } else {
+        state.error = eventMessage(event, 'turn failed');
+      }
       void send('approvals.list', {}, 'approvals');
       break;
     case 'approval.required':
+      state.busy = false;
+      state.error = '';
+      state.approvals = event.payload?.approvals ?? state.approvals;
+      state.session = event.payload?.session ?? state.session;
       void send('approvals.list', {}, 'approvals');
       break;
     case 'approvals.list':
     case 'approvals.updated':
       state.approvals = event.payload?.approvals ?? [];
+      state.session = event.payload?.session ?? state.session;
+      break;
+    case 'approval.executed':
+      state.approvals = event.payload?.approvals ?? [];
+      state.session = event.payload?.session ?? state.session;
+      state.error = approvalExecutionError(event.payload?.observation) ?? '';
+      state.messages.push({
+        role: 'system',
+        content: approvalExecutionMessage(event.payload),
+      });
+      void send('session.status', {}, 'status');
+      void send('approvals.list', {}, 'approvals');
       break;
     case 'tools.list':
       state.tools = event.payload?.tools ?? [];
@@ -680,6 +707,7 @@ function handleEvent(event: BridgeEvent): void {
     case 'system.prompt':
       state.systemPrompt = event.payload?.prompt ?? event.payload?.system_prompt ?? JSON.stringify(event.payload, null, 2);
       break;
+    case 'bridge.response.error':
     case 'error':
       state.error = eventMessage(event, JSON.stringify(event.payload));
       break;
@@ -741,8 +769,42 @@ function setPanel(panel: string): void {
 }
 
 async function approve(id: string, method: string): Promise<void> {
+  if (!id.trim() || !state.bridgeRunning) return;
+  state.error = '';
   await send(method, { id }, 'approval');
   await send('approvals.list', {}, 'approvals');
+}
+
+function hasPendingApprovals(event: BridgeEvent): boolean {
+  const approvals = event.payload?.approvals ?? event.payload?.session?.pending_approvals;
+  if (Array.isArray(approvals)) return approvals.length > 0;
+  if (typeof approvals === 'number') return approvals > 0;
+  const message = eventMessage(event, '').toLowerCase();
+  return message.includes('approvalrequired') || message.includes('approval required') || message.includes('approval_id=');
+}
+
+function approvalExecutionError(observation: unknown): string | null {
+  if (!observation || typeof observation !== 'object') return null;
+  const value = observation as { ok?: unknown; error?: unknown; content?: unknown };
+  if (value.ok !== false && !value.error) return null;
+  const error = typeof value.error === 'string' ? value.error : 'Approved tool execution failed';
+  const content = typeof value.content === 'string' ? value.content : '';
+  return [error, content].filter(Boolean).join(': ');
+}
+
+function approvalExecutionMessage(payload: any): string {
+  const approval = payload?.approval;
+  const observation = payload?.observation;
+  const toolName = approval?.tool_name ?? approval?.toolName ?? 'approved tool';
+  if (!payload?.ok) return `Approval was not applied. The request may already be gone or was resolved elsewhere.`;
+  if (!observation || typeof observation !== 'object') return `Approved and executed ${toolName}.`;
+  const status = observation.ok === false ? 'failed' : 'completed';
+  const content = typeof observation.content === 'string' && observation.content.trim()
+    ? `
+
+${observation.content.trim()}`
+    : '';
+  return `Approved ${toolName}; execution ${status}.${content}`;
 }
 
 async function selectProvider(provider: string): Promise<void> {
@@ -1477,8 +1539,8 @@ function renderApprovals(): string {
       <p class="mt-2 text-sm text-red-100/75">${escapeHtml(approval.reason ?? approval.risk_label ?? 'Risky action requires approval.')}</p>
       <pre class="vv-code mt-3 whitespace-pre-wrap rounded-xl bg-black/20 p-3">${escapeHtml(JSON.stringify(approval.args ?? {}, null, 2))}</pre>
       <div class="mt-3 flex flex-wrap gap-2">
-        <button class="vv-action" data-approval="${escapeHtml(approval.id)}" data-method="approvals.approveOnce">Approve once</button>
-        <button class="vv-action" data-approval="${escapeHtml(approval.id)}" data-method="approvals.approveSession">Approve session</button>
+        <button class="vv-action" data-approval="${escapeHtml(approval.id)}" data-method="approvals.approveOnceAndExecute">Approve once</button>
+        <button class="vv-action" data-approval="${escapeHtml(approval.id)}" data-method="approvals.approveSessionAndExecute">Approve session</button>
         <button class="vv-action vv-action-danger" data-approval="${escapeHtml(approval.id)}" data-method="approvals.deny">Deny</button>
       </div>
     </article>`).join('')}</div>`;
