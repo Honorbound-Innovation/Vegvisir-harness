@@ -22,6 +22,14 @@ type Message = {
   timestamp?: string;
 };
 
+type ApprovalFeedback = {
+  id: string;
+  status: 'pending' | 'success' | 'error' | 'denied';
+  message: string;
+  method: string;
+  updatedAt: number;
+};
+
 type StartBridgeRequest = {
   workspace?: string;
   provider?: string;
@@ -30,6 +38,7 @@ type StartBridgeRequest = {
   vegvisirBinary?: string;
   dangerousBypass?: boolean;
   autoStart?: boolean;
+  settingsSchemaVersion?: number;
 };
 
 type BridgeStatus = {
@@ -59,29 +68,255 @@ type BridgeMethodDraft = {
 
 type PanelId = 'chat' | 'sessions' | 'work' | 'approvals' | 'tools' | 'providers' | 'capabilities' | 'commands' | 'runtime' | 'openai' | 'diff' | 'memory' | 'skills' | 'integrations' | 'evidence' | 'system' | 'settings';
 
+type CanvasPanelId = PanelId;
+
+type PanelDefinition = {
+  id: PanelId;
+  label: string;
+  icon: string;
+  hint: string;
+  defaultWidth: number;
+  defaultHeight: number;
+  minWidth: number;
+  minHeight: number;
+};
+
+type CanvasModuleInstance = {
+  id: string;
+  panelId: CanvasPanelId;
+  title: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  collapsed: boolean;
+  locked: boolean;
+  z: number;
+};
+
+type CanvasLayoutTab = {
+  id: string;
+  name: string;
+  modules: CanvasModuleInstance[];
+};
+
+type CanvasLayoutState = {
+  schemaVersion: 1;
+  activeTabId: string;
+  tabs: CanvasLayoutTab[];
+  editMode: boolean;
+  gridSize: number;
+  snapToGrid: boolean;
+};
+
+type CanvasInteraction = {
+  mode: 'move' | 'resize';
+  id: string;
+  startClientX: number;
+  startClientY: number;
+  startX: number;
+  startY: number;
+  startWidth: number;
+  startHeight: number;
+};
+
 const appElement = document.querySelector<HTMLDivElement>('#app');
 if (!appElement) throw new Error('missing #app root');
 const app = appElement;
 
-const panels: Array<{ id: PanelId; label: string; icon: string; hint: string }> = [
-  { id: 'chat', label: 'Chat', icon: '✦', hint: 'Active agent transcript' },
-  { id: 'sessions', label: 'Sessions', icon: '▤', hint: 'Load saved work' },
-  { id: 'work', label: 'Work log', icon: '◌', hint: 'Bridge and tool events' },
-  { id: 'approvals', label: 'Approvals', icon: '◇', hint: 'Risk gates' },
-  { id: 'tools', label: 'Tools', icon: '⌘', hint: 'Harness capabilities' },
-  { id: 'providers', label: 'Providers', icon: '⬡', hint: 'Models and agents' },
-  { id: 'capabilities', label: 'Capabilities', icon: '◬', hint: 'Bridge parity map' },
-  { id: 'commands', label: 'Commands', icon: '⌁', hint: 'Full slash surface' },
-  { id: 'runtime', label: 'Runtime', icon: '◍', hint: 'Policy and limits' },
-  { id: 'openai', label: 'OpenAI bridge', icon: '◒', hint: 'Compat endpoint' },
-  { id: 'diff', label: 'Diff', icon: '±', hint: 'Workspace changes' },
-  { id: 'memory', label: 'Memory', icon: '◎', hint: 'CMS/ECM state' },
-  { id: 'skills', label: 'Skills', icon: '✧', hint: 'Skiller/LSL workflows' },
-  { id: 'integrations', label: 'Integrations', icon: '⌬', hint: 'MCP, HBSE, subagents' },
-  { id: 'evidence', label: 'Evidence', icon: '◫', hint: 'Runs, trace, verify' },
-  { id: 'system', label: 'System', icon: '◈', hint: 'Prompt and policy' },
-  { id: 'settings', label: 'Settings', icon: '⚙', hint: 'Bridge launch config' },
+const panels: PanelDefinition[] = [
+  { id: 'chat', label: 'Chat', icon: '✦', hint: 'Active agent transcript', defaultWidth: 760, defaultHeight: 620, minWidth: 340, minHeight: 260 },
+  { id: 'sessions', label: 'Sessions', icon: '▤', hint: 'Load saved work', defaultWidth: 520, defaultHeight: 420, minWidth: 320, minHeight: 240 },
+  { id: 'work', label: 'Work log', icon: '◌', hint: 'Bridge and tool events', defaultWidth: 520, defaultHeight: 420, minWidth: 320, minHeight: 220 },
+  { id: 'approvals', label: 'Approvals', icon: '◇', hint: 'Risk gates', defaultWidth: 520, defaultHeight: 300, minWidth: 320, minHeight: 180 },
+  { id: 'tools', label: 'Tools', icon: '⌘', hint: 'Harness capabilities', defaultWidth: 520, defaultHeight: 420, minWidth: 320, minHeight: 220 },
+  { id: 'providers', label: 'Providers', icon: '⬡', hint: 'Models and agents', defaultWidth: 620, defaultHeight: 500, minWidth: 360, minHeight: 260 },
+  { id: 'capabilities', label: 'Capabilities', icon: '◬', hint: 'Bridge parity map', defaultWidth: 620, defaultHeight: 500, minWidth: 360, minHeight: 260 },
+  { id: 'commands', label: 'Commands', icon: '⌁', hint: 'Full slash surface', defaultWidth: 620, defaultHeight: 500, minWidth: 360, minHeight: 260 },
+  { id: 'runtime', label: 'Runtime', icon: '◍', hint: 'Policy and limits', defaultWidth: 520, defaultHeight: 360, minWidth: 320, minHeight: 220 },
+  { id: 'openai', label: 'OpenAI bridge', icon: '◒', hint: 'Compat endpoint', defaultWidth: 520, defaultHeight: 360, minWidth: 320, minHeight: 220 },
+  { id: 'diff', label: 'Diff', icon: '±', hint: 'Workspace changes', defaultWidth: 760, defaultHeight: 520, minWidth: 360, minHeight: 260 },
+  { id: 'memory', label: 'Memory', icon: '◎', hint: 'CMS/ECM state', defaultWidth: 620, defaultHeight: 500, minWidth: 360, minHeight: 260 },
+  { id: 'skills', label: 'Skills', icon: '✧', hint: 'Skiller/LSL workflows', defaultWidth: 620, defaultHeight: 500, minWidth: 360, minHeight: 260 },
+  { id: 'integrations', label: 'Integrations', icon: '⌬', hint: 'MCP, HBSE, subagents', defaultWidth: 620, defaultHeight: 500, minWidth: 360, minHeight: 260 },
+  { id: 'evidence', label: 'Evidence', icon: '◫', hint: 'Runs, trace, verify', defaultWidth: 620, defaultHeight: 500, minWidth: 360, minHeight: 260 },
+  { id: 'system', label: 'System', icon: '◈', hint: 'Prompt and policy', defaultWidth: 620, defaultHeight: 500, minWidth: 360, minHeight: 260 },
+  { id: 'settings', label: 'Settings', icon: '⚙', hint: 'Bridge launch config', defaultWidth: 620, defaultHeight: 460, minWidth: 360, minHeight: 260 },
 ];
+
+const LAYOUT_SCHEMA_VERSION = 1;
+const SETTINGS_SCHEMA_VERSION = 2;
+const GLOBAL_LAYOUT_STORAGE_KEY = 'vegvisir.desktop.layouts.global';
+let loadedLayoutStorageKey = '';
+let canvasInteraction: CanvasInteraction | null = null;
+let forceChatScrollToBottom = false;
+
+type ChatScrollSnapshot = {
+  scrollTop: number;
+  bottomOffset: number;
+  shouldStickToBottom: boolean;
+};
+
+const CHAT_SCROLL_STICKY_THRESHOLD_PX = 96;
+
+function panelDefinition(panelId: PanelId): PanelDefinition {
+  return panels.find((panel) => panel.id === panelId) ?? panels[0];
+}
+
+function defaultLayoutState(): CanvasLayoutState {
+  return {
+    schemaVersion: LAYOUT_SCHEMA_VERSION,
+    activeTabId: 'operations',
+    editMode: false,
+    gridSize: 24,
+    snapToGrid: true,
+    tabs: [
+      createLayoutTabFromPanels('operations', 'Operations', ['chat', 'work', 'approvals', 'runtime']),
+      createLayoutTabFromPanels('provider-control', 'Provider Control', ['providers', 'commands', 'capabilities', 'settings']),
+      createLayoutTabFromPanels('review', 'Review', ['diff', 'evidence', 'work', 'sessions']),
+      createLayoutTabFromPanels('memory-skills', 'Memory and Skills', ['memory', 'skills', 'system', 'chat']),
+      createLayoutTabFromPanels('integrations', 'Integrations', ['integrations', 'tools', 'openai', 'capabilities']),
+    ],
+  };
+}
+
+function createLayoutTabFromPanels(id: string, name: string, panelIds: PanelId[]): CanvasLayoutTab {
+  const positions = [
+    { x: 32, y: 32 },
+    { x: 824, y: 32 },
+    { x: 32, y: 688 },
+    { x: 584, y: 688 },
+  ];
+  return {
+    id,
+    name,
+    modules: panelIds.map((panelId, index) => {
+      const panel = panelDefinition(panelId);
+      const position = positions[index] ?? { x: 32 + index * 48, y: 32 + index * 48 };
+      return {
+        id: `${id}-${panelId}-${index}`,
+        panelId,
+        title: panel.label,
+        x: position.x,
+        y: position.y,
+        width: panel.defaultWidth,
+        height: panel.defaultHeight,
+        collapsed: false,
+        locked: false,
+        z: index + 1,
+      };
+    }),
+  };
+}
+
+function workspaceLayoutStorageKey(): string {
+  const workspace = String(state?.session?.workspace ?? state?.settings?.workspace ?? '').trim();
+  if (!workspace) return GLOBAL_LAYOUT_STORAGE_KEY;
+  const safe = workspace.replace(/[^a-z0-9._-]+/gi, '_').replace(/^_+|_+$/g, '').slice(0, 120);
+  return safe ? `vegvisir.desktop.layouts.${safe}` : GLOBAL_LAYOUT_STORAGE_KEY;
+}
+
+function loadLayouts(): CanvasLayoutState {
+  const key = workspaceLayoutStorageKey();
+  loadedLayoutStorageKey = key;
+  const raw = localStorage.getItem(key) ?? localStorage.getItem(GLOBAL_LAYOUT_STORAGE_KEY);
+  if (!raw) return defaultLayoutState();
+  try {
+    return normalizeLayoutState(JSON.parse(raw));
+  } catch {
+    return defaultLayoutState();
+  }
+}
+
+function normalizeLayoutState(value: Partial<CanvasLayoutState>): CanvasLayoutState {
+  const defaults = defaultLayoutState();
+  const tabs = Array.isArray(value.tabs)
+    ? value.tabs.map(normalizeLayoutTab).filter((tab) => tab.modules.length || tab.name.trim())
+    : defaults.tabs;
+  const activeTabId = typeof value.activeTabId === 'string' && tabs.some((tab) => tab.id === value.activeTabId)
+    ? value.activeTabId
+    : (tabs[0]?.id ?? defaults.activeTabId);
+  return {
+    schemaVersion: LAYOUT_SCHEMA_VERSION,
+    activeTabId,
+    tabs: tabs.length ? tabs : defaults.tabs,
+    editMode: Boolean(value.editMode),
+    gridSize: typeof value.gridSize === 'number' && Number.isFinite(value.gridSize) && value.gridSize >= 4 ? value.gridSize : defaults.gridSize,
+    snapToGrid: typeof value.snapToGrid === 'boolean' ? value.snapToGrid : defaults.snapToGrid,
+  };
+}
+
+function normalizeLayoutTab(tab: Partial<CanvasLayoutTab>): CanvasLayoutTab {
+  const id = typeof tab.id === 'string' && tab.id.trim() ? tab.id : uniqueId('layout');
+  const modules = Array.isArray(tab.modules) ? tab.modules.map(normalizeModuleInstance).filter(Boolean) as CanvasModuleInstance[] : [];
+  return {
+    id,
+    name: typeof tab.name === 'string' && tab.name.trim() ? tab.name : 'Layout',
+    modules,
+  };
+}
+
+function normalizeModuleInstance(module: Partial<CanvasModuleInstance>): CanvasModuleInstance | null {
+  if (!isPanelId(module.panelId)) return null;
+  const panel = panelDefinition(module.panelId);
+  return {
+    id: typeof module.id === 'string' && module.id.trim() ? module.id : uniqueId(`module-${module.panelId}`),
+    panelId: module.panelId,
+    title: typeof module.title === 'string' && module.title.trim() ? module.title : panel.label,
+    x: finiteNumber(module.x, 32),
+    y: finiteNumber(module.y, 32),
+    width: Math.max(panel.minWidth, finiteNumber(module.width, panel.defaultWidth)),
+    height: Math.max(panel.minHeight, finiteNumber(module.height, panel.defaultHeight)),
+    collapsed: Boolean(module.collapsed),
+    locked: Boolean(module.locked),
+    z: finiteNumber(module.z, 1),
+  };
+}
+
+function isPanelId(value: unknown): value is PanelId {
+  return typeof value === 'string' && panels.some((panel) => panel.id === value);
+}
+
+function finiteNumber(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function uniqueId(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+}
+
+function saveLayouts(): void {
+  const key = workspaceLayoutStorageKey();
+  loadedLayoutStorageKey = key;
+  localStorage.setItem(key, JSON.stringify(state.layout));
+  if (key === GLOBAL_LAYOUT_STORAGE_KEY) localStorage.setItem(GLOBAL_LAYOUT_STORAGE_KEY, JSON.stringify(state.layout));
+}
+
+function refreshLayoutStorageScope(): void {
+  const key = workspaceLayoutStorageKey();
+  if (loadedLayoutStorageKey && key === loadedLayoutStorageKey) return;
+  state.layout = loadLayouts();
+  canvasInteraction = null;
+}
+
+function currentLayout(): CanvasLayoutTab {
+  let layout = state.layout.tabs.find((tab) => tab.id === state.layout.activeTabId);
+  if (!layout) {
+    layout = state.layout.tabs[0] ?? createLayoutTabFromPanels('operations', 'Operations', ['chat', 'work', 'approvals', 'runtime']);
+    state.layout.tabs = [layout];
+    state.layout.activeTabId = layout.id;
+  }
+  return layout;
+}
+
+function maxModuleZ(layout = currentLayout()): number {
+  return layout.modules.reduce((max, module) => Math.max(max, module.z), 0);
+}
+
+function snap(value: number): number {
+  const gridSize = state.layout.gridSize || 24;
+  return state.layout.snapToGrid ? Math.round(value / gridSize) * gridSize : Math.round(value);
+}
 
 const state = {
   requestCounter: 0,
@@ -97,6 +332,8 @@ const state = {
   sessionListWorkspace: '',
   pendingAssistant: '',
   approvals: [] as any[],
+  approvalFeedback: null as ApprovalFeedback | null,
+  approvalActions: {} as Record<string, ApprovalFeedback>,
   tools: [] as any[],
   providers: [] as any[],
   models: [] as any[],
@@ -113,10 +350,13 @@ const state = {
   memory: '',
   systemPrompt: '',
   activePanel: 'chat' as PanelId,
+  layout: defaultLayoutState() as CanvasLayoutState,
   busy: false,
   error: '',
   settings: loadSettings(),
 };
+
+state.layout = loadLayouts();
 
 function emptyBridgeMethodDraft(): BridgeMethodDraft {
   return {
@@ -135,7 +375,26 @@ function emptyBridgeMethodDraft(): BridgeMethodDraft {
 
 function loadSettings(): StartBridgeRequest {
   const raw = localStorage.getItem('vegvisir.desktop.settings');
-  const defaults: StartBridgeRequest = {
+  const defaults: StartBridgeRequest = defaultSettings();
+  if (!raw) return defaults;
+  try {
+    const saved = JSON.parse(raw) as StartBridgeRequest;
+    const settings = { ...defaults, ...saved };
+    // Do not preserve dangerous bypass from older desktop settings. It is a startup-only
+    // unsafe mode and must be explicitly re-enabled after this schema migration.
+    if (saved.settingsSchemaVersion !== SETTINGS_SCHEMA_VERSION) {
+      settings.dangerousBypass = false;
+      settings.settingsSchemaVersion = SETTINGS_SCHEMA_VERSION;
+      localStorage.setItem('vegvisir.desktop.settings', JSON.stringify(settings));
+    }
+    return settings;
+  } catch {
+    return defaults;
+  }
+}
+
+function defaultSettings(): StartBridgeRequest {
+  return {
     vegvisirBinary: 'vegvisir',
     workspace: '',
     provider: '',
@@ -143,17 +402,25 @@ function loadSettings(): StartBridgeRequest {
     agent: '',
     dangerousBypass: false,
     autoStart: true,
+    settingsSchemaVersion: SETTINGS_SCHEMA_VERSION,
   };
-  if (!raw) return defaults;
-  try {
-    return { ...defaults, ...JSON.parse(raw) };
-  } catch {
-    return defaults;
-  }
 }
 
 function saveSettings(): void {
+  state.settings.settingsSchemaVersion = SETTINGS_SCHEMA_VERSION;
   localStorage.setItem('vegvisir.desktop.settings', JSON.stringify(state.settings));
+}
+
+function runtimeDangerousBypassEnabled(): boolean {
+  return Boolean(
+    state.runtimeStatus?.dangerously_bypass_approvals_and_sandbox
+    || state.runtimeStatus?.dangerous_bypass
+    || state.runtimeStatus?.dangerousBypass
+  );
+}
+
+function startupDangerousBypassRequested(): boolean {
+  return Boolean(state.settings.dangerousBypass);
 }
 
 function nextId(prefix: string): string {
@@ -288,7 +555,7 @@ async function pollBridge(): Promise<void> {
       catch { handleEvent({ type: 'bridge.raw', payload: { line } }); }
     }
     await refreshStatus();
-    if (lines.length) render();
+    if (lines.length && !canvasInteraction) render();
   } catch (error) {
     state.error = String(error);
     render();
@@ -296,6 +563,13 @@ async function pollBridge(): Promise<void> {
 }
 
 function handleEvent(event: BridgeEvent): void {
+  if (!event.type && event.payload === undefined && (event as any).error) {
+    event = {
+      type: 'bridge.response.error',
+      id: event.id,
+      payload: (event as any).error,
+    };
+  }
   state.events.push(event);
   if (state.events.length > 600) state.events.splice(0, state.events.length - 600);
   const bridgedMethod = event.payload?.method;
@@ -357,15 +631,40 @@ function handleEvent(event: BridgeEvent): void {
       break;
     case 'turn.failed':
       state.busy = false;
-      state.error = eventMessage(event, 'turn failed');
-      void send('approvals.list', {}, 'approvals');
+      if (hasPendingApprovals(event)) {
+        state.error = '';
+      } else {
+        state.error = eventMessage(event, 'turn failed');
+      }
+      void refreshApprovalRelatedState();
       break;
     case 'approval.required':
-      void send('approvals.list', {}, 'approvals');
+      state.busy = false;
+      state.error = '';
+      state.approvals = event.payload?.approvals ?? state.approvals;
+      state.session = event.payload?.session ?? state.session;
+      if (state.approvals.length) {
+        const first = state.approvals[0];
+        state.approvalFeedback = {
+          id: String(first?.id ?? 'approval'),
+          status: 'pending',
+          method: 'approval.required',
+          message: `${state.approvals.length} approval${state.approvals.length === 1 ? '' : 's'} waiting for your decision.`,
+          updatedAt: Date.now(),
+        };
+      }
+      void refreshApprovalRelatedState();
       break;
     case 'approvals.list':
-    case 'approvals.updated':
       state.approvals = event.payload?.approvals ?? [];
+      state.session = event.payload?.session ?? state.session;
+      pruneApprovalActionState();
+      break;
+    case 'approvals.updated':
+      handleApprovalsUpdated(event.payload);
+      break;
+    case 'approval.executed':
+      handleApprovalExecuted(event.payload);
       break;
     case 'tools.list':
       state.tools = event.payload?.tools ?? [];
@@ -423,6 +722,7 @@ function handleEvent(event: BridgeEvent): void {
     case 'system.prompt':
       state.systemPrompt = event.payload?.prompt ?? event.payload?.system_prompt ?? JSON.stringify(event.payload, null, 2);
       break;
+    case 'bridge.response.error':
     case 'error':
       state.error = eventMessage(event, JSON.stringify(event.payload));
       break;
@@ -466,8 +766,17 @@ async function sendTurn(): Promise<void> {
     return;
   }
   state.messages.push({ role: 'user', content });
+  state.busy = true;
+  state.pendingAssistant = '';
+  scrollChatToBottomOnNextRender();
   render();
-  await send('turn.send', { content }, 'turn');
+  try {
+    await send('turn.send', { content }, 'turn');
+  } catch (error) {
+    state.busy = false;
+    state.error = String(error);
+    render();
+  }
 }
 
 async function loadSession(id: string): Promise<void> {
@@ -476,31 +785,147 @@ async function loadSession(id: string): Promise<void> {
 }
 
 function setPanel(panel: string): void {
-  state.activePanel = panel as PanelId;
-  if (panel === 'sessions') void send('session.list', {}, 'sessions');
-  if (panel === 'diff') void send('diff.current', {}, 'diff');
-  if (panel === 'memory') void send('memory.status', {}, 'memory');
-  if (panel === 'system') void send('system.prompt', {}, 'system');
-  if (panel === 'commands') void send('commands.list', {}, 'commands');
-  if (panel === 'capabilities') void send('bridge.capabilities', {}, 'capabilities');
-  if (panel === 'runtime') void send('runtime.status', {}, 'runtime');
-  if (panel === 'openai') void send('openai.compat.info', {}, 'openai');
-  if (panel === 'skills') void send('skills.status', {}, 'skills');
-  if (panel === 'integrations') {
-    void send('mcp.status', {}, 'mcp');
-    void send('hbse.status', {}, 'hbse');
-    void send('subagents.list', {}, 'subagents');
-  }
-  if (panel === 'evidence') {
-    void send('runs.list', {}, 'runs');
-    void send('trace.list', {}, 'trace');
-  }
-  render();
+  if (!isPanelId(panel)) return;
+  state.activePanel = panel;
+  refreshPanelData(panel);
+  addOrFocusModule(panel);
 }
 
 async function approve(id: string, method: string): Promise<void> {
-  await send(method, { id }, 'approval');
-  await send('approvals.list', {}, 'approvals');
+  if (!id.trim() || !state.bridgeRunning) return;
+  state.error = '';
+  const approval = state.approvals.find((item) => String(item?.id ?? '') === id);
+  const feedback: ApprovalFeedback = {
+    id,
+    method,
+    status: 'pending',
+    message: approvalActionStartedMessage(method, approval),
+    updatedAt: Date.now(),
+  };
+  state.approvalActions[id] = feedback;
+  state.approvalFeedback = feedback;
+  render();
+  try {
+    await send(method, { id }, 'approval');
+    await refreshApprovalRelatedState();
+  } catch (error) {
+    const failed: ApprovalFeedback = {
+      id,
+      method,
+      status: 'error',
+      message: `Approval request failed before reaching the bridge: ${String(error)}`,
+      updatedAt: Date.now(),
+    };
+    state.approvalActions[id] = failed;
+    state.approvalFeedback = failed;
+    state.error = failed.message;
+    render();
+  }
+}
+
+function approvalActionStartedMessage(method: string, approval: any): string {
+  const toolName = approval?.tool_name ?? approval?.toolName ?? 'approval request';
+  if (method === 'approvals.deny') return `Denying ${toolName}…`;
+  if (method === 'approvals.approveSessionAndExecute') return `Approving ${toolName} for this session and executing it…`;
+  if (method === 'approvals.approveOnceAndExecute') return `Approving ${toolName} once and executing it…`;
+  return `Updating ${toolName}…`;
+}
+
+async function refreshApprovalRelatedState(): Promise<void> {
+  await Promise.allSettled([
+    send('approvals.list', {}, 'approvals'),
+    send('session.status', {}, 'status'),
+    send('runtime.status', {}, 'runtime'),
+    send('tools.list', {}, 'tools'),
+  ]);
+}
+
+function pruneApprovalActionState(): void {
+  const pendingIds = new Set(state.approvals.map((approval) => String(approval?.id ?? '')).filter(Boolean));
+  for (const [id, feedback] of Object.entries(state.approvalActions)) {
+    if (!pendingIds.has(id) && feedback.status === 'pending') continue;
+    if (!pendingIds.has(id) && Date.now() - feedback.updatedAt > 30_000) delete state.approvalActions[id];
+  }
+}
+
+function handleApprovalExecuted(payload: any): void {
+  const approval = payload?.approval;
+  const active = mostRecentApprovalAction();
+  const id = String(approval?.id ?? payload?.id ?? active?.id ?? 'approval');
+  const error = approvalExecutionError(payload?.observation);
+  const feedback: ApprovalFeedback = {
+    id,
+    method: 'approval.executed',
+    status: payload?.ok && !error ? 'success' : 'error',
+    message: approvalExecutionMessage(payload),
+    updatedAt: Date.now(),
+  };
+  state.approvals = payload?.approvals ?? [];
+  state.session = payload?.session ?? state.session;
+  state.error = error ?? '';
+  state.approvalActions[id] = feedback;
+  state.approvalFeedback = feedback;
+  state.messages.push({
+    role: feedback.status === 'error' ? 'system' : 'assistant',
+    content: feedback.message,
+  });
+  scrollChatToBottomOnNextRender();
+  void refreshApprovalRelatedState();
+}
+
+function handleApprovalsUpdated(payload: any): void {
+  state.approvals = payload?.approvals ?? [];
+  state.session = payload?.session ?? state.session;
+  const active = mostRecentApprovalAction();
+  if (active && active.method === 'approvals.deny') {
+    const feedback: ApprovalFeedback = {
+      ...active,
+      status: payload?.ok === false ? 'error' : 'denied',
+      message: payload?.ok === false ? 'Approval denial was not applied.' : 'Approval denied. Pending approval list refreshed.',
+      updatedAt: Date.now(),
+    };
+    state.approvalActions[feedback.id] = feedback;
+    state.approvalFeedback = feedback;
+  }
+  pruneApprovalActionState();
+}
+
+function mostRecentApprovalAction(): ApprovalFeedback | null {
+  return Object.values(state.approvalActions)
+    .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null;
+}
+
+function hasPendingApprovals(event: BridgeEvent): boolean {
+  const approvals = event.payload?.approvals ?? event.payload?.session?.pending_approvals;
+  if (Array.isArray(approvals)) return approvals.length > 0;
+  if (typeof approvals === 'number') return approvals > 0;
+  const message = eventMessage(event, '').toLowerCase();
+  return message.includes('approvalrequired') || message.includes('approval required') || message.includes('approval_id=');
+}
+
+function approvalExecutionError(observation: unknown): string | null {
+  if (!observation || typeof observation !== 'object') return null;
+  const value = observation as { ok?: unknown; error?: unknown; content?: unknown };
+  if (value.ok !== false && !value.error) return null;
+  const error = typeof value.error === 'string' ? value.error : 'Approved tool execution failed';
+  const content = typeof value.content === 'string' ? value.content : '';
+  return [error, content].filter(Boolean).join(': ');
+}
+
+function approvalExecutionMessage(payload: any): string {
+  const approval = payload?.approval;
+  const observation = payload?.observation;
+  const toolName = approval?.tool_name ?? approval?.toolName ?? 'approved tool';
+  if (!payload?.ok) return `Approval was not applied. The request may already be gone or was resolved elsewhere.`;
+  if (payload?.continued) return `Approved ${toolName}; resuming the model turn so the approved tool result goes back into chat.`;
+  if (!observation || typeof observation !== 'object') return `Approved and executed ${toolName}.`;
+  const status = observation.ok === false ? 'failed' : 'completed';
+  const content = typeof observation.content === 'string' && observation.content.trim()
+    ? `
+
+${observation.content.trim()}`
+    : '';
+  return `Approved ${toolName}; execution ${status}.${content}`;
 }
 
 async function selectProvider(provider: string): Promise<void> {
@@ -524,6 +949,34 @@ async function callBridgeMethod(method: string, params: Record<string, unknown> 
   if (!method.trim() || !state.bridgeRunning) return;
   state.selectedBridgeMethod = method;
   await send(method, params, method);
+}
+
+function nativeMethodNames(): string[] {
+  const methods = state.capabilities?.native_methods;
+  return Array.isArray(methods) ? methods.map(String) : [];
+}
+
+function commandBackedMethodNames(): string[] {
+  const methods = state.capabilities?.command_backed_methods;
+  if (!Array.isArray(methods)) return [];
+  return methods.map((method: any) => typeof method === 'string' ? method : String(method?.method ?? '')).filter(Boolean);
+}
+
+function hasNativeMethod(method: string): boolean {
+  return nativeMethodNames().includes(method);
+}
+
+function hasCommandBackedMethod(method: string): boolean {
+  return commandBackedMethodNames().includes(method);
+}
+
+function hasBridgeMethod(method: string): boolean {
+  if (!state.capabilities) return true;
+  return hasNativeMethod(method) || hasCommandBackedMethod(method) || method === 'command.invoke';
+}
+
+function bridgeMethodDisabledAttr(method: string): string {
+  return hasBridgeMethod(method) ? '' : 'disabled title="Bridge capability not reported by app-server"';
 }
 
 async function callBridgeMethodFromWorkbench(method: string): Promise<void> {
@@ -557,7 +1010,37 @@ async function setToolLimit(value: string): Promise<void> {
   await send('toolLimit.set', { value }, 'tool-limit');
 }
 
+function captureChatScrollSnapshot(): ChatScrollSnapshot | null {
+  const surface = document.querySelector<HTMLDivElement>('#chat-scroll-surface');
+  if (!surface) return null;
+  const bottomOffset = surface.scrollHeight - surface.scrollTop - surface.clientHeight;
+  return {
+    scrollTop: surface.scrollTop,
+    bottomOffset,
+    shouldStickToBottom: forceChatScrollToBottom || bottomOffset <= CHAT_SCROLL_STICKY_THRESHOLD_PX,
+  };
+}
+
+function restoreChatScroll(snapshot: ChatScrollSnapshot | null): void {
+  requestAnimationFrame(() => {
+    const surface = document.querySelector<HTMLDivElement>('#chat-scroll-surface');
+    if (!surface) return;
+    if (!snapshot || snapshot.shouldStickToBottom) {
+      surface.scrollTop = surface.scrollHeight;
+    } else {
+      surface.scrollTop = Math.max(0, Math.min(snapshot.scrollTop, surface.scrollHeight - surface.clientHeight));
+    }
+    forceChatScrollToBottom = false;
+  });
+}
+
+function scrollChatToBottomOnNextRender(): void {
+  forceChatScrollToBottom = true;
+}
+
 function render(): void {
+  const chatScrollSnapshot = captureChatScrollSnapshot();
+  refreshLayoutStorageScope();
   app.innerHTML = `
     <div class="grid h-screen grid-cols-[18rem_minmax(0,1fr)] overflow-hidden bg-vv-bg bg-vv-radial text-vv-text selection:bg-vv-cyan/25 max-[980px]:grid-cols-1">
       ${renderLeftRail()}
@@ -565,6 +1048,7 @@ function render(): void {
         ${renderTopBar()}
         <section class="flex min-h-0 flex-col overflow-hidden bg-vv-grid [background-size:42px_42px]">
           ${state.error ? renderError() : ''}
+          ${renderApprovalToast()}
           ${renderPanel()}
         </section>
         ${renderFooterRail()}
@@ -572,6 +1056,7 @@ function render(): void {
     </div>
   `;
   bindEvents();
+  restoreChatScroll(chatScrollSnapshot);
 }
 
 function renderLeftRail(): string {
@@ -618,6 +1103,7 @@ function renderTopBar(): string {
         <div class="flex items-center gap-3">
           <h1 class="truncate text-[1.04rem] font-black tracking-tight">${escapeHtml(activeTitle())}</h1>
           <span class="rounded-md border border-vv-line bg-white/[0.045] px-2 py-0.5 font-mono text-[0.7rem] text-vv-muted">${escapeHtml(projectName())}</span>
+          ${renderModelWorkingPill()}
         </div>
         <div class="mt-0.5 flex min-w-0 items-center gap-2 text-[0.7rem] text-vv-muted">
           <span>${escapeHtml(state.settings.provider || state.session?.provider || 'default provider')}</span>
@@ -642,7 +1128,7 @@ function renderFooterRail(): string {
     <footer class="flex items-center justify-between border-t border-vv-line bg-black/20 px-5 font-mono text-[0.66rem] text-vv-muted">
       <span>${state.bridgeRunning ? 'Local bridge active' : 'Local bridge offline'}</span>
       <span>${escapeHtml(state.settings.workspace || 'workspace defaults to home/current dir')}</span>
-      <span>${state.busy ? 'working' : 'ready'} · main</span>
+      <span class="inline-flex items-center gap-1.5 ${state.busy ? 'text-vv-cyan' : ''}">${state.busy ? '<span class="vv-mini-spinner" aria-hidden="true"></span>' : ''}${state.busy ? modelWorkingLabel().toLowerCase() : 'ready'} · main</span>
     </footer>
   `;
 }
@@ -651,13 +1137,173 @@ function renderError(): string {
   return `<div class="mx-auto mt-3 max-w-5xl rounded-xl border border-vv-red/45 bg-vv-red/10 p-3 text-red-100 shadow-danger"><div class="flex flex-wrap items-center justify-between gap-2"><strong>Bridge problem</strong><button class="vv-action vv-action-danger" id="restart-bridge-from-error">Restart bridge</button></div><pre class="vv-code mt-2 whitespace-pre-wrap">${escapeHtml(state.error)}</pre></div>`;
 }
 
+function modelWorkingLabel(): string {
+  return state.pendingAssistant.trim() ? 'Streaming response' : 'Model working';
+}
+
+function renderModelWorkingPill(label = modelWorkingLabel()): string {
+  if (!state.busy) return '';
+  return `<span class="vv-pill vv-working-pill text-vv-cyan" role="status" aria-live="polite"><span class="vv-mini-spinner" aria-hidden="true"></span>${escapeHtml(label)}</span>`;
+}
+
+function renderModelWorkingIndicator(): string {
+  if (!state.busy) return '';
+  const label = modelWorkingLabel();
+  const detail = state.pendingAssistant.trim()
+    ? 'Tokens are streaming into the assistant response.'
+    : 'Waiting for the provider, tools, or approval-aware continuation to produce the next chat update.';
+  return `
+    <article class="vv-soft-panel vv-working-card max-w-4xl border-vv-cyan/35 bg-vv-cyan/5" role="status" aria-live="polite" aria-label="${escapeHtml(label)}">
+      <div class="flex items-center gap-3 px-4 py-3">
+        <span class="vv-chat-spinner" aria-hidden="true"></span>
+        <div class="min-w-0">
+          <div class="flex items-center gap-2 text-sm font-black text-vv-cyan">${escapeHtml(label)}<span class="vv-working-dots" aria-hidden="true"><span></span><span></span><span></span></span></div>
+          <div class="mt-1 text-xs leading-5 text-vv-muted">${escapeHtml(detail)}</div>
+        </div>
+      </div>
+    </article>`;
+}
+
+function renderApprovalToast(): string {
+  const feedback = state.approvalFeedback;
+  if (!feedback) return '';
+  const tone = feedback.status === 'success'
+    ? 'border-vv-green/45 bg-vv-green/10 text-green-100'
+    : feedback.status === 'error'
+      ? 'border-vv-red/45 bg-vv-red/10 text-red-100 shadow-danger'
+      : feedback.status === 'denied'
+        ? 'border-vv-amber/45 bg-vv-amber/10 text-amber-100'
+        : 'border-vv-cyan/45 bg-vv-cyan/10 text-cyan-100 shadow-glow';
+  const dot = feedback.status === 'success'
+    ? 'bg-vv-green'
+    : feedback.status === 'error'
+      ? 'bg-vv-red'
+      : feedback.status === 'denied'
+        ? 'bg-vv-amber'
+        : 'bg-vv-cyan animate-pulse';
+  return `
+    <div class="mx-auto mt-3 w-[calc(100%-2rem)] max-w-5xl rounded-xl border ${tone} p-3 text-sm">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div class="flex min-w-0 items-center gap-2">
+          <span class="h-2.5 w-2.5 shrink-0 rounded-full ${dot}"></span>
+          <span class="font-semibold">${escapeHtml(feedback.message)}</span>
+        </div>
+        <button class="vv-action px-2 py-1 text-[0.68rem]" id="clear-approval-feedback">Dismiss</button>
+      </div>
+    </div>`;
+}
+
 function renderPanel(): string {
-  if (state.activePanel === 'chat') return `<div class="min-h-0 flex-1 overflow-hidden">${renderChat()}</div>`;
-  return `<div class="vv-scrollbar min-h-0 flex-1 overflow-auto px-4 py-3"><div class="mx-auto max-w-5xl">${renderNonChatPanel()}</div></div>`;
+  return renderCanvas();
 }
 
 function renderNonChatPanel(): string {
-  switch (state.activePanel) {
+  return renderModuleContent(state.activePanel);
+}
+
+function renderCanvas(): string {
+  const layout = currentLayout();
+  const bounds = canvasBounds(layout.modules);
+  return `
+    <div class="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
+      ${renderLayoutTabs()}
+      <div class="grid min-h-0 grid-cols-1 overflow-hidden">
+        <div id="canvas-surface" class="vv-scrollbar relative min-h-0 overflow-auto bg-vv-grid [background-size:42px_42px]">
+          <div id="canvas-content" class="relative" style="width:${bounds.width}px;height:${bounds.height}px;min-width:100%;min-height:100%;">
+            ${layout.modules.map(renderModuleFrame).join('')}
+            ${layout.modules.length ? '' : renderBlankCanvasEmpty()}
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderLayoutTabs(): string {
+  const layout = currentLayout();
+  const pendingApprovals = state.approvals.length > 0;
+  const dangerous = Boolean(startupDangerousBypassRequested() || runtimeDangerousBypassEnabled());
+  return `
+    <div class="border-b border-vv-line bg-vv-bg2/88 px-4 py-2 backdrop-blur-xl">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div class="vv-scrollbar flex min-w-0 flex-1 items-center gap-2 overflow-x-auto pb-1">
+          ${state.layout.tabs.map((tab) => `<button class="vv-action shrink-0 ${tab.id === state.layout.activeTabId ? 'vv-action-primary' : ''}" data-layout-tab="${escapeHtml(tab.id)}">${escapeHtml(tab.name)}</button>`).join('')}
+          <button class="vv-action shrink-0" id="layout-add-tab">+</button>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="vv-pill ${state.bridgeRunning ? 'text-vv-green' : 'text-vv-red'}"><span class="h-2 w-2 rounded-full ${state.bridgeRunning ? 'bg-vv-green' : 'bg-vv-red'}"></span>${state.bridgeRunning ? 'Bridge online' : 'Bridge offline'}</span>
+          ${pendingApprovals ? `<button class="vv-action vv-action-danger" data-module-add="approvals">${state.approvals.length} approvals</button>` : ''}
+          ${dangerous ? '<span class="vv-pill text-vv-red">dangerous bypass startup mode</span>' : ''}
+          <button class="vv-action" id="layout-save">Save</button>
+          <button class="vv-action" id="layout-duplicate-tab">Duplicate</button>
+          <button class="vv-action" id="layout-rename-tab">Rename</button>
+          <button class="vv-action" id="layout-delete-tab">Delete</button>
+          <button class="vv-action" id="layout-reset-tab">Reset tab</button>
+        </div>
+      </div>
+      <div class="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-vv-muted">
+        <span>${escapeHtml(layout.name)} · ${layout.modules.length} modules · drag, resize, add, and remove enabled</span>
+        <label class="flex items-center gap-2"><input id="layout-snap" type="checkbox" ${state.layout.snapToGrid ? 'checked' : ''} /> snap ${state.layout.gridSize}px grid</label>
+      </div>
+    </div>`;
+}
+
+function canvasBounds(modules: CanvasModuleInstance[]): { width: number; height: number } {
+  if (!modules.length) return { width: 1, height: 1 };
+  const maxX = modules.reduce((max, module) => Math.max(max, module.x + module.width), 0);
+  const maxY = modules.reduce((max, module) => Math.max(max, module.y + module.height), 0);
+  return { width: Math.max(1, Math.ceil(maxX)), height: Math.max(1, Math.ceil(maxY)) };
+}
+
+function renderBlankCanvasEmpty(): string {
+  return `
+    <div class="absolute inset-0 grid min-h-[34rem] place-items-center p-8 text-center">
+      <section class="vv-panel max-w-xl p-6 shadow-glow">
+        <div class="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-3xl border border-vv-line bg-white/[0.045] text-2xl text-vv-cyan">▦</div>
+        <h2 class="text-xl font-black">Blank canvas</h2>
+        <p class="mt-2 text-sm leading-6 text-vv-muted">Add verified Vegvisir modules from the palette. Layout state is local only; bridge/runtime authority remains in Vegvisir app-server.</p>
+        <button class="vv-action vv-action-primary mt-4" data-module-add="chat">Add Chat</button>
+      </section>
+    </div>`;
+}
+
+function renderModuleFrame(instance: CanvasModuleInstance): string {
+  const panel = panelDefinition(instance.panelId);
+  const mode = moduleRenderMode(instance);
+  const selected = instance.z === maxModuleZ();
+  const draggable = !instance.locked;
+  const isApproval = instance.panelId === 'approvals' && state.approvals.length > 0;
+  const isRuntimeDanger = instance.panelId === 'runtime' && Boolean(startupDangerousBypassRequested() || runtimeDangerousBypassEnabled());
+  return `
+    <article data-module-frame="${escapeHtml(instance.id)}" class="vv-canvas-module vv-panel absolute overflow-hidden ${selected ? 'vv-canvas-module-selected' : ''} ${instance.locked ? 'vv-canvas-module-locked' : ''} ${mode === 'compact' ? 'vv-canvas-module-compact' : ''} ${mode === 'collapsed' ? 'vv-canvas-module-collapsed' : ''} ${isApproval || isRuntimeDanger ? 'border-vv-red/60 shadow-danger' : ''}" style="left:${instance.x}px;top:${instance.y}px;width:${instance.width}px;height:${instance.height}px;z-index:${instance.z};">
+      <header class="vv-canvas-module-header ${draggable ? 'vv-canvas-module-draggable' : ''} flex select-none items-center justify-between gap-2 border-b border-vv-line bg-black/32 px-3 py-2" data-module-drag="${escapeHtml(instance.id)}">
+        <div class="flex min-w-0 items-center gap-2">
+          <span class="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-vv-line bg-white/[0.045] text-vv-cyan">${panel.icon}</span>
+          <div class="min-w-0">
+            <h3 class="truncate text-sm font-black">${escapeHtml(instance.title)}</h3>
+            <p class="truncate text-[0.68rem] text-vv-muted">${escapeHtml(panel.hint)}${instance.locked ? ' · locked' : ''}</p>
+          </div>
+        </div>
+        <div class="flex shrink-0 items-center gap-1">
+          <button class="vv-action px-2 py-1 text-[0.65rem]" data-module-focus="${escapeHtml(instance.id)}">Focus</button>
+          <button class="vv-action px-2 py-1 text-[0.65rem]" data-module-collapse="${escapeHtml(instance.id)}">${mode === 'collapsed' ? '□' : '—'}</button>
+          <button class="vv-action px-2 py-1 text-[0.65rem]" data-module-lock="${escapeHtml(instance.id)}">${instance.locked ? '🔒' : '◇'}</button>
+          <button class="vv-action vv-action-danger px-2 py-1 text-[0.65rem]" data-module-remove="${escapeHtml(instance.id)}">×</button>
+        </div>
+      </header>
+      ${mode === 'collapsed' ? '' : `<div class="vv-scrollbar h-[calc(100%-2.95rem)] overflow-auto p-3 ${mode === 'compact' ? 'bg-black/10' : ''}">${mode === 'compact' ? renderModuleCompact(instance.panelId) : renderModuleContent(instance.panelId)}</div>`}
+      ${draggable ? `<div class="vv-canvas-resize-handle" data-module-resize="${escapeHtml(instance.id)}" title="Resize module"></div>` : ''}
+    </article>`;
+}
+
+function moduleRenderMode(instance: CanvasModuleInstance): 'full' | 'compact' | 'collapsed' {
+  if (instance.collapsed || instance.height < 96) return 'collapsed';
+  if (instance.width < 380 || instance.height < 260) return 'compact';
+  return 'full';
+}
+
+function renderModuleContent(panelId: PanelId): string {
+  switch (panelId) {
+    case 'chat': return renderChat();
     case 'sessions': return renderSessions();
     case 'work': return renderWork();
     case 'approvals': return renderApprovals();
@@ -674,18 +1320,46 @@ function renderNonChatPanel(): string {
     case 'evidence': return renderEvidenceWorkbench();
     case 'system': return renderSystem();
     case 'settings': return renderSettings();
-    default: return renderChat();
+  }
+}
+
+function renderModuleCompact(panelId: PanelId): string {
+  const text = moduleSummary(panelId);
+  return `<div class="space-y-3 text-sm leading-6 text-vv-muted"><p>${escapeHtml(text)}</p><button class="vv-action" data-module-open-full="${panelId}">Open / focus full module</button></div>`;
+}
+
+function moduleSummary(panelId: PanelId): string {
+  switch (panelId) {
+    case 'chat': return `${state.busy ? 'Busy' : 'Ready'} · ${state.messages.length} messages${state.pendingAssistant ? ' · streaming' : ''}`;
+    case 'sessions': return `${state.sessions.length} sessions loaded`;
+    case 'work': return `${state.events.length} bridge events`;
+    case 'approvals': return `${state.approvals.length} pending approvals`;
+    case 'tools': return `${state.tools.length} tools loaded`;
+    case 'providers': return `Provider ${state.session?.provider ?? state.settings.provider ?? 'default'} · Model ${state.session?.model ?? state.settings.model ?? 'default'} · ${state.agents.length} agents`;
+    case 'capabilities': return `${state.capabilities?.native_methods?.length ?? 0} native methods · ${state.capabilities?.command_backed_methods?.length ?? 0} command-backed methods`;
+    case 'commands': return `${state.commands.length} slash commands loaded`;
+    case 'runtime': return `${state.bridgeRunning ? 'Bridge online' : 'Bridge offline'} · ${state.busy ? 'working' : 'ready'} · ${startupDangerousBypassRequested() || runtimeDangerousBypassEnabled() ? 'dangerous startup bypass set' : 'policy gated'}`;
+    case 'openai': return state.openaiCompat ? 'OpenAI-compatible metadata loaded; credentials remain behind Vegvisir/HBSE.' : 'OpenAI-compatible metadata not loaded.';
+    case 'diff': return state.diff ? 'Diff loaded' : 'No diff loaded';
+    case 'memory': return state.memory || methodOutputText('memory.status') ? 'Memory status output loaded' : 'Memory output not loaded';
+    case 'skills': return methodOutputText('skills.status') ? 'Skills output loaded' : 'Skills output not loaded';
+    case 'integrations': return [methodOutputText('mcp.status'), methodOutputText('hbse.status'), methodOutputText('subagents.list')].some(Boolean) ? 'Integration output loaded' : 'Integration output not loaded';
+    case 'evidence': return [methodOutputText('runs.list'), methodOutputText('trace.list'), methodOutputText('verify.run')].some(Boolean) ? 'Evidence output loaded' : 'Evidence output not loaded';
+    case 'system': return state.systemPrompt ? 'System prompt loaded' : 'System prompt not loaded';
+    case 'settings': return `Workspace ${state.settings.workspace || 'default'} · binary ${state.settings.vegvisirBinary || 'vegvisir'}`;
   }
 }
 
 function renderChat(): string {
   const messages = [...state.messages];
   if (state.pendingAssistant) messages.push({ role: 'assistant', content: state.pendingAssistant });
+  const transcript = messages.length ? messages.map(renderMessage).join('') : renderEmptyTranscript();
   return `
     <div class="grid h-full max-h-full min-h-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden">
       <div id="chat-scroll-surface" class="vv-scrollbar min-h-0 overflow-y-auto overflow-x-hidden px-5 py-5">
         <div class="mx-auto max-w-4xl space-y-5 pb-4">
-          ${messages.length ? messages.map(renderMessage).join('') : renderEmptyTranscript()}
+          ${transcript}
+          ${renderModelWorkingIndicator()}
         </div>
       </div>
       <div id="chat-composer-surface" class="max-h-[13rem] min-h-0 overflow-hidden border-t border-vv-line bg-vv-bg2/70 px-5 py-3 backdrop-blur-xl">
@@ -713,9 +1387,9 @@ function renderComposer(): string {
         <div class="mt-1.5 flex items-center justify-between gap-2 border-t border-vv-line pt-2">
           <div class="flex min-w-0 items-center gap-1.5 overflow-hidden text-xs text-vv-muted">
             <span class="vv-pill">${escapeHtml(state.settings.model || 'model default')}</span>
-            <span class="vv-pill">${state.busy ? 'High activity' : 'Ready'}</span>
+            ${state.busy ? renderModelWorkingPill() : '<span class="vv-pill">Ready</span>'}
             <span class="vv-pill">Chat + slash commands</span>
-            <span class="vv-pill">${state.settings.dangerousBypass ? 'Bypass startup' : 'Policy gated'}</span>
+            <span class="vv-pill">${startupDangerousBypassRequested() || runtimeDangerousBypassEnabled() ? 'Bypass startup' : 'Policy gated'}</span>
           </div>
           <button id="send-turn" class="vv-focus grid h-9 w-9 shrink-0 place-items-center rounded-full ${state.busy ? 'bg-vv-red' : 'bg-vv-pink'} text-lg font-black text-white shadow-[0_0_28px_rgba(255,46,126,0.28)]" ${state.bridgeRunning && !state.busy ? '' : 'disabled'}>${state.busy ? '■' : '➤'}</button>
         </div>
@@ -728,6 +1402,57 @@ function renderComposer(): string {
   `;
 }
 
+type MarkdownSegment =
+  | { kind: 'text'; text: string }
+  | { kind: 'code'; language: string; code: string };
+
+const CODE_FENCE_RE = /```([^\n`]*)\n?([\s\S]*?)(?:```|$)/g;
+const INLINE_CODE_RE = /`([^`]+)`/g;
+type SyntaxKind =
+  | 'comment'
+  | 'keyword'
+  | 'number'
+  | 'string'
+  | 'function'
+  | 'type'
+  | 'property'
+  | 'builtin'
+  | 'operator'
+  | 'punctuation'
+  | 'diff-add'
+  | 'diff-delete'
+  | 'diff-meta'
+  | 'tag'
+  | 'attr';
+
+const COMMON_CODE_KEYWORDS = new Set([
+  'abstract', 'as', 'async', 'await', 'bool', 'boolean', 'break', 'case', 'catch', 'char', 'class', 'const', 'continue', 'def', 'default',
+  'do', 'else', 'enum', 'export', 'extends', 'false', 'final', 'finally', 'float', 'fn', 'for', 'from', 'function', 'if', 'impl',
+  'import', 'in', 'int', 'interface', 'let', 'match', 'mod', 'mut', 'namespace', 'new', 'none', 'null', 'package', 'pass', 'private',
+  'protected', 'public', 'return', 'self', 'static', 'struct', 'super', 'switch', 'this', 'throw', 'trait', 'true', 'try', 'type',
+  'undefined', 'use', 'using', 'var', 'void', 'while', 'yield', 'where', 'with', 'readonly', 'record', 'sealed', 'virtual', 'override',
+]);
+
+const LANGUAGE_CODE_KEYWORDS: Record<string, string[]> = {
+  csharp: ['base', 'decimal', 'delegate', 'dynamic', 'event', 'get', 'global', 'internal', 'is', 'lock', 'object', 'out', 'params', 'partial', 'ref', 'required', 'set', 'sizeof', 'stackalloc', 'string', 'typeof', 'uint', 'ulong', 'unchecked', 'unsafe'],
+  css: ['and', 'from', 'important', 'media', 'not', 'or', 'supports', 'to'],
+  html: ['doctype'],
+  java: ['assert', 'byte', 'double', 'implements', 'instanceof', 'long', 'native', 'short', 'strictfp', 'synchronized', 'throws', 'transient', 'volatile'],
+  javascript: ['debugger', 'delete', 'instanceof', 'of'],
+  json: [],
+  markdown: [],
+  python: ['and', 'assert', 'del', 'elif', 'except', 'global', 'is', 'lambda', 'nonlocal', 'not', 'or', 'raise'],
+  rust: ['crate', 'dyn', 'extern', 'loop', 'move', 'pub', 'ref', 'unsafe'],
+  shell: ['alias', 'case', 'cd', 'done', 'elif', 'esac', 'eval', 'exec', 'exit', 'fi', 'local', 'read', 'then'],
+  typescript: ['declare', 'keyof', 'satisfies', 'symbol', 'unique'],
+  yaml: ['true', 'false', 'null'],
+};
+
+const CODE_BUILTINS = new Set([
+  'Array', 'Boolean', 'Console', 'Date', 'Dict', 'Error', 'Exception', 'JSON', 'List', 'Map', 'Math', 'Number', 'Object', 'Promise', 'Record',
+  'Regex', 'RegExp', 'Set', 'String', 'Vec', 'console', 'dict', 'enumerate', 'len', 'list', 'map', 'print', 'range', 'str', 'sum', 'println',
+]);
+
 function renderMessage(message: Message): string {
   const role = message.role ?? 'message';
   const isUser = role === 'user';
@@ -737,9 +1462,191 @@ function renderMessage(message: Message): string {
   return `
     <article class="vv-soft-panel ${cardClass}">
       <header class="flex items-center gap-3 border-b border-vv-line px-4 py-2 text-[0.68rem] uppercase tracking-[0.22em] text-vv-muted"><span class="h-2 w-2 rounded-full ${isUser ? 'bg-vv-green' : isCommand ? 'bg-vv-cyan' : 'bg-vv-cyan'}"></span>${escapeHtml(role)}</header>
-      <pre class="vv-code whitespace-pre-wrap break-words px-4 py-3">${escapeHtml(message.content ?? message.text ?? '')}</pre>
+      <div class="px-4 py-3">${renderMessageMarkdown(message.content ?? message.text ?? '')}</div>
     </article>
   `;
+}
+
+function renderMessageMarkdown(markdown: string): string {
+  const segments = parseMarkdownSegments(markdown);
+  if (!segments.length) return '<div class="vv-chat-markdown text-vv-muted">(empty)</div>';
+  return segments.map((segment) => segment.kind === 'code'
+    ? renderCodeFence(segment.code, segment.language)
+    : renderMarkdownText(segment.text)
+  ).join('');
+}
+
+function parseMarkdownSegments(markdown: string): MarkdownSegment[] {
+  const segments: MarkdownSegment[] = [];
+  let cursor = 0;
+  CODE_FENCE_RE.lastIndex = 0;
+  for (const match of markdown.matchAll(CODE_FENCE_RE)) {
+    const start = match.index ?? 0;
+    if (start > cursor) segments.push({ kind: 'text', text: markdown.slice(cursor, start) });
+    segments.push({ kind: 'code', language: normalizeCodeLanguage(match[1] ?? ''), code: stripTrailingFenceNewline(match[2] ?? '') });
+    cursor = start + match[0].length;
+  }
+  if (cursor < markdown.length) segments.push({ kind: 'text', text: markdown.slice(cursor) });
+  return segments.filter((segment) => segment.kind === 'code' || segment.text.length > 0);
+}
+
+function stripTrailingFenceNewline(code: string): string {
+  return code.replace(/^\n/, '').replace(/\n$/, '');
+}
+
+function normalizeCodeLanguage(language: string): string {
+  const normalized = language.trim().split(/\s+/)[0]?.toLowerCase() ?? '';
+  const aliases: Record<string, string> = {
+    csharp: 'csharp', cs: 'csharp', js: 'javascript', jsx: 'javascript', py: 'python', rs: 'rust', sh: 'shell', bash: 'shell',
+    ts: 'typescript', tsx: 'typescript', yml: 'yaml', md: 'markdown', diff: 'diff', patch: 'diff', plaintext: 'text', plain: 'text',
+  };
+  return aliases[normalized] ?? normalized;
+}
+
+function renderMarkdownText(text: string): string {
+  if (!text.trim()) return '';
+  const blocks = text.replace(/^\n+|\n+$/g, '').split(/\n{2,}/);
+  return blocks.map((block) => `<div class="vv-chat-markdown">${renderInlineMarkdown(block).replaceAll('\n', '<br />')}</div>`).join('');
+}
+
+function renderInlineMarkdown(text: string): string {
+  return escapeHtml(text).replace(INLINE_CODE_RE, (_match, code: string) => `<code class="vv-chat-inline-code">${code}</code>`);
+}
+
+function renderCodeFence(code: string, language: string): string {
+  const label = language || 'code';
+  return `
+    <section class="vv-chat-code-block">
+      <div class="vv-chat-code-header"><span>${escapeHtml(label)}</span></div>
+      <pre class="vv-code vv-scrollbar"><code class="language-${escapeHtml(label)}">${highlightCode(code, language)}</code></pre>
+    </section>`;
+}
+
+function highlightCode(code: string, language: string): string {
+  const mode = normalizeCodeLanguage(language);
+  if (mode === 'diff') return highlightDiffCode(code);
+  if (mode === 'html' || mode === 'xml') return highlightMarkupCode(code);
+
+  const keywords = keywordsForLanguage(mode);
+  let output = '';
+  for (let index = 0; index < code.length;) {
+    const rest = code.slice(index);
+
+    const blockComment = rest.match(/^\/\*[\s\S]*?\*\//);
+    if (blockComment) {
+      output += syntaxToken(blockComment[0], 'comment');
+      index += blockComment[0].length;
+      continue;
+    }
+
+    const lineComment = rest.match(lineCommentPattern(mode));
+    if (lineComment) {
+      output += syntaxToken(lineComment[0], 'comment');
+      index += lineComment[0].length;
+      continue;
+    }
+
+    const stringLiteral = rest.match(stringLiteralPattern(mode));
+    if (stringLiteral) {
+      const token = stringLiteral[0];
+      const after = code.slice(index + token.length).match(/^\s*:/);
+      output += (after && ['json', 'yaml'].includes(mode)) ? syntaxToken(token, 'property') : syntaxToken(token, 'string');
+      index += token.length;
+      continue;
+    }
+
+    const numberLiteral = rest.match(/^\b(?:0b[01_]+|0o[0-7_]+|0x[0-9a-fA-F_]+|\d[\d_]*(?:\.\d[\d_]*)?)(?:[eE][+-]?\d[\d_]*)?\b/);
+    if (numberLiteral) {
+      output += syntaxToken(numberLiteral[0], 'number');
+      index += numberLiteral[0].length;
+      continue;
+    }
+
+    const decorator = rest.match(/^@[A-Za-z_][A-Za-z0-9_.-]*/);
+    if (decorator) {
+      output += syntaxToken(decorator[0], 'attr');
+      index += decorator[0].length;
+      continue;
+    }
+
+    const identifier = rest.match(/^[A-Za-z_$][A-Za-z0-9_$]*/);
+    if (identifier) {
+      const token = identifier[0];
+      const previous = code[index - 1] ?? '';
+      const next = code.slice(index + token.length);
+      if (keywords.has(token.toLowerCase())) output += syntaxToken(token, 'keyword');
+      else if (CODE_BUILTINS.has(token)) output += syntaxToken(token, 'builtin');
+      else if (previous === '.') output += syntaxToken(token, 'property');
+      else if (/^\s*[:<]/.test(next) && /^[A-Z]/.test(token)) output += syntaxToken(token, 'type');
+      else if (/^[A-Z][A-Za-z0-9_]*$/.test(token)) output += syntaxToken(token, 'type');
+      else if (/^\s*\(/.test(next)) output += syntaxToken(token, 'function');
+      else output += escapeHtml(token);
+      index += token.length;
+      continue;
+    }
+
+    const operator = rest.match(/^(?:=>|->|::|\.\.|\.\.=|===|!==|==|!=|<=|>=|&&|\|\||\+\+|--|[+\-*\/%=!<>&|^~?:]+)/);
+    if (operator) {
+      output += syntaxToken(operator[0], 'operator');
+      index += operator[0].length;
+      continue;
+    }
+
+    const punctuation = rest.match(/^[{}()[\].,;]/);
+    if (punctuation) {
+      output += syntaxToken(punctuation[0], 'punctuation');
+      index += punctuation[0].length;
+      continue;
+    }
+
+    output += escapeHtml(code[index]);
+    index += 1;
+  }
+  return output;
+}
+
+function highlightDiffCode(code: string): string {
+  return code.split(/(\n)/).map((line) => {
+    if (line === '\n') return line;
+    if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@')) return syntaxToken(line, 'diff-meta');
+    if (line.startsWith('+')) return syntaxToken(line, 'diff-add');
+    if (line.startsWith('-')) return syntaxToken(line, 'diff-delete');
+    return escapeHtml(line);
+  }).join('');
+}
+
+function highlightMarkupCode(code: string): string {
+  return code.replace(/(<!--[\s\S]*?-->)|(<\/?)([A-Za-z][A-Za-z0-9:-]*)([^>]*)(>)/g, (...args: any[]) => {
+    const [match, comment, open, tag, attrs, close] = args as [string, string | undefined, string | undefined, string | undefined, string | undefined, string | undefined];
+    void match;
+    if (comment) return syntaxToken(comment, 'comment');
+    return `${syntaxToken(open ?? '', 'punctuation')}${syntaxToken(tag ?? '', 'tag')}${highlightMarkupAttrs(attrs ?? '')}${syntaxToken(close ?? '', 'punctuation')}`;
+  });
+}
+
+function highlightMarkupAttrs(attrs: string): string {
+  return attrs.replace(/([A-Za-z_:][-A-Za-z0-9_:.]*)(\s*=\s*)("[^"]*"|'[^']*'|[^\s>]+)/g, (_match, name: string, equals: string, value: string) => (
+    `${syntaxToken(name, 'attr')}${syntaxToken(equals, 'operator')}${syntaxToken(value, 'string')}`
+  ));
+}
+
+function keywordsForLanguage(language: string): Set<string> {
+  return new Set([...COMMON_CODE_KEYWORDS, ...(LANGUAGE_CODE_KEYWORDS[language] ?? [])]);
+}
+
+function stringLiteralPattern(language: string): RegExp {
+  if (['shell', 'bash'].includes(language)) return /^(?:\$?'(?:\\.|[^'\\])*'|\$?"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`)/;
+  if (language === 'python') return /^(?:(?:[rbu]|br|rb|fr|rf)?(?:'{3}[\s\S]*?'{3}|"{3}[\s\S]*?"{3}|'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"))/i;
+  return /^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)/;
+}
+
+function lineCommentPattern(language: string): RegExp {
+  if (['python', 'shell', 'yaml', 'toml', 'ruby'].includes(language)) return /^#[^\n]*/;
+  return /^\/\/[^\n]*/;
+}
+
+function syntaxToken(value: string, kind: SyntaxKind): string {
+  return `<span class="vv-syntax-${kind}">${escapeHtml(value)}</span>`;
 }
 
 function renderSessions(): string {
@@ -806,18 +1713,36 @@ function renderWork(): string {
 }
 
 function renderApprovals(): string {
-  if (!state.approvals.length) return '<div class="vv-panel p-4 text-sm text-vv-muted">No pending approvals. The beast is behaving.</div>';
-  return `<div class="grid gap-4">${state.approvals.map((approval) => `
+  const last = state.approvalFeedback;
+  const lastResult = last && last.status !== 'pending'
+    ? `<div class="vv-panel mb-4 p-4 text-sm ${last.status === 'success' ? 'border-vv-green/45 text-green-100' : last.status === 'error' ? 'border-vv-red/45 text-red-100' : 'border-vv-amber/45 text-amber-100'}">
+        <div class="font-black">Last approval result</div>
+        <p class="mt-2 leading-6">${escapeHtml(last.message)}</p>
+      </div>`
+    : '';
+  if (!state.approvals.length) return `${lastResult}<div class="vv-panel p-4 text-sm text-vv-muted">No pending approvals. ${last?.status === 'success' ? 'Last approval executed successfully.' : 'The beast is behaving.'}</div>`;
+  return `${lastResult}<div class="grid gap-4">${state.approvals.map(renderApprovalCard).join('')}</div>`;
+}
+
+function renderApprovalCard(approval: any): string {
+  const id = String(approval.id ?? '');
+  const feedback = id ? state.approvalActions[id] : undefined;
+  const busy = feedback?.status === 'pending';
+  const statusLine = feedback
+    ? `<div class="mt-3 rounded-xl border border-vv-cyan/35 bg-vv-cyan/10 px-3 py-2 text-xs text-cyan-100"><span class="inline-block h-2 w-2 rounded-full bg-vv-cyan ${busy ? 'animate-pulse' : ''}"></span> ${escapeHtml(feedback.message)}</div>`
+    : '';
+  return `
     <article class="rounded-[1.05rem] border border-vv-red/45 bg-vv-red/10 p-4 shadow-danger">
       <h3 class="text-base font-black text-red-100">${escapeHtml(approval.tool_name ?? approval.toolName ?? 'approval')}</h3>
       <p class="mt-2 text-sm text-red-100/75">${escapeHtml(approval.reason ?? approval.risk_label ?? 'Risky action requires approval.')}</p>
       <pre class="vv-code mt-3 whitespace-pre-wrap rounded-xl bg-black/20 p-3">${escapeHtml(JSON.stringify(approval.args ?? {}, null, 2))}</pre>
+      ${statusLine}
       <div class="mt-3 flex flex-wrap gap-2">
-        <button class="vv-action" data-approval="${escapeHtml(approval.id)}" data-method="approvals.approveOnce">Approve once</button>
-        <button class="vv-action" data-approval="${escapeHtml(approval.id)}" data-method="approvals.approveSession">Approve session</button>
-        <button class="vv-action vv-action-danger" data-approval="${escapeHtml(approval.id)}" data-method="approvals.deny">Deny</button>
+        <button class="vv-action" data-approval="${escapeHtml(id)}" data-method="approvals.approveOnceAndExecute" ${busy ? 'disabled' : ''}>${busy ? 'Working…' : 'Approve once'}</button>
+        <button class="vv-action" data-approval="${escapeHtml(id)}" data-method="approvals.approveSessionAndExecute" ${busy ? 'disabled' : ''}>Approve session</button>
+        <button class="vv-action vv-action-danger" data-approval="${escapeHtml(id)}" data-method="approvals.deny" ${busy ? 'disabled' : ''}>Deny</button>
       </div>
-    </article>`).join('')}</div>`;
+    </article>`;
 }
 
 function renderTools(): string {
@@ -885,7 +1810,7 @@ function renderCapabilities(): string {
             <h2 class="text-base font-black">Bridge parity map</h2>
             <p class="mt-2 max-w-3xl text-xs leading-5 text-vv-muted">The desktop app consumes Vegvisir through <code class="text-vv-cyan">vegvisir app-server</code>. Native methods carry typed UI data; command-backed methods provide named parity endpoints for the full harness command families.</p>
           </div>
-          <button class="vv-action" data-bridge-method="bridge.capabilities">Refresh capabilities</button>
+          <button class="vv-action" data-bridge-method="bridge.capabilities" ${bridgeMethodDisabledAttr('bridge.capabilities')}>Refresh capabilities</button>
         </div>
         <div class="mt-4 grid gap-3 md:grid-cols-3">
           ${metricCard('Native methods', nativeMethods.length, 'typed bridge surface')}
@@ -915,7 +1840,7 @@ function renderBridgeMethodRow(spec: any): string {
   const method = String(spec.method ?? '');
   const command = String(spec.command ?? '');
   const subcommand = spec.default_subcommand ? ` ${spec.default_subcommand}` : '';
-  return `<button class="vv-soft-panel w-full p-3 text-left hover:border-vv-line2" data-bridge-method="${escapeHtml(method)}">
+  return `<button class="vv-soft-panel w-full p-3 text-left hover:border-vv-line2" data-bridge-method="${escapeHtml(method)}" ${bridgeMethodDisabledAttr(method)}>
     <div class="font-mono text-xs font-black text-vv-cyan">${escapeHtml(method)}</div>
     <div class="mt-1 text-xs text-vv-muted">${escapeHtml(command + subcommand)}</div>
   </button>`;
@@ -996,11 +1921,11 @@ function renderMethodWorkbench(title: string, description: string, actions: stri
             <h2 class="text-base font-black">${escapeHtml(title)}</h2>
             <p class="mt-2 max-w-3xl text-xs leading-5 text-vv-muted">${escapeHtml(description)}</p>
           </div>
-          <button class="vv-action" data-bridge-method="${escapeHtml(primaryMethod)}">Refresh</button>
+          <button class="vv-action" data-bridge-method="${escapeHtml(primaryMethod)}" ${bridgeMethodDisabledAttr(primaryMethod)}>Refresh</button>
         </div>
         ${renderBridgeMethodParameterForm(selected)}
         <div class="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-          ${actions.map(([method, label, hint]) => `<button class="vv-soft-panel p-3 text-left hover:border-vv-line2 ${selected === method ? 'border-vv-cyan bg-vv-cyan/10' : ''}" data-bridge-method="${escapeHtml(method)}">
+          ${actions.map(([method, label, hint]) => `<button class="vv-soft-panel p-3 text-left hover:border-vv-line2 ${selected === method ? 'border-vv-cyan bg-vv-cyan/10' : ''}" data-bridge-method="${escapeHtml(method)}" ${bridgeMethodDisabledAttr(method)}>
             <div class="font-black">${escapeHtml(label)}</div>
             <div class="mt-1 font-mono text-[0.68rem] text-vv-cyan">${escapeHtml(method)}</div>
             <div class="mt-1 text-xs text-vv-muted">${escapeHtml(hint)}</div>
@@ -1020,7 +1945,7 @@ function renderBridgeMethodParameterForm(selectedMethod: string): string {
           <h3 class="text-sm font-black">Parameterized method call</h3>
           <p class="mt-1 text-xs text-vv-muted">Use raw for exact slash-command arguments, or fill common fields used by recall, runs, agents, subagents, skills, and memory methods.</p>
         </div>
-        <button class="vv-action vv-action-primary" data-run-selected-bridge-method="${escapeHtml(selectedMethod)}">Run selected</button>
+        <button class="vv-action vv-action-primary" data-run-selected-bridge-method="${escapeHtml(selectedMethod)}" ${bridgeMethodDisabledAttr(selectedMethod)}>Run selected</button>
       </div>
       <div class="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
         ${bridgeDraftField('raw', 'Raw args', draft.raw, 'e.g. recent --global')}
@@ -1154,7 +2079,7 @@ function renderSettings(): string {
       ${field('model', 'Model', state.settings.model ?? '')}
       ${field('agent', 'Agent', state.settings.agent ?? '')}
       <label class="flex items-center gap-3 text-sm text-vv-muted"><input type="checkbox" name="autoStart" ${state.settings.autoStart === false ? '' : 'checked'} /> Auto-start bridge when the desktop app opens</label>
-      <label class="flex items-center gap-3 text-sm text-vv-muted"><input type="checkbox" name="dangerousBypass" ${state.settings.dangerousBypass ? 'checked' : ''} /> Dangerous bypass at startup</label>
+      <label class="flex items-center gap-3 text-sm text-vv-muted"><input type="checkbox" name="dangerousBypass" ${startupDangerousBypassRequested() ? 'checked' : ''} /> Dangerous bypass at startup</label>
       <p class="text-xs leading-5 text-vv-muted">Packaged AppImages may not inherit your shell PATH. If bridge start fails, set the Vegvisir binary to an absolute path such as <code class="text-vv-cyan">/home/malice/.local/bin/vegvisir</code>. The backend also searches resource-adjacent <code class="text-vv-cyan">resources/bin</code> paths and <code class="text-vv-cyan">VEGVISIR_DESKTOP_RESOURCE_DIR</code> for future bundled binaries.</p>
       <p class="text-xs leading-5 text-vv-muted">Desktop does not bypass Vegvisir. It spawns <code class="text-vv-cyan">vegvisir app-server</code> so providers, HBSE, CMS, tools, approvals, and policy remain owned by the harness.</p>
       <button class="vv-action vv-action-primary w-fit" type="submit">Save settings</button>
@@ -1183,12 +2108,256 @@ function projectName(): string {
   return trimmed.split('/').filter(Boolean).pop() ?? trimmed;
 }
 
+
+function addOrFocusModule(panelId: PanelId): void {
+  const layout = currentLayout();
+  const existing = layout.modules.find((module) => module.panelId === panelId);
+  if (existing) {
+    focusModule(existing.id);
+    return;
+  }
+  addModule(panelId);
+}
+
+function addModule(panelId: PanelId): void {
+  const layout = currentLayout();
+  const panel = panelDefinition(panelId);
+  const offset = layout.modules.length % 10;
+  const module: CanvasModuleInstance = {
+    id: uniqueId(`module-${panelId}`),
+    panelId,
+    title: panel.label,
+    x: snap(48 + offset * 36),
+    y: snap(48 + offset * 32),
+    width: panel.defaultWidth,
+    height: panel.defaultHeight,
+    collapsed: false,
+    locked: false,
+    z: maxModuleZ(layout) + 1,
+  };
+  layout.modules.push(module);
+  state.activePanel = panelId;
+  saveLayouts();
+  refreshPanelData(panelId);
+  render();
+}
+
+function removeModule(instanceId: string): void {
+  const layout = currentLayout();
+  layout.modules = layout.modules.filter((module) => module.id !== instanceId);
+  saveLayouts();
+  render();
+}
+
+function focusModule(instanceId: string): void {
+  const layout = currentLayout();
+  const module = layout.modules.find((item) => item.id === instanceId);
+  if (!module) return;
+  module.z = maxModuleZ(layout) + 1;
+  state.activePanel = module.panelId;
+  saveLayouts();
+  refreshPanelData(module.panelId);
+  render();
+}
+
+function collapseModule(instanceId: string): void {
+  const module = currentLayout().modules.find((item) => item.id === instanceId);
+  if (!module) return;
+  module.collapsed = !module.collapsed;
+  module.z = maxModuleZ() + 1;
+  saveLayouts();
+  render();
+}
+
+function toggleModuleLock(instanceId: string): void {
+  const module = currentLayout().modules.find((item) => item.id === instanceId);
+  if (!module) return;
+  module.locked = !module.locked;
+  saveLayouts();
+  render();
+}
+
+function updateModuleBounds(instanceId: string, x: number, y: number, width: number, height: number): void {
+  const module = currentLayout().modules.find((item) => item.id === instanceId);
+  if (!module) return;
+  const panel = panelDefinition(module.panelId);
+  module.x = Math.max(0, snap(x));
+  module.y = Math.max(0, snap(y));
+  module.width = Math.max(panel.minWidth, snap(width));
+  module.height = Math.max(panel.minHeight, snap(height));
+}
+
+function createLayoutTab(): void {
+  const name = window.prompt('Layout tab name?', 'New Layout')?.trim() || 'New Layout';
+  const tab: CanvasLayoutTab = { id: uniqueId('layout'), name, modules: [] };
+  state.layout.tabs.push(tab);
+  state.layout.activeTabId = tab.id;
+  saveLayouts();
+  render();
+}
+
+function duplicateLayoutTab(): void {
+  const layout = currentLayout();
+  const name = window.prompt('Duplicate layout as?', `${layout.name} Copy`)?.trim() || `${layout.name} Copy`;
+  const tab: CanvasLayoutTab = {
+    id: uniqueId('layout'),
+    name,
+    modules: layout.modules.map((module) => ({ ...module, id: uniqueId(`module-${module.panelId}`), x: module.x + 24, y: module.y + 24 })),
+  };
+  state.layout.tabs.push(tab);
+  state.layout.activeTabId = tab.id;
+  saveLayouts();
+  render();
+}
+
+function renameLayoutTab(): void {
+  const layout = currentLayout();
+  const name = window.prompt('Rename layout tab?', layout.name)?.trim();
+  if (!name) return;
+  layout.name = name;
+  saveLayouts();
+  render();
+}
+
+function deleteLayoutTab(): void {
+  if (state.layout.tabs.length <= 1) return;
+  const layout = currentLayout();
+  if (!window.confirm(`Delete layout tab "${layout.name}"?`)) return;
+  state.layout.tabs = state.layout.tabs.filter((tab) => tab.id !== layout.id);
+  state.layout.activeTabId = state.layout.tabs[0]?.id ?? '';
+  saveLayouts();
+  render();
+}
+
+function switchLayoutTab(tabId: string): void {
+  if (!state.layout.tabs.some((tab) => tab.id === tabId)) return;
+  state.layout.activeTabId = tabId;
+  canvasInteraction = null;
+  saveLayouts();
+  render();
+}
+
+function resetLayoutTab(): void {
+  const current = currentLayout();
+  if (!window.confirm(`Reset layout tab "${current.name}" to its default module set?`)) return;
+  const defaults = defaultLayoutState();
+  const replacement = defaults.tabs.find((tab) => tab.id === current.id) ?? createLayoutTabFromPanels(current.id, current.name, []);
+  current.modules = replacement.modules.map((module) => ({ ...module, id: uniqueId(`module-${module.panelId}`) }));
+  saveLayouts();
+  render();
+}
+
+function refreshPanelData(panel: PanelId): void {
+  if (panel === 'sessions') void send('session.list', {}, 'sessions');
+  if (panel === 'diff') void send('diff.current', {}, 'diff');
+  if (panel === 'memory') void send('memory.status', {}, 'memory');
+  if (panel === 'system') void send('system.prompt', {}, 'system');
+  if (panel === 'commands') void send('commands.list', {}, 'commands');
+  if (panel === 'capabilities') void send('bridge.capabilities', {}, 'capabilities');
+  if (panel === 'runtime') void send('runtime.status', {}, 'runtime');
+  if (panel === 'openai') void send('openai.compat.info', {}, 'openai');
+  if (panel === 'skills') void send('skills.status', {}, 'skills');
+  if (panel === 'integrations') {
+    void send('mcp.status', {}, 'mcp');
+    void send('hbse.status', {}, 'hbse');
+    void send('subagents.list', {}, 'subagents');
+  }
+  if (panel === 'evidence') {
+    void send('runs.list', {}, 'runs');
+    void send('trace.list', {}, 'trace');
+  }
+}
+
+function startCanvasInteraction(event: PointerEvent, id: string, mode: 'move' | 'resize'): void {
+  if ((event.target as HTMLElement).closest('button')) return;
+  const module = currentLayout().modules.find((item) => item.id === id);
+  if (!module || module.locked) return;
+  event.preventDefault();
+  module.z = maxModuleZ() + 1;
+  canvasInteraction = {
+    mode,
+    id,
+    startClientX: event.clientX,
+    startClientY: event.clientY,
+    startX: module.x,
+    startY: module.y,
+    startWidth: module.width,
+    startHeight: module.height,
+  };
+  render();
+}
+
+function updateCanvasInteraction(event: PointerEvent): void {
+  const interaction = canvasInteraction;
+  if (!interaction) return;
+  const module = currentLayout().modules.find((item) => item.id === interaction.id);
+  if (!module) return;
+  const deltaX = event.clientX - interaction.startClientX;
+  const deltaY = event.clientY - interaction.startClientY;
+  if (interaction.mode === 'move') {
+    updateModuleBounds(interaction.id, interaction.startX + deltaX, interaction.startY + deltaY, module.width, module.height);
+  } else {
+    updateModuleBounds(interaction.id, module.x, module.y, interaction.startWidth + deltaX, interaction.startHeight + deltaY);
+  }
+  applyCanvasInteractionDomUpdate(module);
+}
+
+function applyCanvasInteractionDomUpdate(module: CanvasModuleInstance): void {
+  const frame = document.querySelector<HTMLElement>(`[data-module-frame="${cssEscape(module.id)}"]`);
+  if (frame) {
+    frame.style.left = `${module.x}px`;
+    frame.style.top = `${module.y}px`;
+    frame.style.width = `${module.width}px`;
+    frame.style.height = `${module.height}px`;
+  }
+  const canvasContent = document.querySelector<HTMLElement>('#canvas-content');
+  if (canvasContent) {
+    const bounds = canvasBounds(currentLayout().modules);
+    canvasContent.style.width = `${bounds.width}px`;
+    canvasContent.style.height = `${bounds.height}px`;
+  }
+}
+
+function finishCanvasInteraction(): void {
+  if (!canvasInteraction) return;
+  canvasInteraction = null;
+  saveLayouts();
+  render();
+}
+
 function bindEvents(): void {
   document.querySelector('#start-stop')?.addEventListener('click', () => state.bridgeRunning ? void stopBridge() : void startBridge());
   document.querySelector('#restart-bridge')?.addEventListener('click', () => void restartBridge());
   document.querySelector('#restart-bridge-from-error')?.addEventListener('click', () => void restartBridge());
+  document.querySelector('#clear-approval-feedback')?.addEventListener('click', () => { state.approvalFeedback = null; render(); });
   document.querySelector('#refresh-all')?.addEventListener('click', () => void refreshEverything());
   document.querySelectorAll<HTMLButtonElement>('[data-panel]').forEach((button) => button.addEventListener('click', () => setPanel(button.dataset.panel ?? 'chat')));
+  document.querySelectorAll<HTMLButtonElement>('[data-module-add]').forEach((button) => button.addEventListener('click', () => {
+    const panelId = button.dataset.moduleAdd;
+    if (isPanelId(panelId)) addModule(panelId);
+  }));
+  document.querySelectorAll<HTMLButtonElement>('[data-module-remove]').forEach((button) => button.addEventListener('click', () => removeModule(button.dataset.moduleRemove ?? '')));
+  document.querySelectorAll<HTMLButtonElement>('[data-module-focus]').forEach((button) => button.addEventListener('click', () => focusModule(button.dataset.moduleFocus ?? '')));
+  document.querySelectorAll<HTMLButtonElement>('[data-module-collapse]').forEach((button) => button.addEventListener('click', () => collapseModule(button.dataset.moduleCollapse ?? '')));
+  document.querySelectorAll<HTMLButtonElement>('[data-module-lock]').forEach((button) => button.addEventListener('click', () => toggleModuleLock(button.dataset.moduleLock ?? '')));
+  document.querySelectorAll<HTMLButtonElement>('[data-module-open-full]').forEach((button) => button.addEventListener('click', () => {
+    const panelId = button.dataset.moduleOpenFull;
+    if (isPanelId(panelId)) addOrFocusModule(panelId);
+  }));
+  document.querySelectorAll<HTMLButtonElement>('[data-layout-tab]').forEach((button) => button.addEventListener('click', () => switchLayoutTab(button.dataset.layoutTab ?? '')));
+  document.querySelector('#layout-add-tab')?.addEventListener('click', () => createLayoutTab());
+  document.querySelector('#layout-duplicate-tab')?.addEventListener('click', () => duplicateLayoutTab());
+  document.querySelector('#layout-rename-tab')?.addEventListener('click', () => renameLayoutTab());
+  document.querySelector('#layout-delete-tab')?.addEventListener('click', () => deleteLayoutTab());
+  document.querySelector('#layout-reset-tab')?.addEventListener('click', () => resetLayoutTab());
+  document.querySelector('#layout-save')?.addEventListener('click', () => saveLayouts());
+  document.querySelector('#layout-snap')?.addEventListener('change', (event) => {
+    state.layout.snapToGrid = (event.currentTarget as HTMLInputElement).checked;
+    saveLayouts();
+    render();
+  });
+  document.querySelectorAll<HTMLElement>('[data-module-drag]').forEach((handle) => handle.addEventListener('pointerdown', (event) => startCanvasInteraction(event, handle.dataset.moduleDrag ?? '', 'move')));
+  document.querySelectorAll<HTMLElement>('[data-module-resize]').forEach((handle) => handle.addEventListener('pointerdown', (event) => startCanvasInteraction(event, handle.dataset.moduleResize ?? '', 'resize')));
   document.querySelector('#send-turn')?.addEventListener('click', () => void sendTurn());
   document.querySelector('#turn-input')?.addEventListener('keydown', (event) => {
     const key = event as KeyboardEvent;
@@ -1230,6 +2399,7 @@ function bindEvents(): void {
       agent: String(form.get('agent') ?? ''),
       autoStart: form.get('autoStart') === 'on',
       dangerousBypass: form.get('dangerousBypass') === 'on',
+      settingsSchemaVersion: SETTINGS_SCHEMA_VERSION,
     };
     saveSettings();
     render();
@@ -1242,6 +2412,11 @@ function updateBridgeDraftFromForm(event: Event): void {
   if (!key) return;
   if (key === 'global') state.bridgeDraft.global = input.checked;
   else state.bridgeDraft[key] = input.value;
+}
+
+function cssEscape(value: string): string {
+  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(value);
+  return String(value).replace(/[^a-zA-Z0-9_-]/g, (character) => `\\${character}`);
 }
 
 function escapeHtml(value: string): string {
@@ -1263,6 +2438,10 @@ async function bootstrap(): Promise<void> {
     render();
   }
 }
+
+window.addEventListener('pointermove', (event) => updateCanvasInteraction(event));
+window.addEventListener('pointerup', () => finishCanvasInteraction());
+window.addEventListener('pointercancel', () => finishCanvasInteraction());
 
 void bootstrap();
 setInterval(() => void pollBridge(), 350);

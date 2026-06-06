@@ -100,4 +100,245 @@ input:disabled {
   .vv-code {
     @apply font-mono text-[0.78rem] leading-5 text-slate-200;
   }
+
+  .vv-chat-markdown {
+    @apply whitespace-pre-wrap break-words text-[0.9rem] leading-6 text-slate-200;
+  }
+
+  .vv-chat-markdown + .vv-chat-markdown,
+  .vv-chat-markdown + .vv-chat-code-block,
+  .vv-chat-code-block + .vv-chat-markdown,
+  .vv-chat-code-block + .vv-chat-code-block {
+    @apply mt-3;
+  }
+
+  .vv-chat-inline-code {
+    @apply rounded-md border border-vv-line bg-black/30 px-1.5 py-0.5 font-mono text-[0.82em] text-vv-cyan;
+  }
+
+  .vv-chat-code-block {
+    @apply overflow-hidden rounded-xl border border-vv-line bg-vv-panel/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)];
+  }
+
+  .vv-chat-code-header {
+    @apply flex items-center justify-between border-b border-vv-line bg-white/[0.045] px-3 py-1.5 font-mono text-[0.66rem] uppercase tracking-[0.18em] text-vv-muted;
+  }
+
+  .vv-chat-code-block pre {
+    @apply max-h-[34rem] overflow-auto whitespace-pre p-3;
+  }
+
+  .vv-canvas-module {
+    box-shadow: 0 20px 70px rgba(0, 0, 0, 0.34);
+    transition: border-color 120ms ease, box-shadow 120ms ease, background-color 120ms ease;
+  }
+
+  .vv-canvas-module-selected {
+    @apply border-vv-cyan/65 bg-vv-panel/90 shadow-glow;
+  }
+
+  .vv-canvas-module-locked {
+    @apply border-vv-amber/45 bg-vv-panel/80;
+  }
+
+  .vv-canvas-module-compact {
+    @apply border-dashed;
+  }
+
+  .vv-canvas-module-collapsed {
+    @apply bg-vv-panel2/80;
+  }
+
+  .vv-canvas-module-header {
+    cursor: default;
+    touch-action: none;
+  }
+
+  .vv-canvas-module-draggable {
+    cursor: grab;
+  }
+
+  .vv-canvas-module-draggable:active {
+    cursor: grabbing;
+  }
+
+  .vv-canvas-resize-handle {
+    @apply absolute bottom-1.5 right-1.5 h-4 w-4 rounded-br-lg border-b-2 border-r-2 border-vv-cyan/70 opacity-70 transition hover:opacity-100;
+    cursor: nwse-resize;
+    touch-action: none;
+  }
+}
+
+/* Runtime-generated syntax classes must stay outside Tailwind @layer so purge does not remove them. */
+.vv-syntax-comment {
+  color: #64748b;
+  font-style: italic;
+}
+
+.vv-syntax-keyword {
+  color: #ff2e7e;
+  font-weight: 650;
+}
+
+.vv-syntax-number {
+  color: #ffc857;
+}
+
+.vv-syntax-string {
+  color: #5dffa2;
+}
+
+.vv-syntax-function {
+  color: #75d7ff;
+}
+
+.vv-syntax-type,
+.vv-syntax-builtin {
+  color: #c4b5fd;
+}
+
+.vv-syntax-property,
+.vv-syntax-attr {
+  color: #93c5fd;
+}
+
+.vv-syntax-operator,
+.vv-syntax-punctuation {
+  color: #94a3b8;
+}
+
+.vv-syntax-diff-add {
+  color: #5dffa2;
+}
+
+.vv-syntax-diff-delete {
+  color: #ff5d6c;
+}
+
+.vv-syntax-diff-meta {
+  color: #75d7ff;
+  font-weight: 650;
+}
+
+.vv-syntax-tag {
+  color: #ff2e7e;
+  font-weight: 650;
+}
+
+
+
+/* Desktop model-activity indicators. These are runtime-generated class names, so keep
+   them outside Tailwind @layer to avoid purge issues. */
+.vv-mini-spinner {
+  display: inline-block;
+  width: 0.72rem;
+  height: 0.72rem;
+  border: 2px solid rgba(117, 215, 255, 0.32);
+  border-top-color: #75d7ff;
+  border-radius: 999px;
+  animation: vv-spin 850ms linear infinite;
+  vertical-align: -0.1rem;
+}
+
+.vv-chat-spinner {
+  position: relative;
+  display: inline-grid;
+  width: 2.25rem;
+  height: 2.25rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid rgba(117, 215, 255, 0.28);
+  border-radius: 999px;
+  background: radial-gradient(circle at 50% 50%, rgba(117, 215, 255, 0.20), rgba(117, 215, 255, 0.04) 58%, transparent 60%);
+  box-shadow: 0 0 26px rgba(117, 215, 255, 0.16);
+}
+
+.vv-chat-spinner::before,
+.vv-chat-spinner::after {
+  content: "";
+  position: absolute;
+  inset: 0.32rem;
+  border: 2px solid transparent;
+  border-top-color: #75d7ff;
+  border-right-color: rgba(255, 46, 126, 0.72);
+  border-radius: inherit;
+  animation: vv-spin 900ms linear infinite;
+}
+
+.vv-chat-spinner::after {
+  inset: 0.78rem;
+  border-top-color: #5dffa2;
+  border-right-color: transparent;
+  animation-duration: 620ms;
+  animation-direction: reverse;
+}
+
+.vv-working-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.vv-working-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(117, 215, 255, 0.08), transparent);
+  transform: translateX(-100%);
+  animation: vv-working-sweep 1.8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.vv-working-pill {
+  border-color: rgba(117, 215, 255, 0.35);
+  background: rgba(117, 215, 255, 0.08);
+  box-shadow: 0 0 22px rgba(117, 215, 255, 0.10);
+}
+
+.vv-working-dots {
+  display: inline-flex;
+  gap: 0.18rem;
+  transform: translateY(0.08rem);
+}
+
+.vv-working-dots span {
+  width: 0.24rem;
+  height: 0.24rem;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.35;
+  animation: vv-dot-pulse 1.1s ease-in-out infinite;
+}
+
+.vv-working-dots span:nth-child(2) {
+  animation-delay: 140ms;
+}
+
+.vv-working-dots span:nth-child(3) {
+  animation-delay: 280ms;
+}
+
+@keyframes vv-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes vv-working-sweep {
+  0% { transform: translateX(-100%); opacity: 0; }
+  20% { opacity: 1; }
+  70% { opacity: 1; }
+  100% { transform: translateX(100%); opacity: 0; }
+}
+
+@keyframes vv-dot-pulse {
+  0%, 80%, 100% { transform: translateY(0); opacity: 0.32; }
+  40% { transform: translateY(-0.18rem); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vv-mini-spinner,
+  .vv-chat-spinner::before,
+  .vv-chat-spinner::after,
+  .vv-working-card::before,
+  .vv-working-dots span {
+    animation: none;
+  }
 }
