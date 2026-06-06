@@ -30,6 +30,7 @@ type StartBridgeRequest = {
   vegvisirBinary?: string;
   dangerousBypass?: boolean;
   autoStart?: boolean;
+  settingsSchemaVersion?: number;
 };
 
 type BridgeStatus = {
@@ -136,6 +137,7 @@ const panels: PanelDefinition[] = [
 ];
 
 const LAYOUT_SCHEMA_VERSION = 1;
+const SETTINGS_SCHEMA_VERSION = 2;
 const GLOBAL_LAYOUT_STORAGE_KEY = 'vegvisir.desktop.layouts.global';
 let loadedLayoutStorageKey = '';
 let canvasInteraction: CanvasInteraction | null = null;
@@ -363,7 +365,26 @@ function emptyBridgeMethodDraft(): BridgeMethodDraft {
 
 function loadSettings(): StartBridgeRequest {
   const raw = localStorage.getItem('vegvisir.desktop.settings');
-  const defaults: StartBridgeRequest = {
+  const defaults: StartBridgeRequest = defaultSettings();
+  if (!raw) return defaults;
+  try {
+    const saved = JSON.parse(raw) as StartBridgeRequest;
+    const settings = { ...defaults, ...saved };
+    // Do not preserve dangerous bypass from older desktop settings. It is a startup-only
+    // unsafe mode and must be explicitly re-enabled after this schema migration.
+    if (saved.settingsSchemaVersion !== SETTINGS_SCHEMA_VERSION) {
+      settings.dangerousBypass = false;
+      settings.settingsSchemaVersion = SETTINGS_SCHEMA_VERSION;
+      localStorage.setItem('vegvisir.desktop.settings', JSON.stringify(settings));
+    }
+    return settings;
+  } catch {
+    return defaults;
+  }
+}
+
+function defaultSettings(): StartBridgeRequest {
+  return {
     vegvisirBinary: 'vegvisir',
     workspace: '',
     provider: '',
@@ -371,17 +392,25 @@ function loadSettings(): StartBridgeRequest {
     agent: '',
     dangerousBypass: false,
     autoStart: true,
+    settingsSchemaVersion: SETTINGS_SCHEMA_VERSION,
   };
-  if (!raw) return defaults;
-  try {
-    return { ...defaults, ...JSON.parse(raw) };
-  } catch {
-    return defaults;
-  }
 }
 
 function saveSettings(): void {
+  state.settings.settingsSchemaVersion = SETTINGS_SCHEMA_VERSION;
   localStorage.setItem('vegvisir.desktop.settings', JSON.stringify(state.settings));
+}
+
+function runtimeDangerousBypassEnabled(): boolean {
+  return Boolean(
+    state.runtimeStatus?.dangerously_bypass_approvals_and_sandbox
+    || state.runtimeStatus?.dangerous_bypass
+    || state.runtimeStatus?.dangerousBypass
+  );
+}
+
+function startupDangerousBypassRequested(): boolean {
+  return Boolean(state.settings.dangerousBypass);
 }
 
 function nextId(prefix: string): string {
@@ -951,7 +980,7 @@ function renderCanvas(): string {
 function renderLayoutTabs(): string {
   const layout = currentLayout();
   const pendingApprovals = state.approvals.length > 0;
-  const dangerous = Boolean(state.settings.dangerousBypass || state.runtimeStatus?.dangerous_bypass || state.runtimeStatus?.dangerousBypass);
+  const dangerous = Boolean(startupDangerousBypassRequested() || runtimeDangerousBypassEnabled());
   return `
     <div class="border-b border-vv-line bg-vv-bg2/88 px-4 py-2 backdrop-blur-xl">
       <div class="flex flex-wrap items-center justify-between gap-3">
@@ -1002,7 +1031,7 @@ function renderModuleFrame(instance: CanvasModuleInstance): string {
   const selected = instance.z === maxModuleZ();
   const draggable = !instance.locked;
   const isApproval = instance.panelId === 'approvals' && state.approvals.length > 0;
-  const isRuntimeDanger = instance.panelId === 'runtime' && Boolean(state.settings.dangerousBypass || state.runtimeStatus?.dangerous_bypass || state.runtimeStatus?.dangerousBypass);
+  const isRuntimeDanger = instance.panelId === 'runtime' && Boolean(startupDangerousBypassRequested() || runtimeDangerousBypassEnabled());
   return `
     <article data-module-frame="${escapeHtml(instance.id)}" class="vv-canvas-module vv-panel absolute overflow-hidden ${selected ? 'vv-canvas-module-selected' : ''} ${instance.locked ? 'vv-canvas-module-locked' : ''} ${mode === 'compact' ? 'vv-canvas-module-compact' : ''} ${mode === 'collapsed' ? 'vv-canvas-module-collapsed' : ''} ${isApproval || isRuntimeDanger ? 'border-vv-red/60 shadow-danger' : ''}" style="left:${instance.x}px;top:${instance.y}px;width:${instance.width}px;height:${instance.height}px;z-index:${instance.z};">
       <header class="vv-canvas-module-header ${draggable ? 'vv-canvas-module-draggable' : ''} flex select-none items-center justify-between gap-2 border-b border-vv-line bg-black/32 px-3 py-2" data-module-drag="${escapeHtml(instance.id)}">
@@ -1068,7 +1097,7 @@ function moduleSummary(panelId: PanelId): string {
     case 'providers': return `Provider ${state.session?.provider ?? state.settings.provider ?? 'default'} · Model ${state.session?.model ?? state.settings.model ?? 'default'} · ${state.agents.length} agents`;
     case 'capabilities': return `${state.capabilities?.native_methods?.length ?? 0} native methods · ${state.capabilities?.command_backed_methods?.length ?? 0} command-backed methods`;
     case 'commands': return `${state.commands.length} slash commands loaded`;
-    case 'runtime': return `${state.bridgeRunning ? 'Bridge online' : 'Bridge offline'} · ${state.busy ? 'working' : 'ready'} · ${state.settings.dangerousBypass ? 'dangerous startup bypass set' : 'policy gated'}`;
+    case 'runtime': return `${state.bridgeRunning ? 'Bridge online' : 'Bridge offline'} · ${state.busy ? 'working' : 'ready'} · ${startupDangerousBypassRequested() || runtimeDangerousBypassEnabled() ? 'dangerous startup bypass set' : 'policy gated'}`;
     case 'openai': return state.openaiCompat ? 'OpenAI-compatible metadata loaded; credentials remain behind Vegvisir/HBSE.' : 'OpenAI-compatible metadata not loaded.';
     case 'diff': return state.diff ? 'Diff loaded' : 'No diff loaded';
     case 'memory': return state.memory || methodOutputText('memory.status') ? 'Memory status output loaded' : 'Memory output not loaded';
@@ -1117,7 +1146,7 @@ function renderComposer(): string {
             <span class="vv-pill">${escapeHtml(state.settings.model || 'model default')}</span>
             <span class="vv-pill">${state.busy ? 'High activity' : 'Ready'}</span>
             <span class="vv-pill">Chat + slash commands</span>
-            <span class="vv-pill">${state.settings.dangerousBypass ? 'Bypass startup' : 'Policy gated'}</span>
+            <span class="vv-pill">${startupDangerousBypassRequested() || runtimeDangerousBypassEnabled() ? 'Bypass startup' : 'Policy gated'}</span>
           </div>
           <button id="send-turn" class="vv-focus grid h-9 w-9 shrink-0 place-items-center rounded-full ${state.busy ? 'bg-vv-red' : 'bg-vv-pink'} text-lg font-black text-white shadow-[0_0_28px_rgba(255,46,126,0.28)]" ${state.bridgeRunning && !state.busy ? '' : 'disabled'}>${state.busy ? '■' : '➤'}</button>
         </div>
@@ -1789,7 +1818,7 @@ function renderSettings(): string {
       ${field('model', 'Model', state.settings.model ?? '')}
       ${field('agent', 'Agent', state.settings.agent ?? '')}
       <label class="flex items-center gap-3 text-sm text-vv-muted"><input type="checkbox" name="autoStart" ${state.settings.autoStart === false ? '' : 'checked'} /> Auto-start bridge when the desktop app opens</label>
-      <label class="flex items-center gap-3 text-sm text-vv-muted"><input type="checkbox" name="dangerousBypass" ${state.settings.dangerousBypass ? 'checked' : ''} /> Dangerous bypass at startup</label>
+      <label class="flex items-center gap-3 text-sm text-vv-muted"><input type="checkbox" name="dangerousBypass" ${startupDangerousBypassRequested() ? 'checked' : ''} /> Dangerous bypass at startup</label>
       <p class="text-xs leading-5 text-vv-muted">Packaged AppImages may not inherit your shell PATH. If bridge start fails, set the Vegvisir binary to an absolute path such as <code class="text-vv-cyan">/home/malice/.local/bin/vegvisir</code>. The backend also searches resource-adjacent <code class="text-vv-cyan">resources/bin</code> paths and <code class="text-vv-cyan">VEGVISIR_DESKTOP_RESOURCE_DIR</code> for future bundled binaries.</p>
       <p class="text-xs leading-5 text-vv-muted">Desktop does not bypass Vegvisir. It spawns <code class="text-vv-cyan">vegvisir app-server</code> so providers, HBSE, CMS, tools, approvals, and policy remain owned by the harness.</p>
       <button class="vv-action vv-action-primary w-fit" type="submit">Save settings</button>
@@ -2108,6 +2137,7 @@ function bindEvents(): void {
       agent: String(form.get('agent') ?? ''),
       autoStart: form.get('autoStart') === 'on',
       dangerousBypass: form.get('dangerousBypass') === 'on',
+      settingsSchemaVersion: SETTINGS_SCHEMA_VERSION,
     };
     saveSettings();
     render();
