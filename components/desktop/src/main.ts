@@ -349,6 +349,8 @@ async function restartBridge(): Promise<void> {
     state.messages = [];
     state.pendingAssistant = '';
     state.busy = false;
+    state.sessions = [];
+    state.sessionListWorkspace = '';
     setApprovalsFromBridge([]);
     await activateBridge(status);
   } catch (error) {
@@ -397,6 +399,8 @@ async function stopBridge(): Promise<void> {
   state.messages = [];
   state.pendingAssistant = '';
   state.busy = false;
+  state.sessions = [];
+  state.sessionListWorkspace = '';
   setApprovalsFromBridge([]);
   render();
 }
@@ -418,7 +422,6 @@ async function refreshEverything(): Promise<void> {
   await Promise.allSettled([
     send('session.status', {}, 'status'),
     send('session.messages', {}, 'messages'),
-    send('session.list', {}, 'sessions'),
     send('approvals.list', {}, 'approvals'),
     send('tools.list', {}, 'tools'),
     send('providers.list', {}, 'providers'),
@@ -430,6 +433,19 @@ async function refreshEverything(): Promise<void> {
     send('hbse.onboarding.providers', {}, 'hbse'),
     send('openai.compat.info', {}, 'openai'),
     send('memory.status', {}, 'memory'),
+  ]);
+}
+
+async function refreshSessionIndependentState(): Promise<void> {
+  if (!state.bridgeRunning) return;
+  await Promise.allSettled([
+    send('session.status', {}, 'status'),
+    send('session.messages', {}, 'messages'),
+    send('approvals.list', {}, 'approvals'),
+    send('providers.list', {}, 'providers'),
+    send('models.list', {}, 'models'),
+    send('agents.list', {}, 'agents'),
+    send('runtime.status', {}, 'runtime'),
   ]);
 }
 
@@ -498,13 +514,12 @@ function handleEvent(event: BridgeEvent): void {
       break;
     case 'session.loaded':
       state.session = event.payload?.session ?? state.session;
+      state.busy = false;
       state.pendingAssistant = '';
       state.error = '';
       state.activePanel = 'chat';
       state.messages.push({ role: 'system', content: event.payload?.output ?? 'Session loaded.' });
-      void send('session.messages', {}, 'messages');
-      void send('session.status', {}, 'status');
-      void send('session.list', {}, 'sessions');
+      void refreshCurrentSessionContext();
       break;
     case 'turn.started':
       state.busy = true;
@@ -593,7 +608,6 @@ function handleEvent(event: BridgeEvent): void {
       });
       state.pendingAssistant = '';
       void send('session.status', {}, 'status');
-      void send('session.list', {}, 'sessions');
       break;
     case 'provider.selected':
     case 'model.selected':
@@ -602,7 +616,7 @@ function handleEvent(event: BridgeEvent): void {
     case 'fast.updated':
     case 'toolLimit.updated':
       state.session = event.payload?.session ?? state.session;
-      void refreshEverything();
+      void refreshSessionIndependentState();
       break;
     case 'diff.current':
       state.diff = event.payload?.diff ?? event.payload?.markdown ?? event.payload?.output ?? JSON.stringify(event.payload, null, 2);
@@ -670,9 +684,35 @@ async function sendTurn(): Promise<void> {
   }
 }
 
+async function refreshSessions(): Promise<void> {
+  if (!state.bridgeRunning) return;
+  state.sessionListWorkspace = String(state.session?.workspace ?? state.settings.workspace ?? '');
+  await send('session.list', {}, 'sessions');
+}
+
+async function refreshCurrentSessionContext(): Promise<void> {
+  if (!state.bridgeRunning) return;
+  await Promise.allSettled([
+    send('session.status', {}, 'status'),
+    send('session.messages', {}, 'messages'),
+    send('approvals.list', {}, 'approvals'),
+  ]);
+}
+
 async function loadSession(id: string): Promise<void> {
-  if (!id.trim() || !state.bridgeRunning || state.busy) return;
-  await send('session.load', { id: id.trim() }, 'session-load');
+  const sessionId = id.trim();
+  if (!sessionId || !state.bridgeRunning || state.busy) return;
+  state.error = '';
+  state.busy = true;
+  state.pendingAssistant = '';
+  render();
+  try {
+    await send('session.load', { id: sessionId }, 'session-load');
+  } catch (error) {
+    state.busy = false;
+    state.error = String(error);
+    requestRender();
+  }
 }
 
 function setPanel(panel: string): void {
@@ -2129,7 +2169,7 @@ function resetLayoutTab(): void {
 
 function refreshPanelData(panel: PanelId): void {
   if (panel === 'explorer') void loadExplorerDirectory(state.fileExplorer.path || state.settings.workspace || undefined);
-  if (panel === 'sessions') void send('session.list', {}, 'sessions');
+  if (panel === 'sessions') void refreshSessions();
   if (panel === 'diff') void send('diff.current', {}, 'diff');
   if (panel === 'memory') void send('memory.status', {}, 'memory');
   if (panel === 'system') void send('system.prompt', {}, 'system');
@@ -2397,7 +2437,7 @@ function handleDelegatedClick(event: MouseEvent): void {
 
   if (target.closest('#refresh-sessions')) {
     event.preventDefault();
-    void send('session.list', {}, 'sessions');
+    void refreshSessions();
     return;
   }
 
