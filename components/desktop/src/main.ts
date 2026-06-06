@@ -1006,7 +1006,17 @@ function restoreChatScroll(snapshot: ChatScrollSnapshot | null): void {
     } else {
       surface.scrollTop = Math.max(0, Math.min(snapshot.scrollTop, surface.scrollHeight - surface.clientHeight));
     }
+    followStreamingCodeBlocks();
     forceChatScrollToBottom = false;
+  });
+}
+
+function followStreamingCodeBlocks(): void {
+  if (!state.pendingAssistant) return;
+  const pendingMessage = document.querySelector<HTMLElement>('#pending-assistant-message');
+  if (!pendingMessage) return;
+  pendingMessage.querySelectorAll<HTMLPreElement>('.vv-chat-code-block pre').forEach((codeBlock) => {
+    codeBlock.scrollTop = codeBlock.scrollHeight;
   });
 }
 
@@ -1085,6 +1095,7 @@ function updatePendingAssistantDom(): boolean {
   if (!container) return false;
   const snapshot = captureChatScrollSnapshot();
   container.innerHTML = renderMessage({ role: 'assistant', content: state.pendingAssistant });
+  followStreamingCodeBlocks();
   restoreChatScroll(snapshot);
   return true;
 }
