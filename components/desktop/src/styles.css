@@ -101,6 +101,49 @@ input:disabled {
     @apply font-mono text-[0.78rem] leading-5 text-slate-200;
   }
 
+  .vv-chat-markdown {
+    @apply whitespace-pre-wrap break-words text-[0.9rem] leading-6 text-slate-200;
+  }
+
+  .vv-chat-markdown + .vv-chat-markdown,
+  .vv-chat-markdown + .vv-chat-code-block,
+  .vv-chat-code-block + .vv-chat-markdown,
+  .vv-chat-code-block + .vv-chat-code-block {
+    @apply mt-3;
+  }
+
+  .vv-chat-inline-code {
+    @apply rounded-md border border-vv-line bg-black/30 px-1.5 py-0.5 font-mono text-[0.82em] text-vv-cyan;
+  }
+
+  .vv-chat-code-block {
+    @apply overflow-hidden rounded-xl border border-vv-line bg-vv-panel/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)];
+  }
+
+  .vv-chat-code-header {
+    @apply flex items-center justify-between border-b border-vv-line bg-white/[0.045] px-3 py-1.5 font-mono text-[0.66rem] uppercase tracking-[0.18em] text-vv-muted;
+  }
+
+  .vv-chat-code-block pre {
+    @apply max-h-[34rem] overflow-auto whitespace-pre p-3;
+  }
+
+  .vv-syntax-comment {
+    @apply text-slate-500 italic;
+  }
+
+  .vv-syntax-keyword {
+    @apply font-semibold text-vv-pink;
+  }
+
+  .vv-syntax-number {
+    @apply text-vv-amber;
+  }
+
+  .vv-syntax-string {
+    @apply text-vv-green;
+  }
+
   .vv-canvas-module {
     box-shadow: 0 20px 70px rgba(0, 0, 0, 0.34);
     transition: border-color 120ms ease, box-shadow 120ms ease, background-color 120ms ease;
