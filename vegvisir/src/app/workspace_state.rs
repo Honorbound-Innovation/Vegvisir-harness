@@ -100,7 +100,7 @@ impl TuiApplication {
                     self.session.context_limit = context_window;
                 }
             }
-            Some(_) => {
+            Some(_) | None => {
                 if let Some(default) = self
                     .models
                     .default_for_provider(&self.session.current_provider)
@@ -109,28 +109,8 @@ impl TuiApplication {
                     if let Some(context_window) = default.context_window {
                         self.session.context_limit = context_window;
                     }
-                }
-            }
-            None if !selection.model.trim().is_empty() => {
-                if let Some(default) = self
-                    .models
-                    .default_for_provider(&self.session.current_provider)
-                {
-                    self.session.current_model = default.name.clone();
-                    if let Some(context_window) = default.context_window {
-                        self.session.context_limit = context_window;
-                    }
-                }
-            }
-            None => {
-                if let Some(default) = self
-                    .models
-                    .default_for_provider(&self.session.current_provider)
-                {
-                    self.session.current_model = default.name.clone();
-                    if let Some(context_window) = default.context_window {
-                        self.session.context_limit = context_window;
-                    }
+                } else {
+                    self.session.current_model.clear();
                 }
             }
         }

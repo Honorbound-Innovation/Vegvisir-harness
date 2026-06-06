@@ -1895,9 +1895,13 @@ fn provider_and_model_catalogs_load() -> anyhow::Result<()> {
         models.default_for_provider("google-hbse").unwrap().name,
         "gemini-2.5-pro"
     );
-    assert_eq!(
-        models.default_for_provider("xai-hbse").unwrap().name,
-        "grok-4.3"
+    assert!(
+        models.default_for_provider("xai").is_none(),
+        "xAI models must be discovered from the provider, not seeded from the static catalog"
+    );
+    assert!(
+        models.default_for_provider("xai-hbse").is_none(),
+        "xAI HBSE models must be discovered from the provider, not seeded from the static catalog"
     );
     assert_eq!(
         models.default_for_provider("mistral-hbse").unwrap().name,
@@ -1942,7 +1946,6 @@ fn provider_and_model_catalogs_load() -> anyhow::Result<()> {
         models
             .is_model_allowed_for_provider(models.get("gemini-2.5-flash").unwrap(), "google-hbse")
     );
-    assert!(models.is_model_allowed_for_provider(models.get("grok-4").unwrap(), "xai-hbse"));
     assert!(models.is_model_allowed_for_provider(
         models.get("mistral-large-latest").unwrap(),
         "mistral-hbse"
@@ -1976,14 +1979,6 @@ fn provider_and_model_catalogs_load() -> anyhow::Result<()> {
             .config()
             .name,
         "openai-hbse"
-    );
-    assert_eq!(
-        router
-            .for_model(models.get("grok-4").unwrap(), "xai-hbse")
-            .unwrap()
-            .config()
-            .name,
-        "xai-hbse"
     );
     assert_eq!(
         router
@@ -2034,7 +2029,6 @@ fn conversation_runner_preserves_selected_alias_provider() -> anyhow::Result<()>
         ("openai-hbse", "gpt-5.5"),
         ("anthropic-hbse", "claude-sonnet-4-5"),
         ("google-hbse", "gemini-2.5-flash"),
-        ("xai-hbse", "grok-4"),
         ("mistral-hbse", "mistral-large-latest"),
         ("openrouter-hbse", "openai/gpt-5.4"),
         ("deepseek-hbse", "deepseek-chat"),
@@ -2193,6 +2187,160 @@ fn provider_router_exposes_tool_calls_for_every_catalog_provider() -> anyhow::Re
             provider.name
         );
     }
+    Ok(())
+}
+
+#[test]
+fn xai_models_are_not_seeded_in_static_catalog() -> anyhow::Result<()> {
+    let models = ModelRegistry::default_catalog()?;
+
+    assert!(models.default_for_provider("xai").is_none());
+    assert!(models.default_for_provider("xai-hbse").is_none());
+    assert!(
+        models
+            .list()
+            .into_iter()
+            .all(|model| model.provider != "xai"),
+        "xAI models must be populated by provider discovery, not defaults/models.json"
+    );
+    Ok(())
+}
+
+#[test]
+fn xai_model_discovery_reads_live_provider_models() -> anyhow::Result<()> {
+    unsafe {
+        std::env::set_var("VEGVISIR_TEST_XAI_DISCOVERY_KEY", "xai-discovery-key");
+    }
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let addr = listener.local_addr()?;
+    let server = thread::spawn(move || -> anyhow::Result<String> {
+        let (mut stream, _) = listener.accept()?;
+        stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let n = stream.read(&mut buffer)?;
+            bytes.extend_from_slice(&buffer[..n]);
+            if String::from_utf8_lossy(&bytes).contains("\r\n\r\n") {
+                break;
+            }
+        }
+        let body =
+            r#"{"data":[{"id":"xai-live-from-provider","display_name":"xAI Live From Provider"}]}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        )?;
+        Ok(String::from_utf8_lossy(&bytes).to_string())
+    });
+
+    let provider = ProviderConfig {
+        name: "xai".to_string(),
+        display_name: Some("xAI".to_string()),
+        kind: "openai_compatible".to_string(),
+        api_key_env: Some("VEGVISIR_TEST_XAI_DISCOVERY_KEY".to_string()),
+        base_url: Some(format!("http://{}", addr)),
+        auth_type: "api_key".to_string(),
+        enabled: true,
+        metadata: Default::default(),
+    };
+
+    let models = discover_provider_models(&provider)?;
+
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0].name, "xai-live-from-provider");
+    assert_eq!(
+        models[0].display_name.as_deref(),
+        Some("xAI Live From Provider")
+    );
+    assert_eq!(models[0].provider, "xai");
+    let request = server.join().expect("server thread completed")?;
+    assert!(request.contains("GET /models HTTP/1.1"));
+    assert!(request.contains("Authorization: Bearer xai-discovery-key"));
+    Ok(())
+}
+
+#[test]
+fn xai_hbse_model_discovery_routes_through_broker() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let socket_path = tmp.path().join("hbse-xai-discovery.sock");
+    let listener = UnixListener::bind(&socket_path)?;
+    let server = thread::spawn(move || -> anyhow::Result<Value> {
+        let (mut stream, _) = listener.accept()?;
+        stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let n = stream.read(&mut buffer)?;
+            if n == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&buffer[..n]);
+            if buffer[..n].contains(&b'\n') {
+                break;
+            }
+        }
+        let request: Value = serde_json::from_slice(
+            bytes
+                .split(|byte| *byte == b'\n')
+                .next()
+                .unwrap_or(bytes.as_slice()),
+        )?;
+        let response = json!({
+            "ok": true,
+            "status_code": 200,
+            "body": r#"{"data":[{"id":"xai-hbse-live-from-provider","display_name":"xAI HBSE Live From Provider"}]}"#
+        });
+        stream.write_all(serde_json::to_string(&response)?.as_bytes())?;
+        stream.write_all(b"\n")?;
+        Ok(request)
+    });
+    let provider = ProviderConfig {
+        name: "xai-hbse".to_string(),
+        display_name: Some("xAI via HBSE".to_string()),
+        kind: "hbse_openai_compatible".to_string(),
+        api_key_env: None,
+        base_url: Some("https://api.x.ai/v1".to_string()),
+        auth_type: "hbse".to_string(),
+        enabled: true,
+        metadata: BTreeMap::from([
+            (
+                "hbse_socket".to_string(),
+                Value::String(socket_path.display().to_string()),
+            ),
+            (
+                "hbse_secret_ref".to_string(),
+                Value::String("secret://vegvisir/providers/xai/test".to_string()),
+            ),
+            (
+                "hbse_consumer".to_string(),
+                Value::String("vegvisir.provider.xai-hbse.test".to_string()),
+            ),
+            (
+                "hbse_model_discovery_purpose".to_string(),
+                Value::String("model.discovery".to_string()),
+            ),
+        ]),
+    };
+
+    let models = discover_provider_models(&provider)?;
+
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0].name, "xai-hbse-live-from-provider");
+    assert_eq!(models[0].provider, "xai-hbse");
+    let request = server.join().expect("server thread completed")?;
+    assert_eq!(request["command"], "provider_http");
+    assert_eq!(request["method"], "GET");
+    assert_eq!(request["url"], "https://api.x.ai/v1/models");
+    assert_eq!(
+        request["secret_ref"],
+        "secret://vegvisir/providers/xai/test"
+    );
+    assert_eq!(request["consumer"], "vegvisir.provider.xai-hbse.test");
+    assert_eq!(request["purpose"], "model.discovery");
+    assert_eq!(request["headers"]["Accept"], "application/json");
     Ok(())
 }
 

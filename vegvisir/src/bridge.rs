@@ -472,7 +472,9 @@ fn handle_request(
                 .provider
                 .clone()
                 .unwrap_or_else(|| app.session.current_provider.clone());
-            if params.refresh.unwrap_or(false) {
+            if params.refresh.unwrap_or(false)
+                || provider_requires_dynamic_model_discovery(&requested_provider)
+            {
                 let _ = app.refresh_provider_models(&requested_provider);
             }
             let data: Vec<Value> = app
@@ -950,8 +952,12 @@ fn handle_request(
                 .provider
                 .clone()
                 .unwrap_or_else(|| app.session.current_provider.clone());
-            let refresh_notes = if params.refresh.unwrap_or(false) {
-                if params.provider.is_some() {
+            let should_refresh = params.refresh.unwrap_or(false)
+                || provider_requires_dynamic_model_discovery(&requested_provider);
+            let refresh_notes = if should_refresh {
+                if params.provider.is_some()
+                    || provider_requires_dynamic_model_discovery(&requested_provider)
+                {
                     app.refresh_provider_models(&requested_provider)
                         .map(|note| vec![format!("{requested_provider}: {note}")])
                         .unwrap_or_default()
@@ -2550,7 +2556,12 @@ fn apply_requested_model_or_default(app: &mut TuiApplication, model: &str) -> an
         let default_name = default.name.clone();
         return apply_command(app, &format!("/model {default_name}"));
     }
+    app.session.current_model.clear();
     Ok(())
+}
+
+fn provider_requires_dynamic_model_discovery(provider: &str) -> bool {
+    matches!(provider, "xai" | "xai-hbse")
 }
 
 fn apply_command(app: &mut TuiApplication, command: &str) -> anyhow::Result<()> {

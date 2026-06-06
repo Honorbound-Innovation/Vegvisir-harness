@@ -400,6 +400,8 @@ impl TuiApplication {
             if let Some(context_window) = model.context_window {
                 self.session.context_limit = context_window;
             }
+        } else {
+            self.session.current_model.clear();
         }
         if global {
             self.save_global_model_defaults()?;

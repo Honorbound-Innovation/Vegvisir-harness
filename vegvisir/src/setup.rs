@@ -55,7 +55,7 @@ const PROVIDER_CHOICES: &[ProviderChoice] = &[
         label: "xAI",
         provider_id: "xai",
         hbse_provider: "xai-hbse",
-        default_model: "grok-4",
+        default_model: "",
     },
 ];
 
@@ -131,18 +131,19 @@ fn apply_setup(options: SetupOptions, choice: ProviderChoice) -> anyhow::Result<
         );
     }
     if options.force || !config.contains_key("current_model") {
-        config.insert(
-            "current_model".to_string(),
-            Value::String(
-                options
-                    .model
-                    .as_deref()
-                    .filter(|model| !model.trim().is_empty())
-                    .unwrap_or(choice.default_model)
-                    .trim()
-                    .to_string(),
-            ),
-        );
+        if let Some(model) = options
+            .model
+            .as_deref()
+            .filter(|model| !model.trim().is_empty())
+            .or_else(|| (!choice.default_model.trim().is_empty()).then_some(choice.default_model))
+        {
+            config.insert(
+                "current_model".to_string(),
+                Value::String(model.trim().to_string()),
+            );
+        } else {
+            config.remove("current_model");
+        }
     }
     config
         .entry("setup_completed".to_string())
@@ -193,7 +194,7 @@ fn apply_setup(options: SetupOptions, choice: ProviderChoice) -> anyhow::Result<
         current_model: config
             .get("current_model")
             .and_then(Value::as_str)
-            .unwrap_or(choice.default_model)
+            .unwrap_or("")
             .to_string(),
         hbse_socket,
         hbse_socket_exists,
@@ -311,7 +312,7 @@ pub fn setup_status(data_root: impl AsRef<Path>) -> anyhow::Result<SetupSummary>
     let model = config
         .get("current_model")
         .and_then(Value::as_str)
-        .unwrap_or("demo-local")
+        .unwrap_or(if provider == "demo" { "demo-local" } else { "" })
         .to_string();
     let provider_registry = ProviderRegistry::default_catalog()?;
     let hbse_socket = provider_registry
@@ -387,6 +388,35 @@ mod tests {
         let status = setup_status(&data_root)?;
         assert_eq!(status.current_provider, "openai-sso");
         assert_eq!(status.current_model, "gpt-5.4-mini");
+        Ok(())
+    }
+
+    #[test]
+    fn xai_setup_does_not_write_hardcoded_model_default() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let data_root = tmp.path().join("data");
+        let summary = run_setup(SetupOptions {
+            data_root: data_root.clone(),
+            workspace: tmp.path().join("workspace"),
+            non_interactive: true,
+            force: true,
+            provider: Some("xai".to_string()),
+            model: None,
+            skip_hbse: true,
+        })?;
+
+        assert_eq!(summary.current_provider, "xai-hbse");
+        assert_eq!(summary.current_model, "");
+        let status = setup_status(&data_root)?;
+        assert_eq!(status.current_provider, "xai-hbse");
+        assert_eq!(status.current_model, "");
+
+        let config: Value = serde_json::from_str(&std::fs::read_to_string(summary.config_path)?)?;
+        assert_eq!(config["current_provider"], "xai-hbse");
+        assert!(
+            config.get("current_model").is_none(),
+            "xAI model defaults must come from provider discovery, not setup constants"
+        );
         Ok(())
     }
 

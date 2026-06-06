@@ -748,11 +748,14 @@ impl TuiApplication {
             &models,
             &session.current_provider,
             &session.current_model,
-        ) && let Some(default) = models.default_for_provider(&session.current_provider)
-        {
-            session.current_model = default.name.clone();
-            if let Some(context_window) = default.context_window {
-                session.context_limit = context_window;
+        ) {
+            if let Some(default) = models.default_for_provider(&session.current_provider) {
+                session.current_model = default.name.clone();
+                if let Some(context_window) = default.context_window {
+                    session.context_limit = context_window;
+                }
+            } else {
+                session.current_model.clear();
             }
         }
         let input_history = session.input_history.clone();
