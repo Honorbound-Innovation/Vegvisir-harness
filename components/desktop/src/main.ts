@@ -894,11 +894,13 @@ function renderNonChatPanel(): string {
 function renderCanvas(): string {
   const layout = currentLayout();
   const bounds = canvasBounds(layout.modules);
+  const isEditingLayout = state.layout.editMode;
+  const canvasGridColumns = isEditingLayout ? 'grid-cols-[15rem_minmax(0,1fr)]' : 'grid-cols-1';
   return `
     <div class="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
       ${renderLayoutTabs()}
-      <div class="grid min-h-0 grid-cols-[15rem_minmax(0,1fr)] overflow-hidden max-[980px]:grid-cols-1">
-        ${renderModulePalette()}
+      <div class="grid min-h-0 ${canvasGridColumns} overflow-hidden max-[980px]:grid-cols-1">
+        ${isEditingLayout ? renderModulePalette() : ''}
         <div id="canvas-surface" class="vv-scrollbar relative min-h-0 overflow-auto bg-vv-grid [background-size:42px_42px]">
           <div class="relative" style="width:${bounds.width}px;height:${bounds.height}px;min-width:100%;min-height:100%;">
             ${layout.modules.map(renderModuleFrame).join('')}
