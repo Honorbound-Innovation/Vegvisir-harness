@@ -1,0 +1,8 @@
+export const LAYOUT_SCHEMA_VERSION = 1;
+export const SETTINGS_SCHEMA_VERSION = 2;
+export const GLOBAL_LAYOUT_STORAGE_KEY = 'vegvisir.desktop.layouts.global';
+
+export const CHAT_SCROLL_STICKY_THRESHOLD_PX = 96;
+export const APPROVAL_REFRESH_THROTTLE_MS = 750;
+export const EXPLORER_INITIAL_VISIBLE_ENTRIES = 160;
+export const EXPLORER_VISIBLE_INCREMENT = 160;
