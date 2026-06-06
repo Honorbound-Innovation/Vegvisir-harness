@@ -1,5 +1,6 @@
 use std::{
     env,
+    fs::{self, OpenOptions},
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, ExitStatus, Stdio},
@@ -46,6 +47,8 @@ struct BridgeProcess {
 }
 
 const DEFAULT_GRACEFUL_STOP_TIMEOUT: Duration = Duration::from_millis(2_000);
+const BRIDGE_LOG_FILE_NAME: &str = "bridge.log";
+const BRIDGE_LOG_MAX_LINE_CHARS: usize = 32_000;
 
 #[derive(Clone, Default)]
 pub struct BridgeState {
@@ -73,6 +76,46 @@ fn bridge_status_locked(process: &mut Option<BridgeProcess>) -> BridgeStatus {
     BridgeStatus {
         running: false,
         pid: None,
+    }
+}
+
+fn bridge_log_path() -> PathBuf {
+    let base = env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
+        .unwrap_or_else(|| env::temp_dir());
+    base.join("vegvisir-desktop").join(BRIDGE_LOG_FILE_NAME)
+}
+
+fn append_bridge_log(line: impl AsRef<str>) {
+    let path = bridge_log_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let mut line = line.as_ref().replace('\n', "\\n");
+    if line.chars().count() > BRIDGE_LOG_MAX_LINE_CHARS {
+        let omitted = line
+            .chars()
+            .count()
+            .saturating_sub(BRIDGE_LOG_MAX_LINE_CHARS);
+        line = format!(
+            "{} … truncated {omitted} chars",
+            line.chars()
+                .take(BRIDGE_LOG_MAX_LINE_CHARS)
+                .collect::<String>()
+        );
+    }
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let timestamp = chrono_like_timestamp();
+        let _ = writeln!(file, "[{timestamp}] {line}");
+    }
+}
+
+fn chrono_like_timestamp() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => format!("{}.{:03}", duration.as_secs(), duration.subsec_millis()),
+        Err(_) => "unknown-time".to_string(),
     }
 }
 
@@ -207,10 +250,15 @@ fn spawn_bridge_process(
         .stderr(Stdio::piped());
 
     let mut child = command.spawn().map_err(|error| {
-        format!(
+        let message = format!(
             "failed to spawn Vegvisir bridge using '{}': {error}",
             binary.display()
-        )
+        );
+        append_bridge_log(format!(
+            "desktop.bridge.spawn_failed workspace={} {message}",
+            workspace.display()
+        ));
+        message
     })?;
     let stdin = child
         .stdin
@@ -234,6 +282,13 @@ fn spawn_bridge_process(
             "workspace": workspace.display().to_string()
         }
     });
+    append_bridge_log(format!(
+        "desktop.bridge.spawned pid={} binary={} workspace={} log={}",
+        child.id(),
+        binary.display(),
+        workspace.display(),
+        bridge_log_path().display()
+    ));
     let _ = sender.send(start_event.to_string());
 
     let out_sender = sender.clone();
@@ -247,6 +302,7 @@ fn spawn_bridge_process(
     thread::spawn(move || {
         let reader = BufReader::new(stderr);
         for line in reader.lines().map_while(Result::ok) {
+            append_bridge_log(format!("bridge.stderr {line}"));
             let event = json!({
                 "type": "bridge.stderr",
                 "id": null,
@@ -343,17 +399,36 @@ pub async fn bridge_start(
 pub async fn bridge_send(request: Value, state: State<'_, BridgeState>) -> Result<(), String> {
     let process = state.process.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let request_id = request.get("id").cloned().unwrap_or(Value::Null);
+        let request_method = request
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
         let mut guard = process.lock().map_err(|error| error.to_string())?;
-        let process = guard
-            .as_mut()
-            .ok_or_else(|| "bridge is not running".to_string())?;
+        let process = guard.as_mut().ok_or_else(|| {
+            let message = "bridge is not running".to_string();
+            append_bridge_log(format!(
+                "desktop.bridge_send.failed method={request_method} id={request_id} error={message}"
+            ));
+            message
+        })?;
         let mut line = serde_json::to_string(&request).map_err(|error| error.to_string())?;
         line.push('\n');
-        process
-            .stdin
-            .write_all(line.as_bytes())
-            .map_err(|error| error.to_string())?;
-        process.stdin.flush().map_err(|error| error.to_string())?;
+        if let Err(error) = process.stdin.write_all(line.as_bytes()) {
+            let message = error.to_string();
+            append_bridge_log(format!(
+                "desktop.bridge_send.failed method={request_method} id={request_id} error={message}"
+            ));
+            return Err(message);
+        }
+        if let Err(error) = process.stdin.flush() {
+            let message = error.to_string();
+            append_bridge_log(format!(
+                "desktop.bridge_send.failed method={request_method} id={request_id} error={message}"
+            ));
+            return Err(message);
+        }
         Ok(())
     })
     .await
@@ -379,6 +454,7 @@ pub async fn bridge_poll(state: State<'_, BridgeState>) -> Result<Vec<String>, S
 
         match process.child.try_wait() {
             Ok(Some(status)) => {
+                append_bridge_log(format!("desktop.bridge.exited status={status}"));
                 events.push(
                     json!({
                         "type": "desktop.bridge.exited",
@@ -391,6 +467,7 @@ pub async fn bridge_poll(state: State<'_, BridgeState>) -> Result<Vec<String>, S
             }
             Ok(None) => {}
             Err(error) => {
+                append_bridge_log(format!("desktop.bridge.error {error}"));
                 events.push(
                     json!({
                         "type": "desktop.bridge.error",
@@ -422,7 +499,15 @@ pub async fn bridge_stop(state: State<'_, BridgeState>) -> Result<BridgeStopResu
                 status: None,
             });
         };
-        Ok(stop_process(process, DEFAULT_GRACEFUL_STOP_TIMEOUT))
+        let result = stop_process(process, DEFAULT_GRACEFUL_STOP_TIMEOUT);
+        append_bridge_log(format!(
+            "desktop.bridge.stopped was_running={} graceful={} killed={} status={}",
+            result.was_running,
+            result.graceful,
+            result.killed,
+            result.status.as_deref().unwrap_or("none")
+        ));
+        Ok(result)
     })
     .await
     .map_err(|error| error.to_string())?

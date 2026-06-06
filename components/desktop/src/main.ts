@@ -1,10 +1,18 @@
 import { invoke } from '@tauri-apps/api/core';
 import './styles.css';
-import { APPROVAL_REFRESH_THROTTLE_MS, CHAT_RENDER_MESSAGE_LIMIT, CHAT_SCROLL_STICKY_THRESHOLD_PX, EXPLORER_INITIAL_VISIBLE_ENTRIES, EXPLORER_VISIBLE_INCREMENT, GLOBAL_LAYOUT_STORAGE_KEY, LAYOUT_SCHEMA_VERSION, SETTINGS_SCHEMA_VERSION, WORK_RENDER_EVENT_LIMIT } from './config';
+import { APPROVAL_REFRESH_THROTTLE_MS, CHAT_DRAFT_STORAGE_KEY, CHAT_FAILED_OUTBOX_LIMIT, CHAT_FAILED_OUTBOX_STORAGE_KEY, CHAT_RENDER_MESSAGE_LIMIT, CHAT_SCROLL_STICKY_THRESHOLD_PX, DESKTOP_ERROR_VISIBLE_CHARS, DESKTOP_ERROR_WORK_CHARS, EXPLORER_INITIAL_VISIBLE_ENTRIES, EXPLORER_VISIBLE_INCREMENT, GLOBAL_LAYOUT_STORAGE_KEY, LAYOUT_SCHEMA_VERSION, SETTINGS_SCHEMA_VERSION, WORK_RENDER_EVENT_LIMIT } from './config';
 import { cssEscape, escapeHtml } from './html';
 import { renderMessage } from './markdown';
 import { panelDefinition, panels } from './panels';
 import type { ApprovalFeedback, BridgeEvent, BridgeMethodDraft, BridgeRequest, BridgeStatus, BridgeStopResult, CanvasInteraction, CanvasLayoutState, CanvasLayoutTab, CanvasModuleInstance, CanvasScrollSnapshot, ChatScrollSnapshot, FileExplorerEntry, FileExplorerListing, FileExplorerState, Message, PanelId, StartBridgeRequest } from './types';
+
+type FailedChatDraft = {
+  id: string;
+  content: string;
+  kind: 'chat' | 'command';
+  error: string;
+  createdAt: number;
+};
 
 const appElement = document.querySelector<HTMLDivElement>('#app');
 if (!appElement) throw new Error('missing #app root');
@@ -217,6 +225,9 @@ const state = {
   layout: defaultLayoutState() as CanvasLayoutState,
   busy: false,
   error: '',
+  errorDetails: '',
+  chatDraft: loadChatDraft(),
+  failedOutbox: loadFailedOutbox() as FailedChatDraft[],
   settings: loadSettings(),
 };
 
@@ -291,6 +302,124 @@ function saveSettings(): void {
   localStorage.setItem('vegvisir.desktop.settings', JSON.stringify(state.settings));
 }
 
+function loadChatDraft(): string {
+  try {
+    return localStorage.getItem(CHAT_DRAFT_STORAGE_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function saveChatDraft(value: string): void {
+  state.chatDraft = value;
+  try {
+    if (value) localStorage.setItem(CHAT_DRAFT_STORAGE_KEY, value);
+    else localStorage.removeItem(CHAT_DRAFT_STORAGE_KEY);
+  } catch {
+    // Draft recovery is best-effort; never block chat input on storage failures.
+  }
+}
+
+function loadFailedOutbox(): FailedChatDraft[] {
+  try {
+    const raw = localStorage.getItem(CHAT_FAILED_OUTBOX_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => ({
+        id: String(item?.id ?? uniqueId('failed-turn')),
+        content: String(item?.content ?? ''),
+        kind: (item?.kind === 'command' ? 'command' : 'chat') as FailedChatDraft['kind'],
+        error: String(item?.error ?? ''),
+        createdAt: Number(item?.createdAt ?? Date.now()),
+      }))
+      .filter((item) => item.content.trim())
+      .slice(0, CHAT_FAILED_OUTBOX_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+function saveFailedOutbox(): void {
+  try {
+    localStorage.setItem(CHAT_FAILED_OUTBOX_STORAGE_KEY, JSON.stringify(state.failedOutbox.slice(0, CHAT_FAILED_OUTBOX_LIMIT)));
+  } catch {
+    // Failed-turn recovery is best-effort.
+  }
+}
+
+function rememberFailedTurn(content: string, kind: 'chat' | 'command', error: unknown): void {
+  const trimmed = content.trim();
+  if (!trimmed) return;
+  state.failedOutbox = [
+    {
+      id: uniqueId('failed-turn'),
+      content: trimmed,
+      kind,
+      error: compactErrorText(error, DESKTOP_ERROR_VISIBLE_CHARS),
+      createdAt: Date.now(),
+    },
+    ...state.failedOutbox.filter((item) => item.content !== trimmed),
+  ].slice(0, CHAT_FAILED_OUTBOX_LIMIT);
+  saveFailedOutbox();
+}
+
+function restoreFailedTurn(id: string): void {
+  const item = state.failedOutbox.find((entry) => entry.id === id);
+  if (!item) return;
+  saveChatDraft(item.content);
+  state.failedOutbox = state.failedOutbox.filter((entry) => entry.id !== id);
+  saveFailedOutbox();
+  state.activePanel = 'chat';
+  render();
+  requestAnimationFrame(() => {
+    const input = document.querySelector<HTMLTextAreaElement>('#turn-input');
+    if (!input) return;
+    input.value = item.content;
+    input.focus();
+  });
+}
+
+function dismissFailedTurn(id: string): void {
+  state.failedOutbox = state.failedOutbox.filter((entry) => entry.id !== id);
+  saveFailedOutbox();
+  render();
+}
+
+function compactErrorText(error: unknown, limit = DESKTOP_ERROR_VISIBLE_CHARS): string {
+  const raw = typeof error === 'string' ? error : String(error ?? 'Unknown error');
+  if (raw.length <= limit) return raw;
+  const omitted = raw.length - limit;
+  return `${raw.slice(0, limit)}\n\n… truncated ${omitted.toLocaleString()} characters. Full bridge stderr/errors are written to the Desktop bridge log when available.`;
+}
+
+function setError(error: unknown, fallback = 'Bridge problem'): void {
+  const raw = typeof error === 'string' && error.trim() ? error : String(error ?? fallback);
+  state.errorDetails = raw;
+  state.error = compactErrorText(raw);
+  if (raw.length > DESKTOP_ERROR_VISIBLE_CHARS) {
+    recordDesktopPerf('error_truncated', { rawChars: raw.length, visibleChars: state.error.length });
+  }
+}
+
+function clearError(): void {
+  clearError();
+  state.errorDetails = '';
+}
+
+function bridgeEventDisplayPayload(event: BridgeEvent): unknown {
+  const payload = event.payload;
+  if (payload === undefined || payload === null) return payload ?? {};
+  const text = JSON.stringify(payload, null, 2);
+  if (text.length <= DESKTOP_ERROR_WORK_CHARS) return payload;
+  return {
+    summary: compactErrorText(text, DESKTOP_ERROR_WORK_CHARS),
+    truncated: true,
+    rawChars: text.length,
+  };
+}
+
 function runtimeDangerousBypassEnabled(): boolean {
   return Boolean(
     state.runtimeStatus?.dangerously_bypass_approvals_and_sandbox
@@ -341,7 +470,7 @@ async function send(method: string, params: Record<string, unknown> = {}, prefix
 }
 
 async function startBridge(): Promise<void> {
-  state.error = '';
+  clearError();
   saveSettings();
   try {
     const status = await invoke<BridgeStatus>('bridge_start', { request: compactSettings() });
@@ -349,14 +478,14 @@ async function startBridge(): Promise<void> {
   } catch (error) {
     state.bridgeRunning = false;
     state.bridgePid = null;
-    state.error = String(error);
+    setError(error);
     state.activePanel = 'settings';
     render();
   }
 }
 
 async function restartBridge(): Promise<void> {
-  state.error = '';
+  clearError();
   state.bridgeStopping = true;
   saveSettings();
   render();
@@ -375,7 +504,7 @@ async function restartBridge(): Promise<void> {
     state.bridgeStopping = false;
     state.bridgeRunning = false;
     state.bridgePid = null;
-    state.error = String(error);
+    setError(error);
     state.activePanel = 'settings';
     render();
   }
@@ -408,7 +537,7 @@ async function stopBridge(): Promise<void> {
     state.lastStopResult = result;
     state.events.push({ type: 'desktop.bridge.stopped', payload: result });
   } catch (error) {
-    state.error = String(error);
+    setError(error);
   }
   state.bridgeStopping = false;
   state.bridgeRunning = false;
@@ -431,7 +560,7 @@ async function refreshStatus(): Promise<void> {
   } catch (error) {
     state.bridgeRunning = false;
     state.bridgePid = null;
-    state.error = String(error);
+    setError(error);
   }
 }
 
@@ -471,7 +600,7 @@ async function pollBridge(): Promise<void> {
     }
     if (shouldRender && !canvasInteraction) requestRender();
   } catch (error) {
-    state.error = String(error);
+    setError(error);
     requestRender();
   }
 }
@@ -500,13 +629,13 @@ function handleEvent(event: BridgeEvent): boolean {
       state.bridgeRunning = false;
       state.bridgePid = null;
       state.busy = false;
-      state.error = `Bridge exited: ${event.payload?.status ?? 'unknown status'}`;
+      setError(`Bridge exited: ${event.payload?.status ?? 'unknown status'}`);
       break;
     case 'desktop.bridge.error':
       state.bridgeRunning = false;
       state.bridgePid = null;
       state.busy = false;
-      state.error = event.payload?.message ?? 'bridge error';
+      setError(event.payload?.message ?? 'bridge error');
       break;
     case 'server.ready':
     case 'session.status':
@@ -525,7 +654,7 @@ function handleEvent(event: BridgeEvent): boolean {
       state.session = event.payload?.session ?? state.session;
       state.busy = false;
       state.pendingAssistant = '';
-      state.error = '';
+      clearError();
       state.activePanel = 'chat';
       state.messages.push({ role: 'system', content: event.payload?.output ?? 'Session loaded.' });
       void refreshCurrentSessionContext();
@@ -549,14 +678,14 @@ function handleEvent(event: BridgeEvent): boolean {
     case 'turn.failed':
       state.busy = false;
       if (hasPendingApprovals(event)) {
-        state.error = '';
+        clearError();
       } else {
-        state.error = eventMessage(event, 'turn failed');
+        setError(eventMessage(event, 'turn failed'));
       }
       break;
     case 'approval.required':
       state.busy = false;
-      state.error = '';
+      clearError();
       setApprovalsFromBridge(event.payload?.approvals ?? state.approvals);
       state.session = event.payload?.session ?? state.session;
       if (state.approvals.length) {
@@ -651,7 +780,7 @@ function handleEvent(event: BridgeEvent): boolean {
       break;
     case 'bridge.response.error':
     case 'error':
-      state.error = eventMessage(event, JSON.stringify(event.payload));
+      setError(eventMessage(event, JSON.stringify(event.payload)));
       break;
   }
   return needsRender;
@@ -683,10 +812,11 @@ function normalizeMessages(value: any[]): Message[] {
 
 async function sendTurn(): Promise<void> {
   const input = document.querySelector<HTMLTextAreaElement>('#turn-input');
-  const content = input?.value.trim() ?? '';
+  const content = input?.value.trim() ?? state.chatDraft.trim();
   if (!content || !canSendChatTurn()) return;
-  input!.value = '';
-  state.error = '';
+  if (input) input.value = '';
+  saveChatDraft('');
+  clearError();
   if (content.startsWith('/')) {
     state.messages.push({ role: 'command', content });
     const turnStartedAt = performance.now();
@@ -696,7 +826,10 @@ async function sendTurn(): Promise<void> {
       await sendPromise;
       recordDesktopPerf('command_send_queued', { elapsedMs: Math.round(performance.now() - turnStartedAt) });
     } catch (error) {
-      state.error = String(error);
+      rememberFailedTurn(content, 'command', error);
+      saveChatDraft(content);
+      if (input) input.value = content;
+      setError(error);
       requestRender();
     }
     return;
@@ -713,7 +846,10 @@ async function sendTurn(): Promise<void> {
     recordDesktopPerf('chat_send_queued', { elapsedMs: Math.round(performance.now() - turnStartedAt) });
   } catch (error) {
     state.busy = false;
-    state.error = String(error);
+    rememberFailedTurn(content, 'chat', error);
+    saveChatDraft(content);
+    if (input) input.value = content;
+    setError(error);
     requestRender();
   }
 }
@@ -736,7 +872,7 @@ async function refreshCurrentSessionContext(): Promise<void> {
 async function loadSession(id: string): Promise<void> {
   const sessionId = id.trim();
   if (!sessionId || !state.bridgeRunning || state.busy) return;
-  state.error = '';
+  clearError();
   state.busy = true;
   state.pendingAssistant = '';
   render();
@@ -744,7 +880,7 @@ async function loadSession(id: string): Promise<void> {
     await send('session.load', { id: sessionId }, 'session-load');
   } catch (error) {
     state.busy = false;
-    state.error = String(error);
+    setError(error);
     requestRender();
   }
 }
@@ -758,7 +894,7 @@ function setPanel(panel: string): void {
 
 async function approve(id: string, method: string): Promise<void> {
   if (!id.trim() || !state.bridgeRunning) return;
-  state.error = '';
+  clearError();
   const previousApprovals = state.approvals;
   const approval = state.approvals.find((item) => String(item?.id ?? '') === id);
   const feedback: ApprovalFeedback = {
@@ -785,7 +921,7 @@ async function approve(id: string, method: string): Promise<void> {
     };
     state.approvalActions[id] = failed;
     state.approvalFeedback = failed;
-    state.error = failed.message;
+    setError(failed.message);
     render();
   }
 }
@@ -839,7 +975,7 @@ function handleApprovalExecuted(payload: any): void {
   };
   setApprovalsFromBridge(payload?.approvals ?? []);
   state.session = payload?.session ?? state.session;
-  state.error = error ?? '';
+  if (error) setError(error); else clearError();
   state.approvalActions[id] = feedback;
   state.approvalFeedback = feedback;
   state.messages.push({
@@ -1185,7 +1321,8 @@ function renderFooterRail(): string {
 }
 
 function renderError(): string {
-  return `<div class="mx-auto mt-3 max-w-5xl rounded-xl border border-vv-red/45 bg-vv-red/10 p-3 text-red-100 shadow-danger"><div class="flex flex-wrap items-center justify-between gap-2"><strong>Bridge problem</strong><button class="vv-action vv-action-danger" id="restart-bridge-from-error">Restart bridge</button></div><pre class="vv-code mt-2 whitespace-pre-wrap">${escapeHtml(state.error)}</pre></div>`;
+  const truncated = state.errorDetails && state.errorDetails.length > state.error.length;
+  return `<div class="mx-auto mt-3 max-w-5xl rounded-xl border border-vv-red/45 bg-vv-red/10 p-3 text-red-100 shadow-danger"><div class="flex flex-wrap items-center justify-between gap-2"><strong>Bridge problem</strong><div class="flex flex-wrap gap-2"><button class="vv-action" id="dismiss-error">Dismiss</button><button class="vv-action vv-action-danger" id="restart-bridge-from-error">Restart bridge</button></div></div><pre class="vv-code vv-scrollbar mt-2 max-h-64 overflow-auto whitespace-pre-wrap">${escapeHtml(state.error)}</pre>${truncated ? '<p class="mt-2 text-xs text-red-100/75">Error output was truncated to keep Desktop responsive. Check the persistent bridge log for full stderr/error text.</p>' : ''}</div>`;
 }
 
 function modelWorkingLabel(): string {
@@ -1294,6 +1431,7 @@ function renderLayoutTabs(): string {
           <button class="vv-action" id="layout-reset-tab">Reset tab</button>
         </div>
       </div>
+      ${renderFailedOutboxRecovery()}
       <div class="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-vv-muted">
         <span>${escapeHtml(layout.name)} · ${layout.modules.length} modules · drag, resize, add, and remove enabled</span>
         <label class="flex items-center gap-2"><input id="layout-snap" type="checkbox" ${state.layout.snapToGrid ? 'checked' : ''} /> snap ${state.layout.gridSize}px grid</label>
@@ -1456,7 +1594,7 @@ function renderComposer(): string {
   return `
     <div class="mx-auto w-full max-w-4xl">
       <div class="rounded-[1.15rem] border border-vv-line2 bg-vv-panel/90 p-2.5 shadow-[0_18px_56px_rgba(0,0,0,0.30)]">
-        <textarea id="turn-input" class="vv-focus vv-scrollbar h-16 max-h-16 min-h-16 w-full resize-none rounded-xl border border-transparent bg-transparent px-2.5 py-1.5 text-[0.92rem] leading-6 text-vv-text placeholder:text-vv-dim" placeholder="${escapeHtml(placeholder)}" ${state.bridgeRunning && !approvalPaused ? '' : 'disabled'}></textarea>
+        <textarea id="turn-input" class="vv-focus vv-scrollbar h-16 max-h-16 min-h-16 w-full resize-none rounded-xl border border-transparent bg-transparent px-2.5 py-1.5 text-[0.92rem] leading-6 text-vv-text placeholder:text-vv-dim" placeholder="${escapeHtml(placeholder)}" ${state.bridgeRunning && !approvalPaused ? '' : 'disabled'}>${escapeHtml(state.chatDraft)}</textarea>
         <div class="mt-1.5 flex items-center justify-between gap-2 border-t border-vv-line pt-2">
           <div class="flex min-w-0 items-center gap-1.5 overflow-hidden text-xs text-vv-muted">
             <span class="vv-pill">${escapeHtml(state.settings.model || 'model default')}</span>
@@ -1473,6 +1611,29 @@ function renderComposer(): string {
       </div>
     </div>
   `;
+}
+
+
+function renderFailedOutboxRecovery(): string {
+  if (!state.failedOutbox.length) return '';
+  return `
+    <div class="mt-2 rounded-xl border border-vv-amber/45 bg-vv-amber/10 p-2 text-xs text-amber-100">
+      <div class="mb-2 font-black">Recovered unsent Desktop message${state.failedOutbox.length === 1 ? '' : 's'}</div>
+      <div class="space-y-2">
+        ${state.failedOutbox.map((item) => `
+          <div class="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-vv-amber/25 bg-black/16 p-2">
+            <div class="min-w-0 flex-1">
+              <div class="truncate font-mono text-[0.68rem] text-amber-100/80">${escapeHtml(item.kind)} · ${escapeHtml(formatTimestamp(new Date(item.createdAt).toISOString()))}</div>
+              <div class="mt-1 line-clamp-2 break-words text-vv-text">${escapeHtml(item.content)}</div>
+              <div class="mt-1 truncate text-vv-muted">${escapeHtml(item.error)}</div>
+            </div>
+            <div class="flex shrink-0 gap-1">
+              <button class="vv-action px-2 py-1 text-[0.65rem]" data-failed-turn-restore="${escapeHtml(item.id)}">Restore</button>
+              <button class="vv-action px-2 py-1 text-[0.65rem]" data-failed-turn-dismiss="${escapeHtml(item.id)}">Dismiss</button>
+            </div>
+          </div>`).join('')}
+      </div>
+    </div>`;
 }
 
 function renderSessions(): string {
@@ -1538,7 +1699,7 @@ function renderWork(): string {
   return `<div class="space-y-3">${prefix}${visibleEvents.map((event) => `
     <article class="vv-soft-panel p-3 opacity-80">
       <div class="mb-2 flex items-center gap-2 font-mono text-[0.68rem] uppercase tracking-[0.2em] text-vv-muted"><span class="h-2 w-2 rounded-full bg-vv-cyan"></span>${escapeHtml(event.type)}</div>
-      <pre class="vv-code whitespace-pre-wrap break-words rounded-xl bg-black/18 p-3">${escapeHtml(JSON.stringify(event.payload ?? {}, null, 2))}</pre>
+      <pre class="vv-code whitespace-pre-wrap break-words rounded-xl bg-black/18 p-3">${escapeHtml(JSON.stringify(bridgeEventDisplayPayload(event), null, 2))}</pre>
     </article>
   `).join('') || '<p class="text-vv-muted">No bridge events yet.</p>'}</div>`;
 }
@@ -2429,6 +2590,28 @@ function handleDelegatedClick(event: MouseEvent): void {
     return;
   }
 
+
+  if (target.closest('#dismiss-error')) {
+    event.preventDefault();
+    clearError();
+    render();
+    return;
+  }
+
+  const restoreFailedTurnButton = target.closest<HTMLElement>('[data-failed-turn-restore]');
+  if (restoreFailedTurnButton) {
+    event.preventDefault();
+    restoreFailedTurn(restoreFailedTurnButton.dataset.failedTurnRestore ?? '');
+    return;
+  }
+
+  const dismissFailedTurnButton = target.closest<HTMLElement>('[data-failed-turn-dismiss]');
+  if (dismissFailedTurnButton) {
+    event.preventDefault();
+    dismissFailedTurn(dismissFailedTurnButton.dataset.failedTurnDismiss ?? '');
+    return;
+  }
+
   if (target.closest('#refresh-all')) {
     event.preventDefault();
     void refreshEverything();
@@ -2653,6 +2836,11 @@ function handleDelegatedClick(event: MouseEvent): void {
 function handleDelegatedInput(event: Event): void {
   const target = event.target as HTMLElement | null;
   if (!target) return;
+  if (target.matches('#turn-input')) {
+    saveChatDraft((target as HTMLTextAreaElement).value);
+    return;
+  }
+
   if (target.matches('[data-bridge-param]')) updateBridgeDraftFromForm(event);
 }
 
