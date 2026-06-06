@@ -59,29 +59,245 @@ type BridgeMethodDraft = {
 
 type PanelId = 'chat' | 'sessions' | 'work' | 'approvals' | 'tools' | 'providers' | 'capabilities' | 'commands' | 'runtime' | 'openai' | 'diff' | 'memory' | 'skills' | 'integrations' | 'evidence' | 'system' | 'settings';
 
+type CanvasPanelId = PanelId;
+
+type PanelDefinition = {
+  id: PanelId;
+  label: string;
+  icon: string;
+  hint: string;
+  defaultWidth: number;
+  defaultHeight: number;
+  minWidth: number;
+  minHeight: number;
+};
+
+type CanvasModuleInstance = {
+  id: string;
+  panelId: CanvasPanelId;
+  title: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  collapsed: boolean;
+  locked: boolean;
+  z: number;
+};
+
+type CanvasLayoutTab = {
+  id: string;
+  name: string;
+  modules: CanvasModuleInstance[];
+};
+
+type CanvasLayoutState = {
+  schemaVersion: 1;
+  activeTabId: string;
+  tabs: CanvasLayoutTab[];
+  editMode: boolean;
+  gridSize: number;
+  snapToGrid: boolean;
+};
+
+type CanvasInteraction = {
+  mode: 'move' | 'resize';
+  id: string;
+  startClientX: number;
+  startClientY: number;
+  startX: number;
+  startY: number;
+  startWidth: number;
+  startHeight: number;
+};
+
 const appElement = document.querySelector<HTMLDivElement>('#app');
 if (!appElement) throw new Error('missing #app root');
 const app = appElement;
 
-const panels: Array<{ id: PanelId; label: string; icon: string; hint: string }> = [
-  { id: 'chat', label: 'Chat', icon: '✦', hint: 'Active agent transcript' },
-  { id: 'sessions', label: 'Sessions', icon: '▤', hint: 'Load saved work' },
-  { id: 'work', label: 'Work log', icon: '◌', hint: 'Bridge and tool events' },
-  { id: 'approvals', label: 'Approvals', icon: '◇', hint: 'Risk gates' },
-  { id: 'tools', label: 'Tools', icon: '⌘', hint: 'Harness capabilities' },
-  { id: 'providers', label: 'Providers', icon: '⬡', hint: 'Models and agents' },
-  { id: 'capabilities', label: 'Capabilities', icon: '◬', hint: 'Bridge parity map' },
-  { id: 'commands', label: 'Commands', icon: '⌁', hint: 'Full slash surface' },
-  { id: 'runtime', label: 'Runtime', icon: '◍', hint: 'Policy and limits' },
-  { id: 'openai', label: 'OpenAI bridge', icon: '◒', hint: 'Compat endpoint' },
-  { id: 'diff', label: 'Diff', icon: '±', hint: 'Workspace changes' },
-  { id: 'memory', label: 'Memory', icon: '◎', hint: 'CMS/ECM state' },
-  { id: 'skills', label: 'Skills', icon: '✧', hint: 'Skiller/LSL workflows' },
-  { id: 'integrations', label: 'Integrations', icon: '⌬', hint: 'MCP, HBSE, subagents' },
-  { id: 'evidence', label: 'Evidence', icon: '◫', hint: 'Runs, trace, verify' },
-  { id: 'system', label: 'System', icon: '◈', hint: 'Prompt and policy' },
-  { id: 'settings', label: 'Settings', icon: '⚙', hint: 'Bridge launch config' },
+const panels: PanelDefinition[] = [
+  { id: 'chat', label: 'Chat', icon: '✦', hint: 'Active agent transcript', defaultWidth: 760, defaultHeight: 620, minWidth: 340, minHeight: 260 },
+  { id: 'sessions', label: 'Sessions', icon: '▤', hint: 'Load saved work', defaultWidth: 520, defaultHeight: 420, minWidth: 320, minHeight: 240 },
+  { id: 'work', label: 'Work log', icon: '◌', hint: 'Bridge and tool events', defaultWidth: 520, defaultHeight: 420, minWidth: 320, minHeight: 220 },
+  { id: 'approvals', label: 'Approvals', icon: '◇', hint: 'Risk gates', defaultWidth: 520, defaultHeight: 300, minWidth: 320, minHeight: 180 },
+  { id: 'tools', label: 'Tools', icon: '⌘', hint: 'Harness capabilities', defaultWidth: 520, defaultHeight: 420, minWidth: 320, minHeight: 220 },
+  { id: 'providers', label: 'Providers', icon: '⬡', hint: 'Models and agents', defaultWidth: 620, defaultHeight: 500, minWidth: 360, minHeight: 260 },
+  { id: 'capabilities', label: 'Capabilities', icon: '◬', hint: 'Bridge parity map', defaultWidth: 620, defaultHeight: 500, minWidth: 360, minHeight: 260 },
+  { id: 'commands', label: 'Commands', icon: '⌁', hint: 'Full slash surface', defaultWidth: 620, defaultHeight: 500, minWidth: 360, minHeight: 260 },
+  { id: 'runtime', label: 'Runtime', icon: '◍', hint: 'Policy and limits', defaultWidth: 520, defaultHeight: 360, minWidth: 320, minHeight: 220 },
+  { id: 'openai', label: 'OpenAI bridge', icon: '◒', hint: 'Compat endpoint', defaultWidth: 520, defaultHeight: 360, minWidth: 320, minHeight: 220 },
+  { id: 'diff', label: 'Diff', icon: '±', hint: 'Workspace changes', defaultWidth: 760, defaultHeight: 520, minWidth: 360, minHeight: 260 },
+  { id: 'memory', label: 'Memory', icon: '◎', hint: 'CMS/ECM state', defaultWidth: 620, defaultHeight: 500, minWidth: 360, minHeight: 260 },
+  { id: 'skills', label: 'Skills', icon: '✧', hint: 'Skiller/LSL workflows', defaultWidth: 620, defaultHeight: 500, minWidth: 360, minHeight: 260 },
+  { id: 'integrations', label: 'Integrations', icon: '⌬', hint: 'MCP, HBSE, subagents', defaultWidth: 620, defaultHeight: 500, minWidth: 360, minHeight: 260 },
+  { id: 'evidence', label: 'Evidence', icon: '◫', hint: 'Runs, trace, verify', defaultWidth: 620, defaultHeight: 500, minWidth: 360, minHeight: 260 },
+  { id: 'system', label: 'System', icon: '◈', hint: 'Prompt and policy', defaultWidth: 620, defaultHeight: 500, minWidth: 360, minHeight: 260 },
+  { id: 'settings', label: 'Settings', icon: '⚙', hint: 'Bridge launch config', defaultWidth: 620, defaultHeight: 460, minWidth: 360, minHeight: 260 },
 ];
+
+const LAYOUT_SCHEMA_VERSION = 1;
+const GLOBAL_LAYOUT_STORAGE_KEY = 'vegvisir.desktop.layouts.global';
+let loadedLayoutStorageKey = '';
+let canvasInteraction: CanvasInteraction | null = null;
+
+function panelDefinition(panelId: PanelId): PanelDefinition {
+  return panels.find((panel) => panel.id === panelId) ?? panels[0];
+}
+
+function defaultLayoutState(): CanvasLayoutState {
+  return {
+    schemaVersion: LAYOUT_SCHEMA_VERSION,
+    activeTabId: 'operations',
+    editMode: false,
+    gridSize: 24,
+    snapToGrid: true,
+    tabs: [
+      createLayoutTabFromPanels('operations', 'Operations', ['chat', 'work', 'approvals', 'runtime']),
+      createLayoutTabFromPanels('provider-control', 'Provider Control', ['providers', 'commands', 'capabilities', 'settings']),
+      createLayoutTabFromPanels('review', 'Review', ['diff', 'evidence', 'work', 'sessions']),
+      createLayoutTabFromPanels('memory-skills', 'Memory and Skills', ['memory', 'skills', 'system', 'chat']),
+      createLayoutTabFromPanels('integrations', 'Integrations', ['integrations', 'tools', 'openai', 'capabilities']),
+    ],
+  };
+}
+
+function createLayoutTabFromPanels(id: string, name: string, panelIds: PanelId[]): CanvasLayoutTab {
+  const positions = [
+    { x: 32, y: 32 },
+    { x: 824, y: 32 },
+    { x: 32, y: 688 },
+    { x: 584, y: 688 },
+  ];
+  return {
+    id,
+    name,
+    modules: panelIds.map((panelId, index) => {
+      const panel = panelDefinition(panelId);
+      const position = positions[index] ?? { x: 32 + index * 48, y: 32 + index * 48 };
+      return {
+        id: `${id}-${panelId}-${index}`,
+        panelId,
+        title: panel.label,
+        x: position.x,
+        y: position.y,
+        width: panel.defaultWidth,
+        height: panel.defaultHeight,
+        collapsed: false,
+        locked: false,
+        z: index + 1,
+      };
+    }),
+  };
+}
+
+function workspaceLayoutStorageKey(): string {
+  const workspace = String(state?.session?.workspace ?? state?.settings?.workspace ?? '').trim();
+  if (!workspace) return GLOBAL_LAYOUT_STORAGE_KEY;
+  const safe = workspace.replace(/[^a-z0-9._-]+/gi, '_').replace(/^_+|_+$/g, '').slice(0, 120);
+  return safe ? `vegvisir.desktop.layouts.${safe}` : GLOBAL_LAYOUT_STORAGE_KEY;
+}
+
+function loadLayouts(): CanvasLayoutState {
+  const key = workspaceLayoutStorageKey();
+  loadedLayoutStorageKey = key;
+  const raw = localStorage.getItem(key) ?? localStorage.getItem(GLOBAL_LAYOUT_STORAGE_KEY);
+  if (!raw) return defaultLayoutState();
+  try {
+    return normalizeLayoutState(JSON.parse(raw));
+  } catch {
+    return defaultLayoutState();
+  }
+}
+
+function normalizeLayoutState(value: Partial<CanvasLayoutState>): CanvasLayoutState {
+  const defaults = defaultLayoutState();
+  const tabs = Array.isArray(value.tabs)
+    ? value.tabs.map(normalizeLayoutTab).filter((tab) => tab.modules.length || tab.name.trim())
+    : defaults.tabs;
+  const activeTabId = typeof value.activeTabId === 'string' && tabs.some((tab) => tab.id === value.activeTabId)
+    ? value.activeTabId
+    : (tabs[0]?.id ?? defaults.activeTabId);
+  return {
+    schemaVersion: LAYOUT_SCHEMA_VERSION,
+    activeTabId,
+    tabs: tabs.length ? tabs : defaults.tabs,
+    editMode: Boolean(value.editMode),
+    gridSize: typeof value.gridSize === 'number' && Number.isFinite(value.gridSize) && value.gridSize >= 4 ? value.gridSize : defaults.gridSize,
+    snapToGrid: typeof value.snapToGrid === 'boolean' ? value.snapToGrid : defaults.snapToGrid,
+  };
+}
+
+function normalizeLayoutTab(tab: Partial<CanvasLayoutTab>): CanvasLayoutTab {
+  const id = typeof tab.id === 'string' && tab.id.trim() ? tab.id : uniqueId('layout');
+  const modules = Array.isArray(tab.modules) ? tab.modules.map(normalizeModuleInstance).filter(Boolean) as CanvasModuleInstance[] : [];
+  return {
+    id,
+    name: typeof tab.name === 'string' && tab.name.trim() ? tab.name : 'Layout',
+    modules,
+  };
+}
+
+function normalizeModuleInstance(module: Partial<CanvasModuleInstance>): CanvasModuleInstance | null {
+  if (!isPanelId(module.panelId)) return null;
+  const panel = panelDefinition(module.panelId);
+  return {
+    id: typeof module.id === 'string' && module.id.trim() ? module.id : uniqueId(`module-${module.panelId}`),
+    panelId: module.panelId,
+    title: typeof module.title === 'string' && module.title.trim() ? module.title : panel.label,
+    x: finiteNumber(module.x, 32),
+    y: finiteNumber(module.y, 32),
+    width: Math.max(panel.minWidth, finiteNumber(module.width, panel.defaultWidth)),
+    height: Math.max(panel.minHeight, finiteNumber(module.height, panel.defaultHeight)),
+    collapsed: Boolean(module.collapsed),
+    locked: Boolean(module.locked),
+    z: finiteNumber(module.z, 1),
+  };
+}
+
+function isPanelId(value: unknown): value is PanelId {
+  return typeof value === 'string' && panels.some((panel) => panel.id === value);
+}
+
+function finiteNumber(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function uniqueId(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+}
+
+function saveLayouts(): void {
+  const key = workspaceLayoutStorageKey();
+  loadedLayoutStorageKey = key;
+  localStorage.setItem(key, JSON.stringify(state.layout));
+  if (key === GLOBAL_LAYOUT_STORAGE_KEY) localStorage.setItem(GLOBAL_LAYOUT_STORAGE_KEY, JSON.stringify(state.layout));
+}
+
+function refreshLayoutStorageScope(): void {
+  const key = workspaceLayoutStorageKey();
+  if (loadedLayoutStorageKey && key === loadedLayoutStorageKey) return;
+  state.layout = loadLayouts();
+  canvasInteraction = null;
+}
+
+function currentLayout(): CanvasLayoutTab {
+  let layout = state.layout.tabs.find((tab) => tab.id === state.layout.activeTabId);
+  if (!layout) {
+    layout = state.layout.tabs[0] ?? createLayoutTabFromPanels('operations', 'Operations', ['chat', 'work', 'approvals', 'runtime']);
+    state.layout.tabs = [layout];
+    state.layout.activeTabId = layout.id;
+  }
+  return layout;
+}
+
+function maxModuleZ(layout = currentLayout()): number {
+  return layout.modules.reduce((max, module) => Math.max(max, module.z), 0);
+}
+
+function snap(value: number): number {
+  const gridSize = state.layout.gridSize || 24;
+  return state.layout.snapToGrid ? Math.round(value / gridSize) * gridSize : Math.round(value);
+}
 
 const state = {
   requestCounter: 0,
@@ -113,10 +329,13 @@ const state = {
   memory: '',
   systemPrompt: '',
   activePanel: 'chat' as PanelId,
+  layout: defaultLayoutState() as CanvasLayoutState,
   busy: false,
   error: '',
   settings: loadSettings(),
 };
+
+state.layout = loadLayouts();
 
 function emptyBridgeMethodDraft(): BridgeMethodDraft {
   return {
@@ -476,26 +695,10 @@ async function loadSession(id: string): Promise<void> {
 }
 
 function setPanel(panel: string): void {
-  state.activePanel = panel as PanelId;
-  if (panel === 'sessions') void send('session.list', {}, 'sessions');
-  if (panel === 'diff') void send('diff.current', {}, 'diff');
-  if (panel === 'memory') void send('memory.status', {}, 'memory');
-  if (panel === 'system') void send('system.prompt', {}, 'system');
-  if (panel === 'commands') void send('commands.list', {}, 'commands');
-  if (panel === 'capabilities') void send('bridge.capabilities', {}, 'capabilities');
-  if (panel === 'runtime') void send('runtime.status', {}, 'runtime');
-  if (panel === 'openai') void send('openai.compat.info', {}, 'openai');
-  if (panel === 'skills') void send('skills.status', {}, 'skills');
-  if (panel === 'integrations') {
-    void send('mcp.status', {}, 'mcp');
-    void send('hbse.status', {}, 'hbse');
-    void send('subagents.list', {}, 'subagents');
-  }
-  if (panel === 'evidence') {
-    void send('runs.list', {}, 'runs');
-    void send('trace.list', {}, 'trace');
-  }
-  render();
+  if (!isPanelId(panel)) return;
+  state.activePanel = panel;
+  refreshPanelData(panel);
+  addOrFocusModule(panel);
 }
 
 async function approve(id: string, method: string): Promise<void> {
@@ -524,6 +727,34 @@ async function callBridgeMethod(method: string, params: Record<string, unknown> 
   if (!method.trim() || !state.bridgeRunning) return;
   state.selectedBridgeMethod = method;
   await send(method, params, method);
+}
+
+function nativeMethodNames(): string[] {
+  const methods = state.capabilities?.native_methods;
+  return Array.isArray(methods) ? methods.map(String) : [];
+}
+
+function commandBackedMethodNames(): string[] {
+  const methods = state.capabilities?.command_backed_methods;
+  if (!Array.isArray(methods)) return [];
+  return methods.map((method: any) => typeof method === 'string' ? method : String(method?.method ?? '')).filter(Boolean);
+}
+
+function hasNativeMethod(method: string): boolean {
+  return nativeMethodNames().includes(method);
+}
+
+function hasCommandBackedMethod(method: string): boolean {
+  return commandBackedMethodNames().includes(method);
+}
+
+function hasBridgeMethod(method: string): boolean {
+  if (!state.capabilities) return true;
+  return hasNativeMethod(method) || hasCommandBackedMethod(method) || method === 'command.invoke';
+}
+
+function bridgeMethodDisabledAttr(method: string): string {
+  return hasBridgeMethod(method) ? '' : 'disabled title="Bridge capability not reported by app-server"';
 }
 
 async function callBridgeMethodFromWorkbench(method: string): Promise<void> {
@@ -558,6 +789,7 @@ async function setToolLimit(value: string): Promise<void> {
 }
 
 function render(): void {
+  refreshLayoutStorageScope();
   app.innerHTML = `
     <div class="grid h-screen grid-cols-[18rem_minmax(0,1fr)] overflow-hidden bg-vv-bg bg-vv-radial text-vv-text selection:bg-vv-cyan/25 max-[980px]:grid-cols-1">
       ${renderLeftRail()}
@@ -652,12 +884,134 @@ function renderError(): string {
 }
 
 function renderPanel(): string {
-  if (state.activePanel === 'chat') return `<div class="min-h-0 flex-1 overflow-hidden">${renderChat()}</div>`;
-  return `<div class="vv-scrollbar min-h-0 flex-1 overflow-auto px-4 py-3"><div class="mx-auto max-w-5xl">${renderNonChatPanel()}</div></div>`;
+  return renderCanvas();
 }
 
 function renderNonChatPanel(): string {
-  switch (state.activePanel) {
+  return renderModuleContent(state.activePanel);
+}
+
+function renderCanvas(): string {
+  const layout = currentLayout();
+  const bounds = canvasBounds(layout.modules);
+  return `
+    <div class="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
+      ${renderLayoutTabs()}
+      <div class="grid min-h-0 grid-cols-[15rem_minmax(0,1fr)] overflow-hidden max-[980px]:grid-cols-1">
+        ${renderModulePalette()}
+        <div id="canvas-surface" class="vv-scrollbar relative min-h-0 overflow-auto bg-vv-grid [background-size:42px_42px]">
+          <div class="relative" style="width:${bounds.width}px;height:${bounds.height}px;min-width:100%;min-height:100%;">
+            ${layout.modules.map(renderModuleFrame).join('')}
+            ${layout.modules.length ? '' : renderBlankCanvasEmpty()}
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderLayoutTabs(): string {
+  const layout = currentLayout();
+  const pendingApprovals = state.approvals.length > 0;
+  const dangerous = Boolean(state.settings.dangerousBypass || state.runtimeStatus?.dangerous_bypass || state.runtimeStatus?.dangerousBypass);
+  return `
+    <div class="border-b border-vv-line bg-vv-bg2/88 px-4 py-2 backdrop-blur-xl">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div class="vv-scrollbar flex min-w-0 flex-1 items-center gap-2 overflow-x-auto pb-1">
+          ${state.layout.tabs.map((tab) => `<button class="vv-action shrink-0 ${tab.id === state.layout.activeTabId ? 'vv-action-primary' : ''}" data-layout-tab="${escapeHtml(tab.id)}">${escapeHtml(tab.name)}</button>`).join('')}
+          <button class="vv-action shrink-0" id="layout-add-tab">+</button>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="vv-pill ${state.bridgeRunning ? 'text-vv-green' : 'text-vv-red'}"><span class="h-2 w-2 rounded-full ${state.bridgeRunning ? 'bg-vv-green' : 'bg-vv-red'}"></span>${state.bridgeRunning ? 'Bridge online' : 'Bridge offline'}</span>
+          ${pendingApprovals ? `<button class="vv-action vv-action-danger" data-module-add="approvals">${state.approvals.length} approvals</button>` : ''}
+          ${dangerous ? '<span class="vv-pill text-vv-red">dangerous bypass startup mode</span>' : ''}
+          <button class="vv-action ${state.layout.editMode ? 'vv-action-primary' : ''}" id="layout-edit-toggle">${state.layout.editMode ? 'Editing layout' : 'Edit layout'}</button>
+          <button class="vv-action" id="layout-save">Save</button>
+          <button class="vv-action" id="layout-duplicate-tab">Duplicate</button>
+          <button class="vv-action" id="layout-rename-tab">Rename</button>
+          <button class="vv-action" id="layout-delete-tab">Delete</button>
+          <button class="vv-action" id="layout-reset-tab">Reset tab</button>
+        </div>
+      </div>
+      <div class="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-vv-muted">
+        <span>${escapeHtml(layout.name)} · ${layout.modules.length} modules · ${state.layout.editMode ? 'drag/resize enabled' : 'run mode: module contents interactive'}</span>
+        <label class="flex items-center gap-2"><input id="layout-snap" type="checkbox" ${state.layout.snapToGrid ? 'checked' : ''} /> snap ${state.layout.gridSize}px grid</label>
+      </div>
+    </div>`;
+}
+
+function renderModulePalette(): string {
+  return `
+    <aside class="vv-scrollbar min-h-0 overflow-auto border-r border-vv-line bg-vv-rail/88 p-3 max-[980px]:hidden">
+      <div class="mb-3">
+        <h2 class="text-sm font-black">Module palette</h2>
+        <p class="mt-1 text-xs leading-5 text-vv-muted">Only repo-verified desktop panels are available. ${state.layout.editMode ? 'Click to add a new instance.' : 'Click to focus or add if absent.'}</p>
+      </div>
+      <div class="space-y-1">
+        ${panels.map((panel) => `<button class="vv-rail-button" data-module-add="${panel.id}">
+          <span class="grid h-6 w-6 shrink-0 place-items-center rounded-lg border border-vv-line bg-white/[0.035] text-vv-cyan">${panel.icon}</span>
+          <span class="min-w-0"><span class="block font-semibold text-current">${escapeHtml(panel.label)}</span><span class="block truncate text-xs text-vv-dim">${escapeHtml(panel.hint)}</span></span>
+        </button>`).join('')}
+      </div>
+    </aside>`;
+}
+
+function canvasBounds(modules: CanvasModuleInstance[]): { width: number; height: number } {
+  const maxX = modules.reduce((max, module) => Math.max(max, module.x + module.width), 1320);
+  const maxY = modules.reduce((max, module) => Math.max(max, module.y + module.height), 880);
+  return { width: maxX + 160, height: maxY + 160 };
+}
+
+function renderBlankCanvasEmpty(): string {
+  return `
+    <div class="absolute inset-0 grid min-h-[34rem] place-items-center p-8 text-center">
+      <section class="vv-panel max-w-xl p-6 shadow-glow">
+        <div class="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-3xl border border-vv-line bg-white/[0.045] text-2xl text-vv-cyan">▦</div>
+        <h2 class="text-xl font-black">Blank canvas</h2>
+        <p class="mt-2 text-sm leading-6 text-vv-muted">Add verified Vegvisir modules from the palette. Layout state is local only; bridge/runtime authority remains in Vegvisir app-server.</p>
+        <button class="vv-action vv-action-primary mt-4" data-module-add="chat">Add Chat</button>
+      </section>
+    </div>`;
+}
+
+function renderModuleFrame(instance: CanvasModuleInstance): string {
+  const panel = panelDefinition(instance.panelId);
+  const mode = moduleRenderMode(instance);
+  const selected = instance.z === maxModuleZ();
+  const editable = state.layout.editMode;
+  const draggable = editable && !instance.locked;
+  const isApproval = instance.panelId === 'approvals' && state.approvals.length > 0;
+  const isRuntimeDanger = instance.panelId === 'runtime' && Boolean(state.settings.dangerousBypass || state.runtimeStatus?.dangerous_bypass || state.runtimeStatus?.dangerousBypass);
+  return `
+    <article class="vv-canvas-module vv-panel absolute overflow-hidden ${selected ? 'vv-canvas-module-selected' : ''} ${instance.locked ? 'vv-canvas-module-locked' : ''} ${mode === 'compact' ? 'vv-canvas-module-compact' : ''} ${mode === 'collapsed' ? 'vv-canvas-module-collapsed' : ''} ${isApproval || isRuntimeDanger ? 'border-vv-red/60 shadow-danger' : ''}" style="left:${instance.x}px;top:${instance.y}px;width:${instance.width}px;height:${instance.height}px;z-index:${instance.z};">
+      <header class="vv-canvas-module-header ${draggable ? 'vv-canvas-module-draggable' : ''} flex select-none items-center justify-between gap-2 border-b border-vv-line bg-black/32 px-3 py-2" data-module-drag="${escapeHtml(instance.id)}">
+        <div class="flex min-w-0 items-center gap-2">
+          <span class="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-vv-line bg-white/[0.045] text-vv-cyan">${panel.icon}</span>
+          <div class="min-w-0">
+            <h3 class="truncate text-sm font-black">${escapeHtml(instance.title)}</h3>
+            <p class="truncate text-[0.68rem] text-vv-muted">${escapeHtml(panel.hint)}${instance.locked ? ' · locked' : ''}${!editable ? ' · run mode' : ''}</p>
+          </div>
+        </div>
+        <div class="flex shrink-0 items-center gap-1">
+          <button class="vv-action px-2 py-1 text-[0.65rem]" data-module-focus="${escapeHtml(instance.id)}">Focus</button>
+          <button class="vv-action px-2 py-1 text-[0.65rem]" data-module-collapse="${escapeHtml(instance.id)}" ${editable ? '' : 'disabled title="Enable Edit layout to collapse modules"'}>${mode === 'collapsed' ? '□' : '—'}</button>
+          <button class="vv-action px-2 py-1 text-[0.65rem]" data-module-lock="${escapeHtml(instance.id)}" ${editable ? '' : 'disabled title="Enable Edit layout to lock modules"'}>${instance.locked ? '🔒' : '◇'}</button>
+          <button class="vv-action vv-action-danger px-2 py-1 text-[0.65rem]" data-module-remove="${escapeHtml(instance.id)}" ${editable ? '' : 'disabled title="Enable Edit layout to remove modules"'}>×</button>
+        </div>
+      </header>
+      ${mode === 'collapsed' ? '' : `<div class="vv-scrollbar h-[calc(100%-2.95rem)] overflow-auto p-3 ${mode === 'compact' ? 'bg-black/10' : ''}">${mode === 'compact' ? renderModuleCompact(instance.panelId) : renderModuleContent(instance.panelId)}</div>`}
+      ${draggable ? `<div class="vv-canvas-resize-handle" data-module-resize="${escapeHtml(instance.id)}" title="Resize module"></div>` : ''}
+    </article>`;
+}
+
+function moduleRenderMode(instance: CanvasModuleInstance): 'full' | 'compact' | 'collapsed' {
+  if (instance.collapsed || instance.height < 96) return 'collapsed';
+  if (instance.width < 380 || instance.height < 260) return 'compact';
+  return 'full';
+}
+
+function renderModuleContent(panelId: PanelId): string {
+  switch (panelId) {
+    case 'chat': return renderChat();
     case 'sessions': return renderSessions();
     case 'work': return renderWork();
     case 'approvals': return renderApprovals();
@@ -674,7 +1028,33 @@ function renderNonChatPanel(): string {
     case 'evidence': return renderEvidenceWorkbench();
     case 'system': return renderSystem();
     case 'settings': return renderSettings();
-    default: return renderChat();
+  }
+}
+
+function renderModuleCompact(panelId: PanelId): string {
+  const text = moduleSummary(panelId);
+  return `<div class="space-y-3 text-sm leading-6 text-vv-muted"><p>${escapeHtml(text)}</p><button class="vv-action" data-module-open-full="${panelId}">Open / focus full module</button></div>`;
+}
+
+function moduleSummary(panelId: PanelId): string {
+  switch (panelId) {
+    case 'chat': return `${state.busy ? 'Busy' : 'Ready'} · ${state.messages.length} messages${state.pendingAssistant ? ' · streaming' : ''}`;
+    case 'sessions': return `${state.sessions.length} sessions loaded`;
+    case 'work': return `${state.events.length} bridge events`;
+    case 'approvals': return `${state.approvals.length} pending approvals`;
+    case 'tools': return `${state.tools.length} tools loaded`;
+    case 'providers': return `Provider ${state.session?.provider ?? state.settings.provider ?? 'default'} · Model ${state.session?.model ?? state.settings.model ?? 'default'} · ${state.agents.length} agents`;
+    case 'capabilities': return `${state.capabilities?.native_methods?.length ?? 0} native methods · ${state.capabilities?.command_backed_methods?.length ?? 0} command-backed methods`;
+    case 'commands': return `${state.commands.length} slash commands loaded`;
+    case 'runtime': return `${state.bridgeRunning ? 'Bridge online' : 'Bridge offline'} · ${state.busy ? 'working' : 'ready'} · ${state.settings.dangerousBypass ? 'dangerous startup bypass set' : 'policy gated'}`;
+    case 'openai': return state.openaiCompat ? 'OpenAI-compatible metadata loaded; credentials remain behind Vegvisir/HBSE.' : 'OpenAI-compatible metadata not loaded.';
+    case 'diff': return state.diff ? 'Diff loaded' : 'No diff loaded';
+    case 'memory': return state.memory || methodOutputText('memory.status') ? 'Memory status output loaded' : 'Memory output not loaded';
+    case 'skills': return methodOutputText('skills.status') ? 'Skills output loaded' : 'Skills output not loaded';
+    case 'integrations': return [methodOutputText('mcp.status'), methodOutputText('hbse.status'), methodOutputText('subagents.list')].some(Boolean) ? 'Integration output loaded' : 'Integration output not loaded';
+    case 'evidence': return [methodOutputText('runs.list'), methodOutputText('trace.list'), methodOutputText('verify.run')].some(Boolean) ? 'Evidence output loaded' : 'Evidence output not loaded';
+    case 'system': return state.systemPrompt ? 'System prompt loaded' : 'System prompt not loaded';
+    case 'settings': return `Workspace ${state.settings.workspace || 'default'} · binary ${state.settings.vegvisirBinary || 'vegvisir'}`;
   }
 }
 
@@ -885,7 +1265,7 @@ function renderCapabilities(): string {
             <h2 class="text-base font-black">Bridge parity map</h2>
             <p class="mt-2 max-w-3xl text-xs leading-5 text-vv-muted">The desktop app consumes Vegvisir through <code class="text-vv-cyan">vegvisir app-server</code>. Native methods carry typed UI data; command-backed methods provide named parity endpoints for the full harness command families.</p>
           </div>
-          <button class="vv-action" data-bridge-method="bridge.capabilities">Refresh capabilities</button>
+          <button class="vv-action" data-bridge-method="bridge.capabilities" ${bridgeMethodDisabledAttr('bridge.capabilities')}>Refresh capabilities</button>
         </div>
         <div class="mt-4 grid gap-3 md:grid-cols-3">
           ${metricCard('Native methods', nativeMethods.length, 'typed bridge surface')}
@@ -915,7 +1295,7 @@ function renderBridgeMethodRow(spec: any): string {
   const method = String(spec.method ?? '');
   const command = String(spec.command ?? '');
   const subcommand = spec.default_subcommand ? ` ${spec.default_subcommand}` : '';
-  return `<button class="vv-soft-panel w-full p-3 text-left hover:border-vv-line2" data-bridge-method="${escapeHtml(method)}">
+  return `<button class="vv-soft-panel w-full p-3 text-left hover:border-vv-line2" data-bridge-method="${escapeHtml(method)}" ${bridgeMethodDisabledAttr(method)}>
     <div class="font-mono text-xs font-black text-vv-cyan">${escapeHtml(method)}</div>
     <div class="mt-1 text-xs text-vv-muted">${escapeHtml(command + subcommand)}</div>
   </button>`;
@@ -996,11 +1376,11 @@ function renderMethodWorkbench(title: string, description: string, actions: stri
             <h2 class="text-base font-black">${escapeHtml(title)}</h2>
             <p class="mt-2 max-w-3xl text-xs leading-5 text-vv-muted">${escapeHtml(description)}</p>
           </div>
-          <button class="vv-action" data-bridge-method="${escapeHtml(primaryMethod)}">Refresh</button>
+          <button class="vv-action" data-bridge-method="${escapeHtml(primaryMethod)}" ${bridgeMethodDisabledAttr(primaryMethod)}>Refresh</button>
         </div>
         ${renderBridgeMethodParameterForm(selected)}
         <div class="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-          ${actions.map(([method, label, hint]) => `<button class="vv-soft-panel p-3 text-left hover:border-vv-line2 ${selected === method ? 'border-vv-cyan bg-vv-cyan/10' : ''}" data-bridge-method="${escapeHtml(method)}">
+          ${actions.map(([method, label, hint]) => `<button class="vv-soft-panel p-3 text-left hover:border-vv-line2 ${selected === method ? 'border-vv-cyan bg-vv-cyan/10' : ''}" data-bridge-method="${escapeHtml(method)}" ${bridgeMethodDisabledAttr(method)}>
             <div class="font-black">${escapeHtml(label)}</div>
             <div class="mt-1 font-mono text-[0.68rem] text-vv-cyan">${escapeHtml(method)}</div>
             <div class="mt-1 text-xs text-vv-muted">${escapeHtml(hint)}</div>
@@ -1020,7 +1400,7 @@ function renderBridgeMethodParameterForm(selectedMethod: string): string {
           <h3 class="text-sm font-black">Parameterized method call</h3>
           <p class="mt-1 text-xs text-vv-muted">Use raw for exact slash-command arguments, or fill common fields used by recall, runs, agents, subagents, skills, and memory methods.</p>
         </div>
-        <button class="vv-action vv-action-primary" data-run-selected-bridge-method="${escapeHtml(selectedMethod)}">Run selected</button>
+        <button class="vv-action vv-action-primary" data-run-selected-bridge-method="${escapeHtml(selectedMethod)}" ${bridgeMethodDisabledAttr(selectedMethod)}>Run selected</button>
       </div>
       <div class="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
         ${bridgeDraftField('raw', 'Raw args', draft.raw, 'e.g. recent --global')}
@@ -1173,7 +1553,7 @@ function renderPre(value: string): string {
 function activeTitle(): string {
   const label = panels.find((panel) => panel.id === state.activePanel)?.label ?? 'Workbench';
   if (state.activePanel === 'chat') return state.busy ? 'Vegvisir is working…' : 'Ask Vegvisir to work';
-  return label;
+  return `Canvas · ${label}`;
 }
 
 function projectName(): string {
@@ -1183,12 +1563,248 @@ function projectName(): string {
   return trimmed.split('/').filter(Boolean).pop() ?? trimmed;
 }
 
+
+function addOrFocusModule(panelId: PanelId): void {
+  const layout = currentLayout();
+  if (!state.layout.editMode) {
+    const existing = layout.modules.find((module) => module.panelId === panelId);
+    if (existing) {
+      focusModule(existing.id);
+      return;
+    }
+  }
+  addModule(panelId);
+}
+
+function addModule(panelId: PanelId): void {
+  const layout = currentLayout();
+  const panel = panelDefinition(panelId);
+  const offset = layout.modules.length % 10;
+  const module: CanvasModuleInstance = {
+    id: uniqueId(`module-${panelId}`),
+    panelId,
+    title: panel.label,
+    x: snap(48 + offset * 36),
+    y: snap(48 + offset * 32),
+    width: panel.defaultWidth,
+    height: panel.defaultHeight,
+    collapsed: false,
+    locked: false,
+    z: maxModuleZ(layout) + 1,
+  };
+  layout.modules.push(module);
+  state.activePanel = panelId;
+  saveLayouts();
+  refreshPanelData(panelId);
+  render();
+}
+
+function removeModule(instanceId: string): void {
+  if (!state.layout.editMode) return;
+  const layout = currentLayout();
+  layout.modules = layout.modules.filter((module) => module.id !== instanceId);
+  saveLayouts();
+  render();
+}
+
+function focusModule(instanceId: string): void {
+  const layout = currentLayout();
+  const module = layout.modules.find((item) => item.id === instanceId);
+  if (!module) return;
+  module.z = maxModuleZ(layout) + 1;
+  state.activePanel = module.panelId;
+  saveLayouts();
+  refreshPanelData(module.panelId);
+  render();
+}
+
+function collapseModule(instanceId: string): void {
+  const module = currentLayout().modules.find((item) => item.id === instanceId);
+  if (!module) return;
+  module.collapsed = !module.collapsed;
+  module.z = maxModuleZ() + 1;
+  saveLayouts();
+  render();
+}
+
+function toggleModuleLock(instanceId: string): void {
+  const module = currentLayout().modules.find((item) => item.id === instanceId);
+  if (!module) return;
+  module.locked = !module.locked;
+  saveLayouts();
+  render();
+}
+
+function updateModuleBounds(instanceId: string, x: number, y: number, width: number, height: number): void {
+  const module = currentLayout().modules.find((item) => item.id === instanceId);
+  if (!module) return;
+  const panel = panelDefinition(module.panelId);
+  module.x = Math.max(0, snap(x));
+  module.y = Math.max(0, snap(y));
+  module.width = Math.max(panel.minWidth, snap(width));
+  module.height = Math.max(panel.minHeight, snap(height));
+}
+
+function createLayoutTab(): void {
+  const name = window.prompt('Layout tab name?', 'New Layout')?.trim() || 'New Layout';
+  const tab: CanvasLayoutTab = { id: uniqueId('layout'), name, modules: [] };
+  state.layout.tabs.push(tab);
+  state.layout.activeTabId = tab.id;
+  saveLayouts();
+  render();
+}
+
+function duplicateLayoutTab(): void {
+  const layout = currentLayout();
+  const name = window.prompt('Duplicate layout as?', `${layout.name} Copy`)?.trim() || `${layout.name} Copy`;
+  const tab: CanvasLayoutTab = {
+    id: uniqueId('layout'),
+    name,
+    modules: layout.modules.map((module) => ({ ...module, id: uniqueId(`module-${module.panelId}`), x: module.x + 24, y: module.y + 24 })),
+  };
+  state.layout.tabs.push(tab);
+  state.layout.activeTabId = tab.id;
+  saveLayouts();
+  render();
+}
+
+function renameLayoutTab(): void {
+  const layout = currentLayout();
+  const name = window.prompt('Rename layout tab?', layout.name)?.trim();
+  if (!name) return;
+  layout.name = name;
+  saveLayouts();
+  render();
+}
+
+function deleteLayoutTab(): void {
+  if (state.layout.tabs.length <= 1) return;
+  const layout = currentLayout();
+  if (!window.confirm(`Delete layout tab "${layout.name}"?`)) return;
+  state.layout.tabs = state.layout.tabs.filter((tab) => tab.id !== layout.id);
+  state.layout.activeTabId = state.layout.tabs[0]?.id ?? '';
+  saveLayouts();
+  render();
+}
+
+function switchLayoutTab(tabId: string): void {
+  if (!state.layout.tabs.some((tab) => tab.id === tabId)) return;
+  state.layout.activeTabId = tabId;
+  canvasInteraction = null;
+  saveLayouts();
+  render();
+}
+
+function resetLayoutTab(): void {
+  const current = currentLayout();
+  if (!window.confirm(`Reset layout tab "${current.name}" to its default module set?`)) return;
+  const defaults = defaultLayoutState();
+  const replacement = defaults.tabs.find((tab) => tab.id === current.id) ?? createLayoutTabFromPanels(current.id, current.name, []);
+  current.modules = replacement.modules.map((module) => ({ ...module, id: uniqueId(`module-${module.panelId}`) }));
+  saveLayouts();
+  render();
+}
+
+function refreshPanelData(panel: PanelId): void {
+  if (panel === 'sessions') void send('session.list', {}, 'sessions');
+  if (panel === 'diff') void send('diff.current', {}, 'diff');
+  if (panel === 'memory') void send('memory.status', {}, 'memory');
+  if (panel === 'system') void send('system.prompt', {}, 'system');
+  if (panel === 'commands') void send('commands.list', {}, 'commands');
+  if (panel === 'capabilities') void send('bridge.capabilities', {}, 'capabilities');
+  if (panel === 'runtime') void send('runtime.status', {}, 'runtime');
+  if (panel === 'openai') void send('openai.compat.info', {}, 'openai');
+  if (panel === 'skills') void send('skills.status', {}, 'skills');
+  if (panel === 'integrations') {
+    void send('mcp.status', {}, 'mcp');
+    void send('hbse.status', {}, 'hbse');
+    void send('subagents.list', {}, 'subagents');
+  }
+  if (panel === 'evidence') {
+    void send('runs.list', {}, 'runs');
+    void send('trace.list', {}, 'trace');
+  }
+}
+
+function startCanvasInteraction(event: PointerEvent, id: string, mode: 'move' | 'resize'): void {
+  if (!state.layout.editMode) return;
+  if ((event.target as HTMLElement).closest('button')) return;
+  const module = currentLayout().modules.find((item) => item.id === id);
+  if (!module || module.locked) return;
+  event.preventDefault();
+  module.z = maxModuleZ() + 1;
+  canvasInteraction = {
+    mode,
+    id,
+    startClientX: event.clientX,
+    startClientY: event.clientY,
+    startX: module.x,
+    startY: module.y,
+    startWidth: module.width,
+    startHeight: module.height,
+  };
+  render();
+}
+
+function updateCanvasInteraction(event: PointerEvent): void {
+  const interaction = canvasInteraction;
+  if (!interaction) return;
+  const module = currentLayout().modules.find((item) => item.id === interaction.id);
+  if (!module) return;
+  const deltaX = event.clientX - interaction.startClientX;
+  const deltaY = event.clientY - interaction.startClientY;
+  if (interaction.mode === 'move') {
+    updateModuleBounds(interaction.id, interaction.startX + deltaX, interaction.startY + deltaY, module.width, module.height);
+  } else {
+    updateModuleBounds(interaction.id, module.x, module.y, interaction.startWidth + deltaX, interaction.startHeight + deltaY);
+  }
+  render();
+}
+
+function finishCanvasInteraction(): void {
+  if (!canvasInteraction) return;
+  canvasInteraction = null;
+  saveLayouts();
+}
+
 function bindEvents(): void {
   document.querySelector('#start-stop')?.addEventListener('click', () => state.bridgeRunning ? void stopBridge() : void startBridge());
   document.querySelector('#restart-bridge')?.addEventListener('click', () => void restartBridge());
   document.querySelector('#restart-bridge-from-error')?.addEventListener('click', () => void restartBridge());
   document.querySelector('#refresh-all')?.addEventListener('click', () => void refreshEverything());
   document.querySelectorAll<HTMLButtonElement>('[data-panel]').forEach((button) => button.addEventListener('click', () => setPanel(button.dataset.panel ?? 'chat')));
+  document.querySelectorAll<HTMLButtonElement>('[data-module-add]').forEach((button) => button.addEventListener('click', () => {
+    const panelId = button.dataset.moduleAdd;
+    if (isPanelId(panelId)) addOrFocusModule(panelId);
+  }));
+  document.querySelectorAll<HTMLButtonElement>('[data-module-remove]').forEach((button) => button.addEventListener('click', () => removeModule(button.dataset.moduleRemove ?? '')));
+  document.querySelectorAll<HTMLButtonElement>('[data-module-focus]').forEach((button) => button.addEventListener('click', () => focusModule(button.dataset.moduleFocus ?? '')));
+  document.querySelectorAll<HTMLButtonElement>('[data-module-collapse]').forEach((button) => button.addEventListener('click', () => collapseModule(button.dataset.moduleCollapse ?? '')));
+  document.querySelectorAll<HTMLButtonElement>('[data-module-lock]').forEach((button) => button.addEventListener('click', () => toggleModuleLock(button.dataset.moduleLock ?? '')));
+  document.querySelectorAll<HTMLButtonElement>('[data-module-open-full]').forEach((button) => button.addEventListener('click', () => {
+    const panelId = button.dataset.moduleOpenFull;
+    if (isPanelId(panelId)) addOrFocusModule(panelId);
+  }));
+  document.querySelectorAll<HTMLButtonElement>('[data-layout-tab]').forEach((button) => button.addEventListener('click', () => switchLayoutTab(button.dataset.layoutTab ?? '')));
+  document.querySelector('#layout-add-tab')?.addEventListener('click', () => createLayoutTab());
+  document.querySelector('#layout-duplicate-tab')?.addEventListener('click', () => duplicateLayoutTab());
+  document.querySelector('#layout-rename-tab')?.addEventListener('click', () => renameLayoutTab());
+  document.querySelector('#layout-delete-tab')?.addEventListener('click', () => deleteLayoutTab());
+  document.querySelector('#layout-reset-tab')?.addEventListener('click', () => resetLayoutTab());
+  document.querySelector('#layout-save')?.addEventListener('click', () => saveLayouts());
+  document.querySelector('#layout-edit-toggle')?.addEventListener('click', () => {
+    state.layout.editMode = !state.layout.editMode;
+    canvasInteraction = null;
+    saveLayouts();
+    render();
+  });
+  document.querySelector('#layout-snap')?.addEventListener('change', (event) => {
+    state.layout.snapToGrid = (event.currentTarget as HTMLInputElement).checked;
+    saveLayouts();
+    render();
+  });
+  document.querySelectorAll<HTMLElement>('[data-module-drag]').forEach((handle) => handle.addEventListener('pointerdown', (event) => startCanvasInteraction(event, handle.dataset.moduleDrag ?? '', 'move')));
+  document.querySelectorAll<HTMLElement>('[data-module-resize]').forEach((handle) => handle.addEventListener('pointerdown', (event) => startCanvasInteraction(event, handle.dataset.moduleResize ?? '', 'resize')));
   document.querySelector('#send-turn')?.addEventListener('click', () => void sendTurn());
   document.querySelector('#turn-input')?.addEventListener('keydown', (event) => {
     const key = event as KeyboardEvent;
@@ -1263,6 +1879,10 @@ async function bootstrap(): Promise<void> {
     render();
   }
 }
+
+window.addEventListener('pointermove', (event) => updateCanvasInteraction(event));
+window.addEventListener('pointerup', () => finishCanvasInteraction());
+window.addEventListener('pointercancel', () => finishCanvasInteraction());
 
 void bootstrap();
 setInterval(() => void pollBridge(), 350);

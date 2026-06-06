@@ -100,4 +100,44 @@ input:disabled {
   .vv-code {
     @apply font-mono text-[0.78rem] leading-5 text-slate-200;
   }
+
+  .vv-canvas-module {
+    box-shadow: 0 20px 70px rgba(0, 0, 0, 0.34);
+    transition: border-color 120ms ease, box-shadow 120ms ease, background-color 120ms ease;
+  }
+
+  .vv-canvas-module-selected {
+    @apply border-vv-cyan/65 bg-vv-panel/90 shadow-glow;
+  }
+
+  .vv-canvas-module-locked {
+    @apply border-vv-amber/45 bg-vv-panel/80;
+  }
+
+  .vv-canvas-module-compact {
+    @apply border-dashed;
+  }
+
+  .vv-canvas-module-collapsed {
+    @apply bg-vv-panel2/80;
+  }
+
+  .vv-canvas-module-header {
+    cursor: default;
+    touch-action: none;
+  }
+
+  .vv-canvas-module-draggable {
+    cursor: grab;
+  }
+
+  .vv-canvas-module-draggable:active {
+    cursor: grabbing;
+  }
+
+  .vv-canvas-resize-handle {
+    @apply absolute bottom-1.5 right-1.5 h-4 w-4 rounded-br-lg border-b-2 border-r-2 border-vv-cyan/70 opacity-70 transition hover:opacity-100;
+    cursor: nwse-resize;
+    touch-action: none;
+  }
 }
