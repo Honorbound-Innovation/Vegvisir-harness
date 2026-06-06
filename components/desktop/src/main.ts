@@ -934,13 +934,11 @@ function renderNonChatPanel(): string {
 function renderCanvas(): string {
   const layout = currentLayout();
   const bounds = canvasBounds(layout.modules);
-  const isEditingLayout = state.layout.editMode;
-  const canvasGridColumns = isEditingLayout ? 'grid-cols-[15rem_minmax(0,1fr)]' : 'grid-cols-1';
   return `
     <div class="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
       ${renderLayoutTabs()}
-      <div class="grid min-h-0 ${canvasGridColumns} overflow-hidden max-[980px]:grid-cols-1">
-        ${isEditingLayout ? renderModulePalette() : ''}
+      <div class="grid min-h-0 grid-cols-[15rem_minmax(0,1fr)] overflow-hidden max-[980px]:grid-cols-1">
+        ${renderModulePalette()}
         <div id="canvas-surface" class="vv-scrollbar relative min-h-0 overflow-auto bg-vv-grid [background-size:42px_42px]">
           <div class="relative" style="width:${bounds.width}px;height:${bounds.height}px;min-width:100%;min-height:100%;">
             ${layout.modules.map(renderModuleFrame).join('')}
@@ -966,7 +964,6 @@ function renderLayoutTabs(): string {
           <span class="vv-pill ${state.bridgeRunning ? 'text-vv-green' : 'text-vv-red'}"><span class="h-2 w-2 rounded-full ${state.bridgeRunning ? 'bg-vv-green' : 'bg-vv-red'}"></span>${state.bridgeRunning ? 'Bridge online' : 'Bridge offline'}</span>
           ${pendingApprovals ? `<button class="vv-action vv-action-danger" data-module-add="approvals">${state.approvals.length} approvals</button>` : ''}
           ${dangerous ? '<span class="vv-pill text-vv-red">dangerous bypass startup mode</span>' : ''}
-          <button class="vv-action ${state.layout.editMode ? 'vv-action-primary' : ''}" id="layout-edit-toggle">${state.layout.editMode ? 'Editing layout' : 'Edit layout'}</button>
           <button class="vv-action" id="layout-save">Save</button>
           <button class="vv-action" id="layout-duplicate-tab">Duplicate</button>
           <button class="vv-action" id="layout-rename-tab">Rename</button>
@@ -975,7 +972,7 @@ function renderLayoutTabs(): string {
         </div>
       </div>
       <div class="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-vv-muted">
-        <span>${escapeHtml(layout.name)} · ${layout.modules.length} modules · ${state.layout.editMode ? 'drag/resize enabled' : 'run mode: module contents interactive'}</span>
+        <span>${escapeHtml(layout.name)} · ${layout.modules.length} modules · drag, resize, add, and remove enabled</span>
         <label class="flex items-center gap-2"><input id="layout-snap" type="checkbox" ${state.layout.snapToGrid ? 'checked' : ''} /> snap ${state.layout.gridSize}px grid</label>
       </div>
     </div>`;
@@ -986,7 +983,7 @@ function renderModulePalette(): string {
     <aside class="vv-scrollbar min-h-0 overflow-auto border-r border-vv-line bg-vv-rail/88 p-3 max-[980px]:hidden">
       <div class="mb-3">
         <h2 class="text-sm font-black">Module palette</h2>
-        <p class="mt-1 text-xs leading-5 text-vv-muted">Only repo-verified desktop panels are available. ${state.layout.editMode ? 'Click to add a new instance.' : 'Click to focus or add if absent.'}</p>
+        <p class="mt-1 text-xs leading-5 text-vv-muted">Only repo-verified desktop panels are available. Click to add or focus a module.</p>
       </div>
       <div class="space-y-1">
         ${panels.map((panel) => `<button class="vv-rail-button" data-module-add="${panel.id}">
@@ -1019,8 +1016,7 @@ function renderModuleFrame(instance: CanvasModuleInstance): string {
   const panel = panelDefinition(instance.panelId);
   const mode = moduleRenderMode(instance);
   const selected = instance.z === maxModuleZ();
-  const editable = state.layout.editMode;
-  const draggable = editable && !instance.locked;
+  const draggable = !instance.locked;
   const isApproval = instance.panelId === 'approvals' && state.approvals.length > 0;
   const isRuntimeDanger = instance.panelId === 'runtime' && Boolean(state.settings.dangerousBypass || state.runtimeStatus?.dangerous_bypass || state.runtimeStatus?.dangerousBypass);
   return `
@@ -1030,14 +1026,14 @@ function renderModuleFrame(instance: CanvasModuleInstance): string {
           <span class="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-vv-line bg-white/[0.045] text-vv-cyan">${panel.icon}</span>
           <div class="min-w-0">
             <h3 class="truncate text-sm font-black">${escapeHtml(instance.title)}</h3>
-            <p class="truncate text-[0.68rem] text-vv-muted">${escapeHtml(panel.hint)}${instance.locked ? ' · locked' : ''}${!editable ? ' · run mode' : ''}</p>
+            <p class="truncate text-[0.68rem] text-vv-muted">${escapeHtml(panel.hint)}${instance.locked ? ' · locked' : ''}</p>
           </div>
         </div>
         <div class="flex shrink-0 items-center gap-1">
           <button class="vv-action px-2 py-1 text-[0.65rem]" data-module-focus="${escapeHtml(instance.id)}">Focus</button>
-          <button class="vv-action px-2 py-1 text-[0.65rem]" data-module-collapse="${escapeHtml(instance.id)}" ${editable ? '' : 'disabled title="Enable Edit layout to collapse modules"'}>${mode === 'collapsed' ? '□' : '—'}</button>
-          <button class="vv-action px-2 py-1 text-[0.65rem]" data-module-lock="${escapeHtml(instance.id)}" ${editable ? '' : 'disabled title="Enable Edit layout to lock modules"'}>${instance.locked ? '🔒' : '◇'}</button>
-          <button class="vv-action vv-action-danger px-2 py-1 text-[0.65rem]" data-module-remove="${escapeHtml(instance.id)}" ${editable ? '' : 'disabled title="Enable Edit layout to remove modules"'}>×</button>
+          <button class="vv-action px-2 py-1 text-[0.65rem]" data-module-collapse="${escapeHtml(instance.id)}">${mode === 'collapsed' ? '□' : '—'}</button>
+          <button class="vv-action px-2 py-1 text-[0.65rem]" data-module-lock="${escapeHtml(instance.id)}">${instance.locked ? '🔒' : '◇'}</button>
+          <button class="vv-action vv-action-danger px-2 py-1 text-[0.65rem]" data-module-remove="${escapeHtml(instance.id)}">×</button>
         </div>
       </header>
       ${mode === 'collapsed' ? '' : `<div class="vv-scrollbar h-[calc(100%-2.95rem)] overflow-auto p-3 ${mode === 'compact' ? 'bg-black/10' : ''}">${mode === 'compact' ? renderModuleCompact(instance.panelId) : renderModuleContent(instance.panelId)}</div>`}
@@ -1608,12 +1604,10 @@ function projectName(): string {
 
 function addOrFocusModule(panelId: PanelId): void {
   const layout = currentLayout();
-  if (!state.layout.editMode) {
-    const existing = layout.modules.find((module) => module.panelId === panelId);
-    if (existing) {
-      focusModule(existing.id);
-      return;
-    }
+  const existing = layout.modules.find((module) => module.panelId === panelId);
+  if (existing) {
+    focusModule(existing.id);
+    return;
   }
   addModule(panelId);
 }
@@ -1642,7 +1636,6 @@ function addModule(panelId: PanelId): void {
 }
 
 function removeModule(instanceId: string): void {
-  if (!state.layout.editMode) return;
   const layout = currentLayout();
   layout.modules = layout.modules.filter((module) => module.id !== instanceId);
   saveLayouts();
@@ -1769,7 +1762,6 @@ function refreshPanelData(panel: PanelId): void {
 }
 
 function startCanvasInteraction(event: PointerEvent, id: string, mode: 'move' | 'resize'): void {
-  if (!state.layout.editMode) return;
   if ((event.target as HTMLElement).closest('button')) return;
   const module = currentLayout().modules.find((item) => item.id === id);
   if (!module || module.locked) return;
@@ -1817,7 +1809,7 @@ function bindEvents(): void {
   document.querySelectorAll<HTMLButtonElement>('[data-panel]').forEach((button) => button.addEventListener('click', () => setPanel(button.dataset.panel ?? 'chat')));
   document.querySelectorAll<HTMLButtonElement>('[data-module-add]').forEach((button) => button.addEventListener('click', () => {
     const panelId = button.dataset.moduleAdd;
-    if (isPanelId(panelId)) addOrFocusModule(panelId);
+    if (isPanelId(panelId)) addModule(panelId);
   }));
   document.querySelectorAll<HTMLButtonElement>('[data-module-remove]').forEach((button) => button.addEventListener('click', () => removeModule(button.dataset.moduleRemove ?? '')));
   document.querySelectorAll<HTMLButtonElement>('[data-module-focus]').forEach((button) => button.addEventListener('click', () => focusModule(button.dataset.moduleFocus ?? '')));
@@ -1834,12 +1826,6 @@ function bindEvents(): void {
   document.querySelector('#layout-delete-tab')?.addEventListener('click', () => deleteLayoutTab());
   document.querySelector('#layout-reset-tab')?.addEventListener('click', () => resetLayoutTab());
   document.querySelector('#layout-save')?.addEventListener('click', () => saveLayouts());
-  document.querySelector('#layout-edit-toggle')?.addEventListener('click', () => {
-    state.layout.editMode = !state.layout.editMode;
-    canvasInteraction = null;
-    saveLayouts();
-    render();
-  });
   document.querySelector('#layout-snap')?.addEventListener('change', (event) => {
     state.layout.snapToGrid = (event.currentTarget as HTMLInputElement).checked;
     saveLayouts();
