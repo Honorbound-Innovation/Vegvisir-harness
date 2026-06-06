@@ -311,22 +311,15 @@ pub(crate) fn self_model_invalid(models: &ModelRegistry, provider: &str, model_n
     !models.is_model_allowed_for_provider(model, provider)
 }
 
-pub(crate) fn model_retired_or_known_invalid(
+pub(crate) fn model_known_invalid_or_missing(
     models: &ModelRegistry,
     provider: &str,
     model_name: &str,
 ) -> bool {
-    if retired_model_name(model_name) {
-        return true;
-    }
     let Some(model) = models.get(model_name) else {
-        return false;
+        return true;
     };
     !models.is_model_allowed_for_provider(model, provider)
-}
-
-pub(crate) fn retired_model_name(model_name: &str) -> bool {
-    matches!(model_name.trim(), "gpt-5.1-codex-mini")
 }
 
 pub(crate) fn set_openai_sso_auth_root(registry: &mut ProviderRegistry, data_root: &Path) {

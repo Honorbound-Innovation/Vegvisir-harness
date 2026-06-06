@@ -13,6 +13,17 @@
       "context_window": 32768
     },
     {
+      "name": "gpt-5.4-mini",
+      "provider": "openai",
+      "display_name": "GPT-5.4 Mini",
+      "context_window": 400000,
+      "metadata": {
+        "reasoning_level": "medium",
+        "reasoning_summary": true,
+        "fast_capable": true
+      }
+    },
+    {
       "name": "gpt-5.5",
       "provider": "openai",
       "display_name": "GPT-5.5",
@@ -30,17 +41,6 @@
       "context_window": 400000,
       "metadata": {
         "reasoning_level": "high",
-        "reasoning_summary": true,
-        "fast_capable": true
-      }
-    },
-    {
-      "name": "gpt-5.4-mini",
-      "provider": "openai",
-      "display_name": "GPT-5.4 Mini",
-      "context_window": 400000,
-      "metadata": {
-        "reasoning_level": "medium",
         "reasoning_summary": true,
         "fast_capable": true
       }

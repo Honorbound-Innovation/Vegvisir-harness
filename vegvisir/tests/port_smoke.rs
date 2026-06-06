@@ -1877,15 +1877,15 @@ fn provider_and_model_catalogs_load() -> anyhow::Result<()> {
     assert_eq!(models.get("demo-local").unwrap().provider, "demo");
     assert_eq!(
         models.default_for_provider("openai").unwrap().name,
-        "gpt-5.5"
+        "gpt-5.4-mini"
     );
     assert_eq!(
         models.default_for_provider("openai-sso").unwrap().name,
-        "gpt-5.5"
+        "gpt-5.4-mini"
     );
     assert_eq!(
         models.default_for_provider("openai-hbse").unwrap().name,
-        "gpt-5.5"
+        "gpt-5.4-mini"
     );
     assert_eq!(
         models.default_for_provider("anthropic-hbse").unwrap().name,
@@ -2351,7 +2351,7 @@ fn model_selection_refreshes_before_rejecting_dynamic_models() -> anyhow::Result
 }
 
 #[test]
-fn startup_preserves_unknown_dynamic_model_defaults_until_discovery() -> anyhow::Result<()> {
+fn startup_replaces_unknown_persisted_model_with_provider_default() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let home = tmp.path().join("home");
     fs::create_dir_all(&home)?;
@@ -2367,7 +2367,7 @@ fn startup_preserves_unknown_dynamic_model_defaults_until_discovery() -> anyhow:
     let app = TuiApplication::with_data_root(tmp.path(), &home)?;
 
     assert_eq!(app.session.current_provider, "openai-sso");
-    assert_eq!(app.session.current_model, "gpt-future-dynamic");
+    assert_eq!(app.session.current_model, "gpt-5.4-mini");
     Ok(())
 }
 

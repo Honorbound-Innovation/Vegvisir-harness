@@ -660,7 +660,7 @@ impl TuiApplication {
             .get("subagent_model")
             .and_then(Value::as_str)
             .unwrap_or(&subagent_defaults_config.model);
-        let subagent_model = if model_retired_or_known_invalid(
+        let subagent_model = if model_known_invalid_or_missing(
             &models,
             subagent_provider,
             configured_subagent_model,
@@ -741,13 +741,10 @@ impl TuiApplication {
         }
         let mut provider_registry = ProviderRegistry::default_catalog()?;
         set_openai_sso_auth_root(&mut provider_registry, &data_root);
-        if session.current_provider == "openai" && session.current_model == "gpt-5.1-codex-mini" {
-            session.current_provider = "openai-sso".to_string();
-        }
         if provider_registry.get(&session.current_provider).is_none() {
             session.current_provider = "demo".to_string();
         }
-        if model_retired_or_known_invalid(
+        if model_known_invalid_or_missing(
             &models,
             &session.current_provider,
             &session.current_model,
@@ -1278,15 +1275,14 @@ mod tests {
     }
 
     #[test]
-    fn startup_replaces_stale_openai_codex_mini_default_with_sso() -> anyhow::Result<()> {
+    fn openai_sso_defaults_to_gpt_5_4_mini() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let data_root = tmp.path().join("home");
         std::fs::create_dir_all(&data_root)?;
         std::fs::write(
             data_root.join("config.json"),
             serde_json::json!({
-                "current_provider": "openai",
-                "current_model": "gpt-5.1-codex-mini"
+                "current_provider": "openai-sso"
             })
             .to_string(),
         )?;
@@ -1294,12 +1290,12 @@ mod tests {
         let app = TuiApplication::with_data_root(tmp.path(), &data_root)?;
 
         assert_eq!(app.session.current_provider, "openai-sso");
-        assert_eq!(app.session.current_model, "gpt-5.5");
+        assert_eq!(app.session.current_model, "gpt-5.4-mini");
         Ok(())
     }
 
     #[test]
-    fn startup_replaces_retired_saved_model_with_provider_default() -> anyhow::Result<()> {
+    fn startup_preserves_gpt_5_4_mini_saved_model() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let data_root = tmp.path().join("home");
         std::fs::create_dir_all(&data_root)?;
@@ -1307,7 +1303,7 @@ mod tests {
             data_root.join("config.json"),
             serde_json::json!({
                 "current_provider": "openai-sso",
-                "current_model": "gpt-5.1-codex-mini"
+                "current_model": "gpt-5.4-mini"
             })
             .to_string(),
         )?;
@@ -1315,13 +1311,12 @@ mod tests {
         let app = TuiApplication::with_data_root(tmp.path(), &data_root)?;
 
         assert_eq!(app.session.current_provider, "openai-sso");
-        assert_eq!(app.session.current_model, "gpt-5.5");
-        assert_ne!(app.session.current_model, "gpt-5.1-codex-mini");
+        assert_eq!(app.session.current_model, "gpt-5.4-mini");
         Ok(())
     }
 
     #[test]
-    fn startup_replaces_retired_subagent_model_with_default() -> anyhow::Result<()> {
+    fn startup_preserves_gpt_5_4_mini_subagent_model() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let data_root = tmp.path().join("home");
         std::fs::create_dir_all(&data_root)?;
@@ -1329,7 +1324,7 @@ mod tests {
             data_root.join("config.json"),
             serde_json::json!({
                 "subagent_provider": "openai-sso",
-                "subagent_model": "gpt-5.1-codex-mini"
+                "subagent_model": "gpt-5.4-mini"
             })
             .to_string(),
         )?;
@@ -1342,8 +1337,7 @@ mod tests {
     }
 
     #[test]
-    fn workspace_provider_override_replaces_retired_model_with_provider_default()
-    -> anyhow::Result<()> {
+    fn workspace_provider_override_preserves_gpt_5_4_mini_model() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let workspace = tmp.path().join("workspace");
         let data_root = tmp.path().join("home");
@@ -1354,7 +1348,7 @@ mod tests {
             workspace.display().to_string(),
             super::workspace_state::ProviderSelection {
                 provider: "openai-sso".to_string(),
-                model: "gpt-5.1-codex-mini".to_string(),
+                model: "gpt-5.4-mini".to_string(),
                 reasoning_level: None,
                 fast_mode: false,
             },
@@ -1364,8 +1358,7 @@ mod tests {
         app.apply_provider_selection_for_workspace();
 
         assert_eq!(app.session.current_provider, "openai-sso");
-        assert_eq!(app.session.current_model, "gpt-5.5");
-        assert_ne!(app.session.current_model, "gpt-5.1-codex-mini");
+        assert_eq!(app.session.current_model, "gpt-5.4-mini");
         Ok(())
     }
 

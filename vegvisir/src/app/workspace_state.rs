@@ -111,7 +111,7 @@ impl TuiApplication {
                     }
                 }
             }
-            None if super::retired_model_name(&selection.model) => {
+            None if !selection.model.trim().is_empty() => {
                 if let Some(default) = self
                     .models
                     .default_for_provider(&self.session.current_provider)
@@ -121,9 +121,6 @@ impl TuiApplication {
                         self.session.context_limit = context_window;
                     }
                 }
-            }
-            None if !selection.model.trim().is_empty() => {
-                self.session.current_model = selection.model;
             }
             None => {
                 if let Some(default) = self

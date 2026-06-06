@@ -364,7 +364,7 @@ fn handle_request(
                     dangerously_bypass_approvals_and_sandbox,
                 )?;
             } else if let Some(model) = params.model {
-                apply_command(app, &format!("/model {model}"))?;
+                apply_requested_model_or_default(app, &model)?;
             }
             let content = codex_input_text(&params.input);
             if let Some(thread) = state.threads.get_mut(&resolved_thread_id) {
@@ -2523,12 +2523,34 @@ fn start_app(
         apply_command(&mut app, &format!("/provider {provider}"))?;
     }
     if let Some(model) = model {
-        apply_command(&mut app, &format!("/model {model}"))?;
+        apply_requested_model_or_default(&mut app, &model)?;
     }
     if let Some(agent) = agent {
         apply_command(&mut app, &format!("/agent use {agent}"))?;
     }
     Ok(app)
+}
+
+fn apply_requested_model_or_default(app: &mut TuiApplication, model: &str) -> anyhow::Result<()> {
+    let requested = model.trim();
+    if requested.is_empty() {
+        return Ok(());
+    }
+    let valid_for_provider = app.models.get(requested).is_some_and(|model_info| {
+        app.models
+            .is_model_allowed_for_provider(model_info, &app.session.current_provider)
+    });
+    if valid_for_provider {
+        return apply_command(app, &format!("/model {requested}"));
+    }
+    if let Some(default) = app
+        .models
+        .default_for_provider(&app.session.current_provider)
+    {
+        let default_name = default.name.clone();
+        return apply_command(app, &format!("/model {default_name}"));
+    }
+    Ok(())
 }
 
 fn apply_command(app: &mut TuiApplication, command: &str) -> anyhow::Result<()> {
