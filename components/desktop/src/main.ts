@@ -322,9 +322,19 @@ function nextId(prefix: string): string {
   return `desktop-${prefix}-${state.requestCounter}`;
 }
 
+function recordDesktopPerf(name: string, payload: Record<string, unknown>): void {
+  state.events.push({ type: 'desktop.perf', payload: { name, ...payload } });
+  if (state.events.length > 600) state.events.splice(0, state.events.length - 600);
+}
+
 async function send(method: string, params: Record<string, unknown> = {}, prefix = method): Promise<void> {
   const request: BridgeRequest = { id: nextId(prefix.replace(/[^a-z0-9]+/gi, '-')), method, params };
+  const startedAt = performance.now();
   await invoke('bridge_send', { request });
+  const elapsedMs = Math.round(performance.now() - startedAt);
+  if (method === 'turn.send' || method === 'command.invoke' || elapsedMs >= 250) {
+    recordDesktopPerf('bridge_send', { method, id: request.id, elapsedMs });
+  }
 }
 
 async function startBridge(): Promise<void> {
@@ -692,17 +702,28 @@ async function sendTurn(): Promise<void> {
   state.error = '';
   if (content.startsWith('/')) {
     state.messages.push({ role: 'command', content });
-    render();
-    await send('command.invoke', { command: content }, 'command');
+    const turnStartedAt = performance.now();
+    try {
+      const sendPromise = send('command.invoke', { command: content }, 'command');
+      requestRender();
+      await sendPromise;
+      recordDesktopPerf('command_send_queued', { elapsedMs: Math.round(performance.now() - turnStartedAt) });
+    } catch (error) {
+      state.error = String(error);
+      requestRender();
+    }
     return;
   }
   state.messages.push({ role: 'user', content });
   state.busy = true;
   state.pendingAssistant = '';
   scrollChatToBottomOnNextRender();
-  render();
+  const turnStartedAt = performance.now();
   try {
-    await send('turn.send', { content }, 'turn');
+    const sendPromise = send('turn.send', { content }, 'turn');
+    requestRender();
+    await sendPromise;
+    recordDesktopPerf('chat_send_queued', { elapsedMs: Math.round(performance.now() - turnStartedAt) });
   } catch (error) {
     state.busy = false;
     state.error = String(error);
