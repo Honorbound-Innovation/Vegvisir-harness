@@ -377,9 +377,22 @@ impl AgentProfileStore {
     }
 
     pub fn load(&self, agent_id: &str) -> anyhow::Result<AgentProfile> {
-        Ok(serde_json::from_str(&fs::read_to_string(
-            self.path_for(agent_id),
-        )?)?)
+        let normalized = normalize_agent_id(agent_id);
+        let path = self.path_for(&normalized);
+        let content = fs::read_to_string(&path).with_context(|| {
+            format!(
+                "agent profile '{}' was not found at {}. Use /agent templates to see builtin modes, /agent create <id> | <mode> | <display name> | <system prompt> to create one, or avoid passing --agent for default subagent behavior.",
+                normalized,
+                path.display()
+            )
+        })?;
+        serde_json::from_str(&content).with_context(|| {
+            format!(
+                "failed to parse agent profile '{}' at {}",
+                normalized,
+                path.display()
+            )
+        })
     }
 
     pub fn delete(&self, agent_id: &str) -> anyhow::Result<PathBuf> {
@@ -1183,7 +1196,29 @@ pub fn normalize_agent_id(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::load_skill_definitions;
+    use super::{AgentProfileStore, load_skill_definitions};
+
+    #[test]
+    fn missing_agent_profile_error_names_profile_and_path() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let store = AgentProfileStore::new(tmp.path().join("agents"))?;
+
+        let error = store.load("Missing Reviewer").unwrap_err().to_string();
+
+        assert!(
+            error.contains("agent profile 'missing-reviewer' was not found"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.contains("missing-reviewer.json"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.contains("/agent templates"),
+            "unexpected error: {error}"
+        );
+        Ok(())
+    }
 
     #[test]
     fn loads_lsl_subskills_from_workspace_skills() -> anyhow::Result<()> {

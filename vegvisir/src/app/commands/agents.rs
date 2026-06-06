@@ -1392,6 +1392,23 @@ fn agent_templates() -> Vec<AgentTemplate> {
                 "audit_log",
             ],
         ),
+        template(
+            "reviewer",
+            "Reviewer",
+            "Performs bounded read-only code, design, and documentation review.",
+            "You are a review specialist. Inspect only the scoped evidence, identify concrete risks or regressions, distinguish findings from speculation, and produce concise review notes. Do not edit files unless the user explicitly assigns implementation work and write tools are enabled.",
+            &[
+                "list_files",
+                "read_file",
+                "run_command",
+                "run_tests",
+                "cms_recall",
+                "cms_recent",
+                "cms_search_chatgpt_archive",
+                "cms_prepare_context",
+                "audit_log",
+            ],
+        ),
         template_with_skills(
             "agent-red",
             "Agent Red",
@@ -1537,7 +1554,13 @@ mod registration_tests {
 
         let report = ensure_registered_agent_identities(&store, tmp.path(), tmp.path())?;
 
-        assert!(report.builtin_created >= 7);
+        assert!(report.builtin_created >= 8);
+        let reviewer = store.load("reviewer")?;
+        assert_eq!(reviewer.mode, "reviewer");
+        assert_eq!(reviewer.display_name, "Reviewer");
+        assert!(reviewer.enabled_tools.contains(&"read_file".to_string()));
+        assert!(reviewer.enabled_tools.contains(&"run_tests".to_string()));
+
         let engineer = store.load("engineer")?;
         assert_eq!(engineer.mode, "engineer");
         assert_eq!(

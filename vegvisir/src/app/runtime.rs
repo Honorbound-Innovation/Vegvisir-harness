@@ -243,8 +243,13 @@ impl TuiApplication {
                         self.autonomy.last_status = "cancelled".to_string();
                     }
                 } else {
-                    self.fail_tui_turn_artifact(&error.to_string(), true);
+                    let failed_run = self.fail_tui_turn_artifact(&error.to_string(), true);
                     self.push_turn_failure_summary(error.to_string());
+                    self.auto_recover_failed_turn(
+                        "provider worker returned an error",
+                        Some(error.to_string()),
+                        failed_run,
+                    );
                     if self.autonomy.active {
                         self.autonomy.active = false;
                         self.autonomy.enabled = false;
@@ -259,12 +264,17 @@ impl TuiApplication {
                 self.session.activity.clear();
                 self.clear_pending_turn_runtime_handles();
                 self.pop_empty_assistant_placeholder();
-                self.fail_tui_turn_artifact(
+                let failed_run = self.fail_tui_turn_artifact(
                     "provider worker panicked before completing the turn",
                     true,
                 );
                 self.push_turn_failure_summary(
                     "provider worker panicked before completing the turn".to_string(),
+                );
+                self.auto_recover_failed_turn(
+                    "provider worker panicked before completing the turn",
+                    None,
+                    failed_run,
                 );
                 if self.autonomy.active {
                     self.autonomy.active = false;
@@ -616,7 +626,7 @@ Steering: {display_content}{attachment_note}"
         self.pending_turn_last_activity_at = None;
     }
 
-    fn start_tui_turn_artifact(&mut self, prompt: &str) {
+    pub(crate) fn start_tui_turn_artifact(&mut self, prompt: &str) {
         match RunArtifactManager::start_in(
             &self.cwd,
             &self.data_root,
@@ -711,10 +721,15 @@ Steering: {display_content}{attachment_note}"
         }
     }
 
-    fn fail_tui_turn_artifact(&mut self, message: &str, recoverable: bool) {
+    fn fail_tui_turn_artifact(
+        &mut self,
+        message: &str,
+        recoverable: bool,
+    ) -> Option<(String, std::path::PathBuf)> {
         let Some((manager, mut manifest)) = self.pending_run_artifact.take() else {
-            return;
+            return None;
         };
+        let failed_run = Some((manager.run_id.clone(), manager.run_dir.clone()));
         let failure = RunFailure {
             schema_version: crate::run_artifacts::RUN_ARTIFACT_SCHEMA_VERSION,
             run_id: manager.run_id.clone(),
@@ -756,6 +771,35 @@ Steering: {display_content}{attachment_note}"
                 "Warning: failed to finalize failed run artifact: {error}"
             ));
         }
+        failed_run
+    }
+
+    fn auto_recover_failed_turn(
+        &mut self,
+        reason: &str,
+        error: Option<String>,
+        failed_run: Option<(String, std::path::PathBuf)>,
+    ) {
+        let mut message = format!(
+            "Automatic turn recovery fired: {reason}. Vegvisir cleared the failed worker state, preserved the exact failure context above, and returned the UI to ready so you can retry or continue."
+        );
+        if let Some((run_id, run_dir)) = failed_run {
+            message.push_str(&format!(
+                "\n\nRecoverable failed run artifact: `{run_id}` at {}. Use `/recover last` or `/runs replay-plan {run_id}` for replay guidance before retrying.",
+                run_dir.display()
+            ));
+        } else {
+            message.push_str(
+                "\n\nNo run artifact was active for this failure; use the preserved transcript context above before retrying.",
+            );
+        }
+        if let Some(error) = error.filter(|error| !error.trim().is_empty()) {
+            message.push_str("\n\nRecovered error:\n```text\n");
+            message.push_str(error.trim());
+            message.push_str("\n```");
+        }
+        self.push_system_message(message);
+        self.finish_turn_repair_housekeeping(reason);
     }
 
     fn finish_turn_repair_housekeeping(&mut self, reason: &str) {

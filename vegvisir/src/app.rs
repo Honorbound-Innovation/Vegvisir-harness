@@ -1247,7 +1247,7 @@ fn default_subagent_active_limit() -> usize {
 #[cfg(test)]
 mod tests {
     use super::{StreamEvent, TuiApplication};
-    use crate::core::ChatMessage;
+    use crate::core::{ChatMessage, SessionState};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
     use std::{
         sync::{Arc, atomic::AtomicBool, mpsc},
@@ -1766,6 +1766,77 @@ mod tests {
                 .iter()
                 .any(|message| { message.role == "assistant" && message.content == "done" })
         );
+        Ok(())
+    }
+
+    #[test]
+    fn failed_worker_poll_fires_automatic_turn_recovery() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.start_tui_turn_artifact("recover this failed turn");
+        app.session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "recover this failed turn".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        app.session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: String::new(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        app.session.status = "streaming".to_string();
+        app.session.activity = "provider running".to_string();
+        app.pending_send = Some(std::thread::spawn(|| -> anyhow::Result<SessionState> {
+            Err(anyhow::anyhow!(
+                "simulated provider failure for auto recovery"
+            ))
+        }));
+        app.pending_turn_started_at = Some(Instant::now());
+        app.pending_turn_last_activity_at = Some(Instant::now());
+
+        for _ in 0..20 {
+            if app
+                .pending_send
+                .as_ref()
+                .is_some_and(|handle| handle.is_finished())
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        assert!(app.poll_pending_send());
+
+        assert!(app.pending_send.is_none());
+        assert_eq!(app.session.status, "ready");
+        assert!(app.session.activity.is_empty());
+        assert_eq!(
+            app.info_overlay
+                .as_ref()
+                .map(|overlay| overlay.title.as_str()),
+            Some("turn failure")
+        );
+        let transcript = app
+            .session
+            .messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n---\n");
+        assert!(
+            transcript.contains("Turn failed before the model produced a normal final summary")
+        );
+        assert!(transcript.contains("simulated provider failure for auto recovery"));
+        assert!(
+            transcript.contains("Automatic turn recovery fired: provider worker returned an error")
+        );
+        assert!(transcript.contains("Use `/recover last` or `/runs replay-plan"));
+        let latest_run = app
+            .latest_run_dir()?
+            .expect("failed run artifact should exist");
+        assert!(latest_run.join("failure.json").exists());
         Ok(())
     }
 
