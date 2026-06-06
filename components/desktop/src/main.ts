@@ -157,6 +157,12 @@ type ChatScrollSnapshot = {
   shouldStickToBottom: boolean;
 };
 
+type CanvasScrollSnapshot = {
+  scrollLeft: number;
+  scrollTop: number;
+  tabId: string;
+};
+
 const CHAT_SCROLL_STICKY_THRESHOLD_PX = 96;
 
 function panelDefinition(panelId: PanelId): PanelDefinition {
@@ -1034,12 +1040,35 @@ function restoreChatScroll(snapshot: ChatScrollSnapshot | null): void {
   });
 }
 
+function captureCanvasScrollSnapshot(): CanvasScrollSnapshot | null {
+  const surface = document.querySelector<HTMLDivElement>('#canvas-surface');
+  if (!surface) return null;
+  return {
+    scrollLeft: surface.scrollLeft,
+    scrollTop: surface.scrollTop,
+    tabId: surface.dataset.canvasTab ?? '',
+  };
+}
+
+function restoreCanvasScroll(snapshot: CanvasScrollSnapshot | null): void {
+  if (!snapshot) return;
+  const apply = () => {
+    const surface = document.querySelector<HTMLDivElement>('#canvas-surface');
+    if (!surface || surface.dataset.canvasTab !== snapshot.tabId) return;
+    surface.scrollLeft = Math.max(0, Math.min(snapshot.scrollLeft, surface.scrollWidth - surface.clientWidth));
+    surface.scrollTop = Math.max(0, Math.min(snapshot.scrollTop, surface.scrollHeight - surface.clientHeight));
+  };
+  apply();
+  requestAnimationFrame(apply);
+}
+
 function scrollChatToBottomOnNextRender(): void {
   forceChatScrollToBottom = true;
 }
 
 function render(): void {
   const chatScrollSnapshot = captureChatScrollSnapshot();
+  const canvasScrollSnapshot = captureCanvasScrollSnapshot();
   refreshLayoutStorageScope();
   app.innerHTML = `
     <div class="grid h-screen grid-cols-[18rem_minmax(0,1fr)] overflow-hidden bg-vv-bg bg-vv-radial text-vv-text selection:bg-vv-cyan/25 max-[980px]:grid-cols-1">
@@ -1057,6 +1086,7 @@ function render(): void {
   `;
   bindEvents();
   restoreChatScroll(chatScrollSnapshot);
+  restoreCanvasScroll(canvasScrollSnapshot);
 }
 
 function renderLeftRail(): string {
@@ -1208,7 +1238,7 @@ function renderCanvas(): string {
     <div class="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
       ${renderLayoutTabs()}
       <div class="grid min-h-0 grid-cols-1 overflow-hidden">
-        <div id="canvas-surface" class="vv-scrollbar relative min-h-0 overflow-auto bg-vv-grid [background-size:42px_42px]">
+        <div id="canvas-surface" data-canvas-tab="${escapeHtml(layout.id)}" class="vv-scrollbar relative min-h-0 overflow-auto bg-vv-grid [background-size:42px_42px]">
           <div id="canvas-content" class="relative" style="width:${bounds.width}px;height:${bounds.height}px;min-width:100%;min-height:100%;">
             ${layout.modules.map(renderModuleFrame).join('')}
             ${layout.modules.length ? '' : renderBlankCanvasEmpty()}
