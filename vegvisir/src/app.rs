@@ -644,6 +644,7 @@ impl TuiApplication {
             context_mode: cms_v2::ecm::ContextMode::Project,
             commit_writebacks: true,
         };
+        let models = ModelRegistry::default_catalog()?;
         let subagent_defaults_config = default_subagent_provider_defaults();
         let active_subagent_limit = defaults
             .get("subagent_active_limit")
@@ -651,16 +652,25 @@ impl TuiApplication {
             .map(|value| value as usize)
             .unwrap_or_else(default_subagent_active_limit)
             .max(1);
-        let subagent_provider_defaults = SubagentProviderDefaults::new(
-            defaults
-                .get("subagent_provider")
-                .and_then(Value::as_str)
-                .unwrap_or(&subagent_defaults_config.provider),
-            defaults
-                .get("subagent_model")
-                .and_then(Value::as_str)
-                .unwrap_or(&subagent_defaults_config.model),
-        );
+        let subagent_provider = defaults
+            .get("subagent_provider")
+            .and_then(Value::as_str)
+            .unwrap_or(&subagent_defaults_config.provider);
+        let configured_subagent_model = defaults
+            .get("subagent_model")
+            .and_then(Value::as_str)
+            .unwrap_or(&subagent_defaults_config.model);
+        let subagent_model = if model_retired_or_known_invalid(
+            &models,
+            subagent_provider,
+            configured_subagent_model,
+        ) {
+            subagent_defaults_config.model.as_str()
+        } else {
+            configured_subagent_model
+        };
+        let subagent_provider_defaults =
+            SubagentProviderDefaults::new(subagent_provider, subagent_model);
         let tool_registry =
             build_builtin_registry_with_cms_mode_subagent_limit_and_provider_defaults(
                 &cwd,
@@ -731,12 +741,17 @@ impl TuiApplication {
         }
         let mut provider_registry = ProviderRegistry::default_catalog()?;
         set_openai_sso_auth_root(&mut provider_registry, &data_root);
-        let models = ModelRegistry::default_catalog()?;
+        if session.current_provider == "openai" && session.current_model == "gpt-5.1-codex-mini" {
+            session.current_provider = "openai-sso".to_string();
+        }
         if provider_registry.get(&session.current_provider).is_none() {
             session.current_provider = "demo".to_string();
         }
-        if model_known_but_invalid(&models, &session.current_provider, &session.current_model)
-            && let Some(default) = models.default_for_provider(&session.current_provider)
+        if model_retired_or_known_invalid(
+            &models,
+            &session.current_provider,
+            &session.current_model,
+        ) && let Some(default) = models.default_for_provider(&session.current_provider)
         {
             session.current_model = default.name.clone();
             if let Some(context_window) = default.context_window {
@@ -1260,6 +1275,98 @@ mod tests {
             super::terminal_frame("one\ntwo\nthree"),
             "one\x1b[K\r\ntwo\x1b[K\r\nthree\x1b[K"
         );
+    }
+
+    #[test]
+    fn startup_replaces_stale_openai_codex_mini_default_with_sso() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let data_root = tmp.path().join("home");
+        std::fs::create_dir_all(&data_root)?;
+        std::fs::write(
+            data_root.join("config.json"),
+            serde_json::json!({
+                "current_provider": "openai",
+                "current_model": "gpt-5.1-codex-mini"
+            })
+            .to_string(),
+        )?;
+
+        let app = TuiApplication::with_data_root(tmp.path(), &data_root)?;
+
+        assert_eq!(app.session.current_provider, "openai-sso");
+        assert_eq!(app.session.current_model, "gpt-5.5");
+        Ok(())
+    }
+
+    #[test]
+    fn startup_replaces_retired_saved_model_with_provider_default() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let data_root = tmp.path().join("home");
+        std::fs::create_dir_all(&data_root)?;
+        std::fs::write(
+            data_root.join("config.json"),
+            serde_json::json!({
+                "current_provider": "openai-sso",
+                "current_model": "gpt-5.1-codex-mini"
+            })
+            .to_string(),
+        )?;
+
+        let app = TuiApplication::with_data_root(tmp.path(), &data_root)?;
+
+        assert_eq!(app.session.current_provider, "openai-sso");
+        assert_eq!(app.session.current_model, "gpt-5.5");
+        assert_ne!(app.session.current_model, "gpt-5.1-codex-mini");
+        Ok(())
+    }
+
+    #[test]
+    fn startup_replaces_retired_subagent_model_with_default() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let data_root = tmp.path().join("home");
+        std::fs::create_dir_all(&data_root)?;
+        std::fs::write(
+            data_root.join("config.json"),
+            serde_json::json!({
+                "subagent_provider": "openai-sso",
+                "subagent_model": "gpt-5.1-codex-mini"
+            })
+            .to_string(),
+        )?;
+
+        let app = TuiApplication::with_data_root(tmp.path(), &data_root)?;
+
+        assert_eq!(app.subagent_provider_defaults.provider, "openai-sso");
+        assert_eq!(app.subagent_provider_defaults.model, "gpt-5.4-mini");
+        Ok(())
+    }
+
+    #[test]
+    fn workspace_provider_override_replaces_retired_model_with_provider_default()
+    -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        let data_root = tmp.path().join("home");
+        std::fs::create_dir_all(&workspace)?;
+        let mut app = TuiApplication::with_data_root(&workspace, &data_root)?;
+        let mut index = app.load_workspace_index();
+        index.provider_overrides.insert(
+            workspace.display().to_string(),
+            super::workspace_state::ProviderSelection {
+                provider: "openai-sso".to_string(),
+                model: "gpt-5.1-codex-mini".to_string(),
+                reasoning_level: None,
+                fast_mode: false,
+            },
+        );
+        app.save_workspace_index(&index)?;
+
+        app.apply_provider_selection_for_workspace();
+
+        assert_eq!(app.session.current_provider, "openai-sso");
+        assert_eq!(app.session.current_model, "gpt-5.5");
+        assert_ne!(app.session.current_model, "gpt-5.1-codex-mini");
+        Ok(())
     }
 
     #[test]

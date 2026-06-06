@@ -260,12 +260,20 @@ function loadSettings(): StartBridgeRequest {
     if (saved.settingsSchemaVersion !== SETTINGS_SCHEMA_VERSION) {
       settings.dangerousBypass = false;
       settings.settingsSchemaVersion = SETTINGS_SCHEMA_VERSION;
+      migrateStaleDesktopProviderSettings(settings);
       localStorage.setItem('vegvisir.desktop.settings', JSON.stringify(settings));
     }
     return settings;
   } catch {
     return defaults;
   }
+}
+
+function migrateStaleDesktopProviderSettings(settings: StartBridgeRequest): void {
+  const provider = String(settings.provider ?? '').trim();
+  const model = String(settings.model ?? '').trim();
+  if (provider === 'openai') settings.provider = 'openai-sso';
+  if (model === 'gpt-5.1-codex-mini') settings.model = '';
 }
 
 function defaultSettings(): StartBridgeRequest {

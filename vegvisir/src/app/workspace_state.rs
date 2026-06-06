@@ -111,6 +111,17 @@ impl TuiApplication {
                     }
                 }
             }
+            None if super::retired_model_name(&selection.model) => {
+                if let Some(default) = self
+                    .models
+                    .default_for_provider(&self.session.current_provider)
+                {
+                    self.session.current_model = default.name.clone();
+                    if let Some(context_window) = default.context_window {
+                        self.session.context_limit = context_window;
+                    }
+                }
+            }
             None if !selection.model.trim().is_empty() => {
                 self.session.current_model = selection.model;
             }

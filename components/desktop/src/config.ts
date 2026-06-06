@@ -1,5 +1,5 @@
 export const LAYOUT_SCHEMA_VERSION = 1;
-export const SETTINGS_SCHEMA_VERSION = 2;
+export const SETTINGS_SCHEMA_VERSION = 3;
 export const GLOBAL_LAYOUT_STORAGE_KEY = 'vegvisir.desktop.layouts.global';
 
 export const CHAT_SCROLL_STICKY_THRESHOLD_PX = 96;
