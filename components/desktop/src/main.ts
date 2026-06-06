@@ -53,6 +53,34 @@ type BridgeStopResult = {
   status?: string | null;
 };
 
+type FileExplorerEntry = {
+  name: string;
+  path: string;
+  isDir: boolean;
+  isFile: boolean;
+  isSymlink: boolean;
+  size?: number | null;
+  modifiedMs?: number | string | null;
+  gitRepo: boolean;
+};
+
+type FileExplorerListing = {
+  path: string;
+  parent?: string | null;
+  home?: string | null;
+  entries: FileExplorerEntry[];
+};
+
+type FileExplorerState = {
+  path: string;
+  parent: string;
+  home: string;
+  entries: FileExplorerEntry[];
+  loading: boolean;
+  error: string;
+  selectedPath: string;
+};
+
 type BridgeMethodDraft = {
   raw: string;
   query: string;
@@ -66,7 +94,7 @@ type BridgeMethodDraft = {
   global: boolean;
 };
 
-type PanelId = 'chat' | 'sessions' | 'work' | 'approvals' | 'tools' | 'providers' | 'capabilities' | 'commands' | 'runtime' | 'openai' | 'diff' | 'memory' | 'skills' | 'integrations' | 'evidence' | 'system' | 'settings';
+type PanelId = 'explorer' | 'chat' | 'sessions' | 'work' | 'approvals' | 'tools' | 'providers' | 'capabilities' | 'commands' | 'runtime' | 'openai' | 'diff' | 'memory' | 'skills' | 'integrations' | 'evidence' | 'system' | 'settings';
 
 type CanvasPanelId = PanelId;
 
@@ -125,6 +153,7 @@ if (!appElement) throw new Error('missing #app root');
 const app = appElement;
 
 const panels: PanelDefinition[] = [
+  { id: 'explorer', label: 'Explorer', icon: '▣', hint: 'Browse files and switch workspaces', defaultWidth: 660, defaultHeight: 560, minWidth: 360, minHeight: 280 },
   { id: 'chat', label: 'Chat', icon: '✦', hint: 'Active agent transcript', defaultWidth: 760, defaultHeight: 620, minWidth: 340, minHeight: 260 },
   { id: 'sessions', label: 'Sessions', icon: '▤', hint: 'Load saved work', defaultWidth: 520, defaultHeight: 420, minWidth: 320, minHeight: 240 },
   { id: 'work', label: 'Work log', icon: '◌', hint: 'Bridge and tool events', defaultWidth: 520, defaultHeight: 420, minWidth: 320, minHeight: 220 },
@@ -177,7 +206,7 @@ function defaultLayoutState(): CanvasLayoutState {
     gridSize: 24,
     snapToGrid: true,
     tabs: [
-      createLayoutTabFromPanels('operations', 'Operations', ['chat', 'work', 'approvals', 'runtime']),
+      createLayoutTabFromPanels('operations', 'Operations', ['explorer', 'chat', 'work', 'approvals']),
       createLayoutTabFromPanels('provider-control', 'Provider Control', ['providers', 'commands', 'capabilities', 'settings']),
       createLayoutTabFromPanels('review', 'Review', ['diff', 'evidence', 'work', 'sessions']),
       createLayoutTabFromPanels('memory-skills', 'Memory and Skills', ['memory', 'skills', 'system', 'chat']),
@@ -308,7 +337,7 @@ function refreshLayoutStorageScope(): void {
 function currentLayout(): CanvasLayoutTab {
   let layout = state.layout.tabs.find((tab) => tab.id === state.layout.activeTabId);
   if (!layout) {
-    layout = state.layout.tabs[0] ?? createLayoutTabFromPanels('operations', 'Operations', ['chat', 'work', 'approvals', 'runtime']);
+    layout = state.layout.tabs[0] ?? createLayoutTabFromPanels('operations', 'Operations', ['explorer', 'chat', 'work', 'approvals']);
     state.layout.tabs = [layout];
     state.layout.activeTabId = layout.id;
   }
@@ -352,6 +381,7 @@ const state = {
   runtimeStatus: null as any,
   hbseOnboarding: null as any,
   openaiCompat: null as any,
+  fileExplorer: defaultFileExplorerState() as FileExplorerState,
   diff: '',
   memory: '',
   systemPrompt: '',
@@ -409,6 +439,18 @@ function defaultSettings(): StartBridgeRequest {
     dangerousBypass: false,
     autoStart: true,
     settingsSchemaVersion: SETTINGS_SCHEMA_VERSION,
+  };
+}
+
+function defaultFileExplorerState(): FileExplorerState {
+  return {
+    path: '',
+    parent: '',
+    home: '',
+    entries: [],
+    loading: false,
+    error: '',
+    selectedPath: '',
   };
 }
 
@@ -1333,6 +1375,7 @@ function moduleRenderMode(instance: CanvasModuleInstance): 'full' | 'compact' | 
 
 function renderModuleContent(panelId: PanelId): string {
   switch (panelId) {
+    case 'explorer': return renderExplorer();
     case 'chat': return renderChat();
     case 'sessions': return renderSessions();
     case 'work': return renderWork();
@@ -1360,6 +1403,7 @@ function renderModuleCompact(panelId: PanelId): string {
 
 function moduleSummary(panelId: PanelId): string {
   switch (panelId) {
+    case 'explorer': return `${state.fileExplorer.path || state.settings.workspace || 'home'} · ${state.fileExplorer.entries.length} entries`;
     case 'chat': return `${state.busy ? 'Busy' : 'Ready'} · ${state.messages.length} messages${state.pendingAssistant ? ' · streaming' : ''}`;
     case 'sessions': return `${state.sessions.length} sessions loaded`;
     case 'work': return `${state.events.length} bridge events`;
@@ -2096,6 +2140,143 @@ function renderOpenAiBridge(): string {
     </div>`;
 }
 
+
+function renderExplorer(): string {
+  const explorer = state.fileExplorer;
+  const currentWorkspace = String(state.session?.workspace ?? state.settings.workspace ?? '').trim();
+  const selectedEntry = explorer.entries.find((entry) => entry.path === explorer.selectedPath);
+  const selectedDirectory = selectedEntry?.isDir ? selectedEntry.path : explorer.selectedPath;
+  const workspacePath = selectedDirectory || explorer.path || currentWorkspace;
+  return `
+    <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3">
+      <section class="vv-panel p-3">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div class="min-w-0 flex-1">
+            <h2 class="text-base font-black">Workspace Explorer</h2>
+            <p class="mt-1 text-xs leading-5 text-vv-muted">Browse local directories and switch the Vegvisir bridge workspace with the mouse.</p>
+            <div class="mt-2 flex flex-wrap items-center gap-2 text-xs text-vv-muted">
+              <span class="vv-pill">active: ${escapeHtml(currentWorkspace || 'default/home')}</span>
+              ${explorer.loading ? '<span class="vv-pill text-vv-cyan"><span class="vv-mini-spinner" aria-hidden="true"></span> loading</span>' : ''}
+            </div>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <button class="vv-action" id="explorer-home" ${explorer.home ? '' : 'disabled'}>Home</button>
+            <button class="vv-action" id="explorer-current-workspace" ${currentWorkspace ? '' : 'disabled'}>Current workspace</button>
+            <button class="vv-action" id="explorer-up" ${explorer.parent ? '' : 'disabled'}>Up</button>
+            <button class="vv-action" id="explorer-refresh">Refresh</button>
+          </div>
+        </div>
+        <div class="mt-3 flex gap-2">
+          <input id="explorer-path-input" class="vv-focus min-w-0 flex-1 rounded-xl border border-vv-line bg-black/20 px-3 py-2 font-mono text-xs text-vv-text placeholder:text-vv-dim" value="${escapeHtml(explorer.path || currentWorkspace)}" placeholder="Directory path" />
+          <button class="vv-action" id="explorer-go">Go</button>
+          <button class="vv-action vv-action-primary" data-explorer-switch-workspace="${escapeHtml(workspacePath)}" ${workspacePath ? '' : 'disabled'}>${state.bridgeRunning ? 'Switch + restart' : 'Set workspace'}</button>
+        </div>
+        ${explorer.error ? `<pre class="vv-code mt-3 whitespace-pre-wrap rounded-xl border border-vv-red/45 bg-vv-red/10 p-3 text-red-100">${escapeHtml(explorer.error)}</pre>` : ''}
+        ${renderExplorerBreadcrumbs(explorer.path)}
+      </section>
+      <section class="vv-panel min-h-0 overflow-hidden p-0">
+        <div class="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-2 border-b border-vv-line bg-black/20 px-3 py-2 font-mono text-[0.68rem] uppercase tracking-[0.18em] text-vv-muted">
+          <span>Name</span><span>Size</span><span>Modified</span><span>Action</span>
+        </div>
+        <div class="vv-scrollbar h-full min-h-0 overflow-auto">
+          ${explorer.entries.length ? explorer.entries.map(renderExplorerEntry).join('') : `<div class="p-4 text-sm text-vv-muted">${explorer.loading ? 'Loading directory…' : 'No entries loaded. Click Home, Current workspace, or Go.'}</div>`}
+        </div>
+      </section>
+    </div>`;
+}
+
+function renderExplorerBreadcrumbs(path: string): string {
+  if (!path) return '';
+  const parts = path.split('/').filter(Boolean);
+  const rootButton = `<button class="vv-action px-2 py-1 text-[0.68rem]" data-explorer-open="/">/</button>`;
+  let cursor = '';
+  const buttons = parts.map((part) => {
+    cursor += `/${part}`;
+    return `<button class="vv-action px-2 py-1 text-[0.68rem]" data-explorer-open="${escapeHtml(cursor)}">${escapeHtml(part)}</button>`;
+  });
+  return `<div class="vv-scrollbar mt-3 flex items-center gap-1 overflow-x-auto pb-1">${[rootButton, ...buttons].join('<span class="text-vv-dim">›</span>')}</div>`;
+}
+
+function renderExplorerEntry(entry: FileExplorerEntry): string {
+  const selected = state.fileExplorer.selectedPath === entry.path;
+  const icon = entry.isDir ? (entry.gitRepo ? '⌬' : '▸') : '·';
+  const typeLabel = entry.isDir ? (entry.gitRepo ? 'git workspace' : 'directory') : entry.isSymlink ? 'symlink' : 'file';
+  return `
+    <div class="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-2 border-b border-vv-line/60 px-3 py-2 text-sm ${selected ? 'bg-vv-cyan/10' : 'hover:bg-white/[0.035]'}">
+      <button class="min-w-0 text-left" data-explorer-select="${escapeHtml(entry.path)}" ${entry.isDir ? `data-explorer-open="${escapeHtml(entry.path)}"` : ''}>
+        <div class="flex min-w-0 items-center gap-2">
+          <span class="grid h-6 w-6 shrink-0 place-items-center rounded-lg border border-vv-line bg-white/[0.035] text-vv-cyan">${icon}</span>
+          <span class="truncate font-semibold text-vv-text">${escapeHtml(entry.name)}</span>
+          <span class="vv-pill shrink-0 ${entry.gitRepo ? 'text-vv-green' : ''}">${escapeHtml(typeLabel)}</span>
+        </div>
+        <div class="mt-1 truncate font-mono text-[0.68rem] text-vv-dim">${escapeHtml(entry.path)}</div>
+      </button>
+      <span class="font-mono text-xs text-vv-muted">${escapeHtml(formatFileSize(entry.size))}</span>
+      <span class="font-mono text-xs text-vv-muted">${escapeHtml(formatModifiedTime(entry.modifiedMs))}</span>
+      <div class="flex justify-end gap-1">
+        ${entry.isDir ? `<button class="vv-action px-2 py-1 text-[0.65rem]" data-explorer-open="${escapeHtml(entry.path)}">Open</button><button class="vv-action vv-action-primary px-2 py-1 text-[0.65rem]" data-explorer-switch-workspace="${escapeHtml(entry.path)}">Workspace</button>` : ''}
+      </div>
+    </div>`;
+}
+
+function formatFileSize(value: unknown): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
+  if (value < 1024) return `${value} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let size = value / 1024;
+  let index = 0;
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024;
+    index += 1;
+  }
+  return `${size.toFixed(size >= 10 ? 1 : 2)} ${units[index]}`;
+}
+
+function formatModifiedTime(value: unknown): string {
+  const numeric = typeof value === 'string' ? Number(value) : value;
+  if (typeof numeric !== 'number' || !Number.isFinite(numeric)) return '—';
+  const date = new Date(numeric);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleDateString();
+}
+
+async function loadExplorerDirectory(path?: string): Promise<void> {
+  state.fileExplorer.loading = true;
+  state.fileExplorer.error = '';
+  render();
+  try {
+    const listing = await invoke<FileExplorerListing>('fs_list_directory', { path: path || null });
+    state.fileExplorer = {
+      path: listing.path,
+      parent: listing.parent ?? '',
+      home: listing.home ?? '',
+      entries: Array.isArray(listing.entries) ? listing.entries : [],
+      loading: false,
+      error: '',
+      selectedPath: listing.path,
+    };
+  } catch (error) {
+    state.fileExplorer.loading = false;
+    state.fileExplorer.error = String(error);
+  }
+  render();
+}
+
+async function switchWorkspace(path: string): Promise<void> {
+  const workspace = path.trim();
+  if (!workspace) return;
+  state.settings.workspace = workspace;
+  saveSettings();
+  state.fileExplorer.selectedPath = workspace;
+  state.activePanel = 'explorer';
+  state.events.push({ type: 'desktop.workspace.selected', payload: { workspace } });
+  if (state.bridgeRunning) {
+    await restartBridge();
+  } else {
+    render();
+  }
+}
+
 function renderSystem(): string {
   return `<div><button id="refresh-system" class="vv-action mb-3">Refresh system prompt</button>${renderPre(state.systemPrompt || 'No system prompt loaded.')}</div>`;
 }
@@ -2112,7 +2293,7 @@ function renderSettings(): string {
       <label class="flex items-center gap-3 text-sm text-vv-muted"><input type="checkbox" name="dangerousBypass" ${startupDangerousBypassRequested() ? 'checked' : ''} /> Dangerous bypass at startup</label>
       <p class="text-xs leading-5 text-vv-muted">Packaged AppImages may not inherit your shell PATH. If bridge start fails, set the Vegvisir binary to an absolute path such as <code class="text-vv-cyan">/home/malice/.local/bin/vegvisir</code>. The backend also searches resource-adjacent <code class="text-vv-cyan">resources/bin</code> paths and <code class="text-vv-cyan">VEGVISIR_DESKTOP_RESOURCE_DIR</code> for future bundled binaries.</p>
       <p class="text-xs leading-5 text-vv-muted">Desktop does not bypass Vegvisir. It spawns <code class="text-vv-cyan">vegvisir app-server</code> so providers, HBSE, CMS, tools, approvals, and policy remain owned by the harness.</p>
-      <button class="vv-action vv-action-primary w-fit" type="submit">Save settings</button>
+      <div class="flex flex-wrap gap-2"><button class="vv-action vv-action-primary w-fit" type="submit">Save settings</button><button class="vv-action w-fit" type="button" data-module-add="explorer">Open Explorer</button></div>
     </form>
   `;
 }
@@ -2278,6 +2459,7 @@ function resetLayoutTab(): void {
 }
 
 function refreshPanelData(panel: PanelId): void {
+  if (panel === 'explorer') void loadExplorerDirectory(state.fileExplorer.path || state.settings.workspace || undefined);
   if (panel === 'sessions') void send('session.list', {}, 'sessions');
   if (panel === 'diff') void send('diff.current', {}, 'diff');
   if (panel === 'memory') void send('memory.status', {}, 'memory');
@@ -2388,6 +2570,33 @@ function bindEvents(): void {
   });
   document.querySelectorAll<HTMLElement>('[data-module-drag]').forEach((handle) => handle.addEventListener('pointerdown', (event) => startCanvasInteraction(event, handle.dataset.moduleDrag ?? '', 'move')));
   document.querySelectorAll<HTMLElement>('[data-module-resize]').forEach((handle) => handle.addEventListener('pointerdown', (event) => startCanvasInteraction(event, handle.dataset.moduleResize ?? '', 'resize')));
+  document.querySelector('#explorer-home')?.addEventListener('click', () => void loadExplorerDirectory(state.fileExplorer.home || undefined));
+  document.querySelector('#explorer-current-workspace')?.addEventListener('click', () => void loadExplorerDirectory(String(state.session?.workspace ?? state.settings.workspace ?? '')));
+  document.querySelector('#explorer-up')?.addEventListener('click', () => void loadExplorerDirectory(state.fileExplorer.parent));
+  document.querySelector('#explorer-refresh')?.addEventListener('click', () => void loadExplorerDirectory(state.fileExplorer.path || state.settings.workspace || undefined));
+  document.querySelector('#explorer-go')?.addEventListener('click', () => {
+    const input = document.querySelector<HTMLInputElement>('#explorer-path-input');
+    void loadExplorerDirectory(input?.value.trim() || undefined);
+  });
+  document.querySelector('#explorer-path-input')?.addEventListener('keydown', (event) => {
+    const key = event as KeyboardEvent;
+    if (key.key === 'Enter') {
+      key.preventDefault();
+      void loadExplorerDirectory((key.currentTarget as HTMLInputElement).value.trim() || undefined);
+    }
+  });
+  document.querySelectorAll<HTMLButtonElement>('[data-explorer-open]').forEach((button) => button.addEventListener('click', (event) => {
+    event.stopPropagation();
+    void loadExplorerDirectory(button.dataset.explorerOpen ?? '');
+  }));
+  document.querySelectorAll<HTMLButtonElement>('[data-explorer-select]').forEach((button) => button.addEventListener('click', () => {
+    state.fileExplorer.selectedPath = button.dataset.explorerSelect ?? '';
+    render();
+  }));
+  document.querySelectorAll<HTMLButtonElement>('[data-explorer-switch-workspace]').forEach((button) => button.addEventListener('click', (event) => {
+    event.stopPropagation();
+    void switchWorkspace(button.dataset.explorerSwitchWorkspace ?? '');
+  }));
   document.querySelector('#send-turn')?.addEventListener('click', () => void sendTurn());
   document.querySelector('#turn-input')?.addEventListener('keydown', (event) => {
     const key = event as KeyboardEvent;

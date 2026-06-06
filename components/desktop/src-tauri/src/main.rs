@@ -1,13 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::{
-    env,
+    env, fs,
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, ExitStatus, Stdio},
     sync::{mpsc, Mutex},
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
@@ -39,6 +39,107 @@ struct BridgeStopResult {
     graceful: bool,
     killed: bool,
     status: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileExplorerEntry {
+    name: String,
+    path: String,
+    is_dir: bool,
+    is_file: bool,
+    is_symlink: bool,
+    size: Option<u64>,
+    modified_ms: Option<u128>,
+    git_repo: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileExplorerListing {
+    path: String,
+    parent: Option<String>,
+    home: Option<String>,
+    entries: Vec<FileExplorerEntry>,
+}
+
+fn default_browser_path() -> PathBuf {
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn modified_ms(modified: SystemTime) -> Option<u128> {
+    modified
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_millis())
+}
+
+#[tauri::command]
+fn fs_list_directory(path: Option<String>) -> Result<FileExplorerListing, String> {
+    let requested = path
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| PathBuf::from(value.trim()))
+        .unwrap_or_else(default_browser_path);
+    let directory = fs::canonicalize(&requested).map_err(|error| {
+        format!(
+            "failed to resolve directory '{}': {error}",
+            requested.display()
+        )
+    })?;
+
+    if !directory.is_dir() {
+        return Err(format!("'{}' is not a directory", directory.display()));
+    }
+
+    let mut entries = Vec::new();
+    for item in fs::read_dir(&directory).map_err(|error| {
+        format!(
+            "failed to read directory '{}': {error}",
+            directory.display()
+        )
+    })? {
+        let item = item.map_err(|error| error.to_string())?;
+        let path = item.path();
+        let metadata = item.metadata().ok();
+        let file_type = item.file_type().ok();
+        let is_dir = file_type.as_ref().is_some_and(|kind| kind.is_dir());
+        let is_file = file_type.as_ref().is_some_and(|kind| kind.is_file());
+        let is_symlink = file_type.as_ref().is_some_and(|kind| kind.is_symlink());
+        let name = item.file_name().to_string_lossy().to_string();
+        let git_repo = is_dir && path.join(".git").exists();
+        entries.push(FileExplorerEntry {
+            name,
+            path: path.display().to_string(),
+            is_dir,
+            is_file,
+            is_symlink,
+            size: metadata
+                .as_ref()
+                .filter(|_| is_file)
+                .map(|metadata| metadata.len()),
+            modified_ms: metadata
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(modified_ms),
+            git_repo,
+        });
+    }
+
+    entries.sort_by(|left, right| {
+        right
+            .is_dir
+            .cmp(&left.is_dir)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+
+    Ok(FileExplorerListing {
+        parent: directory.parent().map(|path| path.display().to_string()),
+        home: env::var_os("HOME").map(|path| PathBuf::from(path).display().to_string()),
+        path: directory.display().to_string(),
+        entries,
+    })
 }
 
 struct BridgeProcess {
@@ -429,6 +530,7 @@ fn main() {
             bridge_poll,
             bridge_stop,
             bridge_restart,
+            fs_list_directory,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Vegvisir Desktop");
