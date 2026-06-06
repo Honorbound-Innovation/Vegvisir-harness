@@ -4500,10 +4500,9 @@ fn tui_command_palette_and_help_shortcuts_work() -> anyhow::Result<()> {
     ));
     assert!(!app.command_palette_open);
     assert!(
-        app.session
-            .messages
-            .last()
-            .is_some_and(|message| message.content.contains("Available models for"))
+        app.info_overlay
+            .as_ref()
+            .is_some_and(|overlay| overlay.body.contains("Available models for"))
     );
 
     app.handle_key_event(crossterm::event::KeyEvent::new(
@@ -4518,10 +4517,9 @@ fn tui_command_palette_and_help_shortcuts_work() -> anyhow::Result<()> {
         crossterm::event::KeyModifiers::NONE,
     ));
     assert!(
-        app.session
-            .messages
-            .last()
-            .is_some_and(|message| message.content.contains("Available models for"))
+        app.info_overlay
+            .as_ref()
+            .is_some_and(|overlay| overlay.body.contains("Available models for"))
     );
     app.handle_key_event(crossterm::event::KeyEvent::new(
         crossterm::event::KeyCode::Esc,
@@ -5220,10 +5218,10 @@ fn application_persists_custom_agents_with_dedicated_memory_scope() -> anyhow::R
             .contains("Allowed MCP server github")
     );
     let shown = reopened.execute_command("/agent show reviewer")?.unwrap();
-    assert!(shown.contains("tools: read_file"));
-    assert!(shown.contains("skills: review-style"));
-    assert!(shown.contains("usrl_contracts: review-contract"));
-    assert!(shown.contains("mcp_servers: github"));
+    assert!(shown.contains("| tools | read_file |"));
+    assert!(shown.contains("| skills | review-style |"));
+    assert!(shown.contains("| usrl_contracts | review-contract |"));
+    assert!(shown.contains("| mcp_servers | github |"));
 
     let selected = reopened.execute_command("/agent use reviewer")?.unwrap();
     assert!(selected.contains("System prompt and CMS memory scope applied"));
@@ -5338,8 +5336,8 @@ fn application_clones_exports_imports_and_deletes_agents() -> anyhow::Result<()>
         .unwrap();
     assert!(cloned.contains("Cloned agent planner to researcher"));
     let researcher = app.execute_command("/agent show researcher")?.unwrap();
-    assert!(researcher.contains("name: Researcher"));
-    assert!(researcher.contains("cms_user_id: agent:researcher"));
+    assert!(researcher.contains("| name | Researcher |"));
+    assert!(researcher.contains("| cms_user_id | `agent:researcher` |"));
 
     let export_path = tmp.path().join("planner-export.json");
     let exported = app
@@ -5389,13 +5387,13 @@ fn application_creates_specialized_agents_from_templates() -> anyhow::Result<()>
         .unwrap();
     assert!(created.contains("Created agent red-team from template agent-red"));
     let shown = app.execute_command("/agent show red-team")?.unwrap();
-    assert!(shown.contains("mode: agent-red"));
-    assert!(shown.contains("name: Red Team"));
+    assert!(shown.contains("| mode | `agent-red` |"));
+    assert!(shown.contains("| name | Red Team |"));
     assert!(shown.contains("Security-oriented review"));
-    assert!(shown.contains("tools: list_files, read_file, run_command"));
+    assert!(shown.contains("| tools | list_files, read_file, run_command"));
     assert!(shown.contains("cms_prepare_model_request"));
     assert!(shown.contains("spawn_subagent"));
-    assert!(shown.contains("skills: repo-orientation, code-review, test-repair, risk-check"));
+    assert!(shown.contains("| skills | repo-orientation, code-review, test-repair, risk-check |"));
     assert!(shown.contains("You are Agent Red"));
     assert!(shown.contains("prompt/tool injection paths"));
 
@@ -5450,7 +5448,7 @@ fn natural_agent_template_request_creates_agent_without_provider_roundtrip() -> 
     let shown = app
         .execute_command("/agent show agent-red-security-auditor")?
         .unwrap();
-    assert!(shown.contains("mode: agent-red"));
+    assert!(shown.contains("| mode | `agent-red` |"));
     assert!(shown.contains("owasp and ai-owasp"));
     Ok(())
 }
@@ -5507,14 +5505,14 @@ fn application_designs_custom_agents_with_bindings() -> anyhow::Result<()> {
     assert!(designed.contains("Designed agent reviewer2"));
     assert_eq!(app.session.active_agent_id.as_deref(), Some("reviewer2"));
     let shown = app.execute_command("/agent show reviewer2")?.unwrap();
-    assert!(shown.contains("mode: reviewer"));
-    assert!(shown.contains("name: Reviewer Two"));
-    assert!(shown.contains("provider: openai-hbse"));
-    assert!(shown.contains("model: gpt-5.5"));
-    assert!(shown.contains("tools: list_files, read_file"));
-    assert!(shown.contains("skills: review-style"));
-    assert!(shown.contains("mcp_servers: github"));
-    assert!(shown.contains("usrl_contracts: release_gate"));
+    assert!(shown.contains("| mode | `reviewer` |"));
+    assert!(shown.contains("| name | Reviewer Two |"));
+    assert!(shown.contains("| provider | `openai-hbse` |"));
+    assert!(shown.contains("| model | `gpt-5.5` |"));
+    assert!(shown.contains("| tools | list_files, read_file |"));
+    assert!(shown.contains("| skills | review-style |"));
+    assert!(shown.contains("| mcp_servers | github |"));
+    assert!(shown.contains("| usrl_contracts | release_gate |"));
     assert_eq!(
         app.tool_executor.runtime_policy.allowed_tools,
         vec!["list_files".to_string(), "read_file".to_string()]
@@ -5566,9 +5564,9 @@ fn application_edits_agent_prompt_description_and_model_defaults() -> anyhow::Re
     );
 
     let shown = app.execute_command("/agent show coder")?.unwrap();
-    assert!(shown.contains("description: Writes focused patches."));
-    assert!(shown.contains("provider: openai-hbse"));
-    assert!(shown.contains("model: gpt-5.4-mini"));
+    assert!(shown.contains("| description | Writes focused patches. |"));
+    assert!(shown.contains("| provider | `openai-hbse` |"));
+    assert!(shown.contains("| model | `gpt-5.4-mini` |"));
     assert!(shown.contains("You write Rust changes only after reading context."));
 
     app.execute_command("/agent use coder")?.unwrap();
@@ -5590,8 +5588,8 @@ fn application_edits_agent_prompt_description_and_model_defaults() -> anyhow::Re
             .contains("Set agent coder provider to -")
     );
     let cleared = app.execute_command("/agent show coder")?.unwrap();
-    assert!(cleared.contains("provider: -"));
-    assert!(cleared.contains("model: -"));
+    assert!(cleared.contains("| provider | `-` |"));
+    assert!(cleared.contains("| model | `-` |"));
     Ok(())
 }
 
@@ -5760,7 +5758,7 @@ fn application_loads_markdown_and_usrl_skills_from_filesystem() -> anyhow::Resul
         .unwrap();
     assert!(bound.contains("regulated_release"));
     let profile = app.execute_command("/agent show release")?.unwrap();
-    assert!(profile.contains("usrl_contracts: regulated_release"));
+    assert!(profile.contains("| usrl_contracts | regulated_release |"));
     Ok(())
 }
 
