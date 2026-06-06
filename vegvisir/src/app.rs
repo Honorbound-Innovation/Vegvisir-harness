@@ -2043,9 +2043,16 @@ mod tests {
         assert!(
             transcript.contains("Turn failed before the model produced a normal final summary")
         );
+        assert!(transcript.contains("Exact error message:"));
         assert!(transcript.contains("Recent tool/progress events:"));
-        assert!(transcript.contains("Failure:"));
         assert!(transcript.contains("simulated provider abort"));
+        let overlay = app
+            .info_overlay
+            .as_ref()
+            .expect("turn failure should open an inspect overlay");
+        assert_eq!(overlay.title, "turn failure");
+        assert!(overlay.body.contains("Exact error message:"));
+        assert!(overlay.body.contains("simulated provider abort"));
         assert!(app.session.messages.iter().any(|message| {
             message.role == "system"
                 && message

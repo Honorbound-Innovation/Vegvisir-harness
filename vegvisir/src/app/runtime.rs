@@ -900,6 +900,7 @@ Steering: {display_content}{attachment_note}"
     }
 
     pub(crate) fn push_turn_failure_summary(&mut self, error: String) {
+        let exact_error = error.trim();
         let recent_tool_messages = self
             .session
             .messages
@@ -915,8 +916,19 @@ Steering: {display_content}{attachment_note}"
             .collect::<Vec<_>>();
 
         let mut content = String::from(
-            "Turn failed before the model produced a normal final summary. Preserved recovery context follows.
+            "Turn failed before the model produced a normal final summary.
 
+Exact error message:
+
+```text
+",
+        );
+        content.push_str(exact_error);
+        content.push_str(
+            "
+```
+
+Preserved recovery context:
 ",
         );
         if recent_tool_messages.is_empty() {
@@ -937,16 +949,22 @@ Steering: {display_content}{attachment_note}"
         }
         content.push_str(
             "
-Failure:
-",
-        );
-        content.push_str(error.trim());
-        content.push_str(
-            "
-
-Next step: I should retry or continue from the last successful step instead of leaving the turn silently truncated.",
+Next step: retry or continue from the last successful step instead of leaving the turn silently truncated.",
         );
 
+        self.info_scroll_offset = 0;
+        self.info_overlay = Some(InfoOverlay {
+            title: "turn failure".to_string(),
+            body: content.clone(),
+        });
+        self.logger.emit(
+            "turn_failure_visible",
+            json!({
+                "session": self.session.session_id,
+                "workspace": self.cwd.display().to_string(),
+                "error": exact_error,
+            }),
+        );
         self.push_live_tool_message(content);
     }
 
