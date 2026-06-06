@@ -69,6 +69,9 @@ type FileExplorerListing = {
   parent?: string | null;
   home?: string | null;
   entries: FileExplorerEntry[];
+  truncated?: boolean;
+  totalEntries?: number;
+  limit?: number;
 };
 
 type FileExplorerState = {
@@ -79,6 +82,10 @@ type FileExplorerState = {
   loading: boolean;
   error: string;
   selectedPath: string;
+  visibleLimit: number;
+  truncated: boolean;
+  totalEntries: number;
+  requestToken: number;
 };
 
 type BridgeMethodDraft = {
@@ -194,6 +201,8 @@ type CanvasScrollSnapshot = {
 
 const CHAT_SCROLL_STICKY_THRESHOLD_PX = 96;
 const APPROVAL_REFRESH_THROTTLE_MS = 750;
+const EXPLORER_INITIAL_VISIBLE_ENTRIES = 160;
+const EXPLORER_VISIBLE_INCREMENT = 160;
 let approvalRefreshInFlight = false;
 let lastApprovalRefreshAt = 0;
 
@@ -456,6 +465,10 @@ function defaultFileExplorerState(): FileExplorerState {
     loading: false,
     error: '',
     selectedPath: '',
+    visibleLimit: EXPLORER_INITIAL_VISIBLE_ENTRIES,
+    truncated: false,
+    totalEntries: 0,
+    requestToken: 0,
   };
 }
 
@@ -1399,7 +1412,7 @@ function renderModuleFrame(instance: CanvasModuleInstance): string {
           <button class="vv-action vv-action-danger px-2 py-1 text-[0.65rem]" data-module-remove="${escapeHtml(instance.id)}">×</button>
         </div>
       </header>
-      ${mode === 'collapsed' ? '' : `<div class="vv-scrollbar h-[calc(100%-2.95rem)] overflow-auto p-3 ${mode === 'compact' ? 'bg-black/10' : ''}">${mode === 'compact' ? renderModuleCompact(instance.panelId) : renderModuleContent(instance.panelId)}</div>`}
+      ${mode === 'collapsed' ? '' : `<div class="vv-scrollbar h-[calc(100%-2.95rem)] overflow-auto p-3 ${mode === 'compact' ? 'bg-black/10' : ''}" data-panel-root="${escapeHtml(instance.panelId)}">${mode === 'compact' ? renderModuleCompact(instance.panelId) : renderModuleContent(instance.panelId)}</div>`}
       ${draggable ? `<div class="vv-canvas-resize-handle" data-module-resize="${escapeHtml(instance.id)}" title="Resize module"></div>` : ''}
     </article>`;
 }
@@ -2201,7 +2214,7 @@ function renderExplorer(): string {
             <p class="mt-1 text-xs leading-5 text-vv-muted">Browse local directories and switch the Vegvisir bridge workspace with the mouse.</p>
             <div class="mt-2 flex flex-wrap items-center gap-2 text-xs text-vv-muted">
               <span class="vv-pill">active: ${escapeHtml(currentWorkspace || 'default/home')}</span>
-              ${explorer.loading ? '<span class="vv-pill text-vv-cyan"><span class="vv-mini-spinner" aria-hidden="true"></span> loading</span>' : ''}
+              <span class="vv-pill text-vv-cyan ${explorer.loading ? '' : 'hidden'}" data-explorer-loading-badge><span class="vv-mini-spinner" aria-hidden="true"></span> loading</span>
             </div>
           </div>
           <div class="flex flex-wrap gap-2">
@@ -2223,11 +2236,28 @@ function renderExplorer(): string {
         <div class="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-2 border-b border-vv-line bg-black/20 px-3 py-2 font-mono text-[0.68rem] uppercase tracking-[0.18em] text-vv-muted">
           <span>Name</span><span>Size</span><span>Modified</span><span>Action</span>
         </div>
-        <div class="vv-scrollbar h-full min-h-0 overflow-auto">
-          ${explorer.entries.length ? explorer.entries.map(renderExplorerEntry).join('') : `<div class="p-4 text-sm text-vv-muted">${explorer.loading ? 'Loading directory…' : 'No entries loaded. Click Home, Current workspace, or Go.'}</div>`}
+        <div class="vv-scrollbar h-full min-h-0 overflow-auto" data-explorer-list>
+          ${renderExplorerEntries()}
         </div>
       </section>
     </div>`;
+}
+
+function renderExplorerEntries(): string {
+  const explorer = state.fileExplorer;
+  if (!explorer.entries.length) {
+    return `<div class="p-4 text-sm text-vv-muted">${explorer.loading ? 'Loading directory…' : 'No entries loaded. Click Home, Current workspace, or Go.'}</div>`;
+  }
+  const visibleLimit = Math.max(1, explorer.visibleLimit || EXPLORER_INITIAL_VISIBLE_ENTRIES);
+  const visibleEntries = explorer.entries.slice(0, visibleLimit);
+  const hiddenCount = Math.max(0, explorer.entries.length - visibleEntries.length);
+  const backendTruncated = explorer.truncated
+    ? `<div class="border-b border-vv-line/60 bg-vv-amber/10 px-3 py-2 text-xs text-vv-amber">Showing first ${explorer.entries.length.toLocaleString()} entries returned by the native browser limit. Narrow the path if this directory is larger.</div>`
+    : '';
+  const showMore = hiddenCount > 0
+    ? `<button class="w-full border-b border-vv-line/60 px-3 py-3 text-left text-xs font-semibold text-vv-cyan hover:bg-white/[0.035]" data-explorer-show-more="1">Show ${Math.min(EXPLORER_VISIBLE_INCREMENT, hiddenCount).toLocaleString()} more entries (${hiddenCount.toLocaleString()} hidden)</button>`
+    : '';
+  return `${backendTruncated}${visibleEntries.map(renderExplorerEntry).join('')}${showMore}`;
 }
 
 function renderExplorerBreadcrumbs(path: string): string {
@@ -2286,11 +2316,17 @@ function formatModifiedTime(value: unknown): string {
 }
 
 async function loadExplorerDirectory(path?: string): Promise<void> {
-  state.fileExplorer.loading = true;
-  state.fileExplorer.error = '';
-  render();
+  const token = state.fileExplorer.requestToken + 1;
+  state.fileExplorer = {
+    ...state.fileExplorer,
+    loading: true,
+    error: '',
+    requestToken: token,
+  };
+  updateExplorerLoadingIndicator();
   try {
     const listing = await invoke<FileExplorerListing>('fs_list_directory', { path: path || null });
+    if (state.fileExplorer.requestToken !== token) return;
     state.fileExplorer = {
       path: listing.path,
       parent: listing.parent ?? '',
@@ -2299,12 +2335,33 @@ async function loadExplorerDirectory(path?: string): Promise<void> {
       loading: false,
       error: '',
       selectedPath: listing.path,
+      visibleLimit: EXPLORER_INITIAL_VISIBLE_ENTRIES,
+      truncated: Boolean(listing.truncated),
+      totalEntries: Number(listing.totalEntries ?? listing.entries?.length ?? 0),
+      requestToken: token,
     };
   } catch (error) {
-    state.fileExplorer.loading = false;
-    state.fileExplorer.error = String(error);
+    if (state.fileExplorer.requestToken !== token) return;
+    state.fileExplorer = {
+      ...state.fileExplorer,
+      loading: false,
+      error: String(error),
+      requestToken: token,
+    };
   }
   render();
+}
+
+function updateExplorerLoadingIndicator(): void {
+  const explorerRoots = document.querySelectorAll('[data-panel-root="explorer"]');
+  if (!explorerRoots.length) {
+    render();
+    return;
+  }
+  explorerRoots.forEach((explorerRoot) => {
+    const badge = explorerRoot.querySelector<HTMLElement>('[data-explorer-loading-badge]');
+    if (badge) badge.classList.remove('hidden');
+  });
 }
 
 async function switchWorkspace(path: string): Promise<void> {
@@ -2582,6 +2639,37 @@ function finishCanvasInteraction(): void {
   render();
 }
 
+function handleExplorerClick(event: Event): void {
+  const target = event.target as HTMLElement | null;
+  const showMore = target?.closest<HTMLElement>('[data-explorer-show-more]');
+  if (showMore) {
+    event.preventDefault();
+    state.fileExplorer.visibleLimit += EXPLORER_VISIBLE_INCREMENT;
+    render();
+    return;
+  }
+  const switchButton = target?.closest<HTMLElement>('[data-explorer-switch-workspace]');
+  if (switchButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    void switchWorkspace(switchButton.dataset.explorerSwitchWorkspace ?? '');
+    return;
+  }
+  const openButton = target?.closest<HTMLElement>('[data-explorer-open]');
+  if (openButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    void loadExplorerDirectory(openButton.dataset.explorerOpen ?? '');
+    return;
+  }
+  const selectButton = target?.closest<HTMLElement>('[data-explorer-select]');
+  if (selectButton) {
+    event.preventDefault();
+    state.fileExplorer.selectedPath = selectButton.dataset.explorerSelect ?? '';
+    render();
+  }
+}
+
 function bindEvents(): void {
   document.querySelector('#start-stop')?.addEventListener('click', () => state.bridgeRunning ? void stopBridge() : void startBridge());
   document.querySelector('#restart-bridge')?.addEventListener('click', () => void restartBridge());
@@ -2630,18 +2718,7 @@ function bindEvents(): void {
       void loadExplorerDirectory((key.currentTarget as HTMLInputElement).value.trim() || undefined);
     }
   });
-  document.querySelectorAll<HTMLButtonElement>('[data-explorer-open]').forEach((button) => button.addEventListener('click', (event) => {
-    event.stopPropagation();
-    void loadExplorerDirectory(button.dataset.explorerOpen ?? '');
-  }));
-  document.querySelectorAll<HTMLButtonElement>('[data-explorer-select]').forEach((button) => button.addEventListener('click', () => {
-    state.fileExplorer.selectedPath = button.dataset.explorerSelect ?? '';
-    render();
-  }));
-  document.querySelectorAll<HTMLButtonElement>('[data-explorer-switch-workspace]').forEach((button) => button.addEventListener('click', (event) => {
-    event.stopPropagation();
-    void switchWorkspace(button.dataset.explorerSwitchWorkspace ?? '');
-  }));
+  document.querySelectorAll('[data-panel-root="explorer"]').forEach((root) => root.addEventListener('click', handleExplorerClick));
   document.querySelector('#send-turn')?.addEventListener('click', () => void sendTurn());
   document.querySelector('#turn-input')?.addEventListener('keydown', (event) => {
     const key = event as KeyboardEvent;

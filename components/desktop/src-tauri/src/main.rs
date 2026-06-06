@@ -61,6 +61,9 @@ struct FileExplorerListing {
     parent: Option<String>,
     home: Option<String>,
     entries: Vec<FileExplorerEntry>,
+    truncated: bool,
+    total_entries: usize,
+    limit: usize,
 }
 
 fn default_browser_path() -> PathBuf {
@@ -69,6 +72,8 @@ fn default_browser_path() -> PathBuf {
         .or_else(|| env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."))
 }
+
+const FILE_EXPLORER_ENTRY_LIMIT: usize = 800;
 
 fn modified_ms(modified: SystemTime) -> Option<u128> {
     modified
@@ -95,6 +100,8 @@ fn fs_list_directory(path: Option<String>) -> Result<FileExplorerListing, String
     }
 
     let mut entries = Vec::new();
+    let mut total_entries = 0usize;
+    let mut truncated = false;
     for item in fs::read_dir(&directory).map_err(|error| {
         format!(
             "failed to read directory '{}': {error}",
@@ -102,24 +109,26 @@ fn fs_list_directory(path: Option<String>) -> Result<FileExplorerListing, String
         )
     })? {
         let item = item.map_err(|error| error.to_string())?;
+        total_entries += 1;
+        if entries.len() >= FILE_EXPLORER_ENTRY_LIMIT {
+            truncated = true;
+            break;
+        }
         let path = item.path();
-        let metadata = item.metadata().ok();
         let file_type = item.file_type().ok();
         let is_dir = file_type.as_ref().is_some_and(|kind| kind.is_dir());
         let is_file = file_type.as_ref().is_some_and(|kind| kind.is_file());
         let is_symlink = file_type.as_ref().is_some_and(|kind| kind.is_symlink());
+        let metadata = if is_file { item.metadata().ok() } else { None };
         let name = item.file_name().to_string_lossy().to_string();
-        let git_repo = is_dir && path.join(".git").exists();
+        let git_repo = false;
         entries.push(FileExplorerEntry {
             name,
             path: path.display().to_string(),
             is_dir,
             is_file,
             is_symlink,
-            size: metadata
-                .as_ref()
-                .filter(|_| is_file)
-                .map(|metadata| metadata.len()),
+            size: metadata.as_ref().map(|metadata| metadata.len()),
             modified_ms: metadata
                 .and_then(|metadata| metadata.modified().ok())
                 .and_then(modified_ms),
@@ -127,18 +136,16 @@ fn fs_list_directory(path: Option<String>) -> Result<FileExplorerListing, String
         });
     }
 
-    entries.sort_by(|left, right| {
-        right
-            .is_dir
-            .cmp(&left.is_dir)
-            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
-    });
+    entries.sort_by_cached_key(|entry| (!entry.is_dir, entry.name.to_lowercase()));
 
     Ok(FileExplorerListing {
         parent: directory.parent().map(|path| path.display().to_string()),
         home: env::var_os("HOME").map(|path| PathBuf::from(path).display().to_string()),
         path: directory.display().to_string(),
         entries,
+        truncated,
+        total_entries,
+        limit: FILE_EXPLORER_ENTRY_LIMIT,
     })
 }
 
