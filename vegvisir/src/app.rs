@@ -128,6 +128,7 @@ pub struct TuiApplication {
     pub search_query: String,
     pub search_match_index: usize,
     pub mouse_capture_enabled: bool,
+    pub tool_log_visible: bool,
     pub chat_area_x: u16,
     pub chat_area_y: u16,
     pub chat_area_width: u16,
@@ -811,6 +812,7 @@ impl TuiApplication {
             search_query: String::new(),
             search_match_index: 0,
             mouse_capture_enabled: true,
+            tool_log_visible: true,
             chat_area_x: 0,
             chat_area_y: 0,
             chat_area_width: 0,
@@ -1003,6 +1005,16 @@ impl TuiApplication {
             attachments: Vec::new(),
             created_at: chrono::Utc::now(),
         });
+    }
+
+    pub(crate) fn toggle_tool_log_visibility(&mut self) {
+        self.tool_log_visible = !self.tool_log_visible;
+        let message = if self.tool_log_visible {
+            "Tool/note log shown."
+        } else {
+            "Tool/note log hidden."
+        };
+        self.push_system_message(message);
     }
 
     pub(crate) fn autosave_session(&self) {
@@ -2304,6 +2316,33 @@ mod tests {
         let selected = app.extract_chat_drag_selection((10, 5), (20, 5));
 
         assert_eq!(selected, "selectable");
+        Ok(())
+    }
+
+    #[test]
+    fn ctrl_l_toggles_tool_log_visibility_and_announces_state() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        assert!(app.tool_log_visible);
+        let baseline = app.session.messages.len();
+
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
+        assert!(!app.tool_log_visible);
+        assert_eq!(app.session.messages.len(), baseline + 1);
+        assert!(app
+            .session
+            .messages
+            .last()
+            .is_some_and(|message| message.content.contains("Tool/note log hidden")));
+
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
+        assert!(app.tool_log_visible);
+        assert_eq!(app.session.messages.len(), baseline + 2);
+        assert!(app
+            .session
+            .messages
+            .last()
+            .is_some_and(|message| message.content.contains("Tool/note log shown")));
         Ok(())
     }
 
