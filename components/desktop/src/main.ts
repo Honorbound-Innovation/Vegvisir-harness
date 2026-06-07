@@ -404,7 +404,7 @@ function setError(error: unknown, fallback = 'Bridge problem'): void {
 }
 
 function clearError(): void {
-  clearError();
+  state.error = '';
   state.errorDetails = '';
 }
 

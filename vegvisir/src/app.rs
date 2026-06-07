@@ -530,7 +530,6 @@ fn command_response_is_chat_suppressed(command: &str) -> bool {
             | "/agent"
             | "/agents"
             | "/model"
-            | "/models"
             | "/provider"
             | "/providers"
     )
