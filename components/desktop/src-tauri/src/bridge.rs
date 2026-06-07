@@ -123,33 +123,107 @@ fn is_executable_file(path: &Path) -> bool {
     path.is_file()
 }
 
+fn is_path_like_binary(binary: &str) -> bool {
+    let requested = PathBuf::from(binary);
+    requested.components().count() > 1 || requested.is_absolute()
+}
+
+fn binary_name_variants(binary: &str) -> Vec<String> {
+    let trimmed = binary.trim();
+    if trimmed.is_empty() || is_path_like_binary(trimmed) {
+        return vec![trimmed.to_string()];
+    }
+
+    let mut names = Vec::from([trimmed.to_string()]);
+    if trimmed == "vegvisir" {
+        names.push("vegvisir-rust".to_string());
+    } else if trimmed == "vegvisir-rust" {
+        names.push("vegvisir".to_string());
+    }
+
+    let suffix = env::consts::EXE_SUFFIX;
+    if !suffix.is_empty() {
+        let suffixed = names
+            .iter()
+            .filter(|name| !name.ends_with(suffix))
+            .map(|name| format!("{name}{suffix}"))
+            .collect::<Vec<_>>();
+        names.extend(suffixed);
+    }
+
+    names.dedup();
+    names
+}
+
+fn push_named_candidates(candidates: &mut Vec<PathBuf>, base: impl AsRef<Path>, names: &[String]) {
+    let base = base.as_ref();
+    for name in names {
+        candidates.push(base.join(name));
+    }
+}
+
+fn push_workspace_target_candidates(
+    candidates: &mut Vec<PathBuf>,
+    start: impl AsRef<Path>,
+    names: &[String],
+) {
+    for ancestor in start.as_ref().ancestors() {
+        let has_workspace_manifest = ancestor.join("Cargo.toml").is_file();
+        let has_vegvisir_crate = ancestor.join("vegvisir").join("Cargo.toml").is_file();
+        if has_workspace_manifest || has_vegvisir_crate {
+            push_named_candidates(candidates, ancestor.join("target").join("debug"), names);
+            push_named_candidates(candidates, ancestor.join("target").join("release"), names);
+        }
+    }
+}
+
+fn development_binary_candidates(names: &[String]) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(current_dir) = env::current_dir() {
+        push_workspace_target_candidates(&mut candidates, current_dir, names);
+    }
+    if let Ok(current_exe) = env::current_exe() {
+        if let Some(parent) = current_exe.parent() {
+            push_workspace_target_candidates(&mut candidates, parent, names);
+        }
+    }
+    if let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR") {
+        push_workspace_target_candidates(&mut candidates, PathBuf::from(manifest_dir), names);
+    }
+    candidates
+}
+
 fn path_candidates(binary: &str) -> Vec<PathBuf> {
     let requested = PathBuf::from(binary);
-    if requested.components().count() > 1 || requested.is_absolute() {
+    if is_path_like_binary(binary) {
         return vec![requested];
     }
 
+    let names = binary_name_variants(binary);
     let mut candidates = Vec::new();
 
     if let Some(paths) = env::var_os("PATH") {
-        candidates.extend(env::split_paths(&paths).map(|path| path.join(binary)));
+        for path in env::split_paths(&paths) {
+            push_named_candidates(&mut candidates, path, &names);
+        }
     }
 
     if let Some(home) = env::var_os("HOME") {
         let home = PathBuf::from(home);
-        candidates.push(home.join(".local/bin").join(binary));
-        candidates.push(home.join("bin").join(binary));
+        push_named_candidates(&mut candidates, home.join(".local/bin"), &names);
+        push_named_candidates(&mut candidates, home.join("bin"), &names);
     }
 
-    candidates.push(PathBuf::from("/usr/local/bin").join(binary));
-    candidates.push(PathBuf::from("/usr/bin").join(binary));
-    candidates.push(PathBuf::from("/bin").join(binary));
+    push_named_candidates(&mut candidates, "/usr/local/bin", &names);
+    push_named_candidates(&mut candidates, "/usr/bin", &names);
+    push_named_candidates(&mut candidates, "/bin", &names);
+    candidates.extend(development_binary_candidates(&names));
 
     if let Ok(current_exe) = env::current_exe() {
         if let Some(parent) = current_exe.parent() {
-            candidates.push(parent.join(binary));
-            candidates.push(parent.join("resources").join(binary));
-            candidates.push(parent.join("bin").join(binary));
+            push_named_candidates(&mut candidates, parent, &names);
+            push_named_candidates(&mut candidates, parent.join("resources"), &names);
+            push_named_candidates(&mut candidates, parent.join("bin"), &names);
         }
     }
 
@@ -157,18 +231,27 @@ fn path_candidates(binary: &str) -> Vec<PathBuf> {
 }
 
 fn bundled_binary_candidates(binary: &str) -> Vec<PathBuf> {
+    let names = binary_name_variants(binary);
     let mut candidates = Vec::new();
     if let Ok(resource_dir) = env::var("VEGVISIR_DESKTOP_RESOURCE_DIR") {
         let resource_dir = PathBuf::from(resource_dir);
-        candidates.push(resource_dir.join(binary));
-        candidates.push(resource_dir.join("bin").join(binary));
+        push_named_candidates(&mut candidates, &resource_dir, &names);
+        push_named_candidates(&mut candidates, resource_dir.join("bin"), &names);
     }
     if let Ok(current_exe) = env::current_exe() {
         if let Some(parent) = current_exe.parent() {
-            candidates.push(parent.join("resources").join(binary));
-            candidates.push(parent.join("resources").join("bin").join(binary));
-            candidates.push(parent.join("../Resources").join(binary));
-            candidates.push(parent.join("../Resources").join("bin").join(binary));
+            push_named_candidates(&mut candidates, parent.join("resources"), &names);
+            push_named_candidates(
+                &mut candidates,
+                parent.join("resources").join("bin"),
+                &names,
+            );
+            push_named_candidates(&mut candidates, parent.join("../Resources"), &names);
+            push_named_candidates(
+                &mut candidates,
+                parent.join("../Resources").join("bin"),
+                &names,
+            );
         }
     }
     candidates
@@ -177,10 +260,16 @@ fn bundled_binary_candidates(binary: &str) -> Vec<PathBuf> {
 fn resolve_vegvisir_binary(requested: Option<String>) -> Result<PathBuf, String> {
     let binary = requested
         .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            env::var("VEGVISIR_BINARY")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
         .unwrap_or_else(|| "vegvisir".to_string());
 
     let mut candidates = bundled_binary_candidates(binary.trim());
     candidates.extend(path_candidates(binary.trim()));
+    candidates.dedup();
     for candidate in &candidates {
         if is_executable_file(candidate) {
             return Ok(candidate.to_path_buf());
@@ -194,7 +283,7 @@ fn resolve_vegvisir_binary(requested: Option<String>) -> Result<PathBuf, String>
         .join("\n  - ");
 
     Err(format!(
-        "could not find Vegvisir binary '{binary}'. Install Vegvisir or set Settings → Vegvisir binary to an absolute path. Searched:\n  - {searched}"
+        "could not find Vegvisir binary '{binary}'. Install Vegvisir, set Settings → Vegvisir binary to an absolute path, or set VEGVISIR_BINARY. In source checkouts, desktop also searches target/debug/vegvisir-rust. Searched:\n  - {searched}"
     ))
 }
 
@@ -530,4 +619,35 @@ pub async fn bridge_restart(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vegvisir_binary_variants_include_cargo_target_name() {
+        let variants = binary_name_variants("vegvisir");
+        assert!(variants.iter().any(|name| name == "vegvisir"));
+        assert!(variants.iter().any(|name| name == "vegvisir-rust"));
+    }
+
+    #[test]
+    fn path_like_binary_is_not_rewritten_to_aliases() {
+        let variants = binary_name_variants("./target/debug/vegvisir-rust");
+        assert_eq!(variants, vec!["./target/debug/vegvisir-rust".to_string()]);
+    }
+
+    #[test]
+    fn development_candidates_include_workspace_target_binary() {
+        let dev_binary = format!("vegvisir-rust{}", env::consts::EXE_SUFFIX);
+        let expected_suffix = Path::new("target").join("debug").join(dev_binary);
+        let candidates = development_binary_candidates(&binary_name_variants("vegvisir"));
+        assert!(
+            candidates.iter().any(|path| path.ends_with(&expected_suffix)),
+            "expected a candidate ending with {}, got {candidates:?}",
+            expected_suffix.display()
+        );
+    }
 }

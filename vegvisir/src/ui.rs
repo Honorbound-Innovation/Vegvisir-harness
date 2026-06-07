@@ -1021,7 +1021,7 @@ pub mod layout {
         fn key_hint_bar(&self, width: usize) -> String {
             self.theme.paint(
                 truncate(
-                    "[Enter] send  [PgUp/PgDn] chat  [/] commands  [drag] select text  [?] help  [Ctrl+C] quit",
+                    "[Enter] send  [PgUp/PgDn] chat  [/] commands  [drag] select text  [Ctrl+L] hide/show log  [?] help  [Ctrl+C] quit",
                     width,
                 ),
                 "dim",

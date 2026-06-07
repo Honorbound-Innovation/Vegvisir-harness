@@ -629,21 +629,18 @@ impl TuiApplication {
                 let profile = self.agents.load(id)?;
                 Ok(format!(
                     "# Agent: {}
-
-| Field | Value |
-| --- | --- |
-| id | `{}` |
-| mode | `{}` |
-| name | {} |
-| description | {} |
-| cms_user_id | `{}` |
-| cms_project_id | `{}` |
-| provider | `{}` |
-| model | `{}` |
-| tools | {} |
-| skills | {} |
-| mcp_servers | {} |
-| usrl_contracts | {} |
+id: {}
+mode: {}
+name: {}
+description: {}
+cms_user_id: {}
+cms_project_id: {}
+provider: {}
+model: {}
+tools: {}
+skills: {}
+mcp_servers: {}
+usrl_contracts: {}
 
 ## System prompt
 

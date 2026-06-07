@@ -276,7 +276,7 @@ function migrateStaleDesktopProviderSettings(settings: StartBridgeRequest): void
 
 function defaultSettings(): StartBridgeRequest {
   return {
-    vegvisirBinary: 'vegvisir',
+    vegvisirBinary: '',
     workspace: '',
     provider: '',
     model: '',
@@ -410,7 +410,7 @@ function setError(error: unknown, fallback = 'Bridge problem'): void {
 }
 
 function clearError(): void {
-  clearError();
+  state.error = '';
   state.errorDetails = '';
 }
 
@@ -1546,7 +1546,7 @@ function moduleSummary(panelId: PanelId): string {
     case 'integrations': return [methodOutputText('mcp.status'), methodOutputText('hbse.status'), methodOutputText('subagents.list')].some(Boolean) ? 'Integration output loaded' : 'Integration output not loaded';
     case 'evidence': return [methodOutputText('runs.list'), methodOutputText('trace.list'), methodOutputText('verify.run')].some(Boolean) ? 'Evidence output loaded' : 'Evidence output not loaded';
     case 'system': return state.systemPrompt ? 'System prompt loaded' : 'System prompt not loaded';
-    case 'settings': return `Workspace ${state.settings.workspace || 'default'} · binary ${state.settings.vegvisirBinary || 'vegvisir'}`;
+    case 'settings': return `Workspace ${state.settings.workspace || 'default'} · binary ${state.settings.vegvisirBinary || 'auto'}`;
   }
 }
 
@@ -2267,14 +2267,14 @@ function renderSystem(): string {
 function renderSettings(): string {
   return `
     <form class="vv-panel grid max-w-3xl gap-3 p-4" id="settings-form">
-      ${field('vegvisirBinary', 'Vegvisir binary', state.settings.vegvisirBinary ?? 'vegvisir')}
+      ${field('vegvisirBinary', 'Vegvisir binary', state.settings.vegvisirBinary ?? '')}
       ${field('workspace', 'Workspace', state.settings.workspace ?? '')}
       ${field('provider', 'Provider', state.settings.provider ?? '')}
       ${field('model', 'Model', state.settings.model ?? '')}
       ${field('agent', 'Agent', state.settings.agent ?? '')}
       <label class="flex items-center gap-3 text-sm text-vv-muted"><input type="checkbox" name="autoStart" ${state.settings.autoStart === false ? '' : 'checked'} /> Auto-start bridge when the desktop app opens</label>
       <label class="flex items-center gap-3 text-sm text-vv-muted"><input type="checkbox" name="dangerousBypass" ${startupDangerousBypassRequested() ? 'checked' : ''} /> Dangerous bypass at startup</label>
-      <p class="text-xs leading-5 text-vv-muted">Packaged AppImages may not inherit your shell PATH. If bridge start fails, set the Vegvisir binary to an absolute path such as <code class="text-vv-cyan">/home/malice/.local/bin/vegvisir</code>. The backend also searches resource-adjacent <code class="text-vv-cyan">resources/bin</code> paths and <code class="text-vv-cyan">VEGVISIR_DESKTOP_RESOURCE_DIR</code> for future bundled binaries.</p>
+      <p class="text-xs leading-5 text-vv-muted">Leave Vegvisir binary blank for automatic resolution. Desktop checks <code class="text-vv-cyan">VEGVISIR_BINARY</code>, installed <code class="text-vv-cyan">vegvisir</code>/<code class="text-vv-cyan">vegvisir-rust</code>, packaged resource paths, and source-checkout <code class="text-vv-cyan">target/debug/vegvisir-rust</code>. Packaged AppImages may not inherit your shell PATH; if bridge start fails, set an absolute path such as <code class="text-vv-cyan">/home/malice/.local/bin/vegvisir</code>.</p>
       <p class="text-xs leading-5 text-vv-muted">Desktop does not bypass Vegvisir. It spawns <code class="text-vv-cyan">vegvisir app-server</code> so providers, HBSE, CMS, tools, approvals, and policy remain owned by the harness.</p>
       <div class="flex flex-wrap gap-2"><button class="vv-action vv-action-primary w-fit" type="submit">Save settings</button><button class="vv-action w-fit" type="button" data-module-add="explorer">Open Explorer</button></div>
     </form>
@@ -2892,7 +2892,7 @@ function handleDelegatedSubmit(event: SubmitEvent): void {
   event.preventDefault();
   const form = new FormData(target as HTMLFormElement);
   state.settings = {
-    vegvisirBinary: String(form.get('vegvisirBinary') ?? 'vegvisir'),
+    vegvisirBinary: String(form.get('vegvisirBinary') ?? '').trim(),
     workspace: String(form.get('workspace') ?? ''),
     provider: String(form.get('provider') ?? ''),
     model: String(form.get('model') ?? ''),

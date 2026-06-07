@@ -114,6 +114,11 @@ impl TuiApplication {
             self.redraw_requested = true;
             return;
         }
+        if key.code == KeyCode::Char('l') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.toggle_tool_log_visibility();
+            self.redraw_requested = true;
+            return;
+        }
         if self.help_overlay_open {
             match key.code {
                 KeyCode::Esc | KeyCode::Char('?') => self.help_overlay_open = false,

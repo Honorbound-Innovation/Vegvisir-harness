@@ -170,8 +170,9 @@ fn draw_chat(f: &mut Frame<'_>, app: &mut TuiApplication, area: Rect) {
     f.render_widget(block, area);
 
     let tool_log_height = tool_log_panel_height(app, inner.height);
-    let chat_height = inner.height.saturating_sub(tool_log_height);
-    let (chat_area, tool_log_area) = if tool_log_height > 0 {
+    let show_tool_log = app.tool_log_visible && tool_log_height > 0;
+    let chat_height = inner.height.saturating_sub(if show_tool_log { tool_log_height } else { 0 });
+    let (chat_area, tool_log_area) = if show_tool_log {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -221,7 +222,7 @@ fn draw_chat_transcript(f: &mut Frame<'_>, app: &mut TuiApplication, area: Rect)
 }
 
 fn tool_log_panel_height(app: &TuiApplication, chat_surface_height: u16) -> u16 {
-    if chat_surface_height < 8 || !has_tool_log_messages(app) {
+    if chat_surface_height < 8 || !app.tool_log_visible || !has_tool_log_messages(app) {
         return 0;
     }
     let max_height = ((chat_surface_height as f32) * 0.15).floor() as u16;
@@ -2488,6 +2489,8 @@ fn help_overlay_lines(app: &TuiApplication, width: usize, height: usize) -> Vec<
             Span::styled(" follow live output   ", Style::default().fg(DIM)),
             Span::styled("Ctrl+F", Style::default().fg(CYAN)),
             Span::styled(" search   ", Style::default().fg(DIM)),
+            Span::styled("Ctrl+L", Style::default().fg(CYAN)),
+            Span::styled(" log toggle   ", Style::default().fg(DIM)),
             Span::styled("Ctrl+C", Style::default().fg(CYAN)),
             Span::styled(" quit", Style::default().fg(DIM)),
         ]),
@@ -3230,11 +3233,11 @@ fn draw_status(f: &mut Frame<'_>, app: &TuiApplication, area: Rect) {
     } else if app.input.buffer.starts_with('/') {
         "Enter run command | Tab complete | Esc close"
     } else if app.session.status == "streaming" {
-        "Ctrl+C cancel/quit | PgUp read history | End follow | F12 native select"
+        "Ctrl+C cancel/quit | Ctrl+L hide/show log | PgUp read history | End follow | F12 native select"
     } else if app.mouse_capture_enabled {
         "Enter send | drag copy chat | wheel scroll | F12 native select | Ctrl+C quit"
     } else {
-        "Mouse capture OFF: terminal selection active | F12 restore mouse | Ctrl+C quit"
+        "Mouse capture OFF: terminal selection active | Ctrl+L hide/show log | F12 restore mouse | Ctrl+C quit"
     };
     let text = format!(
         " {} | session {} | ctx {}/{} | tools {} | skills {}{} | {} ",
