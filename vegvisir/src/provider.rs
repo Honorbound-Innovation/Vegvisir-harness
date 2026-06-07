@@ -4076,10 +4076,20 @@ fn truncate_model_observation(value: &str) -> String {
 }
 
 fn approval_required_tool_output(content: &str) -> bool {
-    let lower = content.to_ascii_lowercase();
-    lower.contains("approval_id=")
-        || lower.starts_with("approvalrequired:")
-        || lower.contains("risky tool requires permission:")
+    let first_line = content
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or(content)
+        .trim_start();
+    let lower = first_line.to_ascii_lowercase();
+    lower.starts_with("approvalrequired:")
+        || lower.starts_with("risky tool requires human approval:")
+        || lower.starts_with("risky tool requires permission:")
+        || lower.starts_with("command network access requires human approval:")
+        || (lower.contains("approval_id=")
+            && (lower.contains("requires human approval")
+                || lower.contains("requires permission")
+                || lower.contains("tool approval")))
 }
 
 fn execute_tool_or_stop_for_approval(
@@ -5097,7 +5107,13 @@ mod tests {
         assert!(approval_required_tool_output(
             "ApprovalRequired: Human approval required; approval_id=apr_456"
         ));
+        assert!(approval_required_tool_output(
+            "Command network access requires human approval: git fetch; approval_id=apr_789"
+        ));
         assert!(!approval_required_tool_output("normal tool output"));
+        assert!(!approval_required_tool_output(
+            "ok: read file\n\n```typescript\nconst message = \"approval_id=apr_123\";\n```"
+        ));
     }
 
     #[test]
