@@ -575,6 +575,7 @@ impl TuiApplication {
             Some("policy") | Some("help") => Ok(Self::subagent_policy_help(
                 self.active_subagent_limit,
                 &self.subagent_provider_defaults,
+                &self.subagent_spawn_defaults,
             )),
             Some("config") | Some("defaults") => self.subagents_config_command(&args[1..]),
             None | Some("list") | Some("tasks") => {
@@ -802,22 +803,46 @@ impl TuiApplication {
 provider={}
 model={}
 active_limit={}
+default_max_steps={}
+min_max_steps={}
+max_max_steps={}
+default_max_tool_calls={}
+default_max_read_bytes={}
+default_max_output_bytes={}
+default_allowed_tools={}
+default_budget_notes={}
 config_path={}
 
 Set with:
   /subagents config provider <provider>
   /subagents config model <model>
   /subagents config provider <provider> model <model>
-  /subagents config max <n>",
+  /subagents config max <n>
+  /subagents config max-steps <n> [min-max-steps <n>] [max-max-steps <n>]
+  /subagents config tool-calls <n> read-bytes <n> output-bytes <n>
+  /subagents config allowed-tools <tool-a,tool-b>
+  /subagents config budget-notes <text>",
                 self.subagent_provider_defaults.provider,
                 self.subagent_provider_defaults.model,
                 self.active_subagent_limit,
+                self.subagent_spawn_defaults.default_max_steps,
+                self.subagent_spawn_defaults.min_max_steps,
+                self.subagent_spawn_defaults.max_max_steps,
+                self.subagent_spawn_defaults.work_budget.max_tool_calls.map(|value| value.to_string()).unwrap_or_else(|| "unset".to_string()),
+                self.subagent_spawn_defaults.work_budget.max_read_bytes.map(|value| value.to_string()).unwrap_or_else(|| "unset".to_string()),
+                self.subagent_spawn_defaults.work_budget.max_output_bytes.map(|value| value.to_string()).unwrap_or_else(|| "unset".to_string()),
+                self.subagent_spawn_defaults.work_budget.allowed_tools.join(","),
+                self.subagent_spawn_defaults.work_budget.notes,
                 self.config.path.display()
             )),
-            Some("provider") | Some("model") | Some("set") | Some("max") | Some("limit") => {
+            Some("provider") | Some("model") | Some("set") | Some("max") | Some("limit")
+            | Some("max-steps") | Some("default-max-steps") | Some("min-max-steps")
+            | Some("max-max-steps") | Some("tool-calls") | Some("read-bytes")
+            | Some("output-bytes") | Some("allowed-tools") | Some("budget-notes") => {
                 let mut provider = self.subagent_provider_defaults.provider.clone();
                 let mut model = self.subagent_provider_defaults.model.clone();
                 let mut active_limit = self.active_subagent_limit;
+                let mut spawn_defaults = self.subagent_spawn_defaults.clone();
                 let mut index = 0usize;
                 while index < args.len() {
                     match args[index].as_str() {
@@ -852,6 +877,80 @@ Set with:
                                 .max(1);
                             index += 2;
                         }
+                        "max-steps" | "default-max-steps" => {
+                            let Some(value) = args.get(index + 1) else {
+                                return Ok("Usage: /subagents config max-steps <n>".to_string());
+                            };
+                            spawn_defaults.default_max_steps = value
+                                .parse::<u64>()
+                                .map_err(|_| anyhow::anyhow!("Usage: /subagents config max-steps <n>"))?;
+                            index += 2;
+                        }
+                        "min-max-steps" => {
+                            let Some(value) = args.get(index + 1) else {
+                                return Ok("Usage: /subagents config min-max-steps <n>".to_string());
+                            };
+                            spawn_defaults.min_max_steps = value
+                                .parse::<u64>()
+                                .map_err(|_| anyhow::anyhow!("Usage: /subagents config min-max-steps <n>"))?;
+                            index += 2;
+                        }
+                        "max-max-steps" => {
+                            let Some(value) = args.get(index + 1) else {
+                                return Ok("Usage: /subagents config max-max-steps <n>".to_string());
+                            };
+                            spawn_defaults.max_max_steps = value
+                                .parse::<u64>()
+                                .map_err(|_| anyhow::anyhow!("Usage: /subagents config max-max-steps <n>"))?;
+                            index += 2;
+                        }
+                        "tool-calls" | "max-tool-calls" => {
+                            let Some(value) = args.get(index + 1) else {
+                                return Ok("Usage: /subagents config tool-calls <n>".to_string());
+                            };
+                            spawn_defaults.work_budget.max_tool_calls = Some(value
+                                .parse::<u64>()
+                                .map_err(|_| anyhow::anyhow!("Usage: /subagents config tool-calls <n>"))?);
+                            index += 2;
+                        }
+                        "read-bytes" | "max-read-bytes" => {
+                            let Some(value) = args.get(index + 1) else {
+                                return Ok("Usage: /subagents config read-bytes <n>".to_string());
+                            };
+                            spawn_defaults.work_budget.max_read_bytes = Some(value
+                                .parse::<u64>()
+                                .map_err(|_| anyhow::anyhow!("Usage: /subagents config read-bytes <n>"))?);
+                            index += 2;
+                        }
+                        "output-bytes" | "max-output-bytes" => {
+                            let Some(value) = args.get(index + 1) else {
+                                return Ok("Usage: /subagents config output-bytes <n>".to_string());
+                            };
+                            spawn_defaults.work_budget.max_output_bytes = Some(value
+                                .parse::<u64>()
+                                .map_err(|_| anyhow::anyhow!("Usage: /subagents config output-bytes <n>"))?);
+                            index += 2;
+                        }
+                        "allowed-tools" => {
+                            let Some(value) = args.get(index + 1) else {
+                                return Ok("Usage: /subagents config allowed-tools <tool-a,tool-b>".to_string());
+                            };
+                            spawn_defaults.work_budget.allowed_tools = value
+                                .split(',')
+                                .map(str::trim)
+                                .filter(|tool| !tool.is_empty())
+                                .map(str::to_string)
+                                .collect();
+                            index += 2;
+                        }
+                        "budget-notes" => {
+                            let notes = args[index + 1..].join(" ");
+                            if notes.trim().is_empty() {
+                                return Ok("Usage: /subagents config budget-notes <text>".to_string());
+                            }
+                            spawn_defaults.work_budget.notes = notes.trim().to_string();
+                            index = args.len();
+                        }
                         other if other.starts_with("provider=") => {
                             provider = other.trim_start_matches("provider=").to_string();
                             index += 1;
@@ -868,6 +967,87 @@ Set with:
                                 .max(1);
                             index += 1;
                         }
+                        other if other.starts_with("max_steps=")
+                            || other.starts_with("max-steps=")
+                            || other.starts_with("default_max_steps=")
+                            || other.starts_with("default-max-steps=") =>
+                        {
+                            let (_, value) = other.split_once('=').unwrap_or(("max_steps", ""));
+                            spawn_defaults.default_max_steps = value.parse::<u64>().map_err(|_| {
+                                anyhow::anyhow!("Usage: /subagents config max-steps <n>")
+                            })?;
+                            index += 1;
+                        }
+                        other if other.starts_with("min_max_steps=")
+                            || other.starts_with("min-max-steps=") =>
+                        {
+                            let (_, value) = other.split_once('=').unwrap_or(("min_max_steps", ""));
+                            spawn_defaults.min_max_steps = value.parse::<u64>().map_err(|_| {
+                                anyhow::anyhow!("Usage: /subagents config min-max-steps <n>")
+                            })?;
+                            index += 1;
+                        }
+                        other if other.starts_with("max_max_steps=")
+                            || other.starts_with("max-max-steps=") =>
+                        {
+                            let (_, value) = other.split_once('=').unwrap_or(("max_max_steps", ""));
+                            spawn_defaults.max_max_steps = value.parse::<u64>().map_err(|_| {
+                                anyhow::anyhow!("Usage: /subagents config max-max-steps <n>")
+                            })?;
+                            index += 1;
+                        }
+                        other if other.starts_with("tool_calls=")
+                            || other.starts_with("tool-calls=")
+                            || other.starts_with("max_tool_calls=")
+                            || other.starts_with("max-tool-calls=") =>
+                        {
+                            let (_, value) = other.split_once('=').unwrap_or(("tool_calls", ""));
+                            spawn_defaults.work_budget.max_tool_calls = Some(value.parse::<u64>().map_err(|_| {
+                                anyhow::anyhow!("Usage: /subagents config tool-calls <n>")
+                            })?);
+                            index += 1;
+                        }
+                        other if other.starts_with("read_bytes=")
+                            || other.starts_with("read-bytes=")
+                            || other.starts_with("max_read_bytes=")
+                            || other.starts_with("max-read-bytes=") =>
+                        {
+                            let (_, value) = other.split_once('=').unwrap_or(("read_bytes", ""));
+                            spawn_defaults.work_budget.max_read_bytes = Some(value.parse::<u64>().map_err(|_| {
+                                anyhow::anyhow!("Usage: /subagents config read-bytes <n>")
+                            })?);
+                            index += 1;
+                        }
+                        other if other.starts_with("output_bytes=")
+                            || other.starts_with("output-bytes=")
+                            || other.starts_with("max_output_bytes=")
+                            || other.starts_with("max-output-bytes=") =>
+                        {
+                            let (_, value) = other.split_once('=').unwrap_or(("output_bytes", ""));
+                            spawn_defaults.work_budget.max_output_bytes = Some(value.parse::<u64>().map_err(|_| {
+                                anyhow::anyhow!("Usage: /subagents config output-bytes <n>")
+                            })?);
+                            index += 1;
+                        }
+                        other if other.starts_with("allowed_tools=")
+                            || other.starts_with("allowed-tools=") =>
+                        {
+                            let (_, value) = other.split_once('=').unwrap_or(("allowed_tools", ""));
+                            spawn_defaults.work_budget.allowed_tools = value
+                                .split(',')
+                                .map(str::trim)
+                                .filter(|tool| !tool.is_empty())
+                                .map(str::to_string)
+                                .collect();
+                            index += 1;
+                        }
+                        other if other.starts_with("budget_notes=")
+                            || other.starts_with("budget-notes=") =>
+                        {
+                            let (_, value) = other.split_once('=').unwrap_or(("budget_notes", ""));
+                            spawn_defaults.work_budget.notes = value.trim().to_string();
+                            index += 1;
+                        }
                         other => {
                             return Ok(format!(
                                 "Unknown /subagents config token: {other}
@@ -879,6 +1059,7 @@ Usage: /subagents config provider <provider> model <model>"
                 self.subagent_provider_defaults =
                     crate::tools::SubagentProviderDefaults::new(provider, model);
                 self.active_subagent_limit = active_limit;
+                self.subagent_spawn_defaults = spawn_defaults.normalized();
                 let mut defaults = self.config.load().unwrap_or_default();
                 defaults.insert(
                     "subagent_provider".to_string(),
@@ -892,6 +1073,38 @@ Usage: /subagents config provider <provider> model <model>"
                     "subagent_active_limit".to_string(),
                     serde_json::json!(self.active_subagent_limit),
                 );
+                defaults.insert(
+                    "subagent_default_max_steps".to_string(),
+                    serde_json::json!(self.subagent_spawn_defaults.default_max_steps),
+                );
+                defaults.insert(
+                    "subagent_min_max_steps".to_string(),
+                    serde_json::json!(self.subagent_spawn_defaults.min_max_steps),
+                );
+                defaults.insert(
+                    "subagent_max_max_steps".to_string(),
+                    serde_json::json!(self.subagent_spawn_defaults.max_max_steps),
+                );
+                defaults.insert(
+                    "subagent_default_max_tool_calls".to_string(),
+                    serde_json::json!(self.subagent_spawn_defaults.work_budget.max_tool_calls),
+                );
+                defaults.insert(
+                    "subagent_default_max_read_bytes".to_string(),
+                    serde_json::json!(self.subagent_spawn_defaults.work_budget.max_read_bytes),
+                );
+                defaults.insert(
+                    "subagent_default_max_output_bytes".to_string(),
+                    serde_json::json!(self.subagent_spawn_defaults.work_budget.max_output_bytes),
+                );
+                defaults.insert(
+                    "subagent_default_allowed_tools".to_string(),
+                    serde_json::json!(self.subagent_spawn_defaults.work_budget.allowed_tools),
+                );
+                defaults.insert(
+                    "subagent_default_budget_notes".to_string(),
+                    serde_json::json!(self.subagent_spawn_defaults.work_budget.notes),
+                );
                 self.config.save(&defaults)?;
                 self.rebuild_tooling_for_cms()?;
                 self.logger.emit(
@@ -900,12 +1113,22 @@ Usage: /subagents config provider <provider> model <model>"
                         "provider": self.subagent_provider_defaults.provider,
                         "model": self.subagent_provider_defaults.model,
                         "active_limit": self.active_subagent_limit,
+                        "default_max_steps": self.subagent_spawn_defaults.default_max_steps,
+                        "min_max_steps": self.subagent_spawn_defaults.min_max_steps,
+                        "max_max_steps": self.subagent_spawn_defaults.max_max_steps,
+                        "default_work_budget": self.subagent_spawn_defaults.work_budget,
                         "source": "tui-command",
                     }),
                 );
                 Ok(format!(
-                    "Subagent defaults set to provider={} model={} active_limit={}. New spawn_subagent calls inherit these unless provider/model is specified explicitly.",
-                    self.subagent_provider_defaults.provider, self.subagent_provider_defaults.model, self.active_subagent_limit
+                    "Subagent defaults set to provider={} model={} active_limit={} max_steps={} (range {}..={}) work_budget={:?}. New spawn_subagent calls inherit these unless values are specified explicitly.",
+                    self.subagent_provider_defaults.provider,
+                    self.subagent_provider_defaults.model,
+                    self.active_subagent_limit,
+                    self.subagent_spawn_defaults.default_max_steps,
+                    self.subagent_spawn_defaults.min_max_steps,
+                    self.subagent_spawn_defaults.max_max_steps,
+                    self.subagent_spawn_defaults.work_budget
                 ))
             }
             Some(other) => Ok(format!(
@@ -918,6 +1141,7 @@ Usage: /subagents config [show|provider <provider>|model <model>|max <n>|provide
     fn subagent_policy_help(
         active_subagent_limit: usize,
         defaults: &crate::tools::SubagentProviderDefaults,
+        spawn_defaults: &crate::tools::SubagentSpawnDefaults,
     ) -> String {
         r#"Subagent delegation policy
 
@@ -941,10 +1165,12 @@ Boundaries:
 - use budget notes like "avoid huge raw reads; prefer targeted search/listing; report if more budget is needed"
 - assign explicit non-overlapping file_scope values for file-touching work
 - never let two active subagents own/edit the same files at the same time
-- default active subagent limit is 3; current session limit is {active_subagent_limit}
+- current active subagent limit is {active_subagent_limit}
 - default provider/model is {subagent_provider}/{subagent_model} unless a subagent request explicitly sets provider/model
+- default max_steps is {subagent_default_max_steps}, clamped by configured range {subagent_min_max_steps}..={subagent_max_max_steps}
+- default work_budget is max_tool_calls={subagent_default_max_tool_calls}, max_read_bytes={subagent_default_max_read_bytes}, max_output_bytes={subagent_default_max_output_bytes}, allowed_tools={subagent_default_allowed_tools}
 - change the session limit with /agents max=<n> or /subagents max <n>
-- change default subagent provider/model with /subagents config provider <provider> model <model>
+- change persistent subagent defaults with /subagents config provider <provider> model <model> max-steps <n> tool-calls <n> read-bytes <n> output-bytes <n> allowed-tools <tool-a,tool-b>
 - subagent spawning remains locked to YOLO mode for now
 
 Commands:
@@ -960,10 +1186,43 @@ Commands:
 /subagents max <n>
 /subagents config
 /subagents config provider <provider> model <model>
+/subagents config max-steps <n> min-max-steps <n> max-max-steps <n>
+/subagents config tool-calls <n> read-bytes <n> output-bytes <n> allowed-tools <tool-a,tool-b>
 /agents max=<n>"#
         .replace("{active_subagent_limit}", &active_subagent_limit.to_string())
         .replace("{subagent_provider}", &defaults.provider)
         .replace("{subagent_model}", &defaults.model)
+        .replace("{subagent_default_max_steps}", &spawn_defaults.default_max_steps.to_string())
+        .replace("{subagent_min_max_steps}", &spawn_defaults.min_max_steps.to_string())
+        .replace("{subagent_max_max_steps}", &spawn_defaults.max_max_steps.to_string())
+        .replace(
+            "{subagent_default_max_tool_calls}",
+            &spawn_defaults
+                .work_budget
+                .max_tool_calls
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unset".to_string()),
+        )
+        .replace(
+            "{subagent_default_max_read_bytes}",
+            &spawn_defaults
+                .work_budget
+                .max_read_bytes
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unset".to_string()),
+        )
+        .replace(
+            "{subagent_default_max_output_bytes}",
+            &spawn_defaults
+                .work_budget
+                .max_output_bytes
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unset".to_string()),
+        )
+        .replace(
+            "{subagent_default_allowed_tools}",
+            &spawn_defaults.work_budget.allowed_tools.join(","),
+        )
     }
 
     pub(crate) fn subagent_board_path(&self) -> PathBuf {

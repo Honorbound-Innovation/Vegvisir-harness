@@ -22,6 +22,7 @@ use walkdir::WalkDir;
 
 use crate::{
     command_sandbox::{CommandSandboxConfig, build_sandboxed_command},
+    environment::get_env,
     guardrails::GuardrailEngine,
     memory::{ContextPrepareOptions, VegvisirCms, VegvisirCmsConfig},
     observability::EventLogger,
@@ -296,10 +297,39 @@ pub struct ToolExecutor {
     pub logger: EventLogger,
 }
 
+fn subagent_allowed_tools_from_env() -> Vec<String> {
+    get_env("VEGVISIR_SUBAGENT_ALLOWED_TOOLS")
+        .map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|tool| !tool.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn tool_allowed_by_budget(allowed_tools: &[String], target: &str) -> bool {
+    allowed_tools.iter().any(|allowed| {
+        allowed == "*" || allowed == target || target.starts_with(&format!("{allowed}::"))
+    })
+}
+
 impl ToolExecutor {
     pub fn execute(&mut self, call: ToolCall) -> Observation {
         let result = (|| {
             let tool = self.registry.get(&call.name)?;
+            let subagent_allowed_tools = subagent_allowed_tools_from_env();
+            if !subagent_allowed_tools.is_empty()
+                && !tool_allowed_by_budget(&subagent_allowed_tools, &tool.name)
+            {
+                anyhow::bail!(
+                    "Subagent budget denied tool `{}`; allowed_tools={}",
+                    tool.name,
+                    subagent_allowed_tools.join(",")
+                );
+            }
             let args = tool.normalize_args(call.args);
             tool.validate_args(&args)?;
             self.guardrails.authorize_tool(tool, &args)?;
@@ -511,6 +541,65 @@ impl Default for SubagentProviderDefaults {
     }
 }
 
+pub const DEFAULT_SUBAGENT_MAX_STEPS: u64 = 4;
+pub const DEFAULT_SUBAGENT_MIN_MAX_STEPS: u64 = 1;
+pub const DEFAULT_SUBAGENT_MAX_MAX_STEPS: u64 = 32;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SubagentSpawnDefaults {
+    pub default_max_steps: u64,
+    pub min_max_steps: u64,
+    pub max_max_steps: u64,
+    pub work_budget: SubAgentWorkBudget,
+}
+
+impl SubagentSpawnDefaults {
+    pub fn normalized(mut self) -> Self {
+        self.min_max_steps = self.min_max_steps.max(1);
+        self.max_max_steps = self.max_max_steps.max(self.min_max_steps);
+        self.default_max_steps = self
+            .default_max_steps
+            .clamp(self.min_max_steps, self.max_max_steps);
+        self.work_budget.max_tool_calls = self.work_budget.max_tool_calls.map(|value| value.max(1));
+        self.work_budget.max_read_bytes = self.work_budget.max_read_bytes.map(|value| value.max(1));
+        self.work_budget.max_output_bytes =
+            self.work_budget.max_output_bytes.map(|value| value.max(1));
+        self.work_budget.allowed_tools = self
+            .work_budget
+            .allowed_tools
+            .into_iter()
+            .map(|tool| tool.trim().to_string())
+            .filter(|tool| !tool.is_empty())
+            .collect();
+        self
+    }
+
+    pub fn effective_max_steps(&self, requested: Option<u64>) -> u64 {
+        let normalized = self.clone().normalized();
+        requested
+            .unwrap_or(normalized.default_max_steps)
+            .clamp(normalized.min_max_steps, normalized.max_max_steps)
+    }
+}
+
+impl Default for SubagentSpawnDefaults {
+    fn default() -> Self {
+        Self {
+            default_max_steps: DEFAULT_SUBAGENT_MAX_STEPS,
+            min_max_steps: DEFAULT_SUBAGENT_MIN_MAX_STEPS,
+            max_max_steps: DEFAULT_SUBAGENT_MAX_MAX_STEPS,
+            work_budget: SubAgentWorkBudget {
+                max_steps: None,
+                max_tool_calls: Some(8),
+                max_read_bytes: Some(64 * 1024),
+                max_output_bytes: Some(16 * 1024),
+                allowed_tools: vec!["list_files".to_string(), "read_file".to_string()],
+                notes: "Prefer targeted search/listing and small file excerpts. Do not read huge files in full; ask for a larger budget if needed.".to_string(),
+            },
+        }
+    }
+}
+
 pub fn build_builtin_registry(workspace: impl AsRef<Path>) -> anyhow::Result<ToolRegistry> {
     build_builtin_registry_with_cms(
         workspace.as_ref(),
@@ -560,6 +649,24 @@ pub fn build_builtin_registry_with_cms_mode_subagent_limit_and_provider_defaults
     active_subagent_limit: usize,
     subagent_provider_defaults: SubagentProviderDefaults,
 ) -> anyhow::Result<ToolRegistry> {
+    build_builtin_registry_with_cms_mode_subagent_config(
+        workspace,
+        cms_config,
+        bypass_sandbox,
+        active_subagent_limit,
+        subagent_provider_defaults,
+        SubagentSpawnDefaults::default(),
+    )
+}
+
+pub fn build_builtin_registry_with_cms_mode_subagent_config(
+    workspace: impl AsRef<Path>,
+    cms_config: VegvisirCmsConfig,
+    bypass_sandbox: bool,
+    active_subagent_limit: usize,
+    subagent_provider_defaults: SubagentProviderDefaults,
+    subagent_spawn_defaults: SubagentSpawnDefaults,
+) -> anyhow::Result<ToolRegistry> {
     let sandbox = if bypass_sandbox {
         WorkspaceSandbox::new_unrestricted(workspace)?
     } else {
@@ -571,6 +678,7 @@ pub fn build_builtin_registry_with_cms_mode_subagent_limit_and_provider_defaults
         .map(Path::to_path_buf)
         .unwrap_or_else(|| sandbox.root.join(".vegvisir"));
     let active_subagent_limit = active_subagent_limit.max(1);
+    let subagent_spawn_defaults = subagent_spawn_defaults.normalized();
     let mut registry = ToolRegistry::default();
 
     let list_sandbox = sandbox.clone();
@@ -641,10 +749,24 @@ pub fn build_builtin_registry_with_cms_mode_subagent_limit_and_provider_defaults
             match read_sandbox.read_text(path) {
                 Ok(content) => {
                     let original_bytes = content.len();
+                    let max_read_bytes = get_env("VEGVISIR_SUBAGENT_MAX_READ_BYTES")
+                        .and_then(|value| value.trim().parse::<usize>().ok())
+                        .filter(|value| *value > 0);
+                    let truncated = max_read_bytes.is_some_and(|limit| original_bytes > limit);
+                    let content = if let Some(limit) =
+                        max_read_bytes.filter(|limit| original_bytes > *limit)
+                    {
+                        compact_text_middle(&content, limit, "read_file")
+                    } else {
+                        content
+                    };
                     let mut data = Map::new();
                     data.insert("path".to_string(), json!(path));
                     data.insert("bytes".to_string(), json!(original_bytes));
-                    data.insert("output_truncated".to_string(), json!(false));
+                    data.insert("output_truncated".to_string(), json!(truncated));
+                    if let Some(limit) = max_read_bytes {
+                        data.insert("max_read_bytes".to_string(), json!(limit));
+                    }
                     Observation {
                         ok: true,
                         content,
@@ -1509,6 +1631,7 @@ pub fn build_builtin_registry_with_cms_mode_subagent_limit_and_provider_defaults
     let subagent_sandbox = sandbox.clone();
     let spawn_subagent_board_path = subagent_board_path.clone();
     let spawn_subagent_provider_defaults = subagent_provider_defaults.clone();
+    let spawn_subagent_defaults = subagent_spawn_defaults.clone();
     registry.register(Tool::new(
         "spawn_subagent",
         "Delegate a bounded task to a background Vegvisir child agent and record it on the subagent board.",
@@ -1533,18 +1656,19 @@ pub fn build_builtin_registry_with_cms_mode_subagent_limit_and_provider_defaults
                 },
                 None => subagent_root.clone(),
             };
-            let max_steps = args
-                .get("max_steps")
-                .and_then(Value::as_u64)
-                .unwrap_or(4)
-                .clamp(1, 32)
-                .to_string();
+            let requested_max_steps = args.get("max_steps").and_then(Value::as_u64);
+            let effective_max_steps = spawn_subagent_defaults.effective_max_steps(requested_max_steps);
+            let max_steps = effective_max_steps.to_string();
             let provider = optional_nonempty_string(args.get("provider"))
                 .unwrap_or_else(|| spawn_subagent_provider_defaults.provider.clone());
             let model = optional_nonempty_string(args.get("model"))
                 .unwrap_or_else(|| spawn_subagent_provider_defaults.model.clone());
             let agent = optional_nonempty_string(args.get("agent"));
-            let work_budget = parse_subagent_work_budget(args.get("work_budget"), args.get("max_steps"));
+            let work_budget = parse_subagent_work_budget(
+                args.get("work_budget"),
+                Some(effective_max_steps),
+                &spawn_subagent_defaults.work_budget,
+            );
             let workspace_scope_sandbox = match if bypass_sandbox {
                 WorkspaceSandbox::new_unrestricted(&workspace)
             } else {
@@ -1641,6 +1765,7 @@ pub fn build_builtin_registry_with_cms_mode_subagent_limit_and_provider_defaults
             data.insert("provider".to_string(), json!(provider));
             data.insert("model".to_string(), json!(model));
             data.insert("file_scope".to_string(), json!(record.file_scope));
+            data.insert("max_steps".to_string(), json!(effective_max_steps));
             data.insert("work_budget".to_string(), json!(record.work_budget));
             data.insert("board_path".to_string(), json!(subagent_data_root.join("subagents.json")));
             Observation {
@@ -1833,22 +1958,14 @@ pub fn build_builtin_registry_with_cms_mode_subagent_limit_and_provider_defaults
 
 fn parse_subagent_work_budget(
     value: Option<&Value>,
-    max_steps_value: Option<&Value>,
+    max_steps_value: Option<u64>,
+    default_budget: &SubAgentWorkBudget,
 ) -> SubAgentWorkBudget {
-    let mut budget = SubAgentWorkBudget {
-        max_steps: max_steps_value.and_then(Value::as_u64),
-        max_tool_calls: Some(8),
-        max_read_bytes: Some(64 * 1024),
-        max_output_bytes: Some(16 * 1024),
-        allowed_tools: vec!["list_files".to_string(), "read_file".to_string()],
-        notes: "Prefer targeted search/listing and small file excerpts. Do not read huge files in full; ask for a larger budget if needed.".to_string(),
-    };
+    let mut budget = default_budget.clone();
+    budget.max_steps = max_steps_value;
     let Some(Value::Object(object)) = value else {
         return budget;
     };
-    if let Some(value) = object.get("max_steps").and_then(Value::as_u64) {
-        budget.max_steps = Some(value);
-    }
     if let Some(value) = object.get("max_tool_calls").and_then(Value::as_u64) {
         budget.max_tool_calls = Some(value);
     }
@@ -2063,10 +2180,22 @@ fn subagent_child_env(launch: &SubagentChildLaunch) -> Vec<(String, String)> {
             limit.max(1).to_string(),
         ));
     }
+    if let Some(limit) = launch.work_budget.max_read_bytes {
+        env.push((
+            "VEGVISIR_SUBAGENT_MAX_READ_BYTES".to_string(),
+            limit.max(1).to_string(),
+        ));
+    }
     if let Some(limit) = launch.work_budget.max_output_bytes {
         env.push((
             "VEGVISIR_SUBAGENT_MAX_OUTPUT_BYTES".to_string(),
-            limit.max(1024).to_string(),
+            limit.max(1).to_string(),
+        ));
+    }
+    if !launch.work_budget.allowed_tools.is_empty() {
+        env.push((
+            "VEGVISIR_SUBAGENT_ALLOWED_TOOLS".to_string(),
+            launch.work_budget.allowed_tools.join(","),
         ));
     }
     env
@@ -2123,7 +2252,7 @@ fn run_spawned_subagent(
             model,
             agent,
             bypass_sandbox,
-            work_budget,
+            work_budget: work_budget.clone(),
         };
         let env = subagent_child_env(&launch);
         let argv = subagent_child_argv(launch);
@@ -2174,7 +2303,18 @@ fn run_spawned_subagent(
         Ok(output) => {
             record.status = SubAgentStatus::Completed;
             record.finished_at = Some(Utc::now());
-            record.final_answer = Some(output);
+            record.final_answer = Some(
+                work_budget
+                    .max_output_bytes
+                    .map(|limit| {
+                        compact_text_middle(
+                            &output,
+                            usize::try_from(limit).unwrap_or(usize::MAX),
+                            "subagent output",
+                        )
+                    })
+                    .unwrap_or(output),
+            );
             record.error = None;
         }
         Err(error) => {
@@ -2822,7 +2962,11 @@ mod skiller_tool_tests {
 
     #[test]
     fn subagent_default_work_budget_is_bounded_for_review() {
-        let budget = parse_subagent_work_budget(None, Some(&json!(5)));
+        let budget = parse_subagent_work_budget(
+            None,
+            Some(5),
+            &SubagentSpawnDefaults::default().work_budget,
+        );
 
         assert_eq!(budget.max_steps, Some(5));
         assert_eq!(budget.max_tool_calls, Some(8));
@@ -2903,17 +3047,25 @@ mod skiller_tool_tests {
             work_budget: SubAgentWorkBudget {
                 max_steps: Some(5),
                 max_tool_calls: Some(7),
-                max_read_bytes: None,
+                max_read_bytes: Some(1),
                 max_output_bytes: Some(8192),
-                allowed_tools: Vec::new(),
+                allowed_tools: vec!["read_file".to_string(), "rg".to_string()],
                 notes: String::new(),
             },
         });
 
         assert!(env.contains(&("VEGVISIR_MAX_TOOL_ROUNDS".to_string(), "7".to_string())));
         assert!(env.contains(&(
+            "VEGVISIR_SUBAGENT_MAX_READ_BYTES".to_string(),
+            "1".to_string()
+        )));
+        assert!(env.contains(&(
             "VEGVISIR_SUBAGENT_MAX_OUTPUT_BYTES".to_string(),
             "8192".to_string()
+        )));
+        assert!(env.contains(&(
+            "VEGVISIR_SUBAGENT_ALLOWED_TOOLS".to_string(),
+            "read_file,rg".to_string()
         )));
     }
 
@@ -3154,6 +3306,113 @@ mod skiller_tool_tests {
                 .content
                 .contains("Maximum active subagents reached (1)")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn spawn_subagent_uses_configurable_spawn_defaults() -> anyhow::Result<()> {
+        let _env_lock = env_var_test_lock();
+        let workspace = TempDir::new()?;
+        let fake_bin = workspace.path().join("fake-vegvisir");
+        std::fs::write(
+            &fake_bin,
+            r#"#!/bin/sh
+echo '{"events":[]}'; exit 0
+"#,
+        )?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&fake_bin)?.permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&fake_bin, permissions)?;
+        }
+        let _bin_guard = EnvVarGuard::set("VEGVISIR_BIN", &fake_bin);
+        let mut cms_config = VegvisirCmsConfig::for_workspace(workspace.path());
+        cms_config.db_path = workspace.path().join(".vegvisir/cms-v2.sqlite3");
+        let board_path = cms_config
+            .db_path
+            .parent()
+            .expect("cms db parent")
+            .join("subagents.json");
+        let registry = build_builtin_registry_with_cms_mode_subagent_config(
+            workspace.path(),
+            cms_config,
+            true,
+            3,
+            SubagentProviderDefaults::new("provider-x", "model-x"),
+            SubagentSpawnDefaults {
+                default_max_steps: 11,
+                min_max_steps: 2,
+                max_max_steps: 40,
+                work_budget: SubAgentWorkBudget {
+                    max_steps: None,
+                    max_tool_calls: Some(17),
+                    max_read_bytes: Some(222_222),
+                    max_output_bytes: Some(33_333),
+                    allowed_tools: vec!["read_file".to_string(), "rg".to_string()],
+                    notes: "custom defaults for deep review".to_string(),
+                },
+            },
+        )?;
+        let mut executor = ToolExecutor {
+            registry,
+            guardrails: GuardrailEngine {
+                policy: crate::guardrails::PermissionPolicy {
+                    allow_risky_tools: true,
+                    require_human_approval: false,
+                    bypass_approvals_and_sandbox: true,
+                    ..crate::guardrails::PermissionPolicy::default()
+                },
+                approvals: crate::guardrails::ApprovalLedger::default(),
+            },
+            runtime_policy: RuntimePolicy::default(),
+            logger: EventLogger::new(None),
+        };
+
+        let observation = executor.execute(ToolCall {
+            name: "spawn_subagent".to_string(),
+            args: serde_json::from_value(json!({
+                "goal": "inspect configurable defaults",
+                "name": "configurable-defaults-check",
+                "file_scope": ["."]
+            }))?,
+        });
+
+        assert!(observation.ok, "{}", observation.content);
+        assert_eq!(observation.data.get("max_steps"), Some(&json!(11)));
+        assert_eq!(
+            observation
+                .data
+                .get("work_budget")
+                .and_then(|budget| budget.get("max_tool_calls")),
+            Some(&json!(17))
+        );
+        assert_eq!(
+            observation
+                .data
+                .get("work_budget")
+                .and_then(|budget| budget.get("max_read_bytes")),
+            Some(&json!(222_222))
+        );
+        assert_eq!(
+            observation
+                .data
+                .get("work_budget")
+                .and_then(|budget| budget.get("allowed_tools")),
+            Some(&json!(["read_file", "rg"]))
+        );
+        let records = load_subagent_board_records(&board_path)?;
+        let record = records
+            .iter()
+            .find(|record| record.name == "configurable-defaults-check")
+            .expect("spawned configurable-defaults-check record");
+        assert_eq!(record.work_budget.max_steps, Some(11));
+        assert_eq!(record.work_budget.max_tool_calls, Some(17));
+        assert_eq!(record.work_budget.max_read_bytes, Some(222_222));
+        assert_eq!(record.work_budget.max_output_bytes, Some(33_333));
+        assert!(record.work_budget.allowed_tools.contains(&"rg".to_string()));
+        assert_eq!(record.work_budget.notes, "custom defaults for deep review");
         Ok(())
     }
 

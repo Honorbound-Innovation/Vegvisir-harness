@@ -62,7 +62,8 @@ Rules:
 - Use non-overlapping scopes for parallel work.
 - Prefer read-only scopes unless the user explicitly asks for parallel implementation.
 - Never allow two active implementation workers to edit or own the same files.
-- Vegvisir defaults to three active subagents at once, but operators can change the session limit with `/agents max=<n>` or `/subagents max <n>`.
+- Vegvisir ships a configurable default active-subagent limit and operators can change the session limit with `/agents max=<n>` or `/subagents max <n>`.
+- Spawn `max_steps` defaults/ranges and default work-budget limits are configurable with `/subagents config`; per-use-case `spawn_subagent` requests can override `max_steps` and `work_budget` directly.
 - If a scope conflict is reported, narrow the new task or continue on the main thread.
 
 Example scopes:
@@ -76,7 +77,7 @@ components/skiller/
 
 ## Work Budgets
 
-Non-trivial subagents should receive a budget. A useful budget specifies:
+Non-trivial subagents should receive a budget. If no task-local budget is supplied, Vegvisir uses the configured subagent defaults from `vegvisir/src/defaults/subagents.json` plus any persistent `/subagents config` overrides. A useful budget specifies:
 
 - maximum steps,
 - maximum tool calls,

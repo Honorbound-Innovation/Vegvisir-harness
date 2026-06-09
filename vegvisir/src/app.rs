@@ -46,8 +46,8 @@ use crate::{
     speech::{ActiveSpeechRecording, DEFAULT_PTT_KEY, DEFAULT_PTT_SECONDS, PushToTalkKey},
     subagents::{SubAgentStatus, SubAgentTaskRecord},
     tools::{
-        DEFAULT_ACTIVE_SUBAGENT_LIMIT, SubagentProviderDefaults, ToolExecutor, ToolRegistry,
-        build_builtin_registry_with_cms_mode_subagent_limit_and_provider_defaults,
+        DEFAULT_ACTIVE_SUBAGENT_LIMIT, SubagentProviderDefaults, SubagentSpawnDefaults,
+        ToolExecutor, ToolRegistry, build_builtin_registry_with_cms_mode_subagent_config,
     },
     types::ToolCall,
     ui::{
@@ -100,6 +100,7 @@ pub struct TuiApplication {
     pub autonomous_level: usize,
     pub active_subagent_limit: usize,
     pub subagent_provider_defaults: SubagentProviderDefaults,
+    pub subagent_spawn_defaults: SubagentSpawnDefaults,
     pub mcp_servers: Vec<crate::core::McpServerConfig>,
     pub hbse_services: Vec<HbseServiceRef>,
     pub pending_send: Option<JoinHandle<anyhow::Result<SessionState>>>,
@@ -652,6 +653,7 @@ impl TuiApplication {
             .map(|value| value as usize)
             .unwrap_or_else(default_subagent_active_limit)
             .max(1);
+        let subagent_spawn_defaults = configured_subagent_spawn_defaults(&defaults);
         let subagent_provider = defaults
             .get("subagent_provider")
             .and_then(Value::as_str)
@@ -671,14 +673,14 @@ impl TuiApplication {
         };
         let subagent_provider_defaults =
             SubagentProviderDefaults::new(subagent_provider, subagent_model);
-        let tool_registry =
-            build_builtin_registry_with_cms_mode_subagent_limit_and_provider_defaults(
-                &cwd,
-                cms_config,
-                dangerously_bypass_approvals_and_sandbox,
-                active_subagent_limit,
-                subagent_provider_defaults.clone(),
-            )?;
+        let tool_registry = build_builtin_registry_with_cms_mode_subagent_config(
+            &cwd,
+            cms_config,
+            dangerously_bypass_approvals_and_sandbox,
+            active_subagent_limit,
+            subagent_provider_defaults.clone(),
+            subagent_spawn_defaults.clone(),
+        )?;
         let profile_store = UserProfileStore::new(&data_root);
         let user_profile = profile_store.load()?;
         let mcp_servers = load_mcp_servers(&data_root)?;
@@ -791,6 +793,7 @@ impl TuiApplication {
             autonomous_level: 1,
             active_subagent_limit,
             subagent_provider_defaults,
+            subagent_spawn_defaults,
             mcp_servers,
             hbse_services,
             pending_send: None,
@@ -1072,14 +1075,14 @@ impl TuiApplication {
     fn rebuild_tooling_for_cms(&mut self) -> anyhow::Result<()> {
         let policy = self.tool_executor.guardrails.policy.clone();
         let bypass = policy.bypass_approvals_and_sandbox;
-        let mut tool_registry =
-            build_builtin_registry_with_cms_mode_subagent_limit_and_provider_defaults(
-                &self.cwd,
-                self.cms.config.clone(),
-                bypass,
-                self.active_subagent_limit,
-                self.subagent_provider_defaults.clone(),
-            )?;
+        let mut tool_registry = build_builtin_registry_with_cms_mode_subagent_config(
+            &self.cwd,
+            self.cms.config.clone(),
+            bypass,
+            self.active_subagent_limit,
+            self.subagent_provider_defaults.clone(),
+            self.subagent_spawn_defaults.clone(),
+        )?;
         let mcp_servers = self.active_mcp_servers();
         register_mcp_tools(
             &mut tool_registry,
@@ -1268,6 +1271,135 @@ fn default_subagent_active_limit() -> usize {
         .map(|value| value as usize)
         .unwrap_or(DEFAULT_ACTIVE_SUBAGENT_LIMIT)
         .max(1)
+}
+
+fn subagent_config_u64(parsed: &serde_json::Value, key: &str, default: u64) -> u64 {
+    parsed
+        .get(key)
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(default)
+}
+
+fn subagent_config_optional_u64(parsed: &serde_json::Value, key: &str) -> Option<u64> {
+    parsed.get(key).and_then(serde_json::Value::as_u64)
+}
+
+fn subagent_config_string_vec(
+    parsed: &serde_json::Value,
+    key: &str,
+    default: &[String],
+) -> Vec<String> {
+    parsed
+        .get(key)
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .filter(|items| !items.is_empty())
+        .unwrap_or_else(|| default.to_vec())
+}
+
+fn default_subagent_spawn_defaults() -> SubagentSpawnDefaults {
+    let parsed = default_subagent_config_value();
+    let defaults = SubagentSpawnDefaults::default();
+    SubagentSpawnDefaults {
+        default_max_steps: subagent_config_u64(
+            &parsed,
+            "default_max_steps",
+            defaults.default_max_steps,
+        ),
+        min_max_steps: subagent_config_u64(&parsed, "min_max_steps", defaults.min_max_steps),
+        max_max_steps: subagent_config_u64(&parsed, "max_max_steps", defaults.max_max_steps),
+        work_budget: crate::subagents::SubAgentWorkBudget {
+            max_steps: None,
+            max_tool_calls: subagent_config_optional_u64(&parsed, "default_max_tool_calls")
+                .or(defaults.work_budget.max_tool_calls),
+            max_read_bytes: subagent_config_optional_u64(&parsed, "default_max_read_bytes")
+                .or(defaults.work_budget.max_read_bytes),
+            max_output_bytes: subagent_config_optional_u64(&parsed, "default_max_output_bytes")
+                .or(defaults.work_budget.max_output_bytes),
+            allowed_tools: subagent_config_string_vec(
+                &parsed,
+                "default_allowed_tools",
+                &defaults.work_budget.allowed_tools,
+            ),
+            notes: parsed
+                .get("default_budget_notes")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .unwrap_or(defaults.work_budget.notes),
+        },
+    }
+    .normalized()
+}
+
+fn configured_subagent_spawn_defaults(
+    defaults: &BTreeMap<String, serde_json::Value>,
+) -> SubagentSpawnDefaults {
+    let mut spawn = default_subagent_spawn_defaults();
+    if let Some(value) = defaults
+        .get("subagent_default_max_steps")
+        .and_then(serde_json::Value::as_u64)
+    {
+        spawn.default_max_steps = value;
+    }
+    if let Some(value) = defaults
+        .get("subagent_min_max_steps")
+        .and_then(serde_json::Value::as_u64)
+    {
+        spawn.min_max_steps = value;
+    }
+    if let Some(value) = defaults
+        .get("subagent_max_max_steps")
+        .and_then(serde_json::Value::as_u64)
+    {
+        spawn.max_max_steps = value;
+    }
+    if let Some(value) = defaults
+        .get("subagent_default_max_tool_calls")
+        .and_then(serde_json::Value::as_u64)
+    {
+        spawn.work_budget.max_tool_calls = Some(value);
+    }
+    if let Some(value) = defaults
+        .get("subagent_default_max_read_bytes")
+        .and_then(serde_json::Value::as_u64)
+    {
+        spawn.work_budget.max_read_bytes = Some(value);
+    }
+    if let Some(value) = defaults
+        .get("subagent_default_max_output_bytes")
+        .and_then(serde_json::Value::as_u64)
+    {
+        spawn.work_budget.max_output_bytes = Some(value);
+    }
+    if let Some(items) = defaults
+        .get("subagent_default_allowed_tools")
+        .and_then(serde_json::Value::as_array)
+    {
+        spawn.work_budget.allowed_tools = items
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(str::to_string)
+            .collect();
+    }
+    if let Some(notes) = defaults
+        .get("subagent_default_budget_notes")
+        .and_then(serde_json::Value::as_str)
+    {
+        spawn.work_budget.notes = notes.trim().to_string();
+    }
+    spawn.normalized()
 }
 
 #[cfg(test)]
@@ -2503,20 +2635,22 @@ mod tests {
         app.handle_key_event(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
         assert!(!app.tool_log_visible);
         assert_eq!(app.session.messages.len(), baseline + 1);
-        assert!(app
-            .session
-            .messages
-            .last()
-            .is_some_and(|message| message.content.contains("Tool/note log hidden")));
+        assert!(
+            app.session
+                .messages
+                .last()
+                .is_some_and(|message| message.content.contains("Tool/note log hidden"))
+        );
 
         app.handle_key_event(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
         assert!(app.tool_log_visible);
         assert_eq!(app.session.messages.len(), baseline + 2);
-        assert!(app
-            .session
-            .messages
-            .last()
-            .is_some_and(|message| message.content.contains("Tool/note log shown")));
+        assert!(
+            app.session
+                .messages
+                .last()
+                .is_some_and(|message| message.content.contains("Tool/note log shown"))
+        );
         Ok(())
     }
 
@@ -3041,16 +3175,20 @@ mod tests {
             app.active_subagent_limit,
             super::default_subagent_active_limit()
         );
+        assert_eq!(
+            app.subagent_spawn_defaults,
+            super::default_subagent_spawn_defaults()
+        );
         Ok(())
     }
 
     #[test]
-    fn subagents_config_command_persists_provider_model_and_limit() -> anyhow::Result<()> {
+    fn subagents_config_command_persists_provider_model_limit_and_budget() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
 
         let response = app
-            .execute_command("/subagents config provider provider-x model model-x max 6")?
+            .execute_command("/subagents config provider provider-x model model-x max 6 max-steps 9 min-max-steps 2 max-max-steps 20 tool-calls 11 read-bytes 12345 output-bytes 6789 allowed-tools list_files,read_file,rg budget-notes careful focused work")?
             .expect("command response");
 
         assert!(response.contains("provider=provider-x"));
@@ -3059,6 +3197,31 @@ mod tests {
         assert_eq!(app.subagent_provider_defaults.provider, "provider-x");
         assert_eq!(app.subagent_provider_defaults.model, "model-x");
         assert_eq!(app.active_subagent_limit, 6);
+        assert_eq!(app.subagent_spawn_defaults.default_max_steps, 9);
+        assert_eq!(app.subagent_spawn_defaults.min_max_steps, 2);
+        assert_eq!(app.subagent_spawn_defaults.max_max_steps, 20);
+        assert_eq!(
+            app.subagent_spawn_defaults.work_budget.max_tool_calls,
+            Some(11)
+        );
+        assert_eq!(
+            app.subagent_spawn_defaults.work_budget.max_read_bytes,
+            Some(12345)
+        );
+        assert_eq!(
+            app.subagent_spawn_defaults.work_budget.max_output_bytes,
+            Some(6789)
+        );
+        assert!(
+            app.subagent_spawn_defaults
+                .work_budget
+                .allowed_tools
+                .contains(&"rg".to_string())
+        );
+        assert_eq!(
+            app.subagent_spawn_defaults.work_budget.notes,
+            "careful focused work"
+        );
 
         let saved = app.config.load()?;
         assert_eq!(
@@ -3079,6 +3242,18 @@ mod tests {
                 .and_then(serde_json::Value::as_u64),
             Some(6)
         );
+        assert_eq!(
+            saved
+                .get("subagent_default_max_steps")
+                .and_then(serde_json::Value::as_u64),
+            Some(9)
+        );
+        assert_eq!(
+            saved
+                .get("subagent_default_max_tool_calls")
+                .and_then(serde_json::Value::as_u64),
+            Some(11)
+        );
         Ok(())
     }
 
@@ -3092,7 +3267,7 @@ mod tests {
         assert_eq!(app.active_subagent_limit, 5);
         assert!(response.contains("Active subagent limit set to 5"));
         let policy = app.execute_command("/subagents policy")?.unwrap();
-        assert!(policy.contains("current session limit is 5"));
+        assert!(policy.contains("current active subagent limit is 5"));
         Ok(())
     }
 
