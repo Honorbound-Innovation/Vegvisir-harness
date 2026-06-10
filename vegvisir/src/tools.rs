@@ -2454,7 +2454,84 @@ fn load_subagent_board_records(path: &Path) -> anyhow::Result<Vec<SubAgentTaskRe
     if text.trim().is_empty() {
         return Ok(Vec::new());
     }
-    Ok(serde_json::from_str::<Vec<SubAgentTaskRecord>>(&text)?)
+    match serde_json::from_str::<Vec<SubAgentTaskRecord>>(&text) {
+        Ok(records) => Ok(records),
+        Err(original_error) => {
+            if let Some(records) = recover_subagent_board_records(&text) {
+                let _ = save_subagent_board_records(path, &records);
+                Ok(records)
+            } else {
+                Err(original_error.into())
+            }
+        }
+    }
+}
+
+fn recover_subagent_board_records(text: &str) -> Option<Vec<SubAgentTaskRecord>> {
+    let trimmed = text.trim_start_matches(['\u{feff}', '\u{200b}', '\u{2060}']);
+    let start = trimmed.find('[')?;
+    let candidate = &trimmed[start..];
+
+    if let Ok(records) = serde_json::from_str::<Vec<SubAgentTaskRecord>>(candidate) {
+        return Some(records);
+    }
+
+    recover_subagent_board_records_from_partial_array(candidate)
+}
+
+fn recover_subagent_board_records_from_partial_array(
+    candidate: &str,
+) -> Option<Vec<SubAgentTaskRecord>> {
+    let mut records = Vec::new();
+    let bytes = candidate.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'{' {
+            let start = i;
+            let mut depth = 0i32;
+            let mut in_string = false;
+            let mut escaped = false;
+            while i < bytes.len() {
+                let b = bytes[i];
+                if in_string {
+                    if escaped {
+                        escaped = false;
+                    } else if b == b'\\' {
+                        escaped = true;
+                    } else if b == b'"' {
+                        in_string = false;
+                    }
+                } else {
+                    match b {
+                        b'"' => in_string = true,
+                        b'{' => depth += 1,
+                        b'}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                let slice = &candidate[start..=i];
+                                if let Ok(record) =
+                                    serde_json::from_str::<SubAgentTaskRecord>(slice)
+                                {
+                                    records.push(record);
+                                }
+                                break;
+                            }
+                        }
+                        b']' if depth == 0 => break,
+                        _ => {}
+                    }
+                }
+                i += 1;
+            }
+        }
+        i += 1;
+    }
+
+    if records.is_empty() {
+        None
+    } else {
+        Some(records)
+    }
 }
 
 fn save_subagent_board_records(path: &Path, records: &[SubAgentTaskRecord]) -> anyhow::Result<()> {
@@ -3233,6 +3310,86 @@ echo '{"events":[]}'; exit 0
             .expect("spawned defaults-check record");
         assert_eq!(record.provider.as_deref(), Some(provider));
         assert_eq!(record.model.as_deref(), Some(model));
+        Ok(())
+    }
+
+    #[test]
+    fn load_subagent_board_records_recovers_from_prefixed_garbage() -> anyhow::Result<()> {
+        let workspace = TempDir::new()?;
+        let board_path = workspace.path().join("subagents.json");
+        let records = vec![SubAgentTaskRecord {
+            id: "task-1".to_string(),
+            name: "planner".to_string(),
+            workspace: workspace.path().to_path_buf(),
+            goal: "Inspect subagent visibility".to_string(),
+            parent_run_id: None,
+            child_run_id: None,
+            artifact_dir: None,
+            ownership: None,
+            provider: None,
+            model: None,
+            file_scope: vec![workspace.path().join("vegvisir/src/subagents.rs")],
+            work_budget: SubAgentWorkBudget::default(),
+            status: SubAgentStatus::Running,
+            created_at: Utc::now(),
+            started_at: Some(Utc::now()),
+            finished_at: None,
+            checkpoint: None,
+            final_answer: None,
+            error: None,
+            observability: SubAgentObservability::default(),
+        }];
+        let payload = format!("\naa{}", serde_json::to_string_pretty(&records)?);
+        std::fs::write(&board_path, payload)?;
+
+        let loaded = load_subagent_board_records(&board_path)?;
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].id, "task-1");
+
+        let rewritten = std::fs::read_to_string(&board_path)?;
+        assert!(rewritten.trim_start().starts_with('['));
+        Ok(())
+    }
+
+    #[test]
+    fn load_subagent_board_records_recovers_from_truncated_json() -> anyhow::Result<()> {
+        let workspace = TempDir::new()?;
+        let board_path = workspace.path().join("subagents.json");
+        let records = vec![SubAgentTaskRecord {
+            id: "task-2".to_string(),
+            name: "truncated".to_string(),
+            workspace: workspace.path().to_path_buf(),
+            goal: "Inspect truncated board recovery".to_string(),
+            parent_run_id: None,
+            child_run_id: None,
+            artifact_dir: None,
+            ownership: None,
+            provider: None,
+            model: None,
+            file_scope: Vec::new(),
+            work_budget: SubAgentWorkBudget::default(),
+            status: SubAgentStatus::Queued,
+            created_at: Utc::now(),
+            started_at: None,
+            finished_at: None,
+            checkpoint: None,
+            final_answer: None,
+            error: None,
+            observability: SubAgentObservability::default(),
+        }];
+        let payload = format!(
+            "{}
+TRAILING_GARBAGE",
+            serde_json::to_string_pretty(&records)?
+        );
+        std::fs::write(&board_path, payload)?;
+
+        let loaded = load_subagent_board_records(&board_path)?;
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].id, "task-2");
+
+        let contents = std::fs::read_to_string(&board_path)?;
+        assert!(contents.trim_start().starts_with('['));
         Ok(())
     }
 

@@ -2329,20 +2329,22 @@ mod tests {
         app.handle_key_event(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
         assert!(!app.tool_log_visible);
         assert_eq!(app.session.messages.len(), baseline + 1);
-        assert!(app
-            .session
-            .messages
-            .last()
-            .is_some_and(|message| message.content.contains("Tool/note log hidden")));
+        assert!(
+            app.session
+                .messages
+                .last()
+                .is_some_and(|message| message.content.contains("Tool/note log hidden"))
+        );
 
         app.handle_key_event(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
         assert!(app.tool_log_visible);
         assert_eq!(app.session.messages.len(), baseline + 2);
-        assert!(app
-            .session
-            .messages
-            .last()
-            .is_some_and(|message| message.content.contains("Tool/note log shown")));
+        assert!(
+            app.session
+                .messages
+                .last()
+                .is_some_and(|message| message.content.contains("Tool/note log shown"))
+        );
         Ok(())
     }
 
@@ -2863,6 +2865,8 @@ mod tests {
         let defaults = super::default_subagent_provider_defaults();
 
         assert_eq!(app.subagent_provider_defaults, defaults);
+        assert_eq!(app.subagent_provider_defaults.provider, "openai-sso");
+        assert_eq!(app.subagent_provider_defaults.model, "gpt-5.5");
         assert_eq!(
             app.active_subagent_limit,
             super::default_subagent_active_limit()

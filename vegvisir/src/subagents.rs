@@ -395,24 +395,39 @@ impl<M: Model> SubAgentSupervisor<M> {
         if !path.exists() {
             return Ok(());
         }
-        let records: Vec<SubAgentTaskRecord> = serde_json::from_str(&fs::read_to_string(path)?)?;
-        self.board = records
-            .into_iter()
-            .map(|record| (record.id.clone(), record))
-            .collect();
-        Ok(())
+        let text = fs::read_to_string(path)?;
+        if text.trim().is_empty() {
+            return Ok(());
+        }
+        match serde_json::from_str::<Vec<SubAgentTaskRecord>>(&text) {
+            Ok(records) => {
+                self.board = records
+                    .into_iter()
+                    .map(|record| (record.id.clone(), record))
+                    .collect();
+                Ok(())
+            }
+            Err(original_error) => {
+                if let Some(records) = Self::recover_subagent_board_records(&text) {
+                    let _ = Self::save_board_records(path, &records);
+                    self.board = records
+                        .into_iter()
+                        .map(|record| (record.id.clone(), record))
+                        .collect();
+                    Ok(())
+                } else {
+                    Err(original_error.into())
+                }
+            }
+        }
     }
 
     fn save_board(&self) -> anyhow::Result<()> {
         let Some(path) = &self.board_path else {
             return Ok(());
         };
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
         let records: Vec<_> = self.board.values().cloned().collect();
-        fs::write(path, serde_json::to_string_pretty(&records)?)?;
-        Ok(())
+        Self::save_board_records(path, &records)
     }
 
     fn board_key(&self, id_or_name: &str) -> Option<String> {
@@ -425,6 +440,89 @@ impl<M: Model> SubAgentSupervisor<M> {
                     .find(|record| record.name == id_or_name || record.id == id_or_name)
                     .map(|record| record.id.clone())
             })
+    }
+
+    fn recover_subagent_board_records(text: &str) -> Option<Vec<SubAgentTaskRecord>> {
+        let trimmed = text.trim_start_matches(['\u{feff}', '\u{200b}', '\u{2060}']);
+        let start = trimmed.find('[')?;
+        let candidate = &trimmed[start..];
+
+        if let Ok(records) = serde_json::from_str::<Vec<SubAgentTaskRecord>>(candidate) {
+            return Some(records);
+        }
+
+        Self::recover_subagent_board_records_from_partial_array(candidate)
+    }
+
+    fn recover_subagent_board_records_from_partial_array(
+        candidate: &str,
+    ) -> Option<Vec<SubAgentTaskRecord>> {
+        let mut records = Vec::new();
+        let bytes = candidate.as_bytes();
+        let mut i = 0usize;
+        while i < bytes.len() {
+            if bytes[i] == b'{' {
+                let start = i;
+                let mut depth = 0i32;
+                let mut in_string = false;
+                let mut escaped = false;
+                while i < bytes.len() {
+                    let b = bytes[i];
+                    if in_string {
+                        if escaped {
+                            escaped = false;
+                        } else if b == b'\\' {
+                            escaped = true;
+                        } else if b == b'"' {
+                            in_string = false;
+                        }
+                    } else {
+                        match b {
+                            b'"' => in_string = true,
+                            b'{' => depth += 1,
+                            b'}' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    let slice = &candidate[start..=i];
+                                    if let Ok(record) =
+                                        serde_json::from_str::<SubAgentTaskRecord>(slice)
+                                    {
+                                        records.push(record);
+                                    }
+                                    break;
+                                }
+                            }
+                            b']' if depth == 0 => break,
+                            _ => {}
+                        }
+                    }
+                    i += 1;
+                }
+            }
+            i += 1;
+        }
+
+        if records.is_empty() {
+            None
+        } else {
+            Some(records)
+        }
+    }
+
+    fn save_board_records(path: &PathBuf, records: &[SubAgentTaskRecord]) -> anyhow::Result<()> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        Self::atomic_write_json(path, &serde_json::to_string_pretty(records)?)
+    }
+
+    fn atomic_write_json(path: &PathBuf, content: &str) -> anyhow::Result<()> {
+        let tmp = path.with_extension(format!("{}.tmp", Uuid::new_v4().simple()));
+        fs::write(&tmp, content)?;
+        fs::rename(&tmp, path).inspect_err(|_| {
+            let _ = fs::remove_file(&tmp);
+        })?;
+        Ok(())
     }
 
     fn emit_task_event(&self, name: &str, record: &SubAgentTaskRecord) {
@@ -530,7 +628,12 @@ fn save_board_records(
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(path, serde_json::to_string_pretty(&records)?)?;
+    let content = serde_json::to_string_pretty(&records)?;
+    let tmp = path.with_extension(format!("{}.tmp", Uuid::new_v4().simple()));
+    fs::write(&tmp, content)?;
+    fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = fs::remove_file(&tmp);
+    })?;
     Ok(())
 }
 
