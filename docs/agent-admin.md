@@ -40,10 +40,11 @@ cargo build -p vegvisir-rust --bin vegvisir-agent-admin
 
 ```text
 --data-root <path>   Use a specific Vegvisir data root.
+--workspace <path>   Use a specific workspace for local skills and Skiller agent-pack discovery.
 --json               Print JSON where supported.
 ```
 
-Use `--data-root` for dry runs and registry smoke tests without touching your normal Vegvisir agents.
+Use `--data-root` for dry runs and registry smoke tests without touching your normal Vegvisir agents. Use `--workspace` when skill validation, USRL skill-ref expansion, or Skiller agent-pack discovery should use a workspace other than the current directory.
 
 ## Core commands
 
@@ -216,13 +217,41 @@ Expected final output includes:
 Status: ok
 ```
 
-## Interactive shell
+## Interactive TUI
 
-`vegvisir-agent-admin tui` starts a line-oriented registry control-plane shell. It is still intentionally lightweight, but it now supports inspection, validation, tuning, lifecycle changes, history, metrics, comparison, and permission-list edits. Use non-interactive subcommands for scripts and reproducible automation.
+`vegvisir-agent-admin tui` starts a full-screen, conventional registry browser/editor. It is intentionally lightweight and avoids Vim-style command entry: there is no `:` command mode, no `/` search command, and no `q` quit binding. Use non-interactive subcommands for scripts and reproducible automation.
+
+Current TUI keys:
+
+```text
+Esc         quit, or close help/popups
+Ctrl+C      quit
+F1          toggle help
+F2 / A      open the action menu
+F / Ctrl+F  search agents by id, name, mode, profile text, permissions, and metadata
+P           edit provider for the selected agent
+O           edit model for the selected agent
+U           edit comma-separated tool allow-list for the selected agent
+S           edit comma-separated enabled skills for the selected agent
+D           edit comma-separated allowed MCP servers for the selected agent
+L           edit comma-separated bound USRL contracts for the selected agent
+T           edit comma-separated tags for the selected agent
+↑/↓         move selection
+Home/End    jump to start/end
+PageUp/Down jump by 5
+Enter / V   validate selected agent
+M           show metrics summary
+H           show history count
+R           refresh
+```
+
+The action menu supports validation, metrics, history count, lifecycle status changes, provider/model edits, tool/skill/MCP/USRL permission edits, and tag edits. `status active` still uses the same hard-error validation gate as the CLI command.
+
+Provider/model/permission/tag edit modes are simple text inputs: type the new value, press `Enter` to save, or press `Esc` to cancel. Provider/model clear markers match the CLI: empty input, `-`, or `clear` means inherit/clear. Clearing the provider also clears the model because model validity is provider-scoped. TUI provider/model edits validate catalog names and provider/model compatibility, but they do not check live provider credentials. Tool, skill, MCP, and USRL edits replace the full comma-separated list. Tool and skill names are validated against the current default tool catalog and workspace/data-root skill catalog before saving. MCP server ids are validated against `<data-root>/mcp.json`. `*` is accepted for tools only when it is the sole entry. Known USRL contract skills are expanded to their declared contract ids when available; otherwise the entered contract ref is stored as-is, matching `/agent bind-usrl` behavior.
 
 ## Safety notes
 
-- `delete` requires `--yes` outside the interactive shell.
+- `delete` requires `--yes`; deletion is not available from the TUI.
 - `create`, `create-template`, `design`, `clone`, and `import` refuse to overwrite existing profiles unless `--force` is passed.
 - `provider clear` or `provider -` also clears the model because model validity is provider-scoped.
 - `model clear` or `model -` clears only the model.
@@ -288,34 +317,18 @@ broken
 
 The admin history log records profile-management actions only. It does not record plaintext secrets or provider credentials.
 
-## Richer interactive shell
+## TUI scope and remaining CLI-only operations
 
-The `tui` shell is still line-oriented, but now supports core registry-control operations:
+The full-screen TUI is for safe, high-frequency profile inspection and small reversible edits. Keep using explicit CLI subcommands for multi-field, destructive, or script-oriented operations:
 
 ```text
-list [--long]
-show <id>
-templates [id]
-register [--dry-run]
-validate [id]
-doctor
-create <id>
-create-template <mode> <id>
-edit <id>
-status <id> <draft|active|paused|deprecated|archived|broken>
-tags <id> <tag...>
-allow-tool <id> <tool>
-revoke-tool <id> <tool>
-enable-skill <id> <skill>
-disable-skill <id> <skill>
-bind-usrl <id> <contract>
-unbind-usrl <id> <contract>
-compare <left> <right>
-metrics <id>
-history [id]
-delete <id>
-paths
-quit
+create / create-template / design
+clone / import / export / delete
+prompt replacement
+bulk set operations
+single-field permission-list editing is available in the TUI; use CLI for scripted/bulk permission changes
+scope and budget tuning
+register / compare / doctor / validate all
 ```
 
-`edit <id>` walks through identity, lifecycle status, scope, tags, provider/model, tool/skill/USRL lists, and prompt replacement. It validates the edited profile before saving and asks for explicit confirmation if validation has hard errors.
+This separation keeps the TUI predictable while preserving the complete standalone admin surface for automation.

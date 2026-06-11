@@ -1,12 +1,27 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::{self, Write},
+    io::{self, IsTerminal, Write},
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use anyhow::{Context, bail};
 use clap::{Args, Parser, Subcommand};
+use crossterm::{
+    cursor,
+    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    execute,
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+};
+use ratatui::{
+    Terminal,
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -183,7 +198,7 @@ enum Command {
         #[arg(long)]
         force: bool,
     },
-    /// Launch a small interactive registry editor shell.
+    /// Launch the full-screen agent registry browser/editor.
     Tui,
 }
 
@@ -1646,201 +1661,7 @@ impl AgentRegistryAdmin {
     }
 
     fn tui(&self) -> anyhow::Result<()> {
-        println!("Vegvisir Agent Admin — interactive registry control plane");
-        println!("Registry: {}", self.store.root.display());
-        println!("Workspace: {}", self.workspace.display());
-        println!("Type help for commands. This shell edits the same profiles used by /agent.");
-        let mut line = String::new();
-        loop {
-            print!("agent-admin> ");
-            io::stdout().flush()?;
-            line.clear();
-            if io::stdin().read_line(&mut line)? == 0 {
-                break;
-            }
-            let args = line.split_whitespace().collect::<Vec<_>>();
-            match args.as_slice() {
-                [] => {}
-                ["quit"] | ["exit"] => break,
-                ["help"] => print_tui_help(),
-                ["paths"] => self.print_paths(false)?,
-                ["doctor"] => self.doctor(false)?,
-                ["register"] => self.register(RegisterArgs::default(), false)?,
-                ["register", "--dry-run"] => self.register(
-                    RegisterArgs {
-                        dry_run: true,
-                        ..RegisterArgs::default()
-                    },
-                    false,
-                )?,
-                ["validate"] => self.validate(None, false)?,
-                ["validate", id] => self.validate(Some(id), false)?,
-                ["metrics", id] => self.metrics(id, false)?,
-                ["history"] => self.history(None, false)?,
-                ["history", id] => self.history(Some(id), false)?,
-                ["compare", left, right] => self.compare(left, right, false, false)?,
-                ["templates"] => self.templates(None, false)?,
-                ["templates", id] => self.templates(Some(id), false)?,
-                ["list"] => self.list(ListArgs::default(), false)?,
-                ["list", "--long"] => self.list(
-                    ListArgs {
-                        long: true,
-                        mode: None,
-                    },
-                    false,
-                )?,
-                ["show", id] => self.show(id, false)?,
-                ["create", id] => self.create_interactive(id)?,
-                ["create-template", mode, id] => self.create_template(
-                    CreateTemplateArgs {
-                        mode: (*mode).to_string(),
-                        id: (*id).to_string(),
-                        name: None,
-                        description: None,
-                        force: false,
-                    },
-                    false,
-                )?,
-                ["edit", id] | ["tune", id] => self.edit_interactive(id)?,
-                ["status", id, status] => self.status(id, (*status).to_string(), false)?,
-                ["tags", id, tags @ ..] => self.tags(
-                    id,
-                    tags.iter().map(|value| (*value).to_string()).collect(),
-                    false,
-                )?,
-                ["allow-tool", id, tool] => {
-                    self.add_to_list(id, ListField::Tools, (*tool).to_string(), false)?
-                }
-                ["revoke-tool", id, tool] => {
-                    self.remove_from_list(id, ListField::Tools, tool, false)?
-                }
-                ["enable-skill", id, skill] => {
-                    self.add_to_list(id, ListField::Skills, (*skill).to_string(), false)?
-                }
-                ["disable-skill", id, skill] => {
-                    self.remove_from_list(id, ListField::Skills, skill, false)?
-                }
-                ["bind-usrl", id, contract] => {
-                    self.add_to_list(id, ListField::Usrl, (*contract).to_string(), false)?
-                }
-                ["unbind-usrl", id, contract] => {
-                    self.remove_from_list(id, ListField::Usrl, contract, false)?
-                }
-                ["delete", id] => self.delete_interactive(id)?,
-                [unknown, ..] => println!("Unknown command: {unknown}. Type help."),
-            }
-        }
-        Ok(())
-    }
-
-    fn edit_interactive(&self, id: &str) -> anyhow::Result<()> {
-        let mut profile = self.store.load(id)?;
-        println!("Editing {} ({})", profile.id, profile.display_name);
-        let name = prompt_line("display name", Some(&profile.display_name))?;
-        if !name.trim().is_empty() {
-            profile.display_name = name;
-        }
-        let description = prompt_line("description", Some(&profile.description))?;
-        profile.description = description;
-        let status_default = profile
-            .metadata
-            .get("status")
-            .and_then(Value::as_str)
-            .unwrap_or("draft");
-        let status = prompt_line(
-            "status [draft|active|paused|deprecated|archived|broken]",
-            Some(status_default),
-        )?;
-        let status = normalize_agent_id(&status);
-        if !status.is_empty() {
-            profile
-                .metadata
-                .insert("status".to_string(), Value::String(status));
-        }
-        let primary_scope = prompt_line(
-            "primary scope",
-            profile
-                .metadata
-                .get("primary_scope")
-                .and_then(Value::as_str),
-        )?;
-        if !primary_scope.trim().is_empty() {
-            profile
-                .metadata
-                .insert("primary_scope".to_string(), Value::String(primary_scope));
-        }
-        let tags_default = profile
-            .metadata
-            .get("tags")
-            .and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .collect::<Vec<_>>()
-                    .join(",")
-            });
-        let tags = prompt_line("tags comma-separated", tags_default.as_deref())?;
-        if !tags.trim().is_empty() {
-            profile
-                .metadata
-                .insert("tags".to_string(), json!(clean_list(vec![tags])));
-        }
-        let provider = prompt_line("provider (- to clear)", profile.current_provider.as_deref())?;
-        if !provider.trim().is_empty() {
-            profile.current_provider = none_marker(provider);
-            if profile.current_provider.is_none() {
-                profile.current_model = None;
-            }
-        }
-        let model = prompt_line("model (- to clear)", profile.current_model.as_deref())?;
-        if !model.trim().is_empty() {
-            profile.current_model = none_marker(model);
-        }
-        let tools = prompt_line(
-            "tools comma-separated",
-            Some(&list_or_dash(&profile.enabled_tools)),
-        )?;
-        if tools != "-" {
-            profile.enabled_tools = clean_list(vec![tools]);
-        }
-        let skills = prompt_line(
-            "skills comma-separated",
-            Some(&list_or_dash(&profile.enabled_skills)),
-        )?;
-        if skills != "-" {
-            profile.enabled_skills = clean_list(vec![skills]);
-        }
-        let usrl = prompt_line(
-            "USRL comma-separated",
-            Some(&list_or_dash(&profile.usrl_contracts)),
-        )?;
-        if usrl != "-" {
-            profile.usrl_contracts = clean_list(vec![usrl]);
-        }
-        let edit_prompt = prompt_line("replace prompt? [no/file/manual]", Some("no"))?;
-        match edit_prompt.as_str() {
-            "file" => {
-                let path = prompt_line("prompt file", None)?;
-                profile.system_prompt =
-                    fs::read_to_string(&path).with_context(|| format!("read {path}"))?;
-            }
-            "manual" => {
-                println!("Enter system prompt. Finish with a single '.' line.");
-                profile.system_prompt = read_multiline_prompt()?;
-            }
-            _ => {}
-        }
-        let report = self.validate_profile(&profile)?;
-        print_validation_report(&report);
-        if !report.errors.is_empty() {
-            let answer = prompt_line("save despite validation errors? type yes", Some("no"))?;
-            if answer != "yes" {
-                println!("Edit cancelled.");
-                return Ok(());
-            }
-        }
-        self.save_touched(profile, "interactive-edit", false)
+        run_admin_tui(self)
     }
 
     fn validate_profile(&self, profile: &AgentProfile) -> anyhow::Result<ValidationReport> {
@@ -2234,63 +2055,26 @@ impl AgentRegistryAdmin {
         Ok(created)
     }
 
-    fn create_interactive(&self, id: &str) -> anyhow::Result<()> {
-        let template = prompt_line("template/mode (blank for custom)", Some(""))?;
-        let name = prompt_line("display name", Some(id))?;
-        let mode = prompt_line(
-            "mode",
-            Some(if template.is_empty() {
-                "custom"
-            } else {
-                &template
-            }),
-        )?;
-        let description = prompt_line("description", Some(""))?;
-        println!("Enter system prompt. Finish with a single '.' line.");
-        let prompt = read_multiline_prompt()?;
-        let args = CreateArgs {
-            id: id.to_string(),
-            template: (!template.is_empty()).then_some(template),
-            mode,
-            name: Some(name),
-            description: Some(description),
-            prompt: Some(prompt),
-            prompt_file: None,
-            provider: None,
-            model: None,
-            tools: Vec::new(),
-            add_tools: false,
-            skills: Vec::new(),
-            add_skills: false,
-            mcp: Vec::new(),
-            usrl: Vec::new(),
-            memory_policy: None,
-            force: false,
-        };
-        self.create(args, false)
-    }
-
-    fn delete_interactive(&self, id: &str) -> anyhow::Result<()> {
-        let answer = prompt_line(&format!("delete {id}? type yes"), Some("no"))?;
-        if answer == "yes" {
-            self.delete(id, true, false)
-        } else {
-            println!("Delete cancelled.");
-            Ok(())
-        }
-    }
-
     fn save_touched(
         &self,
-        mut profile: AgentProfile,
+        profile: AgentProfile,
         action: &str,
         json_output: bool,
     ) -> anyhow::Result<()> {
+        let (profile, path) = self.save_touched_quiet(profile, action)?;
+        print_saved(&profile, &path, json_output)
+    }
+
+    fn save_touched_quiet(
+        &self,
+        mut profile: AgentProfile,
+        action: &str,
+    ) -> anyhow::Result<(AgentProfile, PathBuf)> {
         profile.updated_at = chrono::Utc::now();
         touch_metadata(&mut profile, action);
         let path = self.store.save(&profile)?;
         self.append_history(&profile, action, &path)?;
-        print_saved(&profile, &path, json_output)
+        Ok((profile, path))
     }
 
     fn ensure_can_write(&self, id: &str, force: bool) -> anyhow::Result<()> {
@@ -2299,6 +2083,1538 @@ impl AgentRegistryAdmin {
         }
         Ok(())
     }
+}
+
+const TUI_BG: Color = Color::Rgb(8, 9, 10);
+const TUI_FG: Color = Color::Rgb(220, 220, 220);
+const TUI_DIM: Color = Color::Rgb(105, 105, 112);
+const TUI_GREEN: Color = Color::Rgb(88, 220, 120);
+const TUI_CYAN: Color = Color::Rgb(80, 190, 220);
+const TUI_AMBER: Color = Color::Rgb(220, 170, 65);
+const TUI_RED: Color = Color::Rgb(230, 86, 86);
+const TUI_BORDER: Color = Color::Rgb(62, 66, 76);
+const TUI_PANEL: Color = Color::Rgb(16, 17, 20);
+
+#[derive(Default)]
+struct AdminTuiState {
+    selected: usize,
+    mode: AdminTuiMode,
+    show_help: bool,
+    filter: String,
+    input: String,
+    action_selected: usize,
+    message: String,
+}
+
+#[derive(Default, Copy, Clone, Eq, PartialEq)]
+enum AdminTuiMode {
+    #[default]
+    Browse,
+    Search,
+    ActionMenu,
+    TagsInput,
+    ProviderInput,
+    ModelInput,
+    ToolsInput,
+    SkillsInput,
+    McpInput,
+    UsrlInput,
+}
+
+#[derive(Copy, Clone)]
+enum TuiAction {
+    Validate,
+    Metrics,
+    History,
+    Activate,
+    Pause,
+    Deprecate,
+    Archive,
+    EditProvider,
+    ClearProvider,
+    EditModel,
+    ClearModel,
+    EditTools,
+    ClearTools,
+    EditSkills,
+    ClearSkills,
+    EditMcp,
+    ClearMcp,
+    EditUsrl,
+    ClearUsrl,
+    EditTags,
+    ClearTags,
+}
+
+impl TuiAction {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Validate => "Validate selected agent",
+            Self::Metrics => "Show selected metrics summary",
+            Self::History => "Show selected history count",
+            Self::Activate => "Set status: active",
+            Self::Pause => "Set status: paused",
+            Self::Deprecate => "Set status: deprecated",
+            Self::Archive => "Set status: archived",
+            Self::EditProvider => "Edit provider",
+            Self::ClearProvider => "Clear provider and model",
+            Self::EditModel => "Edit model",
+            Self::ClearModel => "Clear model",
+            Self::EditTools => "Edit tool allow-list",
+            Self::ClearTools => "Clear tool allow-list",
+            Self::EditSkills => "Edit enabled skills",
+            Self::ClearSkills => "Clear enabled skills",
+            Self::EditMcp => "Edit allowed MCP servers",
+            Self::ClearMcp => "Clear allowed MCP servers",
+            Self::EditUsrl => "Edit bound USRL contracts",
+            Self::ClearUsrl => "Clear bound USRL contracts",
+            Self::EditTags => "Edit tags",
+            Self::ClearTags => "Clear tags",
+        }
+    }
+
+    fn help(self) -> &'static str {
+        match self {
+            Self::Validate => "Run validation and summarize errors/warnings.",
+            Self::Metrics => "Load the agent metrics file and show task success.",
+            Self::History => "Count recorded admin history events for this agent.",
+            Self::Activate => "Mark active after validation passes without hard errors.",
+            Self::Pause => "Mark paused without deleting or changing permissions.",
+            Self::Deprecate => "Mark deprecated for operators while retaining the profile.",
+            Self::Archive => "Mark archived for old or inactive profiles.",
+            Self::EditProvider => "Open a provider editor; use '-' or 'clear' to inherit.",
+            Self::ClearProvider => {
+                "Clear explicit provider and model so runtime inheritance applies."
+            }
+            Self::EditModel => "Open a model editor; model/provider compatibility is checked.",
+            Self::ClearModel => "Clear the explicit model while preserving the provider.",
+            Self::EditTools => {
+                "Replace the comma-separated tool allow-list after catalog validation."
+            }
+            Self::ClearTools => "Remove all explicitly enabled tools from the selected profile.",
+            Self::EditSkills => {
+                "Replace the comma-separated enabled skills after catalog validation."
+            }
+            Self::ClearSkills => "Remove all enabled skills from the selected profile.",
+            Self::EditMcp => {
+                "Replace the comma-separated MCP server allow-list after mcp.json validation."
+            }
+            Self::ClearMcp => "Remove all allowed MCP servers from the selected profile.",
+            Self::EditUsrl => {
+                "Replace bound USRL contract refs; USRL skill refs are expanded when known."
+            }
+            Self::ClearUsrl => "Remove all bound USRL contract refs from the selected profile.",
+            Self::EditTags => "Open a comma-separated tag editor for the selected profile.",
+            Self::ClearTags => "Remove all tag metadata from the selected profile.",
+        }
+    }
+}
+
+const TUI_ACTIONS: &[TuiAction] = &[
+    TuiAction::Validate,
+    TuiAction::Metrics,
+    TuiAction::History,
+    TuiAction::Activate,
+    TuiAction::Pause,
+    TuiAction::Deprecate,
+    TuiAction::Archive,
+    TuiAction::EditProvider,
+    TuiAction::ClearProvider,
+    TuiAction::EditModel,
+    TuiAction::ClearModel,
+    TuiAction::EditTools,
+    TuiAction::ClearTools,
+    TuiAction::EditSkills,
+    TuiAction::ClearSkills,
+    TuiAction::EditMcp,
+    TuiAction::ClearMcp,
+    TuiAction::EditUsrl,
+    TuiAction::ClearUsrl,
+    TuiAction::EditTags,
+    TuiAction::ClearTags,
+];
+
+fn run_admin_tui(admin: &AgentRegistryAdmin) -> anyhow::Result<()> {
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        bail!("vegvisir-agent-admin tui requires an interactive terminal");
+    }
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, cursor::Hide)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+    let result = run_admin_tui_inner(admin, &mut terminal);
+    let _ = disable_raw_mode();
+    let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen, cursor::Show);
+    let _ = terminal.show_cursor();
+    result
+}
+
+fn run_admin_tui_inner(
+    admin: &AgentRegistryAdmin,
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+) -> anyhow::Result<()> {
+    let mut state = AdminTuiState {
+        message: "F/Ctrl+F search, F2/A actions, P provider, O model, U tools, S skills, D MCP, L USRL, T tags, F1 help, ↑/↓ move, Enter/V validate, Esc/Ctrl+C quit"
+            .to_string(),
+        ..Default::default()
+    };
+    loop {
+        let all_profiles = admin.store.list_lossy()?.0;
+        let profiles = filtered_profiles(&all_profiles, &state.filter);
+        if profiles.is_empty() {
+            state.selected = 0;
+        } else if state.selected >= profiles.len() {
+            state.selected = profiles.len() - 1;
+        }
+        let selected_id = profiles
+            .get(state.selected)
+            .map(|profile| profile.id.as_str());
+        terminal.draw(|frame| draw_admin_tui(frame, &profiles, selected_id, &state))?;
+        if event::poll(Duration::from_millis(150))? {
+            if let Event::Key(key) = event::read()? {
+                if handle_admin_tui_key(admin, &mut state, &profiles, key)? {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn handle_admin_tui_key(
+    admin: &AgentRegistryAdmin,
+    state: &mut AdminTuiState,
+    profiles: &[AgentProfile],
+    key: KeyEvent,
+) -> anyhow::Result<bool> {
+    if state.show_help {
+        match key.code {
+            KeyCode::Esc | KeyCode::F(1) => {
+                state.show_help = false;
+                state.message = "help hidden".to_string();
+            }
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                return Ok(true);
+            }
+            _ => {}
+        }
+        return Ok(false);
+    }
+
+    match state.mode {
+        AdminTuiMode::Search => return handle_admin_tui_search_key(state, key),
+        AdminTuiMode::ActionMenu => {
+            return handle_admin_tui_action_key(admin, state, profiles, key);
+        }
+        AdminTuiMode::TagsInput => {
+            return handle_admin_tui_tags_key(admin, state, profiles, key);
+        }
+        AdminTuiMode::ProviderInput => {
+            return handle_admin_tui_provider_key(admin, state, profiles, key);
+        }
+        AdminTuiMode::ModelInput => {
+            return handle_admin_tui_model_key(admin, state, profiles, key);
+        }
+        AdminTuiMode::ToolsInput => {
+            return handle_admin_tui_tools_key(admin, state, profiles, key);
+        }
+        AdminTuiMode::SkillsInput => {
+            return handle_admin_tui_skills_key(admin, state, profiles, key);
+        }
+        AdminTuiMode::McpInput => {
+            return handle_admin_tui_mcp_key(admin, state, profiles, key);
+        }
+        AdminTuiMode::UsrlInput => {
+            return handle_admin_tui_usrl_key(admin, state, profiles, key);
+        }
+        AdminTuiMode::Browse => {}
+    }
+
+    match key.code {
+        KeyCode::Esc => return Ok(true),
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
+        KeyCode::Char('f') | KeyCode::Char('F') | KeyCode::F(3)
+            if key.modifiers.is_empty()
+                || key.modifiers == KeyModifiers::SHIFT
+                || key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            state.mode = AdminTuiMode::Search;
+            state.message = "type to search agents; Enter applies, Esc cancels".to_string();
+        }
+        KeyCode::F(2) | KeyCode::Char('a') | KeyCode::Char('A') => {
+            state.mode = AdminTuiMode::ActionMenu;
+            state.action_selected = state
+                .action_selected
+                .min(TUI_ACTIONS.len().saturating_sub(1));
+            state.message = "choose an action; Enter applies, Esc cancels".to_string();
+        }
+        KeyCode::Char('p') | KeyCode::Char('P') => begin_provider_input(state, profiles),
+        KeyCode::Char('o') | KeyCode::Char('O') => begin_model_input(state, profiles),
+        KeyCode::Char('u') | KeyCode::Char('U') => begin_tools_input(state, profiles),
+        KeyCode::Char('s') | KeyCode::Char('S') => begin_skills_input(state, profiles),
+        KeyCode::Char('d') | KeyCode::Char('D') => begin_mcp_input(state, profiles),
+        KeyCode::Char('l') | KeyCode::Char('L') => begin_usrl_input(state, profiles),
+        KeyCode::Char('t') | KeyCode::Char('T') => begin_tags_input(state, profiles),
+        KeyCode::Char('r') | KeyCode::Char('R') => state.message = "refreshed".to_string(),
+        KeyCode::F(1) => {
+            state.show_help = true;
+            state.message = "help shown".to_string();
+        }
+        KeyCode::Enter | KeyCode::Char('v') | KeyCode::Char('V') => {
+            apply_tui_action(admin, state, profiles, TuiAction::Validate)?;
+        }
+        KeyCode::Char('m') | KeyCode::Char('M') => {
+            apply_tui_action(admin, state, profiles, TuiAction::Metrics)?;
+        }
+        KeyCode::Char('h') | KeyCode::Char('H') => {
+            apply_tui_action(admin, state, profiles, TuiAction::History)?;
+        }
+        KeyCode::Up => state.selected = state.selected.saturating_sub(1),
+        KeyCode::Down => {
+            if state.selected + 1 < profiles.len() {
+                state.selected += 1;
+            }
+        }
+        KeyCode::Home => state.selected = 0,
+        KeyCode::End => {
+            if !profiles.is_empty() {
+                state.selected = profiles.len() - 1;
+            }
+        }
+        KeyCode::PageUp => state.selected = state.selected.saturating_sub(5),
+        KeyCode::PageDown => {
+            if !profiles.is_empty() {
+                state.selected = (state.selected + 5).min(profiles.len() - 1);
+            }
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_admin_tui_search_key(state: &mut AdminTuiState, key: KeyEvent) -> anyhow::Result<bool> {
+    match key.code {
+        KeyCode::Esc => {
+            state.mode = AdminTuiMode::Browse;
+            state.message = if state.filter.is_empty() {
+                "search cancelled".to_string()
+            } else {
+                format!("search: {}", state.filter)
+            };
+        }
+        KeyCode::Enter => {
+            state.mode = AdminTuiMode::Browse;
+            state.selected = 0;
+            state.message = if state.filter.is_empty() {
+                "search cleared".to_string()
+            } else {
+                format!("search applied: {}", state.filter)
+            };
+        }
+        KeyCode::Backspace => {
+            state.filter.pop();
+        }
+        KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            state.filter.push(c);
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_admin_tui_action_key(
+    admin: &AgentRegistryAdmin,
+    state: &mut AdminTuiState,
+    profiles: &[AgentProfile],
+    key: KeyEvent,
+) -> anyhow::Result<bool> {
+    match key.code {
+        KeyCode::Esc => {
+            state.mode = AdminTuiMode::Browse;
+            state.message = "action cancelled".to_string();
+        }
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
+        KeyCode::Up => state.action_selected = state.action_selected.saturating_sub(1),
+        KeyCode::Down => {
+            if state.action_selected + 1 < TUI_ACTIONS.len() {
+                state.action_selected += 1;
+            }
+        }
+        KeyCode::Home => state.action_selected = 0,
+        KeyCode::End => state.action_selected = TUI_ACTIONS.len().saturating_sub(1),
+        KeyCode::Enter => {
+            let action = TUI_ACTIONS
+                .get(state.action_selected)
+                .copied()
+                .unwrap_or(TuiAction::Validate);
+            apply_tui_action(admin, state, profiles, action)?;
+            if state.mode == AdminTuiMode::ActionMenu {
+                state.mode = AdminTuiMode::Browse;
+            }
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_admin_tui_tags_key(
+    admin: &AgentRegistryAdmin,
+    state: &mut AdminTuiState,
+    profiles: &[AgentProfile],
+    key: KeyEvent,
+) -> anyhow::Result<bool> {
+    match key.code {
+        KeyCode::Esc => {
+            state.mode = AdminTuiMode::Browse;
+            state.message = "tag edit cancelled".to_string();
+        }
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
+        KeyCode::Enter => {
+            if let Some(profile) = profiles.get(state.selected) {
+                let tags = clean_list(vec![state.input.clone()]);
+                tui_set_tags(admin, &profile.id, tags)?;
+                state.message = format!("tags updated for {}", profile.id);
+            } else {
+                state.message = "no selected agent to tag".to_string();
+            }
+            state.mode = AdminTuiMode::Browse;
+        }
+        KeyCode::Backspace => {
+            state.input.pop();
+        }
+        KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            state.input.push(c);
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_admin_tui_provider_key(
+    admin: &AgentRegistryAdmin,
+    state: &mut AdminTuiState,
+    profiles: &[AgentProfile],
+    key: KeyEvent,
+) -> anyhow::Result<bool> {
+    match key.code {
+        KeyCode::Esc => {
+            state.mode = AdminTuiMode::Browse;
+            state.message = "provider edit cancelled".to_string();
+        }
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
+        KeyCode::Enter => {
+            if let Some(profile) = profiles.get(state.selected) {
+                let provider = none_marker(state.input.clone());
+                tui_set_provider(admin, &profile.id, provider.clone())?;
+                state.message = match provider {
+                    Some(provider) => format!("provider {}: {}", profile.id, provider),
+                    None => format!("provider/model cleared for {}", profile.id),
+                };
+            } else {
+                state.message = "no selected agent to edit".to_string();
+            }
+            state.mode = AdminTuiMode::Browse;
+        }
+        KeyCode::Backspace => {
+            state.input.pop();
+        }
+        KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            state.input.push(c);
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_admin_tui_model_key(
+    admin: &AgentRegistryAdmin,
+    state: &mut AdminTuiState,
+    profiles: &[AgentProfile],
+    key: KeyEvent,
+) -> anyhow::Result<bool> {
+    match key.code {
+        KeyCode::Esc => {
+            state.mode = AdminTuiMode::Browse;
+            state.message = "model edit cancelled".to_string();
+        }
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
+        KeyCode::Enter => {
+            if let Some(profile) = profiles.get(state.selected) {
+                let model = none_marker(state.input.clone());
+                tui_set_model(admin, &profile.id, model.clone())?;
+                state.message = match model {
+                    Some(model) => format!("model {}: {}", profile.id, model),
+                    None => format!("model cleared for {}", profile.id),
+                };
+            } else {
+                state.message = "no selected agent to edit".to_string();
+            }
+            state.mode = AdminTuiMode::Browse;
+        }
+        KeyCode::Backspace => {
+            state.input.pop();
+        }
+        KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            state.input.push(c);
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_admin_tui_tools_key(
+    admin: &AgentRegistryAdmin,
+    state: &mut AdminTuiState,
+    profiles: &[AgentProfile],
+    key: KeyEvent,
+) -> anyhow::Result<bool> {
+    match key.code {
+        KeyCode::Esc => {
+            state.mode = AdminTuiMode::Browse;
+            state.message = "tool edit cancelled".to_string();
+        }
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
+        KeyCode::Enter => {
+            if let Some(profile) = profiles.get(state.selected) {
+                let tools = clean_list(vec![state.input.clone()]);
+                tui_set_tools(admin, &profile.id, tools)?;
+                state.message = format!("tools updated for {}", profile.id);
+            } else {
+                state.message = "no selected agent to edit".to_string();
+            }
+            state.mode = AdminTuiMode::Browse;
+        }
+        KeyCode::Backspace => {
+            state.input.pop();
+        }
+        KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            state.input.push(c);
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_admin_tui_skills_key(
+    admin: &AgentRegistryAdmin,
+    state: &mut AdminTuiState,
+    profiles: &[AgentProfile],
+    key: KeyEvent,
+) -> anyhow::Result<bool> {
+    match key.code {
+        KeyCode::Esc => {
+            state.mode = AdminTuiMode::Browse;
+            state.message = "skill edit cancelled".to_string();
+        }
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
+        KeyCode::Enter => {
+            if let Some(profile) = profiles.get(state.selected) {
+                let skills = clean_list(vec![state.input.clone()]);
+                tui_set_skills(admin, &profile.id, skills)?;
+                state.message = format!("skills updated for {}", profile.id);
+            } else {
+                state.message = "no selected agent to edit".to_string();
+            }
+            state.mode = AdminTuiMode::Browse;
+        }
+        KeyCode::Backspace => {
+            state.input.pop();
+        }
+        KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            state.input.push(c);
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_admin_tui_mcp_key(
+    admin: &AgentRegistryAdmin,
+    state: &mut AdminTuiState,
+    profiles: &[AgentProfile],
+    key: KeyEvent,
+) -> anyhow::Result<bool> {
+    match key.code {
+        KeyCode::Esc => {
+            state.mode = AdminTuiMode::Browse;
+            state.message = "MCP edit cancelled".to_string();
+        }
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
+        KeyCode::Enter => {
+            if let Some(profile) = profiles.get(state.selected) {
+                let servers = clean_list(vec![state.input.clone()]);
+                tui_set_mcp_servers(admin, &profile.id, servers)?;
+                state.message = format!("MCP servers updated for {}", profile.id);
+            } else {
+                state.message = "no selected agent to edit".to_string();
+            }
+            state.mode = AdminTuiMode::Browse;
+        }
+        KeyCode::Backspace => {
+            state.input.pop();
+        }
+        KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            state.input.push(c);
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_admin_tui_usrl_key(
+    admin: &AgentRegistryAdmin,
+    state: &mut AdminTuiState,
+    profiles: &[AgentProfile],
+    key: KeyEvent,
+) -> anyhow::Result<bool> {
+    match key.code {
+        KeyCode::Esc => {
+            state.mode = AdminTuiMode::Browse;
+            state.message = "USRL edit cancelled".to_string();
+        }
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
+        KeyCode::Enter => {
+            if let Some(profile) = profiles.get(state.selected) {
+                let contracts = resolve_usrl_contract_refs_for_admin(
+                    admin,
+                    clean_list(vec![state.input.clone()]),
+                )?;
+                tui_set_usrl_contracts(admin, &profile.id, contracts)?;
+                state.message = format!("USRL contracts updated for {}", profile.id);
+            } else {
+                state.message = "no selected agent to edit".to_string();
+            }
+            state.mode = AdminTuiMode::Browse;
+        }
+        KeyCode::Backspace => {
+            state.input.pop();
+        }
+        KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            state.input.push(c);
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn begin_tags_input(state: &mut AdminTuiState, profiles: &[AgentProfile]) {
+    if let Some(profile) = profiles.get(state.selected) {
+        state.input = profile_tags(profile).join(", ");
+        state.mode = AdminTuiMode::TagsInput;
+        state.message = format!("editing tags for {}", profile.id);
+    } else {
+        state.message = "no selected agent to tag".to_string();
+    }
+}
+
+fn begin_provider_input(state: &mut AdminTuiState, profiles: &[AgentProfile]) {
+    if let Some(profile) = profiles.get(state.selected) {
+        state.input = profile
+            .current_provider
+            .clone()
+            .unwrap_or_else(|| "-".to_string());
+        state.mode = AdminTuiMode::ProviderInput;
+        state.message = format!("editing provider for {}", profile.id);
+    } else {
+        state.message = "no selected agent to edit".to_string();
+    }
+}
+
+fn begin_model_input(state: &mut AdminTuiState, profiles: &[AgentProfile]) {
+    if let Some(profile) = profiles.get(state.selected) {
+        state.input = profile
+            .current_model
+            .clone()
+            .unwrap_or_else(|| "-".to_string());
+        state.mode = AdminTuiMode::ModelInput;
+        state.message = format!("editing model for {}", profile.id);
+    } else {
+        state.message = "no selected agent to edit".to_string();
+    }
+}
+
+fn begin_tools_input(state: &mut AdminTuiState, profiles: &[AgentProfile]) {
+    if let Some(profile) = profiles.get(state.selected) {
+        state.input = profile.enabled_tools.join(", ");
+        state.mode = AdminTuiMode::ToolsInput;
+        state.message = format!("editing tools for {}", profile.id);
+    } else {
+        state.message = "no selected agent to edit".to_string();
+    }
+}
+
+fn begin_skills_input(state: &mut AdminTuiState, profiles: &[AgentProfile]) {
+    if let Some(profile) = profiles.get(state.selected) {
+        state.input = profile.enabled_skills.join(", ");
+        state.mode = AdminTuiMode::SkillsInput;
+        state.message = format!("editing skills for {}", profile.id);
+    } else {
+        state.message = "no selected agent to edit".to_string();
+    }
+}
+
+fn begin_mcp_input(state: &mut AdminTuiState, profiles: &[AgentProfile]) {
+    if let Some(profile) = profiles.get(state.selected) {
+        state.input = profile.enabled_mcp_servers.join(", ");
+        state.mode = AdminTuiMode::McpInput;
+        state.message = format!("editing MCP servers for {}", profile.id);
+    } else {
+        state.message = "no selected agent to edit".to_string();
+    }
+}
+
+fn begin_usrl_input(state: &mut AdminTuiState, profiles: &[AgentProfile]) {
+    if let Some(profile) = profiles.get(state.selected) {
+        state.input = profile.usrl_contracts.join(", ");
+        state.mode = AdminTuiMode::UsrlInput;
+        state.message = format!("editing USRL contracts for {}", profile.id);
+    } else {
+        state.message = "no selected agent to edit".to_string();
+    }
+}
+
+fn apply_tui_action(
+    admin: &AgentRegistryAdmin,
+    state: &mut AdminTuiState,
+    profiles: &[AgentProfile],
+    action: TuiAction,
+) -> anyhow::Result<()> {
+    let Some(profile) = profiles.get(state.selected) else {
+        state.message = "no selected agent".to_string();
+        return Ok(());
+    };
+    match action {
+        TuiAction::Validate => {
+            let report = admin.validate_profile(profile)?;
+            state.message = format!(
+                "validation {}: {} errors, {} warnings",
+                report.id,
+                report.errors.len(),
+                report.warnings.len()
+            );
+        }
+        TuiAction::Metrics => {
+            let report = load_metrics_report(admin, &profile.id)?;
+            state.message = format!(
+                "metrics {}: tasks={} success={}",
+                report.id,
+                report.metrics.tasks_completed,
+                percent_or_dash(report.task_success_rate)
+            );
+        }
+        TuiAction::History => {
+            let history = admin.load_history()?;
+            let count = history
+                .iter()
+                .filter(|event| event.agent_id == profile.id)
+                .count();
+            state.message = format!("history {}: {} events", profile.id, count);
+        }
+        TuiAction::Activate => {
+            tui_set_status(admin, &profile.id, "active")?;
+            state.message = format!("status {}: active", profile.id);
+        }
+        TuiAction::Pause => {
+            tui_set_status(admin, &profile.id, "paused")?;
+            state.message = format!("status {}: paused", profile.id);
+        }
+        TuiAction::Deprecate => {
+            tui_set_status(admin, &profile.id, "deprecated")?;
+            state.message = format!("status {}: deprecated", profile.id);
+        }
+        TuiAction::Archive => {
+            tui_set_status(admin, &profile.id, "archived")?;
+            state.message = format!("status {}: archived", profile.id);
+        }
+        TuiAction::EditProvider => begin_provider_input(state, profiles),
+        TuiAction::ClearProvider => {
+            tui_set_provider(admin, &profile.id, None)?;
+            state.message = format!("provider/model cleared for {}", profile.id);
+        }
+        TuiAction::EditModel => begin_model_input(state, profiles),
+        TuiAction::ClearModel => {
+            tui_set_model(admin, &profile.id, None)?;
+            state.message = format!("model cleared for {}", profile.id);
+        }
+        TuiAction::EditTools => begin_tools_input(state, profiles),
+        TuiAction::ClearTools => {
+            tui_set_tools(admin, &profile.id, Vec::new())?;
+            state.message = format!("tools cleared for {}", profile.id);
+        }
+        TuiAction::EditSkills => begin_skills_input(state, profiles),
+        TuiAction::ClearSkills => {
+            tui_set_skills(admin, &profile.id, Vec::new())?;
+            state.message = format!("skills cleared for {}", profile.id);
+        }
+        TuiAction::EditMcp => begin_mcp_input(state, profiles),
+        TuiAction::ClearMcp => {
+            tui_set_mcp_servers(admin, &profile.id, Vec::new())?;
+            state.message = format!("MCP servers cleared for {}", profile.id);
+        }
+        TuiAction::EditUsrl => begin_usrl_input(state, profiles),
+        TuiAction::ClearUsrl => {
+            tui_set_usrl_contracts(admin, &profile.id, Vec::new())?;
+            state.message = format!("USRL contracts cleared for {}", profile.id);
+        }
+        TuiAction::EditTags => begin_tags_input(state, profiles),
+        TuiAction::ClearTags => {
+            tui_set_tags(admin, &profile.id, Vec::new())?;
+            state.message = format!("tags cleared for {}", profile.id);
+        }
+    }
+    Ok(())
+}
+
+fn tui_set_status(admin: &AgentRegistryAdmin, id: &str, status: &str) -> anyhow::Result<()> {
+    let mut profile = admin.store.load(id)?;
+    if status == "active" {
+        let report = admin.validate_profile(&profile)?;
+        if !report.errors.is_empty() {
+            bail!(
+                "refusing to activate {}: validation has {} error(s)",
+                profile.id,
+                report.errors.len()
+            );
+        }
+    }
+    profile
+        .metadata
+        .insert("status".to_string(), Value::String(status.to_string()));
+    admin.save_touched_quiet(profile, "tui-status")?;
+    Ok(())
+}
+
+fn tui_set_provider(
+    admin: &AgentRegistryAdmin,
+    id: &str,
+    provider: Option<String>,
+) -> anyhow::Result<()> {
+    let mut profile = admin.store.load(id)?;
+    match provider {
+        Some(provider) => {
+            let providers = ProviderRegistry::default_catalog()?;
+            if providers.get(&provider).is_none() {
+                bail!("unknown provider: {provider}");
+            }
+            if let Some(model) = &profile.current_model {
+                let models = ModelRegistry::default_catalog()?;
+                if let Some(model_info) = models.get(model)
+                    && !models.is_model_allowed_for_provider(model_info, &provider)
+                {
+                    bail!(
+                        "model {model} is not allowed for provider {provider}; clear or change model first"
+                    );
+                }
+            }
+            profile.current_provider = Some(provider);
+        }
+        None => {
+            profile.current_provider = None;
+            profile.current_model = None;
+        }
+    }
+    admin.save_touched_quiet(profile, "tui-provider")?;
+    Ok(())
+}
+
+fn tui_set_model(
+    admin: &AgentRegistryAdmin,
+    id: &str,
+    model: Option<String>,
+) -> anyhow::Result<()> {
+    let mut profile = admin.store.load(id)?;
+    if let Some(model) = model {
+        let models = ModelRegistry::default_catalog()?;
+        let model_info = models
+            .get(&model)
+            .with_context(|| format!("unknown model: {model}"))?;
+        if let Some(provider) = &profile.current_provider
+            && !models.is_model_allowed_for_provider(model_info, provider)
+        {
+            bail!("model {model} is not allowed for provider {provider}");
+        }
+        profile.current_model = Some(model);
+    } else {
+        profile.current_model = None;
+    }
+    admin.save_touched_quiet(profile, "tui-model")?;
+    Ok(())
+}
+
+fn tui_set_tools(admin: &AgentRegistryAdmin, id: &str, tools: Vec<String>) -> anyhow::Result<()> {
+    validate_tool_allow_list(&tools)?;
+    let mut profile = admin.store.load(id)?;
+    profile.enabled_tools = tools;
+    admin.save_touched_quiet(profile, "tui-tools")?;
+    Ok(())
+}
+
+fn tui_set_skills(admin: &AgentRegistryAdmin, id: &str, skills: Vec<String>) -> anyhow::Result<()> {
+    validate_skill_allow_list(admin, &skills)?;
+    let mut profile = admin.store.load(id)?;
+    profile.enabled_skills = skills;
+    admin.save_touched_quiet(profile, "tui-skills")?;
+    Ok(())
+}
+
+fn tui_set_mcp_servers(
+    admin: &AgentRegistryAdmin,
+    id: &str,
+    servers: Vec<String>,
+) -> anyhow::Result<()> {
+    validate_mcp_server_allow_list(admin, &servers)?;
+    let mut profile = admin.store.load(id)?;
+    profile.enabled_mcp_servers = servers;
+    admin.save_touched_quiet(profile, "tui-mcp")?;
+    Ok(())
+}
+
+fn tui_set_usrl_contracts(
+    admin: &AgentRegistryAdmin,
+    id: &str,
+    contracts: Vec<String>,
+) -> anyhow::Result<()> {
+    let mut profile = admin.store.load(id)?;
+    profile.usrl_contracts = contracts;
+    admin.save_touched_quiet(profile, "tui-usrl")?;
+    Ok(())
+}
+
+fn validate_tool_allow_list(tools: &[String]) -> anyhow::Result<()> {
+    if tools.iter().any(|tool| tool == "*") && tools.len() > 1 {
+        bail!("wildcard tool access '*' must be used alone");
+    }
+    let known = default_tool_definitions()?
+        .into_iter()
+        .map(|tool| tool.name)
+        .collect::<BTreeSet<_>>();
+    for tool in tools {
+        if tool != "*" && !known.contains(tool) {
+            bail!("unknown tool: {tool}");
+        }
+    }
+    Ok(())
+}
+
+fn validate_skill_allow_list(admin: &AgentRegistryAdmin, skills: &[String]) -> anyhow::Result<()> {
+    let known = load_skill_definitions(&admin.workspace, &admin.data_root)?
+        .into_iter()
+        .map(|skill| skill.name)
+        .collect::<BTreeSet<_>>();
+    for skill in skills {
+        if !known.contains(skill) {
+            bail!("unknown skill in current workspace/data root: {skill}");
+        }
+    }
+    Ok(())
+}
+
+fn validate_mcp_server_allow_list(
+    admin: &AgentRegistryAdmin,
+    servers: &[String],
+) -> anyhow::Result<()> {
+    let known = McpConfigStore::new(admin.data_root.join("mcp.json"))
+        .load()?
+        .into_iter()
+        .map(|server| server.id)
+        .collect::<BTreeSet<_>>();
+    for server in servers {
+        if !known.contains(server) {
+            bail!("unknown MCP server in data root mcp.json: {server}");
+        }
+    }
+    Ok(())
+}
+
+fn resolve_usrl_contract_refs_for_admin(
+    admin: &AgentRegistryAdmin,
+    values: Vec<String>,
+) -> anyhow::Result<Vec<String>> {
+    let skills = load_skill_definitions(&admin.workspace, &admin.data_root)?;
+    let mut resolved = Vec::new();
+    for value in values {
+        if let Some(skill) = skills.iter().find(|skill| {
+            skill.name == value
+                && (skill.kind == "usrl_contract"
+                    || skill.metadata.get("format").and_then(Value::as_str) == Some("usrl"))
+        }) {
+            let contracts = skill
+                .metadata
+                .get("usrl_contracts")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if contracts.is_empty() {
+                append_unique(&mut resolved, vec![value]);
+            } else {
+                append_unique(&mut resolved, contracts);
+            }
+        } else {
+            append_unique(&mut resolved, vec![value]);
+        }
+    }
+    Ok(resolved)
+}
+
+fn tui_set_tags(admin: &AgentRegistryAdmin, id: &str, tags: Vec<String>) -> anyhow::Result<()> {
+    let mut profile = admin.store.load(id)?;
+    profile.metadata.insert("tags".to_string(), json!(tags));
+    admin.save_touched_quiet(profile, "tui-tags")?;
+    Ok(())
+}
+
+fn draw_admin_tui(
+    frame: &mut ratatui::Frame<'_>,
+    profiles: &[AgentProfile],
+    selected_id: Option<&str>,
+    state: &AdminTuiState,
+) {
+    let area = frame.area();
+    let outer = Block::default()
+        .title(Line::from(Span::styled(
+            " vegvisir-agent-admin ",
+            Style::default()
+                .fg(TUI_CYAN)
+                .bg(TUI_BG)
+                .add_modifier(Modifier::BOLD),
+        )))
+        .borders(Borders::ALL)
+        .style(Style::default().fg(TUI_FG).bg(TUI_BG))
+        .border_style(Style::default().fg(TUI_BORDER).bg(TUI_BG));
+    frame.render_widget(outer, area);
+    let inner = Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    };
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(8),
+            Constraint::Length(3),
+        ])
+        .split(inner);
+
+    let header = Paragraph::new(vec![Line::from(vec![
+        Span::styled(
+            " Registry ",
+            Style::default()
+                .fg(TUI_FG)
+                .bg(TUI_BG)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" agents=", Style::default().fg(TUI_DIM).bg(TUI_BG)),
+        Span::styled(
+            profiles.len().to_string(),
+            Style::default().fg(TUI_CYAN).bg(TUI_BG),
+        ),
+        Span::styled(" selected=", Style::default().fg(TUI_DIM).bg(TUI_BG)),
+        Span::styled(
+            selected_id.unwrap_or("-"),
+            Style::default()
+                .fg(TUI_GREEN)
+                .bg(TUI_BG)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" filter=", Style::default().fg(TUI_DIM).bg(TUI_BG)),
+        Span::styled(
+            if state.filter.trim().is_empty() {
+                "-"
+            } else {
+                state.filter.as_str()
+            },
+            Style::default().fg(TUI_AMBER).bg(TUI_BG),
+        ),
+    ])])
+    .style(Style::default().fg(TUI_FG).bg(TUI_BG))
+    .block(
+        Block::default()
+            .borders(Borders::BOTTOM)
+            .style(Style::default().fg(TUI_FG).bg(TUI_BG))
+            .border_style(Style::default().fg(TUI_BORDER).bg(TUI_BG)),
+    );
+    frame.render_widget(header, chunks[0]);
+
+    let body = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(36), Constraint::Percentage(64)])
+        .split(chunks[1]);
+
+    let items: Vec<ListItem> = profiles
+        .iter()
+        .enumerate()
+        .map(|(idx, profile)| {
+            let selected = Some(profile.id.as_str()) == selected_id;
+            let marker = if selected { "❯" } else { " " };
+            let status = profile
+                .metadata
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("draft");
+            let base = if selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(TUI_CYAN)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(TUI_FG).bg(TUI_PANEL)
+            };
+            let dim = if selected {
+                Style::default().fg(Color::Black).bg(TUI_CYAN)
+            } else {
+                Style::default().fg(TUI_DIM).bg(TUI_PANEL)
+            };
+            let id_style = if selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(TUI_CYAN)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+                    .fg(TUI_FG)
+                    .bg(TUI_PANEL)
+                    .add_modifier(Modifier::BOLD)
+            };
+            let status_style = if selected {
+                Style::default().fg(Color::Black).bg(TUI_CYAN)
+            } else {
+                Style::default().fg(status_color(status)).bg(TUI_PANEL)
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{marker} {idx:>3} "), dim),
+                Span::styled(profile.id.clone(), id_style),
+                Span::styled("  [", dim),
+                Span::styled(status.to_string(), status_style),
+                Span::styled("]", dim),
+            ]))
+            .style(base)
+        })
+        .collect();
+    let list = List::new(items)
+        .style(Style::default().fg(TUI_FG).bg(TUI_PANEL))
+        .block(admin_tui_block("Agents", TUI_BORDER));
+    frame.render_widget(list, body[0]);
+
+    let detail = if let Some(profile) = profiles
+        .iter()
+        .find(|profile| Some(profile.id.as_str()) == selected_id)
+    {
+        Paragraph::new(vec![
+            admin_tui_kv_line("id", &profile.id, TUI_CYAN),
+            admin_tui_kv_line("name", &profile.display_name, TUI_FG),
+            admin_tui_kv_line("mode", &profile.mode, TUI_GREEN),
+            admin_tui_kv_line(
+                "status",
+                profile
+                    .metadata
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("draft"),
+                status_color(
+                    profile
+                        .metadata
+                        .get("status")
+                        .and_then(Value::as_str)
+                        .unwrap_or("draft"),
+                ),
+            ),
+            admin_tui_kv_line(
+                "provider",
+                profile.current_provider.as_deref().unwrap_or("-"),
+                TUI_AMBER,
+            ),
+            admin_tui_kv_line(
+                "model",
+                profile.current_model.as_deref().unwrap_or("-"),
+                TUI_AMBER,
+            ),
+            admin_tui_kv_line(
+                "primary scope",
+                profile
+                    .metadata
+                    .get("primary_scope")
+                    .and_then(Value::as_str)
+                    .unwrap_or("-"),
+                TUI_FG,
+            ),
+            admin_tui_kv_line(
+                "secondary scopes",
+                &profile
+                    .metadata
+                    .get("secondary_scopes")
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .unwrap_or_else(|| "-".to_string()),
+                TUI_FG,
+            ),
+            admin_tui_kv_line(
+                "tags",
+                &profile
+                    .metadata
+                    .get("tags")
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .unwrap_or_else(|| "-".to_string()),
+                TUI_FG,
+            ),
+            admin_tui_kv_line("tools", &list_or_dash(&profile.enabled_tools), TUI_CYAN),
+            admin_tui_kv_line("skills", &list_or_dash(&profile.enabled_skills), TUI_GREEN),
+            admin_tui_kv_line("MCP", &list_or_dash(&profile.enabled_mcp_servers), TUI_CYAN),
+            admin_tui_kv_line("USRL", &list_or_dash(&profile.usrl_contracts), TUI_AMBER),
+            Line::from(""),
+            Line::from(vec![Span::styled(
+                "System prompt",
+                Style::default()
+                    .fg(TUI_FG)
+                    .bg(TUI_PANEL)
+                    .add_modifier(Modifier::BOLD),
+            )]),
+            Line::from(Span::styled(
+                profile
+                    .system_prompt
+                    .lines()
+                    .take(10)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                Style::default().fg(TUI_FG).bg(TUI_PANEL),
+            )),
+        ])
+        .style(Style::default().fg(TUI_FG).bg(TUI_PANEL))
+        .block(admin_tui_block("Selected agent", TUI_BORDER))
+        .wrap(Wrap { trim: false })
+    } else {
+        Paragraph::new(Span::styled(
+            "No agents found.",
+            Style::default().fg(TUI_DIM).bg(TUI_PANEL),
+        ))
+        .style(Style::default().fg(TUI_FG).bg(TUI_PANEL))
+        .block(admin_tui_block("Selected agent", TUI_BORDER))
+    };
+    frame.render_widget(detail, body[1]);
+
+    if state.show_help {
+        let help_area = centered_rect(82, 70, area);
+        frame.render_widget(Clear, help_area);
+        frame.render_widget(
+            Block::default()
+                .title(Line::from(Span::styled(
+                    " Help ",
+                    Style::default()
+                        .fg(TUI_FG)
+                        .bg(TUI_PANEL)
+                        .add_modifier(Modifier::BOLD),
+                )))
+                .borders(Borders::ALL)
+                .style(Style::default().fg(TUI_FG).bg(TUI_PANEL))
+                .border_style(Style::default().fg(TUI_CYAN).bg(TUI_PANEL)),
+            help_area,
+        );
+        let inner_help = Rect {
+            x: help_area.x + 1,
+            y: help_area.y + 1,
+            width: help_area.width.saturating_sub(2),
+            height: help_area.height.saturating_sub(2),
+        };
+        frame.render_widget(
+            Paragraph::new(tui_help_text())
+                .style(Style::default().fg(TUI_FG).bg(TUI_PANEL))
+                .wrap(Wrap { trim: false }),
+            inner_help,
+        );
+    }
+
+    match state.mode {
+        AdminTuiMode::ActionMenu => render_action_menu(frame, area, state),
+        AdminTuiMode::TagsInput => render_text_input(
+            frame,
+            area,
+            state,
+            selected_id,
+            " Edit tags ",
+            "tags",
+            "Comma-separated tags. Enter saves, Esc cancels.",
+        ),
+        AdminTuiMode::ProviderInput => render_text_input(
+            frame,
+            area,
+            state,
+            selected_id,
+            " Edit provider ",
+            "provider",
+            "Provider id, '-' or 'clear' to inherit. Enter saves, Esc cancels.",
+        ),
+        AdminTuiMode::ModelInput => render_text_input(
+            frame,
+            area,
+            state,
+            selected_id,
+            " Edit model ",
+            "model",
+            "Model id, '-' or 'clear' to inherit. Compatibility is validated on save.",
+        ),
+        AdminTuiMode::ToolsInput => render_text_input(
+            frame,
+            area,
+            state,
+            selected_id,
+            " Edit tool allow-list ",
+            "tools",
+            "Comma-separated tool names. Use '*' alone only when intentionally unrestricted.",
+        ),
+        AdminTuiMode::SkillsInput => render_text_input(
+            frame,
+            area,
+            state,
+            selected_id,
+            " Edit enabled skills ",
+            "skills",
+            "Comma-separated skill names. Enter saves after workspace catalog validation.",
+        ),
+        AdminTuiMode::McpInput => render_text_input(
+            frame,
+            area,
+            state,
+            selected_id,
+            " Edit allowed MCP servers ",
+            "mcp",
+            "Comma-separated MCP server ids. Enter saves after data-root mcp.json validation.",
+        ),
+        AdminTuiMode::UsrlInput => render_text_input(
+            frame,
+            area,
+            state,
+            selected_id,
+            " Edit bound USRL contracts ",
+            "usrl",
+            "Comma-separated contract refs. Known USRL skill refs expand to contract ids.",
+        ),
+        AdminTuiMode::Browse | AdminTuiMode::Search => {}
+    }
+
+    let footer = if state.mode == AdminTuiMode::Search {
+        Paragraph::new(Line::from(vec![
+            Span::styled("Search: ", Style::default().fg(TUI_CYAN).bg(TUI_PANEL)),
+            Span::styled(&state.filter, Style::default().fg(TUI_FG).bg(TUI_PANEL)),
+        ]))
+        .style(Style::default().fg(TUI_FG).bg(TUI_PANEL))
+        .block(admin_tui_block("Search", TUI_CYAN))
+    } else {
+        Paragraph::new(Span::styled(
+            state.message.clone(),
+            Style::default().fg(TUI_DIM).bg(TUI_PANEL),
+        ))
+        .style(Style::default().fg(TUI_FG).bg(TUI_PANEL))
+        .block(admin_tui_block("Status", TUI_BORDER))
+    };
+    frame.render_widget(footer, chunks[2]);
+}
+
+fn render_action_menu(frame: &mut ratatui::Frame<'_>, area: Rect, state: &AdminTuiState) {
+    let menu_area = centered_rect(58, 58, area);
+    frame.render_widget(Clear, menu_area);
+    frame.render_widget(
+        Block::default()
+            .title(Line::from(Span::styled(
+                " Actions ",
+                Style::default()
+                    .fg(TUI_FG)
+                    .bg(TUI_PANEL)
+                    .add_modifier(Modifier::BOLD),
+            )))
+            .borders(Borders::ALL)
+            .style(Style::default().fg(TUI_FG).bg(TUI_PANEL))
+            .border_style(Style::default().fg(TUI_CYAN).bg(TUI_PANEL)),
+        menu_area,
+    );
+    let inner = Rect {
+        x: menu_area.x + 1,
+        y: menu_area.y + 1,
+        width: menu_area.width.saturating_sub(2),
+        height: menu_area.height.saturating_sub(2),
+    };
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(4), Constraint::Length(3)])
+        .split(inner);
+    let items = TUI_ACTIONS
+        .iter()
+        .enumerate()
+        .map(|(idx, action)| {
+            let selected = idx == state.action_selected;
+            let style = if selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(TUI_CYAN)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(TUI_FG).bg(TUI_PANEL)
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(if selected { "❯ " } else { "  " }, style),
+                Span::styled(action.label(), style),
+            ]))
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(
+        List::new(items)
+            .style(Style::default().fg(TUI_FG).bg(TUI_PANEL))
+            .block(admin_tui_block("Choose", TUI_BORDER)),
+        chunks[0],
+    );
+    let selected = TUI_ACTIONS
+        .get(state.action_selected)
+        .copied()
+        .unwrap_or(TuiAction::Validate);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            selected.help(),
+            Style::default().fg(TUI_DIM).bg(TUI_PANEL),
+        )))
+        .style(Style::default().fg(TUI_FG).bg(TUI_PANEL))
+        .block(admin_tui_block("Enter applies, Esc cancels", TUI_BORDER))
+        .wrap(Wrap { trim: false }),
+        chunks[1],
+    );
+}
+
+fn render_text_input(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    state: &AdminTuiState,
+    selected_id: Option<&str>,
+    title: &'static str,
+    label: &'static str,
+    hint: &'static str,
+) {
+    let input_area = centered_rect(72, 28, area);
+    frame.render_widget(Clear, input_area);
+    frame.render_widget(
+        Block::default()
+            .title(Line::from(Span::styled(
+                title,
+                Style::default()
+                    .fg(TUI_FG)
+                    .bg(TUI_PANEL)
+                    .add_modifier(Modifier::BOLD),
+            )))
+            .borders(Borders::ALL)
+            .style(Style::default().fg(TUI_FG).bg(TUI_PANEL))
+            .border_style(Style::default().fg(TUI_CYAN).bg(TUI_PANEL)),
+        input_area,
+    );
+    let inner = Rect {
+        x: input_area.x + 1,
+        y: input_area.y + 1,
+        width: input_area.width.saturating_sub(2),
+        height: input_area.height.saturating_sub(2),
+    };
+    let text = vec![
+        Line::from(vec![
+            Span::styled("agent: ", Style::default().fg(TUI_DIM).bg(TUI_PANEL)),
+            Span::styled(
+                selected_id.unwrap_or("-"),
+                Style::default().fg(TUI_GREEN).bg(TUI_PANEL),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(
+                format!("{label}: "),
+                Style::default().fg(TUI_CYAN).bg(TUI_PANEL),
+            ),
+            Span::styled(&state.input, Style::default().fg(TUI_FG).bg(TUI_PANEL)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            hint,
+            Style::default().fg(TUI_DIM).bg(TUI_PANEL),
+        )),
+    ];
+    frame.render_widget(
+        Paragraph::new(text)
+            .style(Style::default().fg(TUI_FG).bg(TUI_PANEL))
+            .wrap(Wrap { trim: false }),
+        inner,
+    );
+}
+
+fn admin_tui_block(title: &'static str, border: Color) -> Block<'static> {
+    Block::default()
+        .title(Line::from(Span::styled(
+            format!(" {title} "),
+            Style::default()
+                .fg(TUI_FG)
+                .bg(TUI_PANEL)
+                .add_modifier(Modifier::BOLD),
+        )))
+        .borders(Borders::ALL)
+        .style(Style::default().fg(TUI_FG).bg(TUI_PANEL))
+        .border_style(Style::default().fg(border).bg(TUI_PANEL))
+}
+
+fn admin_tui_kv_line(label: &'static str, value: &str, value_color: Color) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("{label}: "),
+            Style::default().fg(TUI_DIM).bg(TUI_PANEL),
+        ),
+        Span::styled(
+            value.to_string(),
+            Style::default().fg(value_color).bg(TUI_PANEL),
+        ),
+    ])
+}
+
+fn status_color(status: &str) -> Color {
+    match normalize_agent_id(status).as_str() {
+        "active" | "ready" => TUI_GREEN,
+        "broken" | "blocked" => TUI_RED,
+        "paused" | "deprecated" => TUI_AMBER,
+        "archived" => TUI_DIM,
+        _ => TUI_AMBER,
+    }
+}
+
+fn load_metrics_report(admin: &AgentRegistryAdmin, id: &str) -> anyhow::Result<MetricsReport> {
+    let path = admin.metrics_path(id);
+    let metrics = if path.exists() {
+        serde_json::from_str::<AgentMetrics>(
+            &fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?,
+        )?
+    } else {
+        AgentMetrics::default()
+    };
+    let verification_total = metrics.verification_successes + metrics.verification_failures;
+    let task_total = metrics.tasks_completed + metrics.tasks_failed;
+    Ok(MetricsReport {
+        id: id.to_string(),
+        path,
+        verification_success_rate: ratio(metrics.verification_successes, verification_total),
+        task_success_rate: ratio(metrics.tasks_completed, task_total),
+        metrics,
+        warnings: Vec::new(),
+    })
 }
 
 fn print_saved(profile: &AgentProfile, path: &Path, json_output: bool) -> anyhow::Result<()> {
@@ -2323,12 +3639,129 @@ fn print_saved(profile: &AgentProfile, path: &Path, json_output: bool) -> anyhow
     Ok(())
 }
 
-fn print_tui_help() {
-    println!(
-        "commands:\n  list [--long]\n  show <id>\n  templates [id]\n  register [--dry-run]\n  validate [id]\n  doctor\n  create <id>\n  create-template <mode> <id>\n  edit <id>\n  status <id> <draft|active|paused|deprecated|archived|broken>\n  tags <id> <tag...>\n  allow-tool <id> <tool> / revoke-tool <id> <tool>\n  enable-skill <id> <skill> / disable-skill <id> <skill>\n  bind-usrl <id> <contract> / unbind-usrl <id> <contract>\n  compare <left> <right>\n  metrics <id>\n  history [id]\n  delete <id>\n  paths\n  quit"
-    );
+fn tui_help_text() -> &'static str {
+    "Keyboard:
+  Esc         quit, or close help when help is open
+  Ctrl+C      quit
+  F1          toggle help
+  F2 / A      open conventional action menu
+  F / Ctrl+F  search agents by id, name, mode, profile text, permissions, and metadata
+  P           edit provider for selected agent ('-' or 'clear' inherits)
+  O           edit model for selected agent ('-' or 'clear' inherits)
+  U           edit comma-separated tool allow-list for selected agent
+  S           edit comma-separated enabled skills for selected agent
+  D           edit comma-separated allowed MCP servers for selected agent
+  L           edit comma-separated bound USRL contracts for selected agent
+  T           edit comma-separated tags for selected agent
+  ↑/↓         move selection
+  Home/End    jump to start/end
+  PageUp/Down jump by 5
+  Enter / V   validate selected agent
+  M           show metrics for selected agent
+  H           show history count for selected agent
+  R           refresh
+
+Action menu:
+  ↑/↓         move action selection
+  Enter       apply selected action
+  Esc         cancel
+
+Provider/model/permission/tag edit modes:
+  type text   edit the selected field
+  Enter       save the field
+  Esc         cancel
+
+Search mode:
+  type text   live-filter the agent list
+  Enter       apply and exit
+  Esc         cancel and exit
+
+Create, clone, delete, import, export, prompt replacement, bulk set operations,
+scope/budget tuning, and registry-wide operations still use explicit
+vegvisir-agent-admin CLI subcommands outside the TUI. There is no ':' command
+entry in this TUI."
 }
 
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(area);
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
+}
+
+fn profile_tags(profile: &AgentProfile) -> Vec<String> {
+    profile
+        .metadata
+        .get("tags")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn filtered_profiles<'a>(profiles: &'a [AgentProfile], filter: &str) -> Vec<AgentProfile> {
+    let needle = filter.trim().to_ascii_lowercase();
+    if needle.is_empty() {
+        return profiles.to_vec();
+    }
+    profiles
+        .iter()
+        .filter(|profile| profile_matches_filter(profile, &needle))
+        .cloned()
+        .collect()
+}
+
+fn profile_matches_filter(profile: &AgentProfile, needle: &str) -> bool {
+    let mut haystack = String::new();
+    haystack.push_str(&profile.id);
+    haystack.push(' ');
+    haystack.push_str(&profile.display_name);
+    haystack.push(' ');
+    haystack.push_str(&profile.mode);
+    haystack.push(' ');
+    haystack.push_str(&profile.description);
+    haystack.push(' ');
+    haystack.push_str(profile.current_provider.as_deref().unwrap_or(""));
+    haystack.push(' ');
+    haystack.push_str(profile.current_model.as_deref().unwrap_or(""));
+    haystack.push(' ');
+    haystack.push_str(&profile.memory_policy);
+    haystack.push(' ');
+    haystack.push_str(&profile.system_prompt);
+    haystack.push(' ');
+    haystack.push_str(&profile.enabled_tools.join(" "));
+    haystack.push(' ');
+    haystack.push_str(&profile.enabled_skills.join(" "));
+    haystack.push(' ');
+    haystack.push_str(&profile.enabled_mcp_servers.join(" "));
+    haystack.push(' ');
+    haystack.push_str(&profile.usrl_contracts.join(" "));
+    haystack.push(' ');
+    for (key, value) in &profile.metadata {
+        haystack.push_str(key);
+        haystack.push(' ');
+        haystack.push_str(&compact_json(value));
+        haystack.push(' ');
+    }
+    haystack.to_ascii_lowercase().contains(needle)
+}
 fn print_validation_report(report: &ValidationReport) {
     println!("\nValidation {}: {}", report.id, report.status);
     if report.errors.is_empty() && report.warnings.is_empty() && report.recommendations.is_empty() {
@@ -2563,45 +3996,6 @@ fn read_prompt(
         ));
     }
     Ok(prompt)
-}
-
-fn read_multiline_prompt() -> anyhow::Result<String> {
-    let mut out = String::new();
-    let mut line = String::new();
-    loop {
-        line.clear();
-        if io::stdin().read_line(&mut line)? == 0 {
-            break;
-        }
-        if line.trim_end() == "." {
-            break;
-        }
-        out.push_str(&line);
-    }
-    if out.trim().is_empty() {
-        Ok(
-            "You are a Vegvisir custom agent. Work evidence-first and preserve user control."
-                .to_string(),
-        )
-    } else {
-        Ok(out.trim_end().to_string())
-    }
-}
-
-fn prompt_line(label: &str, default: Option<&str>) -> anyhow::Result<String> {
-    match default {
-        Some(default) => print!("{label} [{default}]: "),
-        None => print!("{label}: "),
-    }
-    io::stdout().flush()?;
-    let mut line = String::new();
-    io::stdin().read_line(&mut line)?;
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        Ok(default.unwrap_or_default().to_string())
-    } else {
-        Ok(trimmed.to_string())
-    }
 }
 
 fn clean_list(values: Vec<String>) -> Vec<String> {
@@ -2914,6 +4308,30 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    fn write_mcp_config(admin: &AgentRegistryAdmin, ids: &[&str]) -> anyhow::Result<()> {
+        let servers = ids
+            .iter()
+            .map(|id| vegvisir_rust::core::McpServerConfig {
+                id: id.to_string(),
+                display_name: id.to_string(),
+                transport: vegvisir_rust::core::McpTransport::Stdio,
+                command: None,
+                args: Vec::new(),
+                working_dir: None,
+                url: None,
+                enabled: true,
+                hbse_secret_refs: Vec::new(),
+                consumer: String::new(),
+                purpose: String::new(),
+                tools: Vec::new(),
+                metadata: BTreeMap::new(),
+                discovery_error: None,
+            })
+            .collect::<Vec<_>>();
+        McpConfigStore::new(admin.data_root.join("mcp.json")).save(&servers)?;
+        Ok(())
+    }
+
     #[test]
     fn clean_list_splits_commas_dedupes_and_drops_empty_items() {
         assert_eq!(
@@ -2994,6 +4412,16 @@ mod tests {
     }
 
     #[test]
+    fn tui_help_does_not_advertise_vim_style_command_mode() {
+        let help = tui_help_text();
+        assert!(!help.contains("command mode"));
+        assert!(!help.contains("Vim"));
+        assert!(!help.contains("q           quit"));
+        assert!(help.contains("F / Ctrl+F"));
+        assert!(help.contains("There is no ':' command"));
+    }
+
+    #[test]
     fn validate_status_history_and_register_flow() -> anyhow::Result<()> {
         let tmp = tempdir()?;
         let admin = AgentRegistryAdmin::new(tmp.path().join("data"), tmp.path().join("workspace"))?;
@@ -3061,6 +4489,120 @@ mod tests {
         assert!(profile.metadata.get("default_work_budget").is_some());
         let history = admin.load_history()?;
         assert!(history.iter().any(|event| event.agent_id == "engineer"));
+        Ok(())
+    }
+
+    #[test]
+    fn tui_help_advertises_action_menu_without_vim_command_mode() {
+        let help = tui_help_text();
+        assert!(help.contains("F2 / A"));
+        assert!(help.contains("P           edit provider"));
+        assert!(help.contains("O           edit model"));
+        assert!(help.contains("U           edit comma-separated tool allow-list"));
+        assert!(help.contains("S           edit comma-separated enabled skills"));
+        assert!(help.contains("D           edit comma-separated allowed MCP servers"));
+        assert!(help.contains("L           edit comma-separated bound USRL contracts"));
+        assert!(help.contains("Action menu:"));
+        assert!(help.contains("Provider/model/permission/tag edit modes:"));
+        assert!(!help.contains("Vim"));
+        assert!(help.contains("There is no ':' command"));
+    }
+
+    #[test]
+    fn tui_status_tags_provider_model_tools_and_skills_write_history_without_stdout_path()
+    -> anyhow::Result<()> {
+        let tmp = tempdir()?;
+        let admin = AgentRegistryAdmin::new(tmp.path().join("data"), tmp.path().join("workspace"))?;
+        admin.create_template(
+            CreateTemplateArgs {
+                mode: "tester".to_string(),
+                id: "qa".to_string(),
+                name: Some("QA".to_string()),
+                description: None,
+                force: false,
+            },
+            true,
+        )?;
+        write_mcp_config(&admin, &["local-docs", "issue-tracker"])?;
+
+        tui_set_status(&admin, "qa", "paused")?;
+        tui_set_provider(&admin, "qa", Some("demo".to_string()))?;
+        tui_set_model(&admin, "qa", Some("demo-local".to_string()))?;
+        tui_set_tools(
+            &admin,
+            "qa",
+            clean_list(vec!["read_file, run_tests, read_file".to_string()]),
+        )?;
+        tui_set_skills(
+            &admin,
+            "qa",
+            clean_list(vec!["repo-orientation, code-review".to_string()]),
+        )?;
+        tui_set_mcp_servers(
+            &admin,
+            "qa",
+            clean_list(vec!["local-docs, issue-tracker, local-docs".to_string()]),
+        )?;
+        tui_set_usrl_contracts(
+            &admin,
+            "qa",
+            resolve_usrl_contract_refs_for_admin(
+                &admin,
+                clean_list(vec!["safe-dev, safe-dev".to_string()]),
+            )?,
+        )?;
+        tui_set_tags(
+            &admin,
+            "qa",
+            clean_list(vec!["runtime, qa, runtime".to_string()]),
+        )?;
+
+        let profile = admin.store.load("qa")?;
+        assert_eq!(
+            profile.metadata.get("status").and_then(Value::as_str),
+            Some("paused")
+        );
+        assert_eq!(profile.current_provider.as_deref(), Some("demo"));
+        assert_eq!(profile.current_model.as_deref(), Some("demo-local"));
+        assert_eq!(
+            profile.enabled_tools,
+            vec!["read_file".to_string(), "run_tests".to_string()]
+        );
+        assert_eq!(
+            profile.enabled_skills,
+            vec!["repo-orientation".to_string(), "code-review".to_string()]
+        );
+        assert_eq!(
+            profile.enabled_mcp_servers,
+            vec!["local-docs".to_string(), "issue-tracker".to_string()]
+        );
+        assert_eq!(profile.usrl_contracts, vec!["safe-dev".to_string()]);
+        assert_eq!(
+            profile_tags(&profile),
+            vec!["runtime".to_string(), "qa".to_string()]
+        );
+
+        assert!(tui_set_provider(&admin, "qa", Some("openai".to_string())).is_err());
+        assert!(tui_set_tools(&admin, "qa", vec!["not-a-tool".to_string()]).is_err());
+        assert!(
+            tui_set_tools(&admin, "qa", vec!["*".to_string(), "read_file".to_string()]).is_err()
+        );
+        assert!(tui_set_skills(&admin, "qa", vec!["not-a-skill".to_string()]).is_err());
+        assert!(tui_set_mcp_servers(&admin, "qa", vec!["not-a-server".to_string()]).is_err());
+        tui_set_provider(&admin, "qa", None)?;
+        let profile = admin.store.load("qa")?;
+        assert_eq!(profile.current_provider, None);
+        assert_eq!(profile.current_model, None);
+
+        let history = admin.load_history()?;
+        assert!(history.iter().any(|event| event.action == "tui-status"));
+        assert!(history.iter().any(|event| event.action == "tui-provider"));
+        assert!(history.iter().any(|event| event.action == "tui-model"));
+        assert!(history.iter().any(|event| event.action == "tui-tools"));
+        assert!(history.iter().any(|event| event.action == "tui-skills"));
+        assert!(history.iter().any(|event| event.action == "tui-mcp"));
+        assert!(history.iter().any(|event| event.action == "tui-usrl"));
+        assert!(history.iter().any(|event| event.action == "tui-tags"));
         Ok(())
     }
 }
