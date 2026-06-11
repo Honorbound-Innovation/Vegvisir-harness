@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::{self, IsTerminal, Write},
+    io::{self, IsTerminal},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -22,13 +22,13 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use vegvisir_rust::{
+    agent_admin::*,
     core::{
-        AgentProfile, AgentProfileStore, McpConfigStore, ModelRegistry, ProviderRegistry,
-        default_tool_definitions, load_skill_definitions, normalize_agent_id,
+        AgentProfile, AgentProfileStore, ModelRegistry, ProviderRegistry, load_skill_definitions,
+        normalize_agent_id,
     },
     memory::default_vegvisir_data_root,
 };
@@ -424,144 +424,6 @@ struct PromptArgs {
     prompt_file: Option<PathBuf>,
 }
 
-#[derive(Clone, Serialize)]
-struct AgentTemplate {
-    mode: String,
-    display_name: String,
-    description: String,
-    system_prompt: String,
-    enabled_tools: Vec<String>,
-    enabled_skills: Vec<String>,
-    usrl_contracts: Vec<String>,
-    memory_policy: String,
-}
-
-#[derive(Serialize)]
-struct DoctorReport {
-    agents_root: PathBuf,
-    profile_count: usize,
-    invalid_files: Vec<String>,
-    warnings: Vec<String>,
-}
-
-#[derive(Clone, Serialize)]
-struct ValidationIssue {
-    severity: String,
-    field: String,
-    message: String,
-}
-
-#[derive(Clone, Serialize)]
-struct ValidationReport {
-    id: String,
-    status: String,
-    errors: Vec<ValidationIssue>,
-    warnings: Vec<ValidationIssue>,
-    recommendations: Vec<ValidationIssue>,
-}
-
-#[derive(Default, Serialize)]
-struct RegisterReport {
-    builtin_created: usize,
-    skiller_created: usize,
-    dry_run: bool,
-    created_ids: Vec<String>,
-    warnings: Vec<String>,
-}
-
-#[derive(Default, Serialize, Deserialize)]
-struct AgentMetrics {
-    #[serde(default)]
-    tasks_completed: u64,
-    #[serde(default)]
-    tasks_failed: u64,
-    #[serde(default)]
-    tasks_cancelled: u64,
-    #[serde(default)]
-    verification_successes: u64,
-    #[serde(default)]
-    verification_failures: u64,
-    #[serde(default)]
-    scope_violations: u64,
-    #[serde(default)]
-    follow_up_fixes: u64,
-    #[serde(default)]
-    retries: u64,
-    #[serde(default)]
-    average_turnaround_ms: Option<u64>,
-    #[serde(default)]
-    capability_scores: BTreeMap<String, f64>,
-    #[serde(default)]
-    confidence: Option<f64>,
-    #[serde(default)]
-    last_evaluated: Option<String>,
-    #[serde(default)]
-    notes: Vec<String>,
-}
-
-#[derive(Serialize)]
-struct MetricsReport {
-    id: String,
-    path: PathBuf,
-    metrics: AgentMetrics,
-    verification_success_rate: Option<f64>,
-    task_success_rate: Option<f64>,
-    warnings: Vec<String>,
-}
-
-#[derive(Serialize)]
-struct AgentComparison {
-    left_id: String,
-    right_id: String,
-    differences: Vec<FieldDifference>,
-}
-
-#[derive(Serialize)]
-struct FieldDifference {
-    field: String,
-    left: Value,
-    right: Value,
-}
-
-#[derive(Serialize, Deserialize)]
-struct HistoryEvent {
-    agent_id: String,
-    action: String,
-    #[serde(default)]
-    summary: String,
-    #[serde(default)]
-    metadata: BTreeMap<String, Value>,
-    timestamp: String,
-}
-
-#[derive(Debug)]
-enum SkillerAgentArtifact {
-    Pack(PathBuf),
-    ProposalIndex(PathBuf),
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct SkillerAgentPackOnDisk {
-    #[serde(default)]
-    agent_name: String,
-    #[serde(default)]
-    description: String,
-    #[serde(default)]
-    system_prompt_material: String,
-    #[serde(default)]
-    skill_ids: Vec<String>,
-    #[serde(default)]
-    tool_permissions: Vec<String>,
-    #[serde(default)]
-    memory_policy: String,
-    #[serde(default)]
-    source_bundle_ids: Vec<String>,
-    #[serde(default)]
-    source_bundle_name: String,
-    #[serde(default)]
-    source_bundle_version: String,
-}
-
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let data_root = cli.data_root.unwrap_or_else(default_vegvisir_data_root);
@@ -922,28 +784,17 @@ impl AgentRegistryAdmin {
 
     fn metrics(&self, id: &str, json_output: bool) -> anyhow::Result<()> {
         self.store.load(id)?;
-        let path = self.metrics_path(id);
-        let metrics = if path.exists() {
-            serde_json::from_str(
-                &fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?,
-            )?
-        } else {
-            AgentMetrics::default()
-        };
-        let task_total = metrics.tasks_completed + metrics.tasks_failed + metrics.tasks_cancelled;
-        let verified_total = metrics.verification_successes + metrics.verification_failures;
-        let report = MetricsReport {
-            id: normalize_agent_id(id),
-            path,
-            verification_success_rate: ratio(metrics.verification_successes, verified_total),
-            task_success_rate: ratio(metrics.tasks_completed, task_total),
-            warnings: if task_total == 0 {
-                vec!["no recorded task metrics for this agent".to_string()]
-            } else {
-                Vec::new()
-            },
-            metrics,
-        };
+        let mut report = load_metrics_report(&self.data_root, id)?;
+        report.id = normalize_agent_id(id);
+        let task_total = report.metrics.tasks_completed
+            + report.metrics.tasks_failed
+            + report.metrics.tasks_cancelled;
+        report.task_success_rate = ratio(report.metrics.tasks_completed, task_total);
+        if task_total == 0 {
+            report
+                .warnings
+                .push("no recorded task metrics for this agent".to_string());
+        }
         if json_output {
             println!("{}", serde_json::to_string_pretty(&report)?);
         } else {
@@ -1665,206 +1516,11 @@ impl AgentRegistryAdmin {
     }
 
     fn validate_profile(&self, profile: &AgentProfile) -> anyhow::Result<ValidationReport> {
-        let providers = ProviderRegistry::default_catalog()?;
-        let models = ModelRegistry::default_catalog()?;
-        let tools = default_tool_definitions()?;
-        let skills = load_skill_definitions(&self.workspace, &self.data_root)?;
-        let mcp_servers = McpConfigStore::new(self.data_root.join("mcp.json"))
-            .load()
-            .unwrap_or_default();
-        let tool_names = tools
-            .into_iter()
-            .map(|tool| tool.name)
-            .collect::<BTreeSet<_>>();
-        let skill_names = skills
-            .into_iter()
-            .map(|skill| skill.name)
-            .collect::<BTreeSet<_>>();
-        let mcp_ids = mcp_servers
-            .into_iter()
-            .map(|server| server.id)
-            .collect::<BTreeSet<_>>();
-        let mut errors = Vec::new();
-        let mut warnings = Vec::new();
-        let mut recommendations = Vec::new();
-
-        if profile.id.trim().is_empty() {
-            errors.push(issue("error", "id", "agent id is empty"));
-        }
-        if normalize_agent_id(&profile.id) != profile.id {
-            errors.push(issue("error", "id", "agent id is not normalized"));
-        }
-        if profile.display_name.trim().is_empty() {
-            errors.push(issue("error", "display_name", "display name is empty"));
-        }
-        if profile.system_prompt.trim().is_empty() {
-            errors.push(issue("error", "system_prompt", "system prompt is empty"));
-        }
-        if secret_like(&profile.system_prompt) {
-            errors.push(issue(
-                "error",
-                "system_prompt",
-                "prompt appears to contain secret-like material",
-            ));
-        }
-        if profile.description.trim().is_empty() {
-            recommendations.push(issue(
-                "recommendation",
-                "description",
-                "add a concise description for registry operators",
-            ));
-        }
-        if profile
-            .metadata
-            .get("primary_scope")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .unwrap_or_default()
-            .is_empty()
-        {
-            recommendations.push(issue(
-                "recommendation",
-                "metadata.primary_scope",
-                "set a primary scope for better delegation and filtering",
-            ));
-        }
-        if profile.memory_policy.trim().is_empty() {
-            warnings.push(issue("warning", "memory_policy", "memory policy is empty"));
-        }
-        if profile.cms_user_id.trim().is_empty() || profile.cms_project_id.trim().is_empty() {
-            errors.push(issue(
-                "error",
-                "cms_scope",
-                "CMS user/project ids must be non-empty",
-            ));
-        }
-        if let Some(provider) = &profile.current_provider
-            && providers.get(provider).is_none()
-        {
-            errors.push(issue(
-                "error",
-                "current_provider",
-                format!("unknown provider: {provider}"),
-            ));
-        }
-        if let Some(model) = &profile.current_model {
-            match models.get(model) {
-                Some(model_info) => {
-                    if let Some(provider) = &profile.current_provider {
-                        if !models.is_model_allowed_for_provider(model_info, provider) {
-                            errors.push(issue(
-                                "error",
-                                "current_model",
-                                format!("model {model} is not allowed for provider {provider}"),
-                            ));
-                        }
-                    } else {
-                        warnings.push(issue(
-                            "warning",
-                            "current_model",
-                            "model is set but provider is inherited at runtime",
-                        ));
-                    }
-                }
-                None => errors.push(issue(
-                    "error",
-                    "current_model",
-                    format!("unknown model: {model}"),
-                )),
-            }
-        }
-        for tool in &profile.enabled_tools {
-            if tool != "*" && !tool_names.contains(tool) {
-                warnings.push(issue(
-                    "warning",
-                    "enabled_tools",
-                    format!("unknown tool: {tool}"),
-                ));
-            }
-            if tool == "*" {
-                warnings.push(issue(
-                    "warning",
-                    "enabled_tools",
-                    "wildcard tool access should be used only for trusted operator-reviewed agents",
-                ));
-            }
-        }
-        for skill in &profile.enabled_skills {
-            if !skill_names.contains(skill) {
-                warnings.push(issue(
-                    "warning",
-                    "enabled_skills",
-                    format!("unknown skill in current workspace/data root: {skill}"),
-                ));
-            }
-        }
-        for server in &profile.enabled_mcp_servers {
-            if !mcp_ids.contains(server) {
-                warnings.push(issue(
-                    "warning",
-                    "enabled_mcp_servers",
-                    format!("unknown MCP server in data root mcp.json: {server}"),
-                ));
-            }
-        }
-        if profile.enabled_tools.is_empty() {
-            recommendations.push(issue(
-                "recommendation",
-                "enabled_tools",
-                "agent has no enabled tools; confirm this is intentional",
-            ));
-        }
-        Ok(ValidationReport {
-            id: profile.id.clone(),
-            status: if errors.is_empty() {
-                "ready"
-            } else {
-                "blocked"
-            }
-            .to_string(),
-            errors,
-            warnings,
-            recommendations,
-        })
-    }
-
-    fn metrics_path(&self, id: &str) -> PathBuf {
-        self.data_root
-            .join("agents")
-            .join("metrics")
-            .join(format!("{}.json", normalize_agent_id(id)))
-    }
-
-    fn history_path(&self) -> PathBuf {
-        self.data_root
-            .join("agents")
-            .join("history")
-            .join("events.jsonl")
+        validate_profile(profile, &self.workspace, &self.data_root)
     }
 
     fn load_history(&self) -> anyhow::Result<Vec<HistoryEvent>> {
-        let path = self.history_path();
-        if !path.exists() {
-            return Ok(Vec::new());
-        }
-        let mut events = Vec::new();
-        for (index, line) in fs::read_to_string(&path)?.lines().enumerate() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-            match serde_json::from_str::<HistoryEvent>(line) {
-                Ok(event) => events.push(event),
-                Err(error) => events.push(HistoryEvent {
-                    agent_id: "-".to_string(),
-                    action: "invalid-history-record".to_string(),
-                    summary: format!("{}:{}: {error}", path.display(), index + 1),
-                    metadata: BTreeMap::new(),
-                    timestamp: chrono::Utc::now().to_rfc3339(),
-                }),
-            }
-        }
-        Ok(events)
+        load_history(&self.data_root)
     }
 
     fn append_history(
@@ -1873,33 +1529,7 @@ impl AgentRegistryAdmin {
         action: &str,
         path: &Path,
     ) -> anyhow::Result<()> {
-        let history_path = self.history_path();
-        if let Some(parent) = history_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let mut metadata = BTreeMap::new();
-        metadata.insert(
-            "path".to_string(),
-            Value::String(path.display().to_string()),
-        );
-        metadata.insert("mode".to_string(), Value::String(profile.mode.clone()));
-        metadata.insert("status".to_string(), metadata_json(profile, "status"));
-        let event = HistoryEvent {
-            agent_id: profile.id.clone(),
-            action: action.to_string(),
-            summary: format!(
-                "{} ({}, mode={})",
-                profile.display_name, profile.id, profile.mode
-            ),
-            metadata,
-            timestamp: chrono::Utc::now().to_rfc3339(),
-        };
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&history_path)?;
-        writeln!(file, "{}", serde_json::to_string(&event)?)?;
-        Ok(())
+        append_history(&self.data_root, profile, action, path)
     }
 
     fn register_skiller_pack(
@@ -3365,7 +2995,7 @@ fn apply_tui_action(
             );
         }
         TuiAction::Metrics => {
-            let report = load_metrics_report(admin, &profile.id)?;
+            let report = load_metrics_report(&admin.data_root, &profile.id)?;
             state.message = format!(
                 "metrics {}: tasks={} success={}",
                 report.id,
@@ -3706,7 +3336,7 @@ fn tui_set_tools(admin: &AgentRegistryAdmin, id: &str, tools: Vec<String>) -> an
 }
 
 fn tui_set_skills(admin: &AgentRegistryAdmin, id: &str, skills: Vec<String>) -> anyhow::Result<()> {
-    validate_skill_allow_list(admin, &skills)?;
+    validate_skill_allow_list(&admin.workspace, &admin.data_root, &skills)?;
     let mut profile = admin.store.load(id)?;
     profile.enabled_skills = skills;
     admin.save_touched_quiet(profile, "tui-skills")?;
@@ -3718,7 +3348,7 @@ fn tui_set_mcp_servers(
     id: &str,
     servers: Vec<String>,
 ) -> anyhow::Result<()> {
-    validate_mcp_server_allow_list(admin, &servers)?;
+    validate_mcp_server_allow_list(&admin.data_root, &servers)?;
     let mut profile = admin.store.load(id)?;
     profile.enabled_mcp_servers = servers;
     admin.save_touched_quiet(profile, "tui-mcp")?;
@@ -3733,52 +3363,6 @@ fn tui_set_usrl_contracts(
     let mut profile = admin.store.load(id)?;
     profile.usrl_contracts = contracts;
     admin.save_touched_quiet(profile, "tui-usrl")?;
-    Ok(())
-}
-
-fn validate_tool_allow_list(tools: &[String]) -> anyhow::Result<()> {
-    if tools.iter().any(|tool| tool == "*") && tools.len() > 1 {
-        bail!("wildcard tool access '*' must be used alone");
-    }
-    let known = default_tool_definitions()?
-        .into_iter()
-        .map(|tool| tool.name)
-        .collect::<BTreeSet<_>>();
-    for tool in tools {
-        if tool != "*" && !known.contains(tool) {
-            bail!("unknown tool: {tool}");
-        }
-    }
-    Ok(())
-}
-
-fn validate_skill_allow_list(admin: &AgentRegistryAdmin, skills: &[String]) -> anyhow::Result<()> {
-    let known = load_skill_definitions(&admin.workspace, &admin.data_root)?
-        .into_iter()
-        .map(|skill| skill.name)
-        .collect::<BTreeSet<_>>();
-    for skill in skills {
-        if !known.contains(skill) {
-            bail!("unknown skill in current workspace/data root: {skill}");
-        }
-    }
-    Ok(())
-}
-
-fn validate_mcp_server_allow_list(
-    admin: &AgentRegistryAdmin,
-    servers: &[String],
-) -> anyhow::Result<()> {
-    let known = McpConfigStore::new(admin.data_root.join("mcp.json"))
-        .load()?
-        .into_iter()
-        .map(|server| server.id)
-        .collect::<BTreeSet<_>>();
-    for server in servers {
-        if !known.contains(server) {
-            bail!("unknown MCP server in data root mcp.json: {server}");
-        }
-    }
     Ok(())
 }
 
@@ -4467,27 +4051,6 @@ fn status_color(status: &str) -> Color {
     }
 }
 
-fn load_metrics_report(admin: &AgentRegistryAdmin, id: &str) -> anyhow::Result<MetricsReport> {
-    let path = admin.metrics_path(id);
-    let metrics = if path.exists() {
-        serde_json::from_str::<AgentMetrics>(
-            &fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?,
-        )?
-    } else {
-        AgentMetrics::default()
-    };
-    let verification_total = metrics.verification_successes + metrics.verification_failures;
-    let task_total = metrics.tasks_completed + metrics.tasks_failed;
-    Ok(MetricsReport {
-        id: id.to_string(),
-        path,
-        verification_success_rate: ratio(metrics.verification_successes, verification_total),
-        task_success_rate: ratio(metrics.tasks_completed, task_total),
-        metrics,
-        warnings: Vec::new(),
-    })
-}
-
 fn print_saved(profile: &AgentProfile, path: &Path, json_output: bool) -> anyhow::Result<()> {
     if json_output {
         println!(
@@ -4788,120 +4351,10 @@ fn print_comparison(comparison: &AgentComparison) {
     }
 }
 
-fn compact_json(value: &Value) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "<unprintable>".to_string())
-}
-
-fn issue(severity: &str, field: &str, message: impl Into<String>) -> ValidationIssue {
-    ValidationIssue {
-        severity: severity.to_string(),
-        field: field.to_string(),
-        message: message.into(),
-    }
-}
-
-fn ratio(part: u64, total: u64) -> Option<f64> {
-    if total == 0 {
-        None
-    } else {
-        Some(part as f64 / total as f64)
-    }
-}
-
-fn percent_or_dash(value: Option<f64>) -> String {
-    value
-        .map(|value| format!("{:.1}%", value * 100.0))
-        .unwrap_or_else(|| "-".to_string())
-}
-
-fn push_diff(differences: &mut Vec<FieldDifference>, field: &str, left: Value, right: Value) {
-    if left != right {
-        differences.push(FieldDifference {
-            field: field.to_string(),
-            left,
-            right,
-        });
-    }
-}
-
-fn metadata_json(profile: &AgentProfile, key: &str) -> Value {
-    profile.metadata.get(key).cloned().unwrap_or(Value::Null)
-}
-
 fn prompt_digest(prompt: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(prompt.as_bytes());
     format!("{:x}", hasher.finalize())
-}
-
-fn secret_like(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    let patterns = [
-        "api_key",
-        "apikey",
-        "secret_key",
-        "access_token",
-        "refresh_token",
-        "private key",
-        "-----begin",
-        "password=",
-        "authorization: bearer",
-    ];
-    patterns.iter().any(|pattern| lower.contains(pattern))
-}
-
-fn find_skiller_agent_artifacts(
-    cwd: &Path,
-    data_root: &Path,
-) -> Vec<anyhow::Result<SkillerAgentArtifact>> {
-    let roots = [
-        cwd.join(".vegvisir").join("agent-packs"),
-        cwd.join(".vegvisir").join("skiller"),
-        cwd.join(".vegvisir").join("skiller-agent-packs"),
-        data_root.join("agent-packs"),
-        data_root.join("skiller"),
-        data_root.join("skiller-agent-packs"),
-    ];
-    let mut artifacts = Vec::new();
-    let mut seen = BTreeSet::new();
-    for root in roots {
-        collect_skiller_agent_artifacts(&root, 6, &mut seen, &mut artifacts);
-    }
-    artifacts
-}
-
-fn collect_skiller_agent_artifacts(
-    path: &Path,
-    remaining_depth: usize,
-    seen: &mut BTreeSet<PathBuf>,
-    artifacts: &mut Vec<anyhow::Result<SkillerAgentArtifact>>,
-) {
-    if remaining_depth == 0 || !path.exists() {
-        return;
-    }
-    let Ok(metadata) = fs::metadata(path) else {
-        artifacts.push(Err(anyhow::anyhow!("could not inspect {}", path.display())));
-        return;
-    };
-    if metadata.is_file() {
-        match path.file_name().and_then(|name| name.to_str()) {
-            Some("agent-pack.yaml") if seen.insert(path.to_path_buf()) => {
-                artifacts.push(Ok(SkillerAgentArtifact::Pack(path.to_path_buf())))
-            }
-            Some("agent-proposals-index.yaml") if seen.insert(path.to_path_buf()) => {
-                artifacts.push(Ok(SkillerAgentArtifact::ProposalIndex(path.to_path_buf())))
-            }
-            _ => {}
-        }
-        return;
-    }
-    let Ok(entries) = fs::read_dir(path) else {
-        artifacts.push(Err(anyhow::anyhow!("could not list {}", path.display())));
-        return;
-    };
-    for entry in entries.flatten() {
-        collect_skiller_agent_artifacts(&entry.path(), remaining_depth - 1, seen, artifacts);
-    }
 }
 
 fn print_profile(profile: &AgentProfile) {
@@ -4963,83 +4416,6 @@ fn read_prompt(
     Ok(prompt)
 }
 
-fn clean_list(values: Vec<String>) -> Vec<String> {
-    let mut seen = BTreeSet::new();
-    let mut cleaned = Vec::new();
-    for value in values {
-        for item in value.split(',') {
-            let item = item.trim();
-            if !item.is_empty() && seen.insert(item.to_string()) {
-                cleaned.push(item.to_string());
-            }
-        }
-    }
-    cleaned
-}
-
-fn append_unique(target: &mut Vec<String>, values: Vec<String>) {
-    for value in values {
-        if !target.contains(&value) {
-            target.push(value);
-        }
-    }
-}
-
-fn remove_all(target: &mut Vec<String>, values: &[String]) {
-    target.retain(|item| !values.contains(item));
-}
-
-fn list_or_dash(values: &[String]) -> String {
-    if values.is_empty() {
-        "-".to_string()
-    } else {
-        values.join(",")
-    }
-}
-
-fn dash_if_empty(value: &str) -> &str {
-    if value.trim().is_empty() { "-" } else { value }
-}
-
-fn normalized_or_default(value: &str, default: &str) -> String {
-    let normalized = normalize_agent_id(value);
-    if normalized.is_empty() {
-        default.to_string()
-    } else {
-        normalized
-    }
-}
-
-fn none_marker(value: String) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() || trimmed == "-" || trimmed.eq_ignore_ascii_case("clear") {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
-}
-
-fn join_required(label: &str, values: Vec<String>) -> anyhow::Result<String> {
-    let joined = values.join(" ").trim().to_string();
-    if joined.is_empty() {
-        bail!("{label} must not be empty");
-    }
-    Ok(joined)
-}
-
-fn admin_metadata(action: &str) -> BTreeMap<String, Value> {
-    let mut metadata = BTreeMap::new();
-    metadata.insert(
-        "managed_by".to_string(),
-        Value::String("vegvisir-agent-admin".to_string()),
-    );
-    metadata.insert(
-        "last_admin_action".to_string(),
-        Value::String(action.to_string()),
-    );
-    metadata
-}
-
 fn touch_metadata(profile: &mut AgentProfile, action: &str) {
     profile.metadata.insert(
         "managed_by".to_string(),
@@ -5051,227 +4427,11 @@ fn touch_metadata(profile: &mut AgentProfile, action: &str) {
     );
 }
 
-fn print_json_or_text<F>(json_output: bool, value: &Value, text: F) -> anyhow::Result<()>
-where
-    F: FnOnce() -> anyhow::Result<()>,
-{
-    if json_output {
-        println!("{}", serde_json::to_string_pretty(value)?);
-        Ok(())
-    } else {
-        text()
-    }
-}
-
-fn profile_from_template(
-    mode: &str,
-    id: &str,
-    name_override: Option<&str>,
-) -> anyhow::Result<AgentProfile> {
-    let template = agent_template(mode).with_context(|| format!("unknown template: {mode}"))?;
-    let mut profile = AgentProfile::new(
-        id,
-        name_override.unwrap_or(&template.display_name),
-        &template.system_prompt,
-    )?;
-    profile.mode = template.mode.clone();
-    profile.description = template.description.clone();
-    profile.enabled_tools = template.enabled_tools.clone();
-    profile.enabled_skills = template.enabled_skills.clone();
-    profile.usrl_contracts = template.usrl_contracts.clone();
-    profile.memory_policy = template.memory_policy.clone();
-    profile
-        .metadata
-        .insert("template".to_string(), Value::String(template.mode));
-    profile
-        .metadata
-        .insert("registered_identity".to_string(), Value::Bool(false));
-    profile
-        .metadata
-        .insert("identity_source".to_string(), json!("agent-admin-template"));
-    Ok(profile)
-}
-
-fn agent_template(mode: &str) -> Option<AgentTemplate> {
-    let normalized = normalize_agent_id(mode);
-    agent_templates()
-        .into_iter()
-        .find(|template| template.mode == normalized)
-}
-
-fn agent_templates() -> Vec<AgentTemplate> {
-    vec![
-        template(
-            "planner",
-            "Planner",
-            "Decomposes goals into staged, verifiable plans.",
-            "You are a planning specialist. Convert ambiguous goals into concrete phases, dependencies, risks, acceptance checks, and next actions. Do not edit files unless explicitly asked through an enabled tool path.",
-            &[
-                "list_files",
-                "read_file",
-                "cms_recall",
-                "cms_recent",
-                "cms_search_chatgpt_archive",
-                "cms_prepare_context",
-                "save_session",
-            ],
-        ),
-        template(
-            "researcher",
-            "Researcher",
-            "Finds, compares, and summarizes project evidence.",
-            "You are a research specialist. Gather relevant local context, distinguish evidence from inference, cite files or memories when available, and produce concise findings with uncertainty called out.",
-            &[
-                "list_files",
-                "read_file",
-                "cms_recall",
-                "cms_recent",
-                "cms_search_chatgpt_archive",
-                "cms_remember",
-                "cms_prepare_context",
-            ],
-        ),
-        template(
-            "orchestrator",
-            "Orchestrator",
-            "Coordinates specialist agents and tracks execution state.",
-            "You are an orchestration specialist. Break work into bounded tasks, delegate when useful, merge results, maintain task state, and keep execution aligned with the user's current objective.",
-            &[
-                "list_files",
-                "read_file",
-                "cms_recall",
-                "cms_recent",
-                "cms_search_chatgpt_archive",
-                "cms_prepare_context",
-                "spawn_subagent",
-                "save_session",
-                "audit_log",
-            ],
-        ),
-        template(
-            "engineer",
-            "Engineer",
-            "Implements scoped code changes with verification.",
-            "You are an engineering specialist. Read the surrounding code before changing it, make minimal coherent edits, preserve existing behavior unless intentionally changed, and verify with focused tests.",
-            &[
-                "list_files",
-                "read_file",
-                "write_file",
-                "run_command",
-                "run_tests",
-                "cms_recall",
-                "cms_search_chatgpt_archive",
-                "cms_remember",
-                "cms_prepare_context",
-                "audit_log",
-            ],
-        ),
-        template(
-            "coder",
-            "Coder",
-            "Focuses on implementation details and local patches.",
-            "You are a coding specialist. Implement the requested behavior directly, keep patches small, follow local style, and report the exact verification performed.",
-            &[
-                "list_files",
-                "read_file",
-                "write_file",
-                "run_command",
-                "run_tests",
-                "cms_recall",
-                "cms_search_chatgpt_archive",
-                "cms_remember",
-            ],
-        ),
-        template(
-            "tester",
-            "Tester",
-            "Designs and runs verification for changed behavior.",
-            "You are a testing specialist. Identify behavioral risk, add or run targeted tests, explain failures in terms of expected versus actual behavior, and avoid unrelated rewrites.",
-            &[
-                "list_files",
-                "read_file",
-                "write_file",
-                "run_command",
-                "run_tests",
-                "cms_recall",
-                "cms_search_chatgpt_archive",
-                "cms_remember",
-                "audit_log",
-            ],
-        ),
-        template_with_skills(
-            "agent-red",
-            "Agent Red",
-            "Security-oriented review and adversarial analysis with delegated reconnaissance, risk gating, and evidence-backed mitigation planning.",
-            "You are Agent Red, a security specialist for authorized defensive review. Focus on abuse cases, privilege boundaries, secret handling, prompt/tool injection paths, unsafe execution, supply-chain risk, and concrete mitigations. Work evidence-first: inspect relevant files, tests, traces, memories, and tool outputs before making security claims. Use bounded subagents for independent reconnaissance or test planning when the review is broad. Use CMS context tools only for non-secret project memory and never request, expose, transform, or store plaintext secrets. Treat offensive techniques as analysis context only; do not provide persistence, stealth, credential theft, exploitation deployment, or unauthorized access guidance.",
-            &[
-                "list_files",
-                "read_file",
-                "run_command",
-                "run_tests",
-                "cms_recall",
-                "cms_recent",
-                "cms_search_chatgpt_archive",
-                "cms_remember",
-                "cms_prepare_context",
-                "cms_prepare_model_request",
-                "spawn_subagent",
-                "audit_log",
-            ],
-            &[
-                "repo-orientation",
-                "code-review",
-                "test-repair",
-                "risk-check",
-            ],
-        ),
-    ]
-}
-
-fn template(
-    mode: &str,
-    display_name: &str,
-    description: &str,
-    system_prompt: &str,
-    enabled_tools: &[&str],
-) -> AgentTemplate {
-    template_with_skills(
-        mode,
-        display_name,
-        description,
-        system_prompt,
-        enabled_tools,
-        &[],
-    )
-}
-
-fn template_with_skills(
-    mode: &str,
-    display_name: &str,
-    description: &str,
-    system_prompt: &str,
-    enabled_tools: &[&str],
-    enabled_skills: &[&str],
-) -> AgentTemplate {
-    AgentTemplate {
-        mode: mode.to_string(),
-        display_name: display_name.to_string(),
-        description: description.to_string(),
-        system_prompt: system_prompt.to_string(),
-        enabled_tools: enabled_tools.iter().map(|tool| tool.to_string()).collect(),
-        enabled_skills: enabled_skills
-            .iter()
-            .map(|skill| skill.to_string())
-            .collect(),
-        usrl_contracts: Vec::new(),
-        memory_policy: "agent-scoped".to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
+    use vegvisir_rust::core::McpConfigStore;
 
     fn write_mcp_config(admin: &AgentRegistryAdmin, ids: &[&str]) -> anyhow::Result<()> {
         let servers = ids
@@ -5372,6 +4532,74 @@ mod tests {
             profile
                 .enabled_tools
                 .contains(&"spawn_subagent".to_string())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn validation_blocks_secret_like_prompt_material() -> anyhow::Result<()> {
+        let tmp = tempdir()?;
+        let admin = AgentRegistryAdmin::new(tmp.path().join("data"), tmp.path().join("workspace"))?;
+        let mut profile = AgentProfile::new(
+            "secret-review",
+            "Secret Review",
+            "Investigate this api_key=not-a-real-key placeholder.",
+        )?;
+        profile.description = "Prompt validation fixture".to_string();
+        let report = admin.validate_profile(&profile)?;
+        assert!(
+            report.errors.iter().any(
+                |issue| issue.field == "system_prompt" && issue.message.contains("secret-like")
+            ),
+            "expected secret-like system_prompt error, got {}",
+            serde_json::to_string(&report.errors)?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn import_export_round_trip_loads_profile_in_fresh_registry() -> anyhow::Result<()> {
+        let tmp = tempdir()?;
+        let source =
+            AgentRegistryAdmin::new(tmp.path().join("source-data"), tmp.path().join("workspace"))?;
+        let target =
+            AgentRegistryAdmin::new(tmp.path().join("target-data"), tmp.path().join("workspace"))?;
+        source.create_template(
+            CreateTemplateArgs {
+                mode: "tester".to_string(),
+                id: "qa-export".to_string(),
+                name: Some("QA Export".to_string()),
+                description: Some("Round-trip fixture".to_string()),
+                force: false,
+            },
+            true,
+        )?;
+        let export_path = tmp.path().join("qa-export.agent.json");
+        source.export("qa-export", Some(export_path.clone()))?;
+        target.import(&export_path, false, true)?;
+
+        let loaded = target.store.load("qa-export")?;
+        assert_eq!(loaded.display_name, "QA Export");
+        assert_eq!(loaded.mode, "tester");
+        assert_eq!(loaded.description, "Round-trip fixture");
+        assert!(loaded.enabled_tools.contains(&"run_tests".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn lossy_registry_listing_reports_invalid_profile_files() -> anyhow::Result<()> {
+        let tmp = tempdir()?;
+        let admin = AgentRegistryAdmin::new(tmp.path().join("data"), tmp.path().join("workspace"))?;
+        std::fs::write(admin.store.root.join("broken.json"), "{not valid json")?;
+
+        let (profiles, invalid_files) = admin.store.list_lossy()?;
+        assert!(profiles.is_empty());
+        assert!(
+            invalid_files
+                .iter()
+                .any(|item| item.contains("broken.json")),
+            "expected broken.json in invalid files, got {:?}",
+            invalid_files
         );
         Ok(())
     }
