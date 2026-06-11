@@ -1,15 +1,20 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fs,
     io::{self, Write},
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, bail};
 use clap::{Args, Parser, Subcommand};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use vegvisir_rust::{
-    core::{AgentProfile, AgentProfileStore, normalize_agent_id},
+    core::{
+        AgentProfile, AgentProfileStore, McpConfigStore, ModelRegistry, ProviderRegistry,
+        default_tool_definitions, load_skill_definitions, normalize_agent_id,
+    },
     memory::default_vegvisir_data_root,
 };
 
@@ -26,6 +31,9 @@ struct Cli {
     /// Print machine-readable JSON where supported.
     #[arg(long, global = true)]
     json: bool,
+    /// Workspace used for workspace-local skills and Skiller agent-pack discovery.
+    #[arg(long, global = true)]
+    workspace: Option<PathBuf>,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -36,6 +44,30 @@ enum Command {
     Paths,
     /// Validate and summarize the agent registry.
     Doctor,
+    /// Register missing built-in and Skiller-generated agent identities.
+    Register(RegisterArgs),
+    /// Validate one profile, or the whole registry when no id is supplied.
+    Validate { id: Option<String> },
+    /// Show recorded metrics and ability tracking data for one agent.
+    Metrics { id: String },
+    /// Compare two agent profiles.
+    Compare {
+        left_id: String,
+        right_id: String,
+        /// Include full prompt text in the comparison output.
+        #[arg(long)]
+        prompts: bool,
+    },
+    /// Show edit history for an agent, or all agents when no id is supplied.
+    History { id: Option<String> },
+    /// Set lifecycle status metadata. Active status requires validation without hard errors.
+    Status { id: String, status: String },
+    /// Tune scope metadata used by operators and subagent delegation planning.
+    Scope(ScopeArgs),
+    /// Replace tag metadata for filtering and domain specialization.
+    Tags { id: String, tags: Vec<String> },
+    /// Tune default work-budget metadata for future subagent use.
+    Budget(BudgetArgs),
     /// List or show built-in agent templates.
     Templates {
         /// Optional template/mode id to show.
@@ -163,6 +195,56 @@ struct ListArgs {
     /// Filter by mode.
     #[arg(long)]
     mode: Option<String>,
+}
+
+#[derive(Args, Default)]
+struct RegisterArgs {
+    /// Register only built-in templates.
+    #[arg(long)]
+    builtins_only: bool,
+    /// Register only Skiller agent-pack/proposal artifacts.
+    #[arg(long)]
+    skiller_only: bool,
+    /// Report what would be registered without writing profiles.
+    #[arg(long)]
+    dry_run: bool,
+}
+
+#[derive(Args)]
+struct ScopeArgs {
+    id: String,
+    /// Primary scope/domain for the agent.
+    #[arg(long)]
+    primary: Option<String>,
+    /// Comma-separated secondary scopes.
+    #[arg(long, value_delimiter = ',')]
+    secondary: Vec<String>,
+    /// Workspace or repository scope label/path for this agent profile.
+    #[arg(long = "workspace-scope")]
+    workspace_scope: Option<String>,
+    /// Comma-separated file-scope hints.
+    #[arg(long, value_delimiter = ',')]
+    file_scope: Vec<String>,
+}
+
+#[derive(Args)]
+struct BudgetArgs {
+    id: String,
+    #[arg(long)]
+    max_steps: Option<u64>,
+    #[arg(long)]
+    max_tool_calls: Option<u64>,
+    #[arg(long)]
+    max_read_bytes: Option<u64>,
+    #[arg(long)]
+    max_output_bytes: Option<u64>,
+    #[arg(long, value_delimiter = ',')]
+    allowed_tools: Vec<String>,
+    #[arg(long)]
+    notes: Option<String>,
+    /// Clear the stored default work budget.
+    #[arg(long)]
+    clear: bool,
 }
 
 #[derive(Args)]
@@ -347,13 +429,145 @@ struct DoctorReport {
     warnings: Vec<String>,
 }
 
+#[derive(Clone, Serialize)]
+struct ValidationIssue {
+    severity: String,
+    field: String,
+    message: String,
+}
+
+#[derive(Clone, Serialize)]
+struct ValidationReport {
+    id: String,
+    status: String,
+    errors: Vec<ValidationIssue>,
+    warnings: Vec<ValidationIssue>,
+    recommendations: Vec<ValidationIssue>,
+}
+
+#[derive(Default, Serialize)]
+struct RegisterReport {
+    builtin_created: usize,
+    skiller_created: usize,
+    dry_run: bool,
+    created_ids: Vec<String>,
+    warnings: Vec<String>,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+struct AgentMetrics {
+    #[serde(default)]
+    tasks_completed: u64,
+    #[serde(default)]
+    tasks_failed: u64,
+    #[serde(default)]
+    tasks_cancelled: u64,
+    #[serde(default)]
+    verification_successes: u64,
+    #[serde(default)]
+    verification_failures: u64,
+    #[serde(default)]
+    scope_violations: u64,
+    #[serde(default)]
+    follow_up_fixes: u64,
+    #[serde(default)]
+    retries: u64,
+    #[serde(default)]
+    average_turnaround_ms: Option<u64>,
+    #[serde(default)]
+    capability_scores: BTreeMap<String, f64>,
+    #[serde(default)]
+    confidence: Option<f64>,
+    #[serde(default)]
+    last_evaluated: Option<String>,
+    #[serde(default)]
+    notes: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct MetricsReport {
+    id: String,
+    path: PathBuf,
+    metrics: AgentMetrics,
+    verification_success_rate: Option<f64>,
+    task_success_rate: Option<f64>,
+    warnings: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct AgentComparison {
+    left_id: String,
+    right_id: String,
+    differences: Vec<FieldDifference>,
+}
+
+#[derive(Serialize)]
+struct FieldDifference {
+    field: String,
+    left: Value,
+    right: Value,
+}
+
+#[derive(Serialize, Deserialize)]
+struct HistoryEvent {
+    agent_id: String,
+    action: String,
+    #[serde(default)]
+    summary: String,
+    #[serde(default)]
+    metadata: BTreeMap<String, Value>,
+    timestamp: String,
+}
+
+#[derive(Debug)]
+enum SkillerAgentArtifact {
+    Pack(PathBuf),
+    ProposalIndex(PathBuf),
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct SkillerAgentPackOnDisk {
+    #[serde(default)]
+    agent_name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    system_prompt_material: String,
+    #[serde(default)]
+    skill_ids: Vec<String>,
+    #[serde(default)]
+    tool_permissions: Vec<String>,
+    #[serde(default)]
+    memory_policy: String,
+    #[serde(default)]
+    source_bundle_ids: Vec<String>,
+    #[serde(default)]
+    source_bundle_name: String,
+    #[serde(default)]
+    source_bundle_version: String,
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let data_root = cli.data_root.unwrap_or_else(default_vegvisir_data_root);
-    let registry = AgentRegistryAdmin::new(data_root)?;
+    let workspace = cli.workspace.unwrap_or(std::env::current_dir()?);
+    let registry = AgentRegistryAdmin::new(data_root, workspace)?;
     match cli.command.unwrap_or(Command::List(ListArgs::default())) {
         Command::Paths => registry.print_paths(cli.json),
         Command::Doctor => registry.doctor(cli.json),
+        Command::Register(args) => registry.register(args, cli.json),
+        Command::Validate { id } => registry.validate(id.as_deref(), cli.json),
+        Command::Metrics { id } => registry.metrics(&id, cli.json),
+        Command::Compare {
+            left_id,
+            right_id,
+            prompts,
+        } => registry.compare(&left_id, &right_id, prompts, cli.json),
+        Command::History { id } => registry.history(id.as_deref(), cli.json),
+        Command::Status { id, status } => registry.status(&id, status, cli.json),
+        Command::Scope(args) => registry.scope(args, cli.json),
+        Command::Tags { id, tags } => registry.tags(&id, tags, cli.json),
+        Command::Budget(args) => registry.budget(args, cli.json),
         Command::Templates { id } => registry.templates(id.as_deref(), cli.json),
         Command::List(args) => registry.list(args, cli.json),
         Command::Show { id } => registry.show(&id, cli.json),
@@ -423,6 +637,7 @@ fn main() -> anyhow::Result<()> {
 
 struct AgentRegistryAdmin {
     data_root: PathBuf,
+    workspace: PathBuf,
     store: AgentProfileStore,
 }
 
@@ -455,9 +670,13 @@ impl ListField {
 }
 
 impl AgentRegistryAdmin {
-    fn new(data_root: PathBuf) -> anyhow::Result<Self> {
+    fn new(data_root: PathBuf, workspace: PathBuf) -> anyhow::Result<Self> {
         let store = AgentProfileStore::new(data_root.join("agents"))?;
-        Ok(Self { data_root, store })
+        Ok(Self {
+            data_root,
+            workspace,
+            store,
+        })
     }
 
     fn print_paths(&self, json_output: bool) -> anyhow::Result<()> {
@@ -466,10 +685,12 @@ impl AgentRegistryAdmin {
             &json!({
                 "data_root": self.data_root,
                 "agents_root": self.store.root,
+                "workspace": self.workspace,
             }),
             || {
                 println!("data_root: {}", self.data_root.display());
                 println!("agents_root: {}", self.store.root.display());
+                println!("workspace: {}", self.workspace.display());
                 Ok(())
             },
         )
@@ -552,6 +773,424 @@ impl AgentRegistryAdmin {
             }
         }
         Ok(())
+    }
+
+    fn register(&self, args: RegisterArgs, json_output: bool) -> anyhow::Result<()> {
+        let mut report = RegisterReport {
+            dry_run: args.dry_run,
+            ..RegisterReport::default()
+        };
+        let (profiles, warnings) = self.store.list_lossy()?;
+        report.warnings.extend(warnings);
+        let mut known_ids = profiles
+            .into_iter()
+            .map(|profile| profile.id)
+            .collect::<BTreeSet<_>>();
+
+        if !args.skiller_only {
+            for template in agent_templates() {
+                if known_ids.contains(&template.mode) {
+                    continue;
+                }
+                report.created_ids.push(template.mode.clone());
+                report.builtin_created += 1;
+                if !args.dry_run {
+                    let mut profile = profile_from_template(&template.mode, &template.mode, None)?;
+                    profile
+                        .metadata
+                        .insert("registered_identity".to_string(), Value::Bool(true));
+                    profile
+                        .metadata
+                        .insert("identity_source".to_string(), json!("builtin-template"));
+                    touch_metadata(&mut profile, "register-builtin");
+                    let saved = self.store.save(&profile)?;
+                    self.append_history(&profile, "register-builtin", &saved)?;
+                }
+                known_ids.insert(template.mode);
+            }
+        }
+
+        if !args.builtins_only {
+            for artifact in find_skiller_agent_artifacts(&self.workspace, &self.data_root) {
+                match artifact {
+                    Ok(SkillerAgentArtifact::Pack(path)) => {
+                        match self.register_skiller_pack(&mut known_ids, &path, args.dry_run) {
+                            Ok(Some(id)) => {
+                                report.skiller_created += 1;
+                                report.created_ids.push(id);
+                            }
+                            Ok(None) => {}
+                            Err(error) => report.warnings.push(format!(
+                                "skipped Skiller agent pack {}: {error}",
+                                path.display()
+                            )),
+                        }
+                    }
+                    Ok(SkillerAgentArtifact::ProposalIndex(path)) => {
+                        match self.register_skiller_proposals(&mut known_ids, &path, args.dry_run) {
+                            Ok(ids) => {
+                                report.skiller_created += ids.len();
+                                report.created_ids.extend(ids);
+                            }
+                            Err(error) => report.warnings.push(format!(
+                                "skipped Skiller agent proposal index {}: {error}",
+                                path.display()
+                            )),
+                        }
+                    }
+                    Err(error) => report.warnings.push(error.to_string()),
+                }
+            }
+        }
+
+        if json_output {
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        } else {
+            println!("Registered built-in agents: {}", report.builtin_created);
+            println!("Registered Skiller agents: {}", report.skiller_created);
+            if args.dry_run {
+                println!("Dry run: no profiles written.");
+            }
+            if !report.created_ids.is_empty() {
+                println!("IDs: {}", report.created_ids.join(","));
+            }
+            if !report.warnings.is_empty() {
+                println!("\nWarnings:");
+                for warning in &report.warnings {
+                    println!("- {warning}");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate(&self, id: Option<&str>, json_output: bool) -> anyhow::Result<()> {
+        if let Some(id) = id {
+            let profile = self.store.load(id)?;
+            let report = self.validate_profile(&profile)?;
+            if json_output {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print_validation_report(&report);
+            }
+            return Ok(());
+        }
+        let (profiles, warnings) = self.store.list_lossy()?;
+        let mut reports = Vec::new();
+        for profile in &profiles {
+            reports.push(self.validate_profile(profile)?);
+        }
+        if json_output {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "agents_root": self.store.root,
+                    "load_warnings": warnings,
+                    "reports": reports,
+                }))?
+            );
+        } else {
+            println!(
+                "Validated {} profile(s) in {}",
+                reports.len(),
+                self.store.root.display()
+            );
+            for warning in warnings {
+                println!("Load warning: {warning}");
+            }
+            for report in &reports {
+                print_validation_report(report);
+            }
+        }
+        Ok(())
+    }
+
+    fn metrics(&self, id: &str, json_output: bool) -> anyhow::Result<()> {
+        self.store.load(id)?;
+        let path = self.metrics_path(id);
+        let metrics = if path.exists() {
+            serde_json::from_str(
+                &fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?,
+            )?
+        } else {
+            AgentMetrics::default()
+        };
+        let task_total = metrics.tasks_completed + metrics.tasks_failed + metrics.tasks_cancelled;
+        let verified_total = metrics.verification_successes + metrics.verification_failures;
+        let report = MetricsReport {
+            id: normalize_agent_id(id),
+            path,
+            verification_success_rate: ratio(metrics.verification_successes, verified_total),
+            task_success_rate: ratio(metrics.tasks_completed, task_total),
+            warnings: if task_total == 0 {
+                vec!["no recorded task metrics for this agent".to_string()]
+            } else {
+                Vec::new()
+            },
+            metrics,
+        };
+        if json_output {
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        } else {
+            print_metrics_report(&report);
+        }
+        Ok(())
+    }
+
+    fn compare(
+        &self,
+        left_id: &str,
+        right_id: &str,
+        prompts: bool,
+        json_output: bool,
+    ) -> anyhow::Result<()> {
+        let left = self.store.load(left_id)?;
+        let right = self.store.load(right_id)?;
+        let mut differences = Vec::new();
+        push_diff(
+            &mut differences,
+            "mode",
+            json!(left.mode),
+            json!(right.mode),
+        );
+        push_diff(
+            &mut differences,
+            "display_name",
+            json!(left.display_name),
+            json!(right.display_name),
+        );
+        push_diff(
+            &mut differences,
+            "description",
+            json!(left.description),
+            json!(right.description),
+        );
+        push_diff(
+            &mut differences,
+            "provider",
+            json!(left.current_provider),
+            json!(right.current_provider),
+        );
+        push_diff(
+            &mut differences,
+            "model",
+            json!(left.current_model),
+            json!(right.current_model),
+        );
+        push_diff(
+            &mut differences,
+            "tools",
+            json!(left.enabled_tools),
+            json!(right.enabled_tools),
+        );
+        push_diff(
+            &mut differences,
+            "skills",
+            json!(left.enabled_skills),
+            json!(right.enabled_skills),
+        );
+        push_diff(
+            &mut differences,
+            "mcp_servers",
+            json!(left.enabled_mcp_servers),
+            json!(right.enabled_mcp_servers),
+        );
+        push_diff(
+            &mut differences,
+            "usrl_contracts",
+            json!(left.usrl_contracts),
+            json!(right.usrl_contracts),
+        );
+        push_diff(
+            &mut differences,
+            "cms_user_id",
+            json!(left.cms_user_id),
+            json!(right.cms_user_id),
+        );
+        push_diff(
+            &mut differences,
+            "cms_project_id",
+            json!(left.cms_project_id),
+            json!(right.cms_project_id),
+        );
+        push_diff(
+            &mut differences,
+            "memory_policy",
+            json!(left.memory_policy),
+            json!(right.memory_policy),
+        );
+        push_diff(
+            &mut differences,
+            "status",
+            metadata_json(&left, "status"),
+            metadata_json(&right, "status"),
+        );
+        push_diff(
+            &mut differences,
+            "primary_scope",
+            metadata_json(&left, "primary_scope"),
+            metadata_json(&right, "primary_scope"),
+        );
+        push_diff(
+            &mut differences,
+            "tags",
+            metadata_json(&left, "tags"),
+            metadata_json(&right, "tags"),
+        );
+        if prompts {
+            push_diff(
+                &mut differences,
+                "system_prompt",
+                json!(left.system_prompt),
+                json!(right.system_prompt),
+            );
+        } else if left.system_prompt != right.system_prompt {
+            differences.push(FieldDifference {
+                field: "system_prompt".to_string(),
+                left: json!({"bytes": left.system_prompt.len(), "sha256": prompt_digest(&left.system_prompt)}),
+                right: json!({"bytes": right.system_prompt.len(), "sha256": prompt_digest(&right.system_prompt)}),
+            });
+        }
+        let comparison = AgentComparison {
+            left_id: left.id,
+            right_id: right.id,
+            differences,
+        };
+        if json_output {
+            println!("{}", serde_json::to_string_pretty(&comparison)?);
+        } else {
+            print_comparison(&comparison);
+        }
+        Ok(())
+    }
+
+    fn history(&self, id: Option<&str>, json_output: bool) -> anyhow::Result<()> {
+        let mut events = self.load_history()?;
+        if let Some(id) = id {
+            let id = normalize_agent_id(id);
+            events.retain(|event| normalize_agent_id(&event.agent_id) == id);
+        }
+        if json_output {
+            println!("{}", serde_json::to_string_pretty(&events)?);
+        } else if events.is_empty() {
+            println!("No history recorded.");
+        } else {
+            for event in events.iter().rev().take(100) {
+                println!(
+                    "{} {:<18} {} {}",
+                    event.timestamp, event.agent_id, event.action, event.summary
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn status(&self, id: &str, status: String, json_output: bool) -> anyhow::Result<()> {
+        let status = normalize_agent_id(&status);
+        let allowed = [
+            "draft",
+            "active",
+            "paused",
+            "deprecated",
+            "archived",
+            "broken",
+        ];
+        if !allowed.contains(&status.as_str()) {
+            bail!("status must be one of: {}", allowed.join(","));
+        }
+        let mut profile = self.store.load(id)?;
+        if status == "active" {
+            let report = self.validate_profile(&profile)?;
+            if !report.errors.is_empty() {
+                bail!(
+                    "refusing to activate {}: validation has {} error(s)",
+                    profile.id,
+                    report.errors.len()
+                );
+            }
+        }
+        profile
+            .metadata
+            .insert("status".to_string(), Value::String(status));
+        self.save_touched(profile, "status", json_output)
+    }
+
+    fn scope(&self, args: ScopeArgs, json_output: bool) -> anyhow::Result<()> {
+        let mut profile = self.store.load(&args.id)?;
+        if let Some(primary) = args.primary {
+            profile
+                .metadata
+                .insert("primary_scope".to_string(), Value::String(primary));
+        }
+        if !args.secondary.is_empty() {
+            profile.metadata.insert(
+                "secondary_scopes".to_string(),
+                json!(clean_list(args.secondary)),
+            );
+        }
+        if let Some(workspace_scope) = args.workspace_scope {
+            profile.metadata.insert(
+                "workspace_scope".to_string(),
+                Value::String(workspace_scope),
+            );
+        }
+        if !args.file_scope.is_empty() {
+            profile.metadata.insert(
+                "file_scope_hints".to_string(),
+                json!(clean_list(args.file_scope)),
+            );
+        }
+        self.save_touched(profile, "scope", json_output)
+    }
+
+    fn tags(&self, id: &str, tags: Vec<String>, json_output: bool) -> anyhow::Result<()> {
+        let mut profile = self.store.load(id)?;
+        profile
+            .metadata
+            .insert("tags".to_string(), json!(clean_list(tags)));
+        self.save_touched(profile, "tags", json_output)
+    }
+
+    fn budget(&self, args: BudgetArgs, json_output: bool) -> anyhow::Result<()> {
+        let mut profile = self.store.load(&args.id)?;
+        if args.clear {
+            profile.metadata.remove("default_work_budget");
+        } else {
+            let mut budget = profile
+                .metadata
+                .get("default_work_budget")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            if !budget.is_object() {
+                budget = json!({});
+            }
+            let map = budget.as_object_mut().expect("object ensured");
+            if let Some(value) = args.max_steps {
+                map.insert("max_steps".to_string(), json!(value));
+            }
+            if let Some(value) = args.max_tool_calls {
+                map.insert("max_tool_calls".to_string(), json!(value));
+            }
+            if let Some(value) = args.max_read_bytes {
+                map.insert("max_read_bytes".to_string(), json!(value));
+            }
+            if let Some(value) = args.max_output_bytes {
+                map.insert("max_output_bytes".to_string(), json!(value));
+            }
+            if !args.allowed_tools.is_empty() {
+                map.insert(
+                    "allowed_tools".to_string(),
+                    json!(clean_list(args.allowed_tools)),
+                );
+            }
+            if let Some(notes) = args.notes {
+                map.insert("notes".to_string(), json!(notes));
+            }
+            profile
+                .metadata
+                .insert("default_work_budget".to_string(), budget);
+        }
+        self.save_touched(profile, "budget", json_output)
     }
 
     fn templates(&self, id: Option<&str>, json_output: bool) -> anyhow::Result<()> {
@@ -701,6 +1340,7 @@ impl AgentRegistryAdmin {
         }
         touch_metadata(&mut profile, "created");
         let path = self.store.save(&profile)?;
+        self.append_history(&profile, "created", &path)?;
         print_saved(&profile, &path, json_output)
     }
 
@@ -716,6 +1356,7 @@ impl AgentRegistryAdmin {
         }
         touch_metadata(&mut profile, "created-from-template");
         let path = self.store.save(&profile)?;
+        self.append_history(&profile, "created-from-template", &path)?;
         print_saved(&profile, &path, json_output)
     }
 
@@ -946,6 +1587,7 @@ impl AgentRegistryAdmin {
             Value::String(source_id.to_string()),
         );
         let path = self.store.save(&profile)?;
+        self.append_history(&profile, "cloned", &path)?;
         print_saved(&profile, &path, json_output)
     }
 
@@ -999,15 +1641,15 @@ impl AgentRegistryAdmin {
             Value::String(path.display().to_string()),
         );
         let saved = self.store.save(&profile)?;
+        self.append_history(&profile, "imported", &saved)?;
         print_saved(&profile, &saved, json_output)
     }
 
     fn tui(&self) -> anyhow::Result<()> {
-        println!("Vegvisir Agent Admin — interactive registry editor");
+        println!("Vegvisir Agent Admin — interactive registry control plane");
         println!("Registry: {}", self.store.root.display());
-        println!(
-            "Commands: list, templates, show <id>, create <id>, create-template <mode> <id>, delete <id>, doctor, paths, help, quit"
-        );
+        println!("Workspace: {}", self.workspace.display());
+        println!("Type help for commands. This shell edits the same profiles used by /agent.");
         let mut line = String::new();
         loop {
             print!("agent-admin> ");
@@ -1020,14 +1662,33 @@ impl AgentRegistryAdmin {
             match args.as_slice() {
                 [] => {}
                 ["quit"] | ["exit"] => break,
-                ["help"] => println!(
-                    "list\ntemplates [id]\nshow <id>\ncreate <id>\ncreate-template <mode> <id>\ndelete <id>\ndoctor\npaths\nquit\n\nFor full editing, use non-interactive subcommands such as set, prompt, allow-tool, bind-usrl, import, export."
-                ),
+                ["help"] => print_tui_help(),
                 ["paths"] => self.print_paths(false)?,
                 ["doctor"] => self.doctor(false)?,
+                ["register"] => self.register(RegisterArgs::default(), false)?,
+                ["register", "--dry-run"] => self.register(
+                    RegisterArgs {
+                        dry_run: true,
+                        ..RegisterArgs::default()
+                    },
+                    false,
+                )?,
+                ["validate"] => self.validate(None, false)?,
+                ["validate", id] => self.validate(Some(id), false)?,
+                ["metrics", id] => self.metrics(id, false)?,
+                ["history"] => self.history(None, false)?,
+                ["history", id] => self.history(Some(id), false)?,
+                ["compare", left, right] => self.compare(left, right, false, false)?,
                 ["templates"] => self.templates(None, false)?,
                 ["templates", id] => self.templates(Some(id), false)?,
                 ["list"] => self.list(ListArgs::default(), false)?,
+                ["list", "--long"] => self.list(
+                    ListArgs {
+                        long: true,
+                        mode: None,
+                    },
+                    false,
+                )?,
                 ["show", id] => self.show(id, false)?,
                 ["create", id] => self.create_interactive(id)?,
                 ["create-template", mode, id] => self.create_template(
@@ -1040,11 +1701,537 @@ impl AgentRegistryAdmin {
                     },
                     false,
                 )?,
+                ["edit", id] | ["tune", id] => self.edit_interactive(id)?,
+                ["status", id, status] => self.status(id, (*status).to_string(), false)?,
+                ["tags", id, tags @ ..] => self.tags(
+                    id,
+                    tags.iter().map(|value| (*value).to_string()).collect(),
+                    false,
+                )?,
+                ["allow-tool", id, tool] => {
+                    self.add_to_list(id, ListField::Tools, (*tool).to_string(), false)?
+                }
+                ["revoke-tool", id, tool] => {
+                    self.remove_from_list(id, ListField::Tools, tool, false)?
+                }
+                ["enable-skill", id, skill] => {
+                    self.add_to_list(id, ListField::Skills, (*skill).to_string(), false)?
+                }
+                ["disable-skill", id, skill] => {
+                    self.remove_from_list(id, ListField::Skills, skill, false)?
+                }
+                ["bind-usrl", id, contract] => {
+                    self.add_to_list(id, ListField::Usrl, (*contract).to_string(), false)?
+                }
+                ["unbind-usrl", id, contract] => {
+                    self.remove_from_list(id, ListField::Usrl, contract, false)?
+                }
                 ["delete", id] => self.delete_interactive(id)?,
                 [unknown, ..] => println!("Unknown command: {unknown}. Type help."),
             }
         }
         Ok(())
+    }
+
+    fn edit_interactive(&self, id: &str) -> anyhow::Result<()> {
+        let mut profile = self.store.load(id)?;
+        println!("Editing {} ({})", profile.id, profile.display_name);
+        let name = prompt_line("display name", Some(&profile.display_name))?;
+        if !name.trim().is_empty() {
+            profile.display_name = name;
+        }
+        let description = prompt_line("description", Some(&profile.description))?;
+        profile.description = description;
+        let status_default = profile
+            .metadata
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("draft");
+        let status = prompt_line(
+            "status [draft|active|paused|deprecated|archived|broken]",
+            Some(status_default),
+        )?;
+        let status = normalize_agent_id(&status);
+        if !status.is_empty() {
+            profile
+                .metadata
+                .insert("status".to_string(), Value::String(status));
+        }
+        let primary_scope = prompt_line(
+            "primary scope",
+            profile
+                .metadata
+                .get("primary_scope")
+                .and_then(Value::as_str),
+        )?;
+        if !primary_scope.trim().is_empty() {
+            profile
+                .metadata
+                .insert("primary_scope".to_string(), Value::String(primary_scope));
+        }
+        let tags_default = profile
+            .metadata
+            .get("tags")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            });
+        let tags = prompt_line("tags comma-separated", tags_default.as_deref())?;
+        if !tags.trim().is_empty() {
+            profile
+                .metadata
+                .insert("tags".to_string(), json!(clean_list(vec![tags])));
+        }
+        let provider = prompt_line("provider (- to clear)", profile.current_provider.as_deref())?;
+        if !provider.trim().is_empty() {
+            profile.current_provider = none_marker(provider);
+            if profile.current_provider.is_none() {
+                profile.current_model = None;
+            }
+        }
+        let model = prompt_line("model (- to clear)", profile.current_model.as_deref())?;
+        if !model.trim().is_empty() {
+            profile.current_model = none_marker(model);
+        }
+        let tools = prompt_line(
+            "tools comma-separated",
+            Some(&list_or_dash(&profile.enabled_tools)),
+        )?;
+        if tools != "-" {
+            profile.enabled_tools = clean_list(vec![tools]);
+        }
+        let skills = prompt_line(
+            "skills comma-separated",
+            Some(&list_or_dash(&profile.enabled_skills)),
+        )?;
+        if skills != "-" {
+            profile.enabled_skills = clean_list(vec![skills]);
+        }
+        let usrl = prompt_line(
+            "USRL comma-separated",
+            Some(&list_or_dash(&profile.usrl_contracts)),
+        )?;
+        if usrl != "-" {
+            profile.usrl_contracts = clean_list(vec![usrl]);
+        }
+        let edit_prompt = prompt_line("replace prompt? [no/file/manual]", Some("no"))?;
+        match edit_prompt.as_str() {
+            "file" => {
+                let path = prompt_line("prompt file", None)?;
+                profile.system_prompt =
+                    fs::read_to_string(&path).with_context(|| format!("read {path}"))?;
+            }
+            "manual" => {
+                println!("Enter system prompt. Finish with a single '.' line.");
+                profile.system_prompt = read_multiline_prompt()?;
+            }
+            _ => {}
+        }
+        let report = self.validate_profile(&profile)?;
+        print_validation_report(&report);
+        if !report.errors.is_empty() {
+            let answer = prompt_line("save despite validation errors? type yes", Some("no"))?;
+            if answer != "yes" {
+                println!("Edit cancelled.");
+                return Ok(());
+            }
+        }
+        self.save_touched(profile, "interactive-edit", false)
+    }
+
+    fn validate_profile(&self, profile: &AgentProfile) -> anyhow::Result<ValidationReport> {
+        let providers = ProviderRegistry::default_catalog()?;
+        let models = ModelRegistry::default_catalog()?;
+        let tools = default_tool_definitions()?;
+        let skills = load_skill_definitions(&self.workspace, &self.data_root)?;
+        let mcp_servers = McpConfigStore::new(self.data_root.join("mcp.json"))
+            .load()
+            .unwrap_or_default();
+        let tool_names = tools
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<BTreeSet<_>>();
+        let skill_names = skills
+            .into_iter()
+            .map(|skill| skill.name)
+            .collect::<BTreeSet<_>>();
+        let mcp_ids = mcp_servers
+            .into_iter()
+            .map(|server| server.id)
+            .collect::<BTreeSet<_>>();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        let mut recommendations = Vec::new();
+
+        if profile.id.trim().is_empty() {
+            errors.push(issue("error", "id", "agent id is empty"));
+        }
+        if normalize_agent_id(&profile.id) != profile.id {
+            errors.push(issue("error", "id", "agent id is not normalized"));
+        }
+        if profile.display_name.trim().is_empty() {
+            errors.push(issue("error", "display_name", "display name is empty"));
+        }
+        if profile.system_prompt.trim().is_empty() {
+            errors.push(issue("error", "system_prompt", "system prompt is empty"));
+        }
+        if secret_like(&profile.system_prompt) {
+            errors.push(issue(
+                "error",
+                "system_prompt",
+                "prompt appears to contain secret-like material",
+            ));
+        }
+        if profile.description.trim().is_empty() {
+            recommendations.push(issue(
+                "recommendation",
+                "description",
+                "add a concise description for registry operators",
+            ));
+        }
+        if profile
+            .metadata
+            .get("primary_scope")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default()
+            .is_empty()
+        {
+            recommendations.push(issue(
+                "recommendation",
+                "metadata.primary_scope",
+                "set a primary scope for better delegation and filtering",
+            ));
+        }
+        if profile.memory_policy.trim().is_empty() {
+            warnings.push(issue("warning", "memory_policy", "memory policy is empty"));
+        }
+        if profile.cms_user_id.trim().is_empty() || profile.cms_project_id.trim().is_empty() {
+            errors.push(issue(
+                "error",
+                "cms_scope",
+                "CMS user/project ids must be non-empty",
+            ));
+        }
+        if let Some(provider) = &profile.current_provider
+            && providers.get(provider).is_none()
+        {
+            errors.push(issue(
+                "error",
+                "current_provider",
+                format!("unknown provider: {provider}"),
+            ));
+        }
+        if let Some(model) = &profile.current_model {
+            match models.get(model) {
+                Some(model_info) => {
+                    if let Some(provider) = &profile.current_provider {
+                        if !models.is_model_allowed_for_provider(model_info, provider) {
+                            errors.push(issue(
+                                "error",
+                                "current_model",
+                                format!("model {model} is not allowed for provider {provider}"),
+                            ));
+                        }
+                    } else {
+                        warnings.push(issue(
+                            "warning",
+                            "current_model",
+                            "model is set but provider is inherited at runtime",
+                        ));
+                    }
+                }
+                None => errors.push(issue(
+                    "error",
+                    "current_model",
+                    format!("unknown model: {model}"),
+                )),
+            }
+        }
+        for tool in &profile.enabled_tools {
+            if tool != "*" && !tool_names.contains(tool) {
+                warnings.push(issue(
+                    "warning",
+                    "enabled_tools",
+                    format!("unknown tool: {tool}"),
+                ));
+            }
+            if tool == "*" {
+                warnings.push(issue(
+                    "warning",
+                    "enabled_tools",
+                    "wildcard tool access should be used only for trusted operator-reviewed agents",
+                ));
+            }
+        }
+        for skill in &profile.enabled_skills {
+            if !skill_names.contains(skill) {
+                warnings.push(issue(
+                    "warning",
+                    "enabled_skills",
+                    format!("unknown skill in current workspace/data root: {skill}"),
+                ));
+            }
+        }
+        for server in &profile.enabled_mcp_servers {
+            if !mcp_ids.contains(server) {
+                warnings.push(issue(
+                    "warning",
+                    "enabled_mcp_servers",
+                    format!("unknown MCP server in data root mcp.json: {server}"),
+                ));
+            }
+        }
+        if profile.enabled_tools.is_empty() {
+            recommendations.push(issue(
+                "recommendation",
+                "enabled_tools",
+                "agent has no enabled tools; confirm this is intentional",
+            ));
+        }
+        Ok(ValidationReport {
+            id: profile.id.clone(),
+            status: if errors.is_empty() {
+                "ready"
+            } else {
+                "blocked"
+            }
+            .to_string(),
+            errors,
+            warnings,
+            recommendations,
+        })
+    }
+
+    fn metrics_path(&self, id: &str) -> PathBuf {
+        self.data_root
+            .join("agents")
+            .join("metrics")
+            .join(format!("{}.json", normalize_agent_id(id)))
+    }
+
+    fn history_path(&self) -> PathBuf {
+        self.data_root
+            .join("agents")
+            .join("history")
+            .join("events.jsonl")
+    }
+
+    fn load_history(&self) -> anyhow::Result<Vec<HistoryEvent>> {
+        let path = self.history_path();
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let mut events = Vec::new();
+        for (index, line) in fs::read_to_string(&path)?.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<HistoryEvent>(line) {
+                Ok(event) => events.push(event),
+                Err(error) => events.push(HistoryEvent {
+                    agent_id: "-".to_string(),
+                    action: "invalid-history-record".to_string(),
+                    summary: format!("{}:{}: {error}", path.display(), index + 1),
+                    metadata: BTreeMap::new(),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                }),
+            }
+        }
+        Ok(events)
+    }
+
+    fn append_history(
+        &self,
+        profile: &AgentProfile,
+        action: &str,
+        path: &Path,
+    ) -> anyhow::Result<()> {
+        let history_path = self.history_path();
+        if let Some(parent) = history_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut metadata = BTreeMap::new();
+        metadata.insert(
+            "path".to_string(),
+            Value::String(path.display().to_string()),
+        );
+        metadata.insert("mode".to_string(), Value::String(profile.mode.clone()));
+        metadata.insert("status".to_string(), metadata_json(profile, "status"));
+        let event = HistoryEvent {
+            agent_id: profile.id.clone(),
+            action: action.to_string(),
+            summary: format!(
+                "{} ({}, mode={})",
+                profile.display_name, profile.id, profile.mode
+            ),
+            metadata,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        };
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&history_path)?;
+        writeln!(file, "{}", serde_json::to_string(&event)?)?;
+        Ok(())
+    }
+
+    fn register_skiller_pack(
+        &self,
+        known_ids: &mut BTreeSet<String>,
+        path: &Path,
+        dry_run: bool,
+    ) -> anyhow::Result<Option<String>> {
+        let pack: SkillerAgentPackOnDisk = serde_yaml::from_str(&fs::read_to_string(path)?)?;
+        let id = normalize_agent_id(&pack.agent_name);
+        if id.is_empty() || known_ids.contains(&id) {
+            return Ok(None);
+        }
+        if !dry_run {
+            let prompt = if pack.system_prompt_material.trim().is_empty() {
+                format!(
+                    "You are {}. Operate as a Skiller-generated specialist agent for source-grounded technical work. Use selected Skiller skills as evidence, respect runtime policy, cite sources when possible, and escalate unsupported or unsafe requests.",
+                    pack.agent_name
+                )
+            } else {
+                pack.system_prompt_material.clone()
+            };
+            let mut profile = AgentProfile::new(&id, &pack.agent_name, prompt)?;
+            profile.mode = "skiller".to_string();
+            profile.description = if pack.description.trim().is_empty() {
+                format!(
+                    "Skiller-generated agent pack loaded from {}",
+                    path.display()
+                )
+            } else {
+                pack.description.clone()
+            };
+            profile.enabled_skills = pack.skill_ids.clone();
+            profile.enabled_tools = pack
+                .tool_permissions
+                .iter()
+                .filter_map(|permission| permission.split(':').next())
+                .map(str::trim)
+                .filter(|tool| !tool.is_empty())
+                .map(str::to_string)
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            profile.memory_policy = if pack.memory_policy.trim().is_empty() {
+                "agent-scoped".to_string()
+            } else {
+                pack.memory_policy.clone()
+            };
+            profile
+                .metadata
+                .insert("registered_identity".to_string(), json!(true));
+            profile
+                .metadata
+                .insert("identity_source".to_string(), json!("skiller-agent-pack"));
+            profile.metadata.insert(
+                "artifact_path".to_string(),
+                json!(path.display().to_string()),
+            );
+            profile.metadata.insert(
+                "source_bundle_ids".to_string(),
+                json!(pack.source_bundle_ids),
+            );
+            profile.metadata.insert(
+                "source_bundle_name".to_string(),
+                json!(pack.source_bundle_name),
+            );
+            profile.metadata.insert(
+                "source_bundle_version".to_string(),
+                json!(pack.source_bundle_version),
+            );
+            touch_metadata(&mut profile, "register-skiller-pack");
+            let saved = self.store.save(&profile)?;
+            self.append_history(&profile, "register-skiller-pack", &saved)?;
+        }
+        known_ids.insert(id.clone());
+        Ok(Some(id))
+    }
+
+    fn register_skiller_proposals(
+        &self,
+        known_ids: &mut BTreeSet<String>,
+        index_path: &Path,
+        dry_run: bool,
+    ) -> anyhow::Result<Vec<String>> {
+        let index: skiller::agents::AgentProposalIndex =
+            serde_yaml::from_str(&fs::read_to_string(index_path)?)?;
+        let base = index_path.parent().unwrap_or_else(|| Path::new("."));
+        let mut created = Vec::new();
+        for entry in &index.proposals {
+            if entry.file.contains("..") || Path::new(&entry.file).is_absolute() {
+                continue;
+            }
+            let proposal_path = base.join(&entry.file);
+            let proposal: skiller::models::AgentProfileProposal =
+                serde_yaml::from_str(&fs::read_to_string(&proposal_path)?)?;
+            let id = normalize_agent_id(&proposal.agent_id);
+            if id.is_empty() || known_ids.contains(&id) {
+                continue;
+            }
+            if !dry_run {
+                let prompt = format!(
+                    "You are {}.\n\nPurpose: {}\n\nRuntime context policy: {}\nReview policy: {}\nEscalation policy: {}\n\nRecommended Skiller skills:\n{}",
+                    proposal.agent_name,
+                    proposal.agent_purpose,
+                    proposal.runtime_context_policy,
+                    proposal.review_policy,
+                    proposal.escalation_policy,
+                    proposal
+                        .recommended_skills
+                        .iter()
+                        .map(|skill| format!("- {skill}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                );
+                let mut profile = AgentProfile::new(&id, &proposal.agent_name, prompt)?;
+                profile.mode = "skiller".to_string();
+                profile.description = proposal.agent_purpose.clone();
+                profile.enabled_skills = proposal.recommended_skills.clone();
+                profile.enabled_tools = proposal.required_tools.clone();
+                profile.memory_policy = "agent-scoped".to_string();
+                profile
+                    .metadata
+                    .insert("registered_identity".to_string(), json!(true));
+                profile.metadata.insert(
+                    "identity_source".to_string(),
+                    json!("skiller-agent-proposal"),
+                );
+                profile.metadata.insert(
+                    "artifact_path".to_string(),
+                    json!(proposal_path.display().to_string()),
+                );
+                profile
+                    .metadata
+                    .insert("source_bundle_id".to_string(), json!(index.bundle_id));
+                profile
+                    .metadata
+                    .insert("source_bundle_name".to_string(), json!(index.bundle_name));
+                profile.metadata.insert(
+                    "ready_for_packaging".to_string(),
+                    json!(proposal.proposal_readiness.ready_for_packaging),
+                );
+                profile.metadata.insert(
+                    "ready_for_default_use_candidate".to_string(),
+                    json!(proposal.proposal_readiness.ready_for_default_use_candidate),
+                );
+                touch_metadata(&mut profile, "register-skiller-proposal");
+                let saved = self.store.save(&profile)?;
+                self.append_history(&profile, "register-skiller-proposal", &saved)?;
+            }
+            known_ids.insert(id.clone());
+            created.push(id);
+        }
+        Ok(created)
     }
 
     fn create_interactive(&self, id: &str) -> anyhow::Result<()> {
@@ -1102,6 +2289,7 @@ impl AgentRegistryAdmin {
         profile.updated_at = chrono::Utc::now();
         touch_metadata(&mut profile, action);
         let path = self.store.save(&profile)?;
+        self.append_history(&profile, action, &path)?;
         print_saved(&profile, &path, json_output)
     }
 
@@ -1133,6 +2321,189 @@ fn print_saved(profile: &AgentProfile, path: &Path, json_output: bool) -> anyhow
         );
     }
     Ok(())
+}
+
+fn print_tui_help() {
+    println!(
+        "commands:\n  list [--long]\n  show <id>\n  templates [id]\n  register [--dry-run]\n  validate [id]\n  doctor\n  create <id>\n  create-template <mode> <id>\n  edit <id>\n  status <id> <draft|active|paused|deprecated|archived|broken>\n  tags <id> <tag...>\n  allow-tool <id> <tool> / revoke-tool <id> <tool>\n  enable-skill <id> <skill> / disable-skill <id> <skill>\n  bind-usrl <id> <contract> / unbind-usrl <id> <contract>\n  compare <left> <right>\n  metrics <id>\n  history [id]\n  delete <id>\n  paths\n  quit"
+    );
+}
+
+fn print_validation_report(report: &ValidationReport) {
+    println!("\nValidation {}: {}", report.id, report.status);
+    if report.errors.is_empty() && report.warnings.is_empty() && report.recommendations.is_empty() {
+        println!("  ok");
+        return;
+    }
+    for issue in &report.errors {
+        println!("  ERROR {}: {}", issue.field, issue.message);
+    }
+    for issue in &report.warnings {
+        println!("  WARN  {}: {}", issue.field, issue.message);
+    }
+    for issue in &report.recommendations {
+        println!("  REC   {}: {}", issue.field, issue.message);
+    }
+}
+
+fn print_metrics_report(report: &MetricsReport) {
+    println!("# Metrics: {}", report.id);
+    println!("path: {}", report.path.display());
+    println!("tasks_completed: {}", report.metrics.tasks_completed);
+    println!("tasks_failed: {}", report.metrics.tasks_failed);
+    println!("tasks_cancelled: {}", report.metrics.tasks_cancelled);
+    println!(
+        "task_success_rate: {}",
+        percent_or_dash(report.task_success_rate)
+    );
+    println!(
+        "verification_success_rate: {}",
+        percent_or_dash(report.verification_success_rate)
+    );
+    println!("scope_violations: {}", report.metrics.scope_violations);
+    println!("follow_up_fixes: {}", report.metrics.follow_up_fixes);
+    println!("retries: {}", report.metrics.retries);
+    if !report.metrics.capability_scores.is_empty() {
+        println!("capability_scores:");
+        for (name, score) in &report.metrics.capability_scores {
+            println!("  {name}: {score:.2}");
+        }
+    }
+    for warning in &report.warnings {
+        println!("warning: {warning}");
+    }
+}
+
+fn print_comparison(comparison: &AgentComparison) {
+    println!(
+        "# Compare {} -> {}",
+        comparison.left_id, comparison.right_id
+    );
+    if comparison.differences.is_empty() {
+        println!("No differences in compared fields.");
+        return;
+    }
+    for diff in &comparison.differences {
+        println!("\n## {}", diff.field);
+        println!("left: {}", compact_json(&diff.left));
+        println!("right: {}", compact_json(&diff.right));
+    }
+}
+
+fn compact_json(value: &Value) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "<unprintable>".to_string())
+}
+
+fn issue(severity: &str, field: &str, message: impl Into<String>) -> ValidationIssue {
+    ValidationIssue {
+        severity: severity.to_string(),
+        field: field.to_string(),
+        message: message.into(),
+    }
+}
+
+fn ratio(part: u64, total: u64) -> Option<f64> {
+    if total == 0 {
+        None
+    } else {
+        Some(part as f64 / total as f64)
+    }
+}
+
+fn percent_or_dash(value: Option<f64>) -> String {
+    value
+        .map(|value| format!("{:.1}%", value * 100.0))
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn push_diff(differences: &mut Vec<FieldDifference>, field: &str, left: Value, right: Value) {
+    if left != right {
+        differences.push(FieldDifference {
+            field: field.to_string(),
+            left,
+            right,
+        });
+    }
+}
+
+fn metadata_json(profile: &AgentProfile, key: &str) -> Value {
+    profile.metadata.get(key).cloned().unwrap_or(Value::Null)
+}
+
+fn prompt_digest(prompt: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(prompt.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+fn secret_like(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    let patterns = [
+        "api_key",
+        "apikey",
+        "secret_key",
+        "access_token",
+        "refresh_token",
+        "private key",
+        "-----begin",
+        "password=",
+        "authorization: bearer",
+    ];
+    patterns.iter().any(|pattern| lower.contains(pattern))
+}
+
+fn find_skiller_agent_artifacts(
+    cwd: &Path,
+    data_root: &Path,
+) -> Vec<anyhow::Result<SkillerAgentArtifact>> {
+    let roots = [
+        cwd.join(".vegvisir").join("agent-packs"),
+        cwd.join(".vegvisir").join("skiller"),
+        cwd.join(".vegvisir").join("skiller-agent-packs"),
+        data_root.join("agent-packs"),
+        data_root.join("skiller"),
+        data_root.join("skiller-agent-packs"),
+    ];
+    let mut artifacts = Vec::new();
+    let mut seen = BTreeSet::new();
+    for root in roots {
+        collect_skiller_agent_artifacts(&root, 6, &mut seen, &mut artifacts);
+    }
+    artifacts
+}
+
+fn collect_skiller_agent_artifacts(
+    path: &Path,
+    remaining_depth: usize,
+    seen: &mut BTreeSet<PathBuf>,
+    artifacts: &mut Vec<anyhow::Result<SkillerAgentArtifact>>,
+) {
+    if remaining_depth == 0 || !path.exists() {
+        return;
+    }
+    let Ok(metadata) = fs::metadata(path) else {
+        artifacts.push(Err(anyhow::anyhow!("could not inspect {}", path.display())));
+        return;
+    };
+    if metadata.is_file() {
+        match path.file_name().and_then(|name| name.to_str()) {
+            Some("agent-pack.yaml") if seen.insert(path.to_path_buf()) => {
+                artifacts.push(Ok(SkillerAgentArtifact::Pack(path.to_path_buf())))
+            }
+            Some("agent-proposals-index.yaml") if seen.insert(path.to_path_buf()) => {
+                artifacts.push(Ok(SkillerAgentArtifact::ProposalIndex(path.to_path_buf())))
+            }
+            _ => {}
+        }
+        return;
+    }
+    let Ok(entries) = fs::read_dir(path) else {
+        artifacts.push(Err(anyhow::anyhow!("could not list {}", path.display())));
+        return;
+    };
+    for entry in entries.flatten() {
+        collect_skiller_agent_artifacts(&entry.path(), remaining_depth - 1, seen, artifacts);
+    }
 }
 
 fn print_profile(profile: &AgentProfile) {
@@ -1566,6 +2937,26 @@ mod tests {
     }
 
     #[test]
+    fn cli_global_workspace_and_scope_workspace_scope_do_not_collide() {
+        let cli = Cli::parse_from([
+            "vegvisir-agent-admin",
+            "--workspace",
+            "/tmp/workspace",
+            "scope",
+            "engineer",
+            "--workspace-scope",
+            "repo",
+        ]);
+        assert_eq!(cli.workspace, Some(PathBuf::from("/tmp/workspace")));
+        match cli.command {
+            Some(Command::Scope(args)) => {
+                assert_eq!(args.workspace_scope.as_deref(), Some("repo"));
+            }
+            _ => panic!("expected scope command"),
+        }
+    }
+
+    #[test]
     fn template_profile_carries_template_permissions() -> anyhow::Result<()> {
         let profile = profile_from_template("engineer", "build-engineer", Some("Build Engineer"))?;
         assert_eq!(profile.id, "build-engineer");
@@ -1578,7 +2969,7 @@ mod tests {
     #[test]
     fn registry_create_set_and_doctor_flow() -> anyhow::Result<()> {
         let tmp = tempdir()?;
-        let admin = AgentRegistryAdmin::new(tmp.path().to_path_buf())?;
+        let admin = AgentRegistryAdmin::new(tmp.path().join("data"), tmp.path().join("workspace"))?;
         admin.create_template(
             CreateTemplateArgs {
                 mode: "tester".to_string(),
@@ -1599,6 +2990,77 @@ mod tests {
                 .enabled_tools
                 .contains(&"spawn_subagent".to_string())
         );
+        Ok(())
+    }
+
+    #[test]
+    fn validate_status_history_and_register_flow() -> anyhow::Result<()> {
+        let tmp = tempdir()?;
+        let admin = AgentRegistryAdmin::new(tmp.path().join("data"), tmp.path().join("workspace"))?;
+
+        admin.register(
+            RegisterArgs {
+                builtins_only: true,
+                skiller_only: false,
+                dry_run: false,
+            },
+            true,
+        )?;
+        let engineer = admin.store.load("engineer")?;
+        assert_eq!(engineer.mode, "engineer");
+
+        let report = admin.validate_profile(&engineer)?;
+        assert!(
+            report.errors.is_empty(),
+            "unexpected validation errors: {}",
+            serde_json::to_string(&report.errors)?
+        );
+
+        admin.status("engineer", "active".to_string(), true)?;
+        admin.scope(
+            ScopeArgs {
+                id: "engineer".to_string(),
+                primary: Some("implementation".to_string()),
+                secondary: vec!["rust".to_string(), "tests".to_string()],
+                workspace_scope: Some("repo".to_string()),
+                file_scope: vec!["vegvisir/src".to_string()],
+            },
+            true,
+        )?;
+        admin.tags(
+            "engineer",
+            vec!["runtime".to_string(), "coding".to_string()],
+            true,
+        )?;
+        admin.budget(
+            BudgetArgs {
+                id: "engineer".to_string(),
+                max_steps: Some(8),
+                max_tool_calls: Some(20),
+                max_read_bytes: Some(65536),
+                max_output_bytes: Some(16384),
+                allowed_tools: vec!["read_file".to_string(), "run_tests".to_string()],
+                notes: Some("focused engineering work".to_string()),
+                clear: false,
+            },
+            true,
+        )?;
+
+        let profile = admin.store.load("engineer")?;
+        assert_eq!(
+            profile.metadata.get("status").and_then(Value::as_str),
+            Some("active")
+        );
+        assert_eq!(
+            profile
+                .metadata
+                .get("primary_scope")
+                .and_then(Value::as_str),
+            Some("implementation")
+        );
+        assert!(profile.metadata.get("default_work_budget").is_some());
+        let history = admin.load_history()?;
+        assert!(history.iter().any(|event| event.agent_id == "engineer"));
         Ok(())
     }
 }

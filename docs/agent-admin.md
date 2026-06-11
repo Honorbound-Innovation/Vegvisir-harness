@@ -218,22 +218,7 @@ Status: ok
 
 ## Interactive shell
 
-`vegvisir-agent-admin tui` starts a small line-oriented registry editor shell with these commands:
-
-```text
-list
-templates [id]
-show <id>
-create <id>
-create-template <mode> <id>
-delete <id>
-doctor
-paths
-help
-quit
-```
-
-The interactive shell is intentionally minimal. Use the non-interactive subcommands for full field editing and automation.
+`vegvisir-agent-admin tui` starts a line-oriented registry control-plane shell. It is still intentionally lightweight, but it now supports inspection, validation, tuning, lifecycle changes, history, metrics, comparison, and permission-list edits. Use non-interactive subcommands for scripts and reproducible automation.
 
 ## Safety notes
 
@@ -243,3 +228,94 @@ The interactive shell is intentionally minimal. Use the non-interactive subcomma
 - `model clear` or `model -` clears only the model.
 - The binary does not validate provider/model names against live provider credentials; the main runtime validates effective provider/model use when an agent is activated.
 - The binary does not read or write plaintext credentials.
+
+## Registry control-plane commands
+
+The admin binary also implements the broader scoped-agent registry plan:
+
+```text
+vegvisir-agent-admin register [--builtins-only] [--skiller-only] [--dry-run]
+vegvisir-agent-admin validate [id]
+vegvisir-agent-admin status <id> <draft|active|paused|deprecated|archived|broken>
+vegvisir-agent-admin scope <id> [--primary <scope>] [--secondary <a,b>] [--workspace-scope <scope>] [--file-scope <paths>]
+vegvisir-agent-admin tags <id> <tags>
+vegvisir-agent-admin budget <id> [--max-steps N] [--max-tool-calls N] [--max-read-bytes N] [--max-output-bytes N] [--allowed-tools a,b] [--notes <text>]
+vegvisir-agent-admin budget <id> --clear
+vegvisir-agent-admin metrics <id>
+vegvisir-agent-admin compare <left-id> <right-id> [--prompts]
+vegvisir-agent-admin history [id]
+```
+
+`register` synchronizes missing built-in template identities and Skiller-generated agent packs/proposals from known workspace/data-root discovery paths into the normal profile registry. Use `--dry-run` first when auditing a registry.
+
+`validate` performs standalone readiness checks against the shared runtime catalogs where possible:
+
+- required identity and prompt fields
+- normalized ids
+- non-empty CMS scope ids
+- provider/model catalog compatibility
+- known tools from the default tool catalog
+- known skills from workspace/data-root skills
+- known MCP server ids from `mcp.json`
+- secret-like prompt content
+- wildcard tool access warnings
+- missing scope/description recommendations
+
+`status active` refuses to activate a profile with hard validation errors. Other lifecycle states are metadata-only and support operator workflows:
+
+```text
+draft
+active
+paused
+deprecated
+archived
+broken
+```
+
+`scope`, `tags`, and `budget` store operator-facing metadata in the agent profile without changing the runtime schema. These fields are intended for delegation planning, filtering, and future ability/self-improvement workflows.
+
+`metrics` reads optional per-agent metric files from:
+
+```text
+<data-root>/agents/metrics/<agent-id>.json
+```
+
+`history` reads the append-only admin action log at:
+
+```text
+<data-root>/agents/history/events.jsonl
+```
+
+The admin history log records profile-management actions only. It does not record plaintext secrets or provider credentials.
+
+## Richer interactive shell
+
+The `tui` shell is still line-oriented, but now supports core registry-control operations:
+
+```text
+list [--long]
+show <id>
+templates [id]
+register [--dry-run]
+validate [id]
+doctor
+create <id>
+create-template <mode> <id>
+edit <id>
+status <id> <draft|active|paused|deprecated|archived|broken>
+tags <id> <tag...>
+allow-tool <id> <tool>
+revoke-tool <id> <tool>
+enable-skill <id> <skill>
+disable-skill <id> <skill>
+bind-usrl <id> <contract>
+unbind-usrl <id> <contract>
+compare <left> <right>
+metrics <id>
+history [id]
+delete <id>
+paths
+quit
+```
+
+`edit <id>` walks through identity, lifecycle status, scope, tags, provider/model, tool/skill/USRL lists, and prompt replacement. It validates the edited profile before saving and asks for explicit confirmation if validation has hard errors.
