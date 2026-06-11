@@ -229,6 +229,9 @@ Ctrl+C      quit
 F1          toggle help
 F2 / A      open the action menu
 F / Ctrl+F  search agents by id, name, mode, profile text, permissions, and metadata
+E           edit primary scope metadata for the selected agent
+Y           edit memory policy for the selected agent
+B           edit budget max steps for the selected agent
 P           edit provider for the selected agent
 O           edit model for the selected agent
 U           edit comma-separated tool allow-list for the selected agent
@@ -245,9 +248,9 @@ H           show history count
 R           refresh
 ```
 
-The action menu supports validation, metrics, history count, lifecycle status changes, provider/model edits, tool/skill/MCP/USRL permission edits, and tag edits. `status active` still uses the same hard-error validation gate as the CLI command.
+The action menu supports validation, metrics, history count, lifecycle status changes, scope metadata edits, memory-policy edits, budget edits, provider/model edits, tool/skill/MCP/USRL permission edits, and tag edits. `status active` still uses the same hard-error validation gate as the CLI command.
 
-Provider/model/permission/tag edit modes are simple text inputs: type the new value, press `Enter` to save, or press `Esc` to cancel. Provider/model clear markers match the CLI: empty input, `-`, or `clear` means inherit/clear. Clearing the provider also clears the model because model validity is provider-scoped. TUI provider/model edits validate catalog names and provider/model compatibility, but they do not check live provider credentials. Tool, skill, MCP, and USRL edits replace the full comma-separated list. Tool and skill names are validated against the current default tool catalog and workspace/data-root skill catalog before saving. MCP server ids are validated against `<data-root>/mcp.json`. `*` is accepted for tools only when it is the sole entry. Known USRL contract skills are expanded to their declared contract ids when available; otherwise the entered contract ref is stored as-is, matching `/agent bind-usrl` behavior.
+Scope/memory/budget/provider/model/permission/tag edit modes are simple text inputs: type the new value, press `Enter` to save, or press `Esc` to cancel. `E` edits the primary scope directly; the action menu also exposes secondary scopes, workspace scope, file-scope hints, and a clear-scope action. Empty input, `-`, or `clear` removes string scope fields. Empty comma-separated scope lists clear the stored list. `Y` edits the memory policy, and empty input, `-`, or `clear` resets it to `agent-scoped`. `B` edits `default_work_budget.max_steps` directly; the action menu also exposes max tool calls, read/output byte limits, allowed tools, notes, and a clear-budget action. Empty input, `-`, or `clear` removes numeric budget fields and notes; empty allowed-tools input clears the budget tool list. Budget allowed-tools entries are validated against the default tool catalog. Provider/model clear markers match the CLI: empty input, `-`, or `clear` means inherit/clear. Clearing the provider also clears the model because model validity is provider-scoped. TUI provider/model edits validate catalog names and provider/model compatibility, but they do not check live provider credentials. Tool, skill, MCP, and USRL edits replace the full comma-separated list. Tool and skill names are validated against the current default tool catalog and workspace/data-root skill catalog before saving. MCP server ids are validated against `<data-root>/mcp.json`. `*` is accepted for tools only when it is the sole entry. Known USRL contract skills are expanded to their declared contract ids when available; otherwise the entered contract ref is stored as-is, matching `/agent bind-usrl` behavior.
 
 ## Safety notes
 
@@ -326,8 +329,7 @@ create / create-template / design
 clone / import / export / delete
 prompt replacement
 bulk set operations
-single-field permission-list editing is available in the TUI; use CLI for scripted/bulk permission changes
-scope and budget tuning
+single-field permission-list and budget editing is available in the TUI; use CLI for scripted/bulk permission changes
 register / compare / doctor / validate all
 ```
 

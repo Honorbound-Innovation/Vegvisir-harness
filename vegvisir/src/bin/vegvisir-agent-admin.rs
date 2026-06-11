@@ -2113,6 +2113,17 @@ enum AdminTuiMode {
     Search,
     ActionMenu,
     TagsInput,
+    PrimaryScopeInput,
+    SecondaryScopesInput,
+    WorkspaceScopeInput,
+    FileScopeInput,
+    MemoryPolicyInput,
+    BudgetMaxStepsInput,
+    BudgetMaxToolCallsInput,
+    BudgetMaxReadBytesInput,
+    BudgetMaxOutputBytesInput,
+    BudgetAllowedToolsInput,
+    BudgetNotesInput,
     ProviderInput,
     ModelInput,
     ToolsInput,
@@ -2142,6 +2153,19 @@ enum TuiAction {
     ClearMcp,
     EditUsrl,
     ClearUsrl,
+    EditPrimaryScope,
+    EditSecondaryScopes,
+    EditWorkspaceScope,
+    EditFileScope,
+    ClearScopeMetadata,
+    EditMemoryPolicy,
+    EditBudgetMaxSteps,
+    EditBudgetMaxToolCalls,
+    EditBudgetMaxReadBytes,
+    EditBudgetMaxOutputBytes,
+    EditBudgetAllowedTools,
+    EditBudgetNotes,
+    ClearBudget,
     EditTags,
     ClearTags,
 }
@@ -2168,6 +2192,19 @@ impl TuiAction {
             Self::ClearMcp => "Clear allowed MCP servers",
             Self::EditUsrl => "Edit bound USRL contracts",
             Self::ClearUsrl => "Clear bound USRL contracts",
+            Self::EditPrimaryScope => "Edit primary scope",
+            Self::EditSecondaryScopes => "Edit secondary scopes",
+            Self::EditWorkspaceScope => "Edit workspace scope",
+            Self::EditFileScope => "Edit file-scope hints",
+            Self::ClearScopeMetadata => "Clear scope metadata",
+            Self::EditMemoryPolicy => "Edit memory policy",
+            Self::EditBudgetMaxSteps => "Edit budget max steps",
+            Self::EditBudgetMaxToolCalls => "Edit budget max tool calls",
+            Self::EditBudgetMaxReadBytes => "Edit budget max read bytes",
+            Self::EditBudgetMaxOutputBytes => "Edit budget max output bytes",
+            Self::EditBudgetAllowedTools => "Edit budget allowed tools",
+            Self::EditBudgetNotes => "Edit budget notes",
+            Self::ClearBudget => "Clear default work budget",
             Self::EditTags => "Edit tags",
             Self::ClearTags => "Clear tags",
         }
@@ -2204,6 +2241,33 @@ impl TuiAction {
                 "Replace bound USRL contract refs; USRL skill refs are expanded when known."
             }
             Self::ClearUsrl => "Remove all bound USRL contract refs from the selected profile.",
+            Self::EditPrimaryScope => "Set the primary operator scope stored in profile metadata.",
+            Self::EditSecondaryScopes => "Replace comma-separated secondary scope metadata.",
+            Self::EditWorkspaceScope => "Set the workspace/repository scope metadata label.",
+            Self::EditFileScope => "Replace comma-separated file-scope hint metadata.",
+            Self::ClearScopeMetadata => {
+                "Remove primary, secondary, workspace, and file-scope metadata."
+            }
+            Self::EditMemoryPolicy => {
+                "Set the agent memory policy label; empty, '-' or clear resets to agent-scoped."
+            }
+            Self::EditBudgetMaxSteps => {
+                "Set or clear default max_steps for future subagent work budgets."
+            }
+            Self::EditBudgetMaxToolCalls => {
+                "Set or clear default max_tool_calls for future subagent work budgets."
+            }
+            Self::EditBudgetMaxReadBytes => {
+                "Set or clear default max_read_bytes for future subagent work budgets."
+            }
+            Self::EditBudgetMaxOutputBytes => {
+                "Set or clear default max_output_bytes for future subagent work budgets."
+            }
+            Self::EditBudgetAllowedTools => {
+                "Replace default budget allowed_tools after tool catalog validation."
+            }
+            Self::EditBudgetNotes => "Set or clear default work-budget notes.",
+            Self::ClearBudget => "Remove all default work-budget metadata from this profile.",
             Self::EditTags => "Open a comma-separated tag editor for the selected profile.",
             Self::ClearTags => "Remove all tag metadata from the selected profile.",
         }
@@ -2230,6 +2294,19 @@ const TUI_ACTIONS: &[TuiAction] = &[
     TuiAction::ClearMcp,
     TuiAction::EditUsrl,
     TuiAction::ClearUsrl,
+    TuiAction::EditPrimaryScope,
+    TuiAction::EditSecondaryScopes,
+    TuiAction::EditWorkspaceScope,
+    TuiAction::EditFileScope,
+    TuiAction::ClearScopeMetadata,
+    TuiAction::EditMemoryPolicy,
+    TuiAction::EditBudgetMaxSteps,
+    TuiAction::EditBudgetMaxToolCalls,
+    TuiAction::EditBudgetMaxReadBytes,
+    TuiAction::EditBudgetMaxOutputBytes,
+    TuiAction::EditBudgetAllowedTools,
+    TuiAction::EditBudgetNotes,
+    TuiAction::ClearBudget,
     TuiAction::EditTags,
     TuiAction::ClearTags,
 ];
@@ -2255,7 +2332,7 @@ fn run_admin_tui_inner(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
 ) -> anyhow::Result<()> {
     let mut state = AdminTuiState {
-        message: "F/Ctrl+F search, F2/A actions, P provider, O model, U tools, S skills, D MCP, L USRL, T tags, F1 help, ↑/↓ move, Enter/V validate, Esc/Ctrl+C quit"
+        message: "F/Ctrl+F search, F2/A actions, E scope, Y memory, B budget, P provider, O model, U tools, S skills, D MCP, L USRL, T tags, F1 help"
             .to_string(),
         ..Default::default()
     };
@@ -2310,6 +2387,67 @@ fn handle_admin_tui_key(
         AdminTuiMode::TagsInput => {
             return handle_admin_tui_tags_key(admin, state, profiles, key);
         }
+        AdminTuiMode::PrimaryScopeInput => {
+            return handle_admin_tui_primary_scope_key(admin, state, profiles, key);
+        }
+        AdminTuiMode::SecondaryScopesInput => {
+            return handle_admin_tui_secondary_scopes_key(admin, state, profiles, key);
+        }
+        AdminTuiMode::WorkspaceScopeInput => {
+            return handle_admin_tui_workspace_scope_key(admin, state, profiles, key);
+        }
+        AdminTuiMode::FileScopeInput => {
+            return handle_admin_tui_file_scope_key(admin, state, profiles, key);
+        }
+        AdminTuiMode::MemoryPolicyInput => {
+            return handle_admin_tui_memory_policy_key(admin, state, profiles, key);
+        }
+        AdminTuiMode::BudgetMaxStepsInput => {
+            return handle_admin_tui_budget_number_key(
+                admin,
+                state,
+                profiles,
+                key,
+                "max_steps",
+                "max steps",
+            );
+        }
+        AdminTuiMode::BudgetMaxToolCallsInput => {
+            return handle_admin_tui_budget_number_key(
+                admin,
+                state,
+                profiles,
+                key,
+                "max_tool_calls",
+                "max tool calls",
+            );
+        }
+        AdminTuiMode::BudgetMaxReadBytesInput => {
+            return handle_admin_tui_budget_number_key(
+                admin,
+                state,
+                profiles,
+                key,
+                "max_read_bytes",
+                "max read bytes",
+            );
+        }
+        AdminTuiMode::BudgetMaxOutputBytesInput => {
+            return handle_admin_tui_budget_number_key(
+                admin,
+                state,
+                profiles,
+                key,
+                "max_output_bytes",
+                "max output bytes",
+            );
+        }
+        AdminTuiMode::BudgetAllowedToolsInput => {
+            return handle_admin_tui_budget_allowed_tools_key(admin, state, profiles, key);
+        }
+        AdminTuiMode::BudgetNotesInput => {
+            return handle_admin_tui_budget_notes_key(admin, state, profiles, key);
+        }
         AdminTuiMode::ProviderInput => {
             return handle_admin_tui_provider_key(admin, state, profiles, key);
         }
@@ -2349,6 +2487,9 @@ fn handle_admin_tui_key(
                 .min(TUI_ACTIONS.len().saturating_sub(1));
             state.message = "choose an action; Enter applies, Esc cancels".to_string();
         }
+        KeyCode::Char('e') | KeyCode::Char('E') => begin_primary_scope_input(state, profiles),
+        KeyCode::Char('y') | KeyCode::Char('Y') => begin_memory_policy_input(state, profiles),
+        KeyCode::Char('b') | KeyCode::Char('B') => begin_budget_max_steps_input(state, profiles),
         KeyCode::Char('p') | KeyCode::Char('P') => begin_provider_input(state, profiles),
         KeyCode::Char('o') | KeyCode::Char('O') => begin_model_input(state, profiles),
         KeyCode::Char('u') | KeyCode::Char('U') => begin_tools_input(state, profiles),
@@ -2477,6 +2618,295 @@ fn handle_admin_tui_tags_key(
                 state.message = format!("tags updated for {}", profile.id);
             } else {
                 state.message = "no selected agent to tag".to_string();
+            }
+            state.mode = AdminTuiMode::Browse;
+        }
+        KeyCode::Backspace => {
+            state.input.pop();
+        }
+        KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            state.input.push(c);
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_admin_tui_primary_scope_key(
+    admin: &AgentRegistryAdmin,
+    state: &mut AdminTuiState,
+    profiles: &[AgentProfile],
+    key: KeyEvent,
+) -> anyhow::Result<bool> {
+    match key.code {
+        KeyCode::Esc => {
+            state.mode = AdminTuiMode::Browse;
+            state.message = "primary scope edit cancelled".to_string();
+        }
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
+        KeyCode::Enter => {
+            if let Some(profile) = profiles.get(state.selected) {
+                tui_set_metadata_string(
+                    admin,
+                    &profile.id,
+                    "primary_scope",
+                    none_marker(state.input.clone()),
+                    "tui-scope",
+                )?;
+                state.message = format!("primary scope updated for {}", profile.id);
+            } else {
+                state.message = "no selected agent to edit".to_string();
+            }
+            state.mode = AdminTuiMode::Browse;
+        }
+        KeyCode::Backspace => {
+            state.input.pop();
+        }
+        KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            state.input.push(c);
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_admin_tui_secondary_scopes_key(
+    admin: &AgentRegistryAdmin,
+    state: &mut AdminTuiState,
+    profiles: &[AgentProfile],
+    key: KeyEvent,
+) -> anyhow::Result<bool> {
+    match key.code {
+        KeyCode::Esc => {
+            state.mode = AdminTuiMode::Browse;
+            state.message = "secondary scope edit cancelled".to_string();
+        }
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
+        KeyCode::Enter => {
+            if let Some(profile) = profiles.get(state.selected) {
+                tui_set_metadata_list(
+                    admin,
+                    &profile.id,
+                    "secondary_scopes",
+                    clean_list(vec![state.input.clone()]),
+                    "tui-scope",
+                )?;
+                state.message = format!("secondary scopes updated for {}", profile.id);
+            } else {
+                state.message = "no selected agent to edit".to_string();
+            }
+            state.mode = AdminTuiMode::Browse;
+        }
+        KeyCode::Backspace => {
+            state.input.pop();
+        }
+        KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            state.input.push(c);
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_admin_tui_workspace_scope_key(
+    admin: &AgentRegistryAdmin,
+    state: &mut AdminTuiState,
+    profiles: &[AgentProfile],
+    key: KeyEvent,
+) -> anyhow::Result<bool> {
+    match key.code {
+        KeyCode::Esc => {
+            state.mode = AdminTuiMode::Browse;
+            state.message = "workspace scope edit cancelled".to_string();
+        }
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
+        KeyCode::Enter => {
+            if let Some(profile) = profiles.get(state.selected) {
+                tui_set_metadata_string(
+                    admin,
+                    &profile.id,
+                    "workspace_scope",
+                    none_marker(state.input.clone()),
+                    "tui-scope",
+                )?;
+                state.message = format!("workspace scope updated for {}", profile.id);
+            } else {
+                state.message = "no selected agent to edit".to_string();
+            }
+            state.mode = AdminTuiMode::Browse;
+        }
+        KeyCode::Backspace => {
+            state.input.pop();
+        }
+        KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            state.input.push(c);
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_admin_tui_file_scope_key(
+    admin: &AgentRegistryAdmin,
+    state: &mut AdminTuiState,
+    profiles: &[AgentProfile],
+    key: KeyEvent,
+) -> anyhow::Result<bool> {
+    match key.code {
+        KeyCode::Esc => {
+            state.mode = AdminTuiMode::Browse;
+            state.message = "file-scope hint edit cancelled".to_string();
+        }
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
+        KeyCode::Enter => {
+            if let Some(profile) = profiles.get(state.selected) {
+                tui_set_metadata_list(
+                    admin,
+                    &profile.id,
+                    "file_scope_hints",
+                    clean_list(vec![state.input.clone()]),
+                    "tui-scope",
+                )?;
+                state.message = format!("file-scope hints updated for {}", profile.id);
+            } else {
+                state.message = "no selected agent to edit".to_string();
+            }
+            state.mode = AdminTuiMode::Browse;
+        }
+        KeyCode::Backspace => {
+            state.input.pop();
+        }
+        KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            state.input.push(c);
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_admin_tui_memory_policy_key(
+    admin: &AgentRegistryAdmin,
+    state: &mut AdminTuiState,
+    profiles: &[AgentProfile],
+    key: KeyEvent,
+) -> anyhow::Result<bool> {
+    match key.code {
+        KeyCode::Esc => {
+            state.mode = AdminTuiMode::Browse;
+            state.message = "memory policy edit cancelled".to_string();
+        }
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
+        KeyCode::Enter => {
+            if let Some(profile) = profiles.get(state.selected) {
+                let policy =
+                    none_marker(state.input.clone()).unwrap_or_else(|| "agent-scoped".to_string());
+                tui_set_memory_policy(admin, &profile.id, policy.clone())?;
+                state.message = format!("memory policy {}: {}", profile.id, policy);
+            } else {
+                state.message = "no selected agent to edit".to_string();
+            }
+            state.mode = AdminTuiMode::Browse;
+        }
+        KeyCode::Backspace => {
+            state.input.pop();
+        }
+        KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            state.input.push(c);
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_admin_tui_budget_number_key(
+    admin: &AgentRegistryAdmin,
+    state: &mut AdminTuiState,
+    profiles: &[AgentProfile],
+    key: KeyEvent,
+    budget_key: &str,
+    label: &str,
+) -> anyhow::Result<bool> {
+    match key.code {
+        KeyCode::Esc => {
+            state.mode = AdminTuiMode::Browse;
+            state.message = format!("budget {label} edit cancelled");
+        }
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
+        KeyCode::Enter => {
+            if let Some(profile) = profiles.get(state.selected) {
+                let value = parse_optional_u64_input(&state.input, label)?;
+                tui_set_budget_u64(admin, &profile.id, budget_key, value)?;
+                state.message = match value {
+                    Some(value) => format!("budget {label} {}: {}", profile.id, value),
+                    None => format!("budget {label} cleared for {}", profile.id),
+                };
+            } else {
+                state.message = "no selected agent to edit".to_string();
+            }
+            state.mode = AdminTuiMode::Browse;
+        }
+        KeyCode::Backspace => {
+            state.input.pop();
+        }
+        KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            state.input.push(c);
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_admin_tui_budget_allowed_tools_key(
+    admin: &AgentRegistryAdmin,
+    state: &mut AdminTuiState,
+    profiles: &[AgentProfile],
+    key: KeyEvent,
+) -> anyhow::Result<bool> {
+    match key.code {
+        KeyCode::Esc => {
+            state.mode = AdminTuiMode::Browse;
+            state.message = "budget allowed-tools edit cancelled".to_string();
+        }
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
+        KeyCode::Enter => {
+            if let Some(profile) = profiles.get(state.selected) {
+                let tools = clean_list(vec![state.input.clone()]);
+                tui_set_budget_allowed_tools(admin, &profile.id, tools)?;
+                state.message = format!("budget allowed tools updated for {}", profile.id);
+            } else {
+                state.message = "no selected agent to edit".to_string();
+            }
+            state.mode = AdminTuiMode::Browse;
+        }
+        KeyCode::Backspace => {
+            state.input.pop();
+        }
+        KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            state.input.push(c);
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_admin_tui_budget_notes_key(
+    admin: &AgentRegistryAdmin,
+    state: &mut AdminTuiState,
+    profiles: &[AgentProfile],
+    key: KeyEvent,
+) -> anyhow::Result<bool> {
+    match key.code {
+        KeyCode::Esc => {
+            state.mode = AdminTuiMode::Browse;
+            state.message = "budget notes edit cancelled".to_string();
+        }
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
+        KeyCode::Enter => {
+            if let Some(profile) = profiles.get(state.selected) {
+                tui_set_budget_notes(admin, &profile.id, none_marker(state.input.clone()))?;
+                state.message = format!("budget notes updated for {}", profile.id);
+            } else {
+                state.message = "no selected agent to edit".to_string();
             }
             state.mode = AdminTuiMode::Browse;
         }
@@ -2708,6 +3138,146 @@ fn begin_tags_input(state: &mut AdminTuiState, profiles: &[AgentProfile]) {
     }
 }
 
+fn begin_primary_scope_input(state: &mut AdminTuiState, profiles: &[AgentProfile]) {
+    if let Some(profile) = profiles.get(state.selected) {
+        state.input = profile
+            .metadata
+            .get("primary_scope")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        state.mode = AdminTuiMode::PrimaryScopeInput;
+        state.message = format!("editing primary scope for {}", profile.id);
+    } else {
+        state.message = "no selected agent to edit".to_string();
+    }
+}
+
+fn begin_secondary_scopes_input(state: &mut AdminTuiState, profiles: &[AgentProfile]) {
+    if let Some(profile) = profiles.get(state.selected) {
+        state.input = metadata_string_list(profile, "secondary_scopes").join(", ");
+        state.mode = AdminTuiMode::SecondaryScopesInput;
+        state.message = format!("editing secondary scopes for {}", profile.id);
+    } else {
+        state.message = "no selected agent to edit".to_string();
+    }
+}
+
+fn begin_workspace_scope_input(state: &mut AdminTuiState, profiles: &[AgentProfile]) {
+    if let Some(profile) = profiles.get(state.selected) {
+        state.input = profile
+            .metadata
+            .get("workspace_scope")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        state.mode = AdminTuiMode::WorkspaceScopeInput;
+        state.message = format!("editing workspace scope for {}", profile.id);
+    } else {
+        state.message = "no selected agent to edit".to_string();
+    }
+}
+
+fn begin_file_scope_input(state: &mut AdminTuiState, profiles: &[AgentProfile]) {
+    if let Some(profile) = profiles.get(state.selected) {
+        state.input = metadata_string_list(profile, "file_scope_hints").join(", ");
+        state.mode = AdminTuiMode::FileScopeInput;
+        state.message = format!("editing file-scope hints for {}", profile.id);
+    } else {
+        state.message = "no selected agent to edit".to_string();
+    }
+}
+
+fn begin_memory_policy_input(state: &mut AdminTuiState, profiles: &[AgentProfile]) {
+    if let Some(profile) = profiles.get(state.selected) {
+        state.input = profile.memory_policy.clone();
+        state.mode = AdminTuiMode::MemoryPolicyInput;
+        state.message = format!("editing memory policy for {}", profile.id);
+    } else {
+        state.message = "no selected agent to edit".to_string();
+    }
+}
+
+fn begin_budget_max_steps_input(state: &mut AdminTuiState, profiles: &[AgentProfile]) {
+    begin_budget_number_input(
+        state,
+        profiles,
+        "max_steps",
+        AdminTuiMode::BudgetMaxStepsInput,
+        "max steps",
+    );
+}
+
+fn begin_budget_max_tool_calls_input(state: &mut AdminTuiState, profiles: &[AgentProfile]) {
+    begin_budget_number_input(
+        state,
+        profiles,
+        "max_tool_calls",
+        AdminTuiMode::BudgetMaxToolCallsInput,
+        "max tool calls",
+    );
+}
+
+fn begin_budget_max_read_bytes_input(state: &mut AdminTuiState, profiles: &[AgentProfile]) {
+    begin_budget_number_input(
+        state,
+        profiles,
+        "max_read_bytes",
+        AdminTuiMode::BudgetMaxReadBytesInput,
+        "max read bytes",
+    );
+}
+
+fn begin_budget_max_output_bytes_input(state: &mut AdminTuiState, profiles: &[AgentProfile]) {
+    begin_budget_number_input(
+        state,
+        profiles,
+        "max_output_bytes",
+        AdminTuiMode::BudgetMaxOutputBytesInput,
+        "max output bytes",
+    );
+}
+
+fn begin_budget_number_input(
+    state: &mut AdminTuiState,
+    profiles: &[AgentProfile],
+    key: &str,
+    mode: AdminTuiMode,
+    label: &str,
+) {
+    if let Some(profile) = profiles.get(state.selected) {
+        state.input = budget_u64(profile, key)
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_string());
+        state.mode = mode;
+        state.message = format!("editing budget {label} for {}", profile.id);
+    } else {
+        state.message = "no selected agent to edit".to_string();
+    }
+}
+
+fn begin_budget_allowed_tools_input(state: &mut AdminTuiState, profiles: &[AgentProfile]) {
+    if let Some(profile) = profiles.get(state.selected) {
+        state.input = budget_string_list(profile, "allowed_tools").join(", ");
+        state.mode = AdminTuiMode::BudgetAllowedToolsInput;
+        state.message = format!("editing budget allowed tools for {}", profile.id);
+    } else {
+        state.message = "no selected agent to edit".to_string();
+    }
+}
+
+fn begin_budget_notes_input(state: &mut AdminTuiState, profiles: &[AgentProfile]) {
+    if let Some(profile) = profiles.get(state.selected) {
+        state.input = budget_string(profile, "notes")
+            .map(str::to_string)
+            .unwrap_or_else(|| "-".to_string());
+        state.mode = AdminTuiMode::BudgetNotesInput;
+        state.message = format!("editing budget notes for {}", profile.id);
+    } else {
+        state.message = "no selected agent to edit".to_string();
+    }
+}
+
 fn begin_provider_input(state: &mut AdminTuiState, profiles: &[AgentProfile]) {
     if let Some(profile) = profiles.get(state.selected) {
         state.input = profile
@@ -2857,6 +3427,25 @@ fn apply_tui_action(
             tui_set_usrl_contracts(admin, &profile.id, Vec::new())?;
             state.message = format!("USRL contracts cleared for {}", profile.id);
         }
+        TuiAction::EditPrimaryScope => begin_primary_scope_input(state, profiles),
+        TuiAction::EditSecondaryScopes => begin_secondary_scopes_input(state, profiles),
+        TuiAction::EditWorkspaceScope => begin_workspace_scope_input(state, profiles),
+        TuiAction::EditFileScope => begin_file_scope_input(state, profiles),
+        TuiAction::ClearScopeMetadata => {
+            tui_clear_scope_metadata(admin, &profile.id)?;
+            state.message = format!("scope metadata cleared for {}", profile.id);
+        }
+        TuiAction::EditMemoryPolicy => begin_memory_policy_input(state, profiles),
+        TuiAction::EditBudgetMaxSteps => begin_budget_max_steps_input(state, profiles),
+        TuiAction::EditBudgetMaxToolCalls => begin_budget_max_tool_calls_input(state, profiles),
+        TuiAction::EditBudgetMaxReadBytes => begin_budget_max_read_bytes_input(state, profiles),
+        TuiAction::EditBudgetMaxOutputBytes => begin_budget_max_output_bytes_input(state, profiles),
+        TuiAction::EditBudgetAllowedTools => begin_budget_allowed_tools_input(state, profiles),
+        TuiAction::EditBudgetNotes => begin_budget_notes_input(state, profiles),
+        TuiAction::ClearBudget => {
+            tui_clear_budget(admin, &profile.id)?;
+            state.message = format!("default work budget cleared for {}", profile.id);
+        }
         TuiAction::EditTags => begin_tags_input(state, profiles),
         TuiAction::ClearTags => {
             tui_set_tags(admin, &profile.id, Vec::new())?;
@@ -2882,6 +3471,172 @@ fn tui_set_status(admin: &AgentRegistryAdmin, id: &str, status: &str) -> anyhow:
         .metadata
         .insert("status".to_string(), Value::String(status.to_string()));
     admin.save_touched_quiet(profile, "tui-status")?;
+    Ok(())
+}
+
+fn tui_set_metadata_string(
+    admin: &AgentRegistryAdmin,
+    id: &str,
+    key: &str,
+    value: Option<String>,
+    action: &str,
+) -> anyhow::Result<()> {
+    let mut profile = admin.store.load(id)?;
+    match value {
+        Some(value) => {
+            profile
+                .metadata
+                .insert(key.to_string(), Value::String(value));
+        }
+        None => {
+            profile.metadata.remove(key);
+        }
+    }
+    admin.save_touched_quiet(profile, action)?;
+    Ok(())
+}
+
+fn tui_set_metadata_list(
+    admin: &AgentRegistryAdmin,
+    id: &str,
+    key: &str,
+    values: Vec<String>,
+    action: &str,
+) -> anyhow::Result<()> {
+    let mut profile = admin.store.load(id)?;
+    if values.is_empty() {
+        profile.metadata.remove(key);
+    } else {
+        profile.metadata.insert(key.to_string(), json!(values));
+    }
+    admin.save_touched_quiet(profile, action)?;
+    Ok(())
+}
+
+fn tui_clear_scope_metadata(admin: &AgentRegistryAdmin, id: &str) -> anyhow::Result<()> {
+    let mut profile = admin.store.load(id)?;
+    profile.metadata.remove("primary_scope");
+    profile.metadata.remove("secondary_scopes");
+    profile.metadata.remove("workspace_scope");
+    profile.metadata.remove("file_scope_hints");
+    admin.save_touched_quiet(profile, "tui-scope")?;
+    Ok(())
+}
+
+fn tui_set_memory_policy(
+    admin: &AgentRegistryAdmin,
+    id: &str,
+    policy: String,
+) -> anyhow::Result<()> {
+    let trimmed = policy.trim();
+    if trimmed.is_empty() {
+        bail!("memory policy must not be empty");
+    }
+    let mut profile = admin.store.load(id)?;
+    profile.memory_policy = trimmed.to_string();
+    admin.save_touched_quiet(profile, "tui-memory-policy")?;
+    Ok(())
+}
+
+fn parse_optional_u64_input(input: &str, label: &str) -> anyhow::Result<Option<u64>> {
+    let Some(value) = none_marker(input.to_string()) else {
+        return Ok(None);
+    };
+    value
+        .parse::<u64>()
+        .map(Some)
+        .with_context(|| format!("budget {label} must be a non-negative integer, '-' or clear"))
+}
+
+fn tui_update_budget_metadata<F>(
+    admin: &AgentRegistryAdmin,
+    id: &str,
+    update: F,
+) -> anyhow::Result<()>
+where
+    F: FnOnce(&mut serde_json::Map<String, Value>) -> anyhow::Result<()>,
+{
+    let mut profile = admin.store.load(id)?;
+    let mut budget = profile
+        .metadata
+        .get("default_work_budget")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    if !budget.is_object() {
+        budget = json!({});
+    }
+    {
+        let map = budget.as_object_mut().expect("object ensured");
+        update(map)?;
+    }
+    if budget.as_object().map(|map| map.is_empty()).unwrap_or(true) {
+        profile.metadata.remove("default_work_budget");
+    } else {
+        profile
+            .metadata
+            .insert("default_work_budget".to_string(), budget);
+    }
+    admin.save_touched_quiet(profile, "tui-budget")?;
+    Ok(())
+}
+
+fn tui_set_budget_u64(
+    admin: &AgentRegistryAdmin,
+    id: &str,
+    key: &str,
+    value: Option<u64>,
+) -> anyhow::Result<()> {
+    tui_update_budget_metadata(admin, id, |budget| {
+        match value {
+            Some(value) => {
+                budget.insert(key.to_string(), json!(value));
+            }
+            None => {
+                budget.remove(key);
+            }
+        }
+        Ok(())
+    })
+}
+
+fn tui_set_budget_allowed_tools(
+    admin: &AgentRegistryAdmin,
+    id: &str,
+    tools: Vec<String>,
+) -> anyhow::Result<()> {
+    validate_tool_allow_list(&tools)?;
+    tui_update_budget_metadata(admin, id, |budget| {
+        if tools.is_empty() {
+            budget.remove("allowed_tools");
+        } else {
+            budget.insert("allowed_tools".to_string(), json!(tools));
+        }
+        Ok(())
+    })
+}
+
+fn tui_set_budget_notes(
+    admin: &AgentRegistryAdmin,
+    id: &str,
+    notes: Option<String>,
+) -> anyhow::Result<()> {
+    tui_update_budget_metadata(admin, id, |budget| {
+        match notes {
+            Some(notes) => {
+                budget.insert("notes".to_string(), json!(notes));
+            }
+            None => {
+                budget.remove("notes");
+            }
+        }
+        Ok(())
+    })
+}
+
+fn tui_clear_budget(admin: &AgentRegistryAdmin, id: &str) -> anyhow::Result<()> {
+    let mut profile = admin.store.load(id)?;
+    profile.metadata.remove("default_work_budget");
+    admin.save_touched_quiet(profile, "tui-budget")?;
     Ok(())
 }
 
@@ -3065,7 +3820,11 @@ fn resolve_usrl_contract_refs_for_admin(
 
 fn tui_set_tags(admin: &AgentRegistryAdmin, id: &str, tags: Vec<String>) -> anyhow::Result<()> {
     let mut profile = admin.store.load(id)?;
-    profile.metadata.insert("tags".to_string(), json!(tags));
+    if tags.is_empty() {
+        profile.metadata.remove("tags");
+    } else {
+        profile.metadata.insert("tags".to_string(), json!(tags));
+    }
     admin.save_touched_quiet(profile, "tui-tags")?;
     Ok(())
 }
@@ -3248,20 +4007,25 @@ fn draw_admin_tui(
             ),
             admin_tui_kv_line(
                 "secondary scopes",
-                &profile
-                    .metadata
-                    .get("secondary_scopes")
-                    .and_then(Value::as_array)
-                    .map(|items| {
-                        items
-                            .iter()
-                            .filter_map(Value::as_str)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    })
-                    .unwrap_or_else(|| "-".to_string()),
+                &metadata_list_or_dash(profile, "secondary_scopes"),
                 TUI_FG,
             ),
+            admin_tui_kv_line(
+                "workspace scope",
+                profile
+                    .metadata
+                    .get("workspace_scope")
+                    .and_then(Value::as_str)
+                    .unwrap_or("-"),
+                TUI_FG,
+            ),
+            admin_tui_kv_line(
+                "file-scope hints",
+                &metadata_list_or_dash(profile, "file_scope_hints"),
+                TUI_FG,
+            ),
+            admin_tui_kv_line("memory policy", &profile.memory_policy, TUI_GREEN),
+            admin_tui_kv_line("budget", &budget_summary(profile), TUI_AMBER),
             admin_tui_kv_line(
                 "tags",
                 &profile
@@ -3354,6 +4118,105 @@ fn draw_admin_tui(
             " Edit tags ",
             "tags",
             "Comma-separated tags. Enter saves, Esc cancels.",
+        ),
+        AdminTuiMode::PrimaryScopeInput => render_text_input(
+            frame,
+            area,
+            state,
+            selected_id,
+            " Edit primary scope ",
+            "primary scope",
+            "Primary scope label. Empty, '-' or 'clear' removes it.",
+        ),
+        AdminTuiMode::SecondaryScopesInput => render_text_input(
+            frame,
+            area,
+            state,
+            selected_id,
+            " Edit secondary scopes ",
+            "secondary scopes",
+            "Comma-separated secondary scope labels. Empty input clears the list.",
+        ),
+        AdminTuiMode::WorkspaceScopeInput => render_text_input(
+            frame,
+            area,
+            state,
+            selected_id,
+            " Edit workspace scope ",
+            "workspace scope",
+            "Workspace/repository scope label. Empty, '-' or 'clear' removes it.",
+        ),
+        AdminTuiMode::FileScopeInput => render_text_input(
+            frame,
+            area,
+            state,
+            selected_id,
+            " Edit file-scope hints ",
+            "file-scope hints",
+            "Comma-separated workspace-relative file-scope hints. Empty input clears the list.",
+        ),
+        AdminTuiMode::MemoryPolicyInput => render_text_input(
+            frame,
+            area,
+            state,
+            selected_id,
+            " Edit memory policy ",
+            "memory policy",
+            "Memory policy label. Empty, '-' or 'clear' resets to agent-scoped.",
+        ),
+        AdminTuiMode::BudgetMaxStepsInput => render_text_input(
+            frame,
+            area,
+            state,
+            selected_id,
+            " Edit budget max steps ",
+            "max steps",
+            "Default max_steps for subagents. Empty, '-' or 'clear' removes it.",
+        ),
+        AdminTuiMode::BudgetMaxToolCallsInput => render_text_input(
+            frame,
+            area,
+            state,
+            selected_id,
+            " Edit budget max tool calls ",
+            "max tool calls",
+            "Default max_tool_calls for subagents. Empty, '-' or 'clear' removes it.",
+        ),
+        AdminTuiMode::BudgetMaxReadBytesInput => render_text_input(
+            frame,
+            area,
+            state,
+            selected_id,
+            " Edit budget max read bytes ",
+            "max read bytes",
+            "Default max_read_bytes for subagents. Empty, '-' or 'clear' removes it.",
+        ),
+        AdminTuiMode::BudgetMaxOutputBytesInput => render_text_input(
+            frame,
+            area,
+            state,
+            selected_id,
+            " Edit budget max output bytes ",
+            "max output bytes",
+            "Default max_output_bytes for subagents. Empty, '-' or 'clear' removes it.",
+        ),
+        AdminTuiMode::BudgetAllowedToolsInput => render_text_input(
+            frame,
+            area,
+            state,
+            selected_id,
+            " Edit budget allowed tools ",
+            "allowed tools",
+            "Comma-separated default budget allowed_tools. Empty input clears the list.",
+        ),
+        AdminTuiMode::BudgetNotesInput => render_text_input(
+            frame,
+            area,
+            state,
+            selected_id,
+            " Edit budget notes ",
+            "notes",
+            "Default work-budget notes. Empty, '-' or 'clear' removes them.",
         ),
         AdminTuiMode::ProviderInput => render_text_input(
             frame,
@@ -3457,9 +4320,16 @@ fn render_action_menu(frame: &mut ratatui::Frame<'_>, area: Rect, state: &AdminT
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(4), Constraint::Length(3)])
         .split(inner);
+    let visible_rows = usize::from(chunks[0].height.saturating_sub(2)).max(1);
+    let mut start = state.action_selected.saturating_sub(visible_rows / 2);
+    if start + visible_rows > TUI_ACTIONS.len() {
+        start = TUI_ACTIONS.len().saturating_sub(visible_rows);
+    }
     let items = TUI_ACTIONS
         .iter()
         .enumerate()
+        .skip(start)
+        .take(visible_rows)
         .map(|(idx, action)| {
             let selected = idx == state.action_selected;
             let style = if selected {
@@ -3472,6 +4342,7 @@ fn render_action_menu(frame: &mut ratatui::Frame<'_>, area: Rect, state: &AdminT
             };
             ListItem::new(Line::from(vec![
                 Span::styled(if selected { "❯ " } else { "  " }, style),
+                Span::styled(format!("{:>2}/{} ", idx + 1, TUI_ACTIONS.len()), style),
                 Span::styled(action.label(), style),
             ]))
         })
@@ -3646,6 +4517,9 @@ fn tui_help_text() -> &'static str {
   F1          toggle help
   F2 / A      open conventional action menu
   F / Ctrl+F  search agents by id, name, mode, profile text, permissions, and metadata
+  E           edit primary scope metadata for selected agent
+  Y           edit memory policy for selected agent
+  B           edit budget max steps for selected agent
   P           edit provider for selected agent ('-' or 'clear' inherits)
   O           edit model for selected agent ('-' or 'clear' inherits)
   U           edit comma-separated tool allow-list for selected agent
@@ -3666,7 +4540,7 @@ Action menu:
   Enter       apply selected action
   Esc         cancel
 
-Provider/model/permission/tag edit modes:
+Scope/memory/budget/provider/model/permission/tag edit modes:
   type text   edit the selected field
   Enter       save the field
   Esc         cancel
@@ -3677,8 +4551,8 @@ Search mode:
   Esc         cancel and exit
 
 Create, clone, delete, import, export, prompt replacement, bulk set operations,
-scope/budget tuning, and registry-wide operations still use explicit
-vegvisir-agent-admin CLI subcommands outside the TUI. There is no ':' command
+and registry-wide operations still use explicit vegvisir-agent-admin CLI
+subcommands outside the TUI. There is no ':' command
 entry in this TUI."
 }
 
@@ -3699,6 +4573,97 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+fn metadata_string_list(profile: &AgentProfile, key: &str) -> Vec<String> {
+    profile
+        .metadata
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn metadata_list_or_dash(profile: &AgentProfile, key: &str) -> String {
+    let values = metadata_string_list(profile, key);
+    if values.is_empty() {
+        "-".to_string()
+    } else {
+        values.join(", ")
+    }
+}
+
+fn budget_value<'a>(profile: &'a AgentProfile, key: &str) -> Option<&'a Value> {
+    profile
+        .metadata
+        .get("default_work_budget")
+        .and_then(Value::as_object)
+        .and_then(|budget| budget.get(key))
+}
+
+fn budget_u64(profile: &AgentProfile, key: &str) -> Option<u64> {
+    budget_value(profile, key).and_then(Value::as_u64)
+}
+
+fn budget_string<'a>(profile: &'a AgentProfile, key: &str) -> Option<&'a str> {
+    budget_value(profile, key).and_then(Value::as_str)
+}
+
+fn budget_string_list(profile: &AgentProfile, key: &str) -> Vec<String> {
+    budget_value(profile, key)
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn budget_summary(profile: &AgentProfile) -> String {
+    let Some(budget) = profile
+        .metadata
+        .get("default_work_budget")
+        .and_then(Value::as_object)
+    else {
+        return "-".to_string();
+    };
+    if budget.is_empty() {
+        return "-".to_string();
+    }
+    let mut parts = Vec::new();
+    for (key, label) in [
+        ("max_steps", "steps"),
+        ("max_tool_calls", "calls"),
+        ("max_read_bytes", "read"),
+        ("max_output_bytes", "output"),
+    ] {
+        if let Some(value) = budget.get(key).and_then(Value::as_u64) {
+            parts.push(format!("{label}={value}"));
+        }
+    }
+    let tools = budget_string_list(profile, "allowed_tools");
+    if !tools.is_empty() {
+        parts.push(format!("tools={}", tools.join(",")));
+    }
+    if let Some(notes) = budget.get("notes").and_then(Value::as_str)
+        && !notes.trim().is_empty()
+    {
+        parts.push(format!("notes={}", notes.trim()));
+    }
+    if parts.is_empty() {
+        "-".to_string()
+    } else {
+        parts.join(" ")
+    }
 }
 
 fn profile_tags(profile: &AgentProfile) -> Vec<String> {
@@ -4496,6 +5461,9 @@ mod tests {
     fn tui_help_advertises_action_menu_without_vim_command_mode() {
         let help = tui_help_text();
         assert!(help.contains("F2 / A"));
+        assert!(help.contains("E           edit primary scope metadata"));
+        assert!(help.contains("Y           edit memory policy"));
+        assert!(help.contains("B           edit budget max steps"));
         assert!(help.contains("P           edit provider"));
         assert!(help.contains("O           edit model"));
         assert!(help.contains("U           edit comma-separated tool allow-list"));
@@ -4503,7 +5471,7 @@ mod tests {
         assert!(help.contains("D           edit comma-separated allowed MCP servers"));
         assert!(help.contains("L           edit comma-separated bound USRL contracts"));
         assert!(help.contains("Action menu:"));
-        assert!(help.contains("Provider/model/permission/tag edit modes:"));
+        assert!(help.contains("Scope/memory/budget/provider/model/permission/tag edit modes:"));
         assert!(!help.contains("Vim"));
         assert!(help.contains("There is no ':' command"));
     }
@@ -4526,6 +5494,45 @@ mod tests {
         write_mcp_config(&admin, &["local-docs", "issue-tracker"])?;
 
         tui_set_status(&admin, "qa", "paused")?;
+        tui_set_metadata_string(
+            &admin,
+            "qa",
+            "primary_scope",
+            Some("testing".to_string()),
+            "tui-scope",
+        )?;
+        tui_set_metadata_list(
+            &admin,
+            "qa",
+            "secondary_scopes",
+            clean_list(vec!["rust, cli, rust".to_string()]),
+            "tui-scope",
+        )?;
+        tui_set_metadata_string(
+            &admin,
+            "qa",
+            "workspace_scope",
+            Some("repo".to_string()),
+            "tui-scope",
+        )?;
+        tui_set_metadata_list(
+            &admin,
+            "qa",
+            "file_scope_hints",
+            clean_list(vec!["vegvisir/src, docs".to_string()]),
+            "tui-scope",
+        )?;
+        tui_set_memory_policy(&admin, "qa", "project-scoped".to_string())?;
+        tui_set_budget_u64(&admin, "qa", "max_steps", Some(6))?;
+        tui_set_budget_u64(&admin, "qa", "max_tool_calls", Some(12))?;
+        tui_set_budget_u64(&admin, "qa", "max_read_bytes", Some(32768))?;
+        tui_set_budget_u64(&admin, "qa", "max_output_bytes", Some(8192))?;
+        tui_set_budget_allowed_tools(
+            &admin,
+            "qa",
+            clean_list(vec!["read_file, run_tests, read_file".to_string()]),
+        )?;
+        tui_set_budget_notes(&admin, "qa", Some("focused qa budget".to_string()))?;
         tui_set_provider(&admin, "qa", Some("demo".to_string()))?;
         tui_set_model(&admin, "qa", Some("demo-local".to_string()))?;
         tui_set_tools(
@@ -4562,6 +5569,39 @@ mod tests {
             profile.metadata.get("status").and_then(Value::as_str),
             Some("paused")
         );
+        assert_eq!(
+            profile
+                .metadata
+                .get("primary_scope")
+                .and_then(Value::as_str),
+            Some("testing")
+        );
+        assert_eq!(
+            metadata_string_list(&profile, "secondary_scopes"),
+            vec!["rust".to_string(), "cli".to_string()]
+        );
+        assert_eq!(
+            profile
+                .metadata
+                .get("workspace_scope")
+                .and_then(Value::as_str),
+            Some("repo")
+        );
+        assert_eq!(
+            metadata_string_list(&profile, "file_scope_hints"),
+            vec!["vegvisir/src".to_string(), "docs".to_string()]
+        );
+        assert_eq!(profile.memory_policy, "project-scoped");
+        assert_eq!(budget_u64(&profile, "max_steps"), Some(6));
+        assert_eq!(budget_u64(&profile, "max_tool_calls"), Some(12));
+        assert_eq!(budget_u64(&profile, "max_read_bytes"), Some(32768));
+        assert_eq!(budget_u64(&profile, "max_output_bytes"), Some(8192));
+        assert_eq!(
+            budget_string_list(&profile, "allowed_tools"),
+            vec!["read_file".to_string(), "run_tests".to_string()]
+        );
+        assert_eq!(budget_string(&profile, "notes"), Some("focused qa budget"));
+        assert!(budget_summary(&profile).contains("steps=6"));
         assert_eq!(profile.current_provider.as_deref(), Some("demo"));
         assert_eq!(profile.current_model.as_deref(), Some("demo-local"));
         assert_eq!(
@@ -4589,13 +5629,39 @@ mod tests {
         );
         assert!(tui_set_skills(&admin, "qa", vec!["not-a-skill".to_string()]).is_err());
         assert!(tui_set_mcp_servers(&admin, "qa", vec!["not-a-server".to_string()]).is_err());
+        assert!(
+            tui_set_budget_allowed_tools(&admin, "qa", vec!["not-a-tool".to_string()]).is_err()
+        );
+        assert!(parse_optional_u64_input("not-a-number", "max steps").is_err());
+        assert_eq!(parse_optional_u64_input("clear", "max steps")?, None);
+        tui_set_metadata_string(&admin, "qa", "primary_scope", None, "tui-scope")?;
+        tui_clear_scope_metadata(&admin, "qa")?;
+        tui_set_memory_policy(&admin, "qa", "agent-scoped".to_string())?;
+        tui_set_budget_u64(&admin, "qa", "max_steps", None)?;
+        tui_set_budget_allowed_tools(&admin, "qa", Vec::new())?;
+        tui_set_budget_notes(&admin, "qa", None)?;
+        tui_clear_budget(&admin, "qa")?;
         tui_set_provider(&admin, "qa", None)?;
         let profile = admin.store.load("qa")?;
         assert_eq!(profile.current_provider, None);
         assert_eq!(profile.current_model, None);
+        tui_set_tags(&admin, "qa", Vec::new())?;
+        let profile = admin.store.load("qa")?;
+        assert_eq!(profile.metadata.get("primary_scope"), None);
+        assert_eq!(profile.metadata.get("secondary_scopes"), None);
+        assert_eq!(profile.metadata.get("tags"), None);
+        assert_eq!(profile.metadata.get("default_work_budget"), None);
+        assert_eq!(profile.memory_policy, "agent-scoped");
 
         let history = admin.load_history()?;
         assert!(history.iter().any(|event| event.action == "tui-status"));
+        assert!(history.iter().any(|event| event.action == "tui-scope"));
+        assert!(
+            history
+                .iter()
+                .any(|event| event.action == "tui-memory-policy")
+        );
+        assert!(history.iter().any(|event| event.action == "tui-budget"));
         assert!(history.iter().any(|event| event.action == "tui-provider"));
         assert!(history.iter().any(|event| event.action == "tui-model"));
         assert!(history.iter().any(|event| event.action == "tui-tools"));
