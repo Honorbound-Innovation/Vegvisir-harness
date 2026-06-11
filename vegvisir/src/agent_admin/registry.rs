@@ -6,16 +6,16 @@ use std::{
     time::Duration,
 };
 
+use super::cli::{
+    BudgetArgs, CreateArgs, CreateTemplateArgs, DesignArgs, ListArgs, PromptArgs, RegisterArgs,
+    ScopeArgs, SetArgs,
+};
 use super::*;
-use crate::{
-    core::{
-        AgentProfile, AgentProfileStore, ModelRegistry, ProviderRegistry, load_skill_definitions,
-        normalize_agent_id,
-    },
-    memory::default_vegvisir_data_root,
+use crate::core::{
+    AgentProfile, AgentProfileStore, ModelRegistry, ProviderRegistry, load_skill_definitions,
+    normalize_agent_id,
 };
 use anyhow::{Context, bail};
-use clap::{Args, Parser, Subcommand};
 use crossterm::{
     cursor,
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
@@ -32,493 +32,14 @@ use ratatui::{
 };
 use serde_json::{Value, json};
 
-#[derive(Parser)]
-#[command(
-    name = "vegvisir-agent-admin",
-    bin_name = "vegvisir-agent-admin",
-    about = "Standalone Vegvisir agent registry administration tool"
-)]
-struct Cli {
-    /// Vegvisir data root. Defaults to VEGVISIR_HOME, XDG_DATA_HOME/vegvisir, or ~/.local/share/vegvisir.
-    #[arg(long, global = true)]
-    data_root: Option<PathBuf>,
-    /// Print machine-readable JSON where supported.
-    #[arg(long, global = true)]
-    json: bool,
-    /// Workspace used for workspace-local skills and Skiller agent-pack discovery.
-    #[arg(long, global = true)]
-    workspace: Option<PathBuf>,
-    #[command(subcommand)]
-    command: Option<Command>,
-}
-
-#[derive(Subcommand)]
-enum Command {
-    /// Print registry paths used by this binary.
-    Paths,
-    /// Validate and summarize the agent registry.
-    Doctor,
-    /// Register missing built-in and Skiller-generated agent identities.
-    Register(RegisterArgs),
-    /// Validate one profile, or the whole registry when no id is supplied.
-    Validate { id: Option<String> },
-    /// Show recorded metrics and ability tracking data for one agent.
-    Metrics { id: String },
-    /// Compare two agent profiles.
-    Compare {
-        left_id: String,
-        right_id: String,
-        /// Include full prompt text in the comparison output.
-        #[arg(long)]
-        prompts: bool,
-    },
-    /// Show edit history for an agent, or all agents when no id is supplied.
-    History { id: Option<String> },
-    /// Set lifecycle status metadata. Active status requires validation without hard errors.
-    Status { id: String, status: String },
-    /// Tune scope metadata used by operators and subagent delegation planning.
-    Scope(ScopeArgs),
-    /// Replace tag metadata for filtering and domain specialization.
-    Tags { id: String, tags: Vec<String> },
-    /// Tune default work-budget metadata for future subagent use.
-    Budget(BudgetArgs),
-    /// List or show built-in agent templates.
-    Templates {
-        /// Optional template/mode id to show.
-        id: Option<String>,
-    },
-    /// List registered agents.
-    List(ListArgs),
-    /// Show one agent profile.
-    Show { id: String },
-    /// Create a new agent profile.
-    Create(CreateArgs),
-    /// Create a new profile from a built-in template.
-    #[command(name = "create-template", alias = "from-template")]
-    CreateTemplate(CreateTemplateArgs),
-    /// Design a profile with one command, including permissions and defaults.
-    Design(DesignArgs),
-    /// Update fields on an existing agent profile.
-    Set(SetArgs),
-    /// Set display name.
-    Name { id: String, name: Vec<String> },
-    /// Set mode.
-    Mode { id: String, mode: String },
-    /// Set description.
-    #[command(alias = "description")]
-    Describe {
-        id: String,
-        description: Vec<String>,
-    },
-    /// Set or clear provider. Use '-' or 'clear' to clear provider and model.
-    Provider { id: String, provider: String },
-    /// Set or clear model. Use '-' or 'clear' to clear.
-    Model { id: String, model: String },
-    /// Replace the system prompt from text or --prompt-file.
-    #[command(alias = "system")]
-    Prompt(PromptArgs),
-    /// Allow one tool for an agent. Use '*' only when intentionally unrestricted.
-    #[command(name = "allow-tool", alias = "tool")]
-    AllowTool { id: String, tool: String },
-    /// Revoke one tool from an agent.
-    #[command(name = "revoke-tool")]
-    RevokeTool { id: String, tool: String },
-    /// Replace the tool allow-list.
-    #[command(name = "set-tools")]
-    SetTools { id: String, tools: Vec<String> },
-    /// Enable one skill for an agent.
-    #[command(name = "enable-skill", alias = "skill")]
-    EnableSkill { id: String, skill: String },
-    /// Disable one skill for an agent.
-    #[command(name = "disable-skill")]
-    DisableSkill { id: String, skill: String },
-    /// Replace enabled skills.
-    #[command(name = "set-skills")]
-    SetSkills { id: String, skills: Vec<String> },
-    /// Allow one MCP server for an agent.
-    #[command(name = "allow-mcp", alias = "mcp")]
-    AllowMcp { id: String, server: String },
-    /// Revoke one MCP server from an agent.
-    #[command(name = "revoke-mcp")]
-    RevokeMcp { id: String, server: String },
-    /// Replace allowed MCP servers.
-    #[command(name = "set-mcp")]
-    SetMcp { id: String, servers: Vec<String> },
-    /// Bind a USRL contract reference.
-    #[command(name = "bind-usrl", alias = "usrl")]
-    BindUsrl { id: String, contract: String },
-    /// Unbind a USRL contract reference.
-    #[command(name = "unbind-usrl")]
-    UnbindUsrl { id: String, contract: String },
-    /// Replace bound USRL contract references.
-    #[command(name = "set-usrl")]
-    SetUsrl { id: String, contracts: Vec<String> },
-    /// Set memory policy label.
-    #[command(name = "memory-policy", alias = "memory")]
-    MemoryPolicy { id: String, policy: String },
-    /// Set explicit CMS scope ids for an agent.
-    #[command(name = "cms-scope")]
-    CmsScope {
-        id: String,
-        #[arg(long)]
-        user: String,
-        #[arg(long)]
-        project: String,
-    },
-    /// Reset CMS scope to agent:<id> for user and project.
-    #[command(name = "reset-cms-scope")]
-    ResetCmsScope { id: String },
-    /// Clone an existing profile to a new id.
-    Clone {
-        source_id: String,
-        new_id: String,
-        #[arg(long)]
-        name: Option<String>,
-        /// Overwrite destination if it already exists.
-        #[arg(long)]
-        force: bool,
-    },
-    /// Delete an agent profile. Requires --yes.
-    Delete {
-        id: String,
-        #[arg(long)]
-        yes: bool,
-    },
-    /// Export one profile to stdout or a JSON file.
-    Export {
-        id: String,
-        #[arg(long)]
-        out: Option<PathBuf>,
-    },
-    /// Import a profile JSON file into the registry.
-    Import {
-        path: PathBuf,
-        /// Overwrite an existing profile with the same id.
-        #[arg(long)]
-        force: bool,
-    },
-    /// Launch the full-screen agent registry browser/editor.
-    Tui,
-}
-
-#[derive(Args, Default)]
-struct ListArgs {
-    /// Include prompt and metadata summary in text output.
-    #[arg(long)]
-    long: bool,
-    /// Filter by mode.
-    #[arg(long)]
-    mode: Option<String>,
-}
-
-#[derive(Args, Default)]
-struct RegisterArgs {
-    /// Register only built-in templates.
-    #[arg(long)]
-    builtins_only: bool,
-    /// Register only Skiller agent-pack/proposal artifacts.
-    #[arg(long)]
-    skiller_only: bool,
-    /// Report what would be registered without writing profiles.
-    #[arg(long)]
-    dry_run: bool,
-}
-
-#[derive(Args)]
-struct ScopeArgs {
-    id: String,
-    /// Primary scope/domain for the agent.
-    #[arg(long)]
-    primary: Option<String>,
-    /// Comma-separated secondary scopes.
-    #[arg(long, value_delimiter = ',')]
-    secondary: Vec<String>,
-    /// Workspace or repository scope label/path for this agent profile.
-    #[arg(long = "workspace-scope")]
-    workspace_scope: Option<String>,
-    /// Comma-separated file-scope hints.
-    #[arg(long, value_delimiter = ',')]
-    file_scope: Vec<String>,
-}
-
-#[derive(Args)]
-struct BudgetArgs {
-    id: String,
-    #[arg(long)]
-    max_steps: Option<u64>,
-    #[arg(long)]
-    max_tool_calls: Option<u64>,
-    #[arg(long)]
-    max_read_bytes: Option<u64>,
-    #[arg(long)]
-    max_output_bytes: Option<u64>,
-    #[arg(long, value_delimiter = ',')]
-    allowed_tools: Vec<String>,
-    #[arg(long)]
-    notes: Option<String>,
-    /// Clear the stored default work budget.
-    #[arg(long)]
-    clear: bool,
-}
-
-#[derive(Args)]
-struct CreateArgs {
-    id: String,
-    /// Start from a built-in template/mode before applying other options.
-    #[arg(long)]
-    template: Option<String>,
-    /// Agent mode, e.g. engineer, planner, tester, skiller, custom.
-    #[arg(long, default_value = "custom")]
-    mode: String,
-    /// Display name. Defaults to the normalized id or template display name.
-    #[arg(long)]
-    name: Option<String>,
-    /// Short description.
-    #[arg(long)]
-    description: Option<String>,
-    /// System prompt text. Use --prompt-file for long prompts.
-    #[arg(long, conflicts_with = "prompt_file")]
-    prompt: Option<String>,
-    /// File containing the system prompt.
-    #[arg(long)]
-    prompt_file: Option<PathBuf>,
-    /// Default provider for this agent.
-    #[arg(long)]
-    provider: Option<String>,
-    /// Default model for this agent.
-    #[arg(long)]
-    model: Option<String>,
-    /// Comma-separated enabled tool names. Use '*' only when intentionally unrestricted.
-    #[arg(long, value_delimiter = ',')]
-    tools: Vec<String>,
-    /// Append tools to the template/default list instead of replacing it.
-    #[arg(long)]
-    add_tools: bool,
-    /// Comma-separated enabled skill names.
-    #[arg(long, value_delimiter = ',')]
-    skills: Vec<String>,
-    /// Append skills to the template/default list instead of replacing it.
-    #[arg(long)]
-    add_skills: bool,
-    /// Comma-separated enabled MCP server ids.
-    #[arg(long, value_delimiter = ',')]
-    mcp: Vec<String>,
-    /// Comma-separated USRL contract refs.
-    #[arg(long, value_delimiter = ',')]
-    usrl: Vec<String>,
-    /// Agent memory policy label.
-    #[arg(long)]
-    memory_policy: Option<String>,
-    /// Overwrite an existing profile.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Args)]
-struct CreateTemplateArgs {
-    mode: String,
-    id: String,
-    /// Display name override.
-    #[arg(long)]
-    name: Option<String>,
-    /// Description override.
-    #[arg(long)]
-    description: Option<String>,
-    /// Overwrite an existing profile.
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Args)]
-struct DesignArgs {
-    id: String,
-    /// Agent mode/template.
-    #[arg(long, default_value = "custom")]
-    mode: String,
-    /// Display name.
-    #[arg(long)]
-    name: String,
-    /// System prompt text. Use --prompt-file for long prompts.
-    #[arg(long, conflicts_with = "prompt_file")]
-    prompt: Option<String>,
-    /// File containing the system prompt.
-    #[arg(long)]
-    prompt_file: Option<PathBuf>,
-    #[arg(long)]
-    description: Option<String>,
-    #[arg(long)]
-    provider: Option<String>,
-    #[arg(long)]
-    model: Option<String>,
-    #[arg(long, value_delimiter = ',')]
-    tools: Vec<String>,
-    #[arg(long, value_delimiter = ',')]
-    skills: Vec<String>,
-    #[arg(long, value_delimiter = ',')]
-    mcp: Vec<String>,
-    #[arg(long, value_delimiter = ',')]
-    usrl: Vec<String>,
-    #[arg(long)]
-    memory_policy: Option<String>,
-    #[arg(long)]
-    force: bool,
-}
-
-#[derive(Args)]
-struct SetArgs {
-    id: String,
-    #[arg(long)]
-    mode: Option<String>,
-    #[arg(long)]
-    name: Option<String>,
-    #[arg(long)]
-    description: Option<String>,
-    #[arg(long, conflicts_with = "prompt_file")]
-    prompt: Option<String>,
-    #[arg(long)]
-    prompt_file: Option<PathBuf>,
-    #[arg(long)]
-    provider: Option<String>,
-    #[arg(long)]
-    model: Option<String>,
-    #[arg(long, value_delimiter = ',')]
-    tools: Option<Vec<String>>,
-    #[arg(long, value_delimiter = ',')]
-    add_tools: Vec<String>,
-    #[arg(long, value_delimiter = ',')]
-    remove_tools: Vec<String>,
-    #[arg(long, value_delimiter = ',')]
-    skills: Option<Vec<String>>,
-    #[arg(long, value_delimiter = ',')]
-    add_skills: Vec<String>,
-    #[arg(long, value_delimiter = ',')]
-    remove_skills: Vec<String>,
-    #[arg(long, value_delimiter = ',')]
-    mcp: Option<Vec<String>>,
-    #[arg(long, value_delimiter = ',')]
-    add_mcp: Vec<String>,
-    #[arg(long, value_delimiter = ',')]
-    remove_mcp: Vec<String>,
-    #[arg(long, value_delimiter = ',')]
-    usrl: Option<Vec<String>>,
-    #[arg(long, value_delimiter = ',')]
-    add_usrl: Vec<String>,
-    #[arg(long, value_delimiter = ',')]
-    remove_usrl: Vec<String>,
-    #[arg(long)]
-    memory_policy: Option<String>,
-    #[arg(long)]
-    cms_user: Option<String>,
-    #[arg(long)]
-    cms_project: Option<String>,
-}
-
-#[derive(Args)]
-struct PromptArgs {
-    id: String,
-    /// Prompt text as remaining positional words.
-    prompt: Vec<String>,
-    /// File containing the system prompt.
-    #[arg(long, conflicts_with = "prompt")]
-    prompt_file: Option<PathBuf>,
-}
-
-pub fn run_agent_admin_cli() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-    let data_root = cli.data_root.unwrap_or_else(default_vegvisir_data_root);
-    let workspace = cli.workspace.unwrap_or(std::env::current_dir()?);
-    let registry = AgentRegistryAdmin::new(data_root, workspace)?;
-    match cli.command.unwrap_or(Command::List(ListArgs::default())) {
-        Command::Paths => registry.print_paths(cli.json),
-        Command::Doctor => registry.doctor(cli.json),
-        Command::Register(args) => registry.register(args, cli.json),
-        Command::Validate { id } => registry.validate(id.as_deref(), cli.json),
-        Command::Metrics { id } => registry.metrics(&id, cli.json),
-        Command::Compare {
-            left_id,
-            right_id,
-            prompts,
-        } => registry.compare(&left_id, &right_id, prompts, cli.json),
-        Command::History { id } => registry.history(id.as_deref(), cli.json),
-        Command::Status { id, status } => registry.status(&id, status, cli.json),
-        Command::Scope(args) => registry.scope(args, cli.json),
-        Command::Tags { id, tags } => registry.tags(&id, tags, cli.json),
-        Command::Budget(args) => registry.budget(args, cli.json),
-        Command::Templates { id } => registry.templates(id.as_deref(), cli.json),
-        Command::List(args) => registry.list(args, cli.json),
-        Command::Show { id } => registry.show(&id, cli.json),
-        Command::Create(args) => registry.create(args, cli.json),
-        Command::CreateTemplate(args) => registry.create_template(args, cli.json),
-        Command::Design(args) => registry.design(args, cli.json),
-        Command::Set(args) => registry.set(args, cli.json),
-        Command::Name { id, name } => registry.name(&id, join_required("name", name)?, cli.json),
-        Command::Mode { id, mode } => registry.mode(&id, mode, cli.json),
-        Command::Describe { id, description } => {
-            registry.describe(&id, join_required("description", description)?, cli.json)
-        }
-        Command::Provider { id, provider } => registry.provider(&id, provider, cli.json),
-        Command::Model { id, model } => registry.model(&id, model, cli.json),
-        Command::Prompt(args) => registry.prompt(args, cli.json),
-        Command::AllowTool { id, tool } => {
-            registry.add_to_list(&id, ListField::Tools, tool, cli.json)
-        }
-        Command::RevokeTool { id, tool } => {
-            registry.remove_from_list(&id, ListField::Tools, &tool, cli.json)
-        }
-        Command::SetTools { id, tools } => {
-            registry.replace_list(&id, ListField::Tools, tools, cli.json)
-        }
-        Command::EnableSkill { id, skill } => {
-            registry.add_to_list(&id, ListField::Skills, skill, cli.json)
-        }
-        Command::DisableSkill { id, skill } => {
-            registry.remove_from_list(&id, ListField::Skills, &skill, cli.json)
-        }
-        Command::SetSkills { id, skills } => {
-            registry.replace_list(&id, ListField::Skills, skills, cli.json)
-        }
-        Command::AllowMcp { id, server } => {
-            registry.add_to_list(&id, ListField::Mcp, server, cli.json)
-        }
-        Command::RevokeMcp { id, server } => {
-            registry.remove_from_list(&id, ListField::Mcp, &server, cli.json)
-        }
-        Command::SetMcp { id, servers } => {
-            registry.replace_list(&id, ListField::Mcp, servers, cli.json)
-        }
-        Command::BindUsrl { id, contract } => {
-            registry.add_to_list(&id, ListField::Usrl, contract, cli.json)
-        }
-        Command::UnbindUsrl { id, contract } => {
-            registry.remove_from_list(&id, ListField::Usrl, &contract, cli.json)
-        }
-        Command::SetUsrl { id, contracts } => {
-            registry.replace_list(&id, ListField::Usrl, contracts, cli.json)
-        }
-        Command::MemoryPolicy { id, policy } => registry.memory_policy(&id, policy, cli.json),
-        Command::CmsScope { id, user, project } => registry.cms_scope(&id, user, project, cli.json),
-        Command::ResetCmsScope { id } => registry.reset_cms_scope(&id, cli.json),
-        Command::Clone {
-            source_id,
-            new_id,
-            name,
-            force,
-        } => registry.clone_profile(&source_id, &new_id, name, force, cli.json),
-        Command::Delete { id, yes } => registry.delete(&id, yes, cli.json),
-        Command::Export { id, out } => registry.export(&id, out),
-        Command::Import { path, force } => registry.import(&path, force, cli.json),
-        Command::Tui => registry.tui(),
-    }
-}
-
-struct AgentRegistryAdmin {
+pub(super) struct AgentRegistryAdmin {
     data_root: PathBuf,
     workspace: PathBuf,
     store: AgentProfileStore,
 }
 
 #[derive(Copy, Clone)]
-enum ListField {
+pub(super) enum ListField {
     Tools,
     Skills,
     Mcp,
@@ -546,7 +67,7 @@ impl ListField {
 }
 
 impl AgentRegistryAdmin {
-    fn new(data_root: PathBuf, workspace: PathBuf) -> anyhow::Result<Self> {
+    pub(super) fn new(data_root: PathBuf, workspace: PathBuf) -> anyhow::Result<Self> {
         let store = AgentProfileStore::new(data_root.join("agents"))?;
         Ok(Self {
             data_root,
@@ -555,7 +76,7 @@ impl AgentRegistryAdmin {
         })
     }
 
-    fn print_paths(&self, json_output: bool) -> anyhow::Result<()> {
+    pub(super) fn print_paths(&self, json_output: bool) -> anyhow::Result<()> {
         print_json_or_text(
             json_output,
             &json!({
@@ -572,7 +93,7 @@ impl AgentRegistryAdmin {
         )
     }
 
-    fn doctor(&self, json_output: bool) -> anyhow::Result<()> {
+    pub(super) fn doctor(&self, json_output: bool) -> anyhow::Result<()> {
         let (profiles, invalid_files) = self.store.list_lossy()?;
         let mut warnings = Vec::new();
         let mut ids = BTreeSet::new();
@@ -651,7 +172,7 @@ impl AgentRegistryAdmin {
         Ok(())
     }
 
-    fn register(&self, args: RegisterArgs, json_output: bool) -> anyhow::Result<()> {
+    pub(super) fn register(&self, args: RegisterArgs, json_output: bool) -> anyhow::Result<()> {
         let mut report = RegisterReport {
             dry_run: args.dry_run,
             ..RegisterReport::default()
@@ -740,7 +261,7 @@ impl AgentRegistryAdmin {
         Ok(())
     }
 
-    fn validate(&self, id: Option<&str>, json_output: bool) -> anyhow::Result<()> {
+    pub(super) fn validate(&self, id: Option<&str>, json_output: bool) -> anyhow::Result<()> {
         if let Some(id) = id {
             let profile = self.store.load(id)?;
             let report = self.validate_profile(&profile)?;
@@ -781,7 +302,7 @@ impl AgentRegistryAdmin {
         Ok(())
     }
 
-    fn metrics(&self, id: &str, json_output: bool) -> anyhow::Result<()> {
+    pub(super) fn metrics(&self, id: &str, json_output: bool) -> anyhow::Result<()> {
         self.store.load(id)?;
         let mut report = load_metrics_report(&self.data_root, id)?;
         report.id = normalize_agent_id(id);
@@ -802,7 +323,7 @@ impl AgentRegistryAdmin {
         Ok(())
     }
 
-    fn compare(
+    pub(super) fn compare(
         &self,
         left_id: &str,
         right_id: &str,
@@ -929,7 +450,7 @@ impl AgentRegistryAdmin {
         Ok(())
     }
 
-    fn history(&self, id: Option<&str>, json_output: bool) -> anyhow::Result<()> {
+    pub(super) fn history(&self, id: Option<&str>, json_output: bool) -> anyhow::Result<()> {
         let mut events = self.load_history()?;
         if let Some(id) = id {
             let id = normalize_agent_id(id);
@@ -950,7 +471,7 @@ impl AgentRegistryAdmin {
         Ok(())
     }
 
-    fn status(&self, id: &str, status: String, json_output: bool) -> anyhow::Result<()> {
+    pub(super) fn status(&self, id: &str, status: String, json_output: bool) -> anyhow::Result<()> {
         let status = normalize_agent_id(&status);
         let allowed = [
             "draft",
@@ -980,7 +501,7 @@ impl AgentRegistryAdmin {
         self.save_touched(profile, "status", json_output)
     }
 
-    fn scope(&self, args: ScopeArgs, json_output: bool) -> anyhow::Result<()> {
+    pub(super) fn scope(&self, args: ScopeArgs, json_output: bool) -> anyhow::Result<()> {
         let mut profile = self.store.load(&args.id)?;
         if let Some(primary) = args.primary {
             profile
@@ -1008,7 +529,12 @@ impl AgentRegistryAdmin {
         self.save_touched(profile, "scope", json_output)
     }
 
-    fn tags(&self, id: &str, tags: Vec<String>, json_output: bool) -> anyhow::Result<()> {
+    pub(super) fn tags(
+        &self,
+        id: &str,
+        tags: Vec<String>,
+        json_output: bool,
+    ) -> anyhow::Result<()> {
         let mut profile = self.store.load(id)?;
         profile
             .metadata
@@ -1016,7 +542,7 @@ impl AgentRegistryAdmin {
         self.save_touched(profile, "tags", json_output)
     }
 
-    fn budget(&self, args: BudgetArgs, json_output: bool) -> anyhow::Result<()> {
+    pub(super) fn budget(&self, args: BudgetArgs, json_output: bool) -> anyhow::Result<()> {
         let mut profile = self.store.load(&args.id)?;
         if args.clear {
             profile.metadata.remove("default_work_budget");
@@ -1058,7 +584,7 @@ impl AgentRegistryAdmin {
         self.save_touched(profile, "budget", json_output)
     }
 
-    fn templates(&self, id: Option<&str>, json_output: bool) -> anyhow::Result<()> {
+    pub(super) fn templates(&self, id: Option<&str>, json_output: bool) -> anyhow::Result<()> {
         if let Some(id) = id {
             let template = agent_template(id).with_context(|| format!("unknown template: {id}"))?;
             if json_output {
@@ -1085,7 +611,7 @@ impl AgentRegistryAdmin {
         Ok(())
     }
 
-    fn list(&self, args: ListArgs, json_output: bool) -> anyhow::Result<()> {
+    pub(super) fn list(&self, args: ListArgs, json_output: bool) -> anyhow::Result<()> {
         let (mut profiles, warnings) = self.store.list_lossy()?;
         if let Some(mode) = args.mode {
             let mode = normalize_agent_id(&mode);
@@ -1135,7 +661,7 @@ impl AgentRegistryAdmin {
         Ok(())
     }
 
-    fn show(&self, id: &str, json_output: bool) -> anyhow::Result<()> {
+    pub(super) fn show(&self, id: &str, json_output: bool) -> anyhow::Result<()> {
         let profile = self.store.load(id)?;
         if json_output {
             println!("{}", serde_json::to_string_pretty(&profile)?);
@@ -1145,7 +671,7 @@ impl AgentRegistryAdmin {
         Ok(())
     }
 
-    fn create(&self, args: CreateArgs, json_output: bool) -> anyhow::Result<()> {
+    pub(super) fn create(&self, args: CreateArgs, json_output: bool) -> anyhow::Result<()> {
         let id = normalize_agent_id(&args.id);
         if id.is_empty() {
             bail!("agent id must contain at least one letter or number");
@@ -1209,7 +735,11 @@ impl AgentRegistryAdmin {
         print_saved(&profile, &path, json_output)
     }
 
-    fn create_template(&self, args: CreateTemplateArgs, json_output: bool) -> anyhow::Result<()> {
+    pub(super) fn create_template(
+        &self,
+        args: CreateTemplateArgs,
+        json_output: bool,
+    ) -> anyhow::Result<()> {
         let id = normalize_agent_id(&args.id);
         if id.is_empty() {
             bail!("agent id must contain at least one letter or number");
@@ -1225,7 +755,7 @@ impl AgentRegistryAdmin {
         print_saved(&profile, &path, json_output)
     }
 
-    fn design(&self, args: DesignArgs, json_output: bool) -> anyhow::Result<()> {
+    pub(super) fn design(&self, args: DesignArgs, json_output: bool) -> anyhow::Result<()> {
         let prompt = read_prompt(args.prompt, args.prompt_file)?
             .with_context(|| "design requires --prompt or --prompt-file")?;
         let create_args = CreateArgs {
@@ -1250,7 +780,7 @@ impl AgentRegistryAdmin {
         self.create(create_args, json_output)
     }
 
-    fn set(&self, args: SetArgs, json_output: bool) -> anyhow::Result<()> {
+    pub(super) fn set(&self, args: SetArgs, json_output: bool) -> anyhow::Result<()> {
         let mut profile = self.store.load(&args.id)?;
         if let Some(mode) = args.mode {
             profile.mode = normalized_or_default(&mode, "custom");
@@ -1310,25 +840,35 @@ impl AgentRegistryAdmin {
         self.save_touched(profile, "set", json_output)
     }
 
-    fn name(&self, id: &str, name: String, json_output: bool) -> anyhow::Result<()> {
+    pub(super) fn name(&self, id: &str, name: String, json_output: bool) -> anyhow::Result<()> {
         let mut profile = self.store.load(id)?;
         profile.display_name = name;
         self.save_touched(profile, "name", json_output)
     }
 
-    fn mode(&self, id: &str, mode: String, json_output: bool) -> anyhow::Result<()> {
+    pub(super) fn mode(&self, id: &str, mode: String, json_output: bool) -> anyhow::Result<()> {
         let mut profile = self.store.load(id)?;
         profile.mode = normalized_or_default(&mode, "custom");
         self.save_touched(profile, "mode", json_output)
     }
 
-    fn describe(&self, id: &str, description: String, json_output: bool) -> anyhow::Result<()> {
+    pub(super) fn describe(
+        &self,
+        id: &str,
+        description: String,
+        json_output: bool,
+    ) -> anyhow::Result<()> {
         let mut profile = self.store.load(id)?;
         profile.description = description;
         self.save_touched(profile, "describe", json_output)
     }
 
-    fn provider(&self, id: &str, provider: String, json_output: bool) -> anyhow::Result<()> {
+    pub(super) fn provider(
+        &self,
+        id: &str,
+        provider: String,
+        json_output: bool,
+    ) -> anyhow::Result<()> {
         let mut profile = self.store.load(id)?;
         profile.current_provider = none_marker(provider);
         if profile.current_provider.is_none() {
@@ -1337,13 +877,13 @@ impl AgentRegistryAdmin {
         self.save_touched(profile, "provider", json_output)
     }
 
-    fn model(&self, id: &str, model: String, json_output: bool) -> anyhow::Result<()> {
+    pub(super) fn model(&self, id: &str, model: String, json_output: bool) -> anyhow::Result<()> {
         let mut profile = self.store.load(id)?;
         profile.current_model = none_marker(model);
         self.save_touched(profile, "model", json_output)
     }
 
-    fn prompt(&self, args: PromptArgs, json_output: bool) -> anyhow::Result<()> {
+    pub(super) fn prompt(&self, args: PromptArgs, json_output: bool) -> anyhow::Result<()> {
         let mut profile = self.store.load(&args.id)?;
         let prompt = if let Some(path) = args.prompt_file {
             std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?
@@ -1354,7 +894,7 @@ impl AgentRegistryAdmin {
         self.save_touched(profile, "prompt", json_output)
     }
 
-    fn add_to_list(
+    pub(super) fn add_to_list(
         &self,
         id: &str,
         field: ListField,
@@ -1366,7 +906,7 @@ impl AgentRegistryAdmin {
         self.save_touched(profile, &format!("add-{}", field.label()), json_output)
     }
 
-    fn remove_from_list(
+    pub(super) fn remove_from_list(
         &self,
         id: &str,
         field: ListField,
@@ -1381,7 +921,7 @@ impl AgentRegistryAdmin {
         self.save_touched(profile, &format!("remove-{}", field.label()), json_output)
     }
 
-    fn replace_list(
+    pub(super) fn replace_list(
         &self,
         id: &str,
         field: ListField,
@@ -1393,13 +933,18 @@ impl AgentRegistryAdmin {
         self.save_touched(profile, &format!("set-{}", field.label()), json_output)
     }
 
-    fn memory_policy(&self, id: &str, policy: String, json_output: bool) -> anyhow::Result<()> {
+    pub(super) fn memory_policy(
+        &self,
+        id: &str,
+        policy: String,
+        json_output: bool,
+    ) -> anyhow::Result<()> {
         let mut profile = self.store.load(id)?;
         profile.memory_policy = policy;
         self.save_touched(profile, "memory-policy", json_output)
     }
 
-    fn cms_scope(
+    pub(super) fn cms_scope(
         &self,
         id: &str,
         user: String,
@@ -1415,7 +960,7 @@ impl AgentRegistryAdmin {
         self.save_touched(profile, "cms-scope", json_output)
     }
 
-    fn reset_cms_scope(&self, id: &str, json_output: bool) -> anyhow::Result<()> {
+    pub(super) fn reset_cms_scope(&self, id: &str, json_output: bool) -> anyhow::Result<()> {
         let mut profile = self.store.load(id)?;
         let scope = format!("agent:{}", profile.id);
         profile.cms_user_id = scope.clone();
@@ -1423,7 +968,7 @@ impl AgentRegistryAdmin {
         self.save_touched(profile, "reset-cms-scope", json_output)
     }
 
-    fn clone_profile(
+    pub(super) fn clone_profile(
         &self,
         source_id: &str,
         new_id: &str,
@@ -1456,7 +1001,7 @@ impl AgentRegistryAdmin {
         print_saved(&profile, &path, json_output)
     }
 
-    fn delete(&self, id: &str, yes: bool, json_output: bool) -> anyhow::Result<()> {
+    pub(super) fn delete(&self, id: &str, yes: bool, json_output: bool) -> anyhow::Result<()> {
         if !yes {
             bail!("refusing to delete {id} without --yes");
         }
@@ -1475,7 +1020,7 @@ impl AgentRegistryAdmin {
         Ok(())
     }
 
-    fn export(&self, id: &str, out: Option<PathBuf>) -> anyhow::Result<()> {
+    pub(super) fn export(&self, id: &str, out: Option<PathBuf>) -> anyhow::Result<()> {
         let profile = self.store.load(id)?;
         let text = serde_json::to_string_pretty(&profile)?;
         if let Some(path) = out {
@@ -1487,7 +1032,12 @@ impl AgentRegistryAdmin {
         Ok(())
     }
 
-    fn import(&self, path: &PathBuf, force: bool, json_output: bool) -> anyhow::Result<()> {
+    pub(super) fn import(
+        &self,
+        path: &PathBuf,
+        force: bool,
+        json_output: bool,
+    ) -> anyhow::Result<()> {
         let mut profile: AgentProfile = serde_json::from_str(
             &std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?,
         )?;
@@ -1510,7 +1060,7 @@ impl AgentRegistryAdmin {
         print_saved(&profile, &saved, json_output)
     }
 
-    fn tui(&self) -> anyhow::Result<()> {
+    pub(super) fn tui(&self) -> anyhow::Result<()> {
         run_admin_tui(self)
     }
 
@@ -4052,8 +3602,10 @@ fn status_color(status: &str) -> Color {
 
 #[cfg(test)]
 mod tests {
+    use super::super::cli::{Cli, Command};
     use super::*;
     use crate::core::McpConfigStore;
+    use clap::Parser;
     use tempfile::tempdir;
 
     fn write_mcp_config(admin: &AgentRegistryAdmin, ids: &[&str]) -> anyhow::Result<()> {
