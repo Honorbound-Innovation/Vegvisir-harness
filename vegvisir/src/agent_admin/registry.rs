@@ -33,9 +33,9 @@ use ratatui::{
 use serde_json::{Value, json};
 
 pub(super) struct AgentRegistryAdmin {
-    data_root: PathBuf,
-    workspace: PathBuf,
-    store: AgentProfileStore,
+    pub(super) data_root: PathBuf,
+    pub(super) workspace: PathBuf,
+    pub(super) store: AgentProfileStore,
 }
 
 #[derive(Copy, Clone)]
@@ -76,1012 +76,60 @@ impl AgentRegistryAdmin {
         })
     }
 
-    pub(super) fn print_paths(&self, json_output: bool) -> anyhow::Result<()> {
-        print_json_or_text(
-            json_output,
-            &json!({
-                "data_root": self.data_root,
-                "agents_root": self.store.root,
-                "workspace": self.workspace,
-            }),
-            || {
-                println!("data_root: {}", self.data_root.display());
-                println!("agents_root: {}", self.store.root.display());
-                println!("workspace: {}", self.workspace.display());
-                Ok(())
-            },
-        )
-    }
-
-    pub(super) fn doctor(&self, json_output: bool) -> anyhow::Result<()> {
-        let (profiles, invalid_files) = self.store.list_lossy()?;
-        let mut warnings = Vec::new();
-        let mut ids = BTreeSet::new();
-        let mut cms_scopes: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
-        for profile in &profiles {
-            if !ids.insert(profile.id.clone()) {
-                warnings.push(format!("duplicate profile id loaded: {}", profile.id));
-            }
-            let expected_path = self.store.path_for(&profile.id);
-            if !expected_path.exists() {
-                warnings.push(format!(
-                    "profile {} is not stored at expected path {}",
-                    profile.id,
-                    expected_path.display()
-                ));
-            }
-            if profile.system_prompt.trim().is_empty() {
-                warnings.push(format!("profile {} has an empty system prompt", profile.id));
-            }
-            if profile.display_name.trim().is_empty() {
-                warnings.push(format!("profile {} has an empty display name", profile.id));
-            }
-            if profile
-                .enabled_tools
-                .iter()
-                .any(|tool| tool.trim().is_empty())
-            {
-                warnings.push(format!("profile {} has an empty tool entry", profile.id));
-            }
-            if profile.current_model.is_some() && profile.current_provider.is_none() {
-                warnings.push(format!(
-                    "profile {} sets a model but no provider; runtime will inherit current provider",
-                    profile.id
-                ));
-            }
-            cms_scopes
-                .entry((profile.cms_user_id.clone(), profile.cms_project_id.clone()))
-                .or_default()
-                .push(profile.id.clone());
-        }
-        for ((user, project), profile_ids) in cms_scopes {
-            if profile_ids.len() > 1 {
-                warnings.push(format!(
-                    "profiles share CMS scope {user}/{project}: {}",
-                    profile_ids.join(",")
-                ));
-            }
-        }
-        let report = DoctorReport {
-            agents_root: self.store.root.clone(),
-            profile_count: profiles.len(),
-            invalid_files,
-            warnings,
-        };
-        if json_output {
-            println!("{}", serde_json::to_string_pretty(&report)?);
-        } else {
-            println!("Agent registry: {}", report.agents_root.display());
-            println!("Profiles: {}", report.profile_count);
-            if report.invalid_files.is_empty() && report.warnings.is_empty() {
-                println!("Status: ok");
-            }
-            if !report.invalid_files.is_empty() {
-                println!("\nInvalid files:");
-                for item in &report.invalid_files {
-                    println!("- {item}");
-                }
-            }
-            if !report.warnings.is_empty() {
-                println!("\nWarnings:");
-                for item in &report.warnings {
-                    println!("- {item}");
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub(super) fn register(&self, args: RegisterArgs, json_output: bool) -> anyhow::Result<()> {
-        let mut report = RegisterReport {
-            dry_run: args.dry_run,
-            ..RegisterReport::default()
-        };
-        let (profiles, warnings) = self.store.list_lossy()?;
-        report.warnings.extend(warnings);
-        let mut known_ids = profiles
-            .into_iter()
-            .map(|profile| profile.id)
-            .collect::<BTreeSet<_>>();
-
-        if !args.skiller_only {
-            for template in agent_templates() {
-                if known_ids.contains(&template.mode) {
-                    continue;
-                }
-                report.created_ids.push(template.mode.clone());
-                report.builtin_created += 1;
-                if !args.dry_run {
-                    let mut profile = profile_from_template(&template.mode, &template.mode, None)?;
-                    profile
-                        .metadata
-                        .insert("registered_identity".to_string(), Value::Bool(true));
-                    profile
-                        .metadata
-                        .insert("identity_source".to_string(), json!("builtin-template"));
-                    touch_metadata(&mut profile, "register-builtin");
-                    let saved = self.store.save(&profile)?;
-                    self.append_history(&profile, "register-builtin", &saved)?;
-                }
-                known_ids.insert(template.mode);
-            }
-        }
-
-        if !args.builtins_only {
-            for artifact in find_skiller_agent_artifacts(&self.workspace, &self.data_root) {
-                match artifact {
-                    Ok(SkillerAgentArtifact::Pack(path)) => {
-                        match self.register_skiller_pack(&mut known_ids, &path, args.dry_run) {
-                            Ok(Some(id)) => {
-                                report.skiller_created += 1;
-                                report.created_ids.push(id);
-                            }
-                            Ok(None) => {}
-                            Err(error) => report.warnings.push(format!(
-                                "skipped Skiller agent pack {}: {error}",
-                                path.display()
-                            )),
-                        }
-                    }
-                    Ok(SkillerAgentArtifact::ProposalIndex(path)) => {
-                        match self.register_skiller_proposals(&mut known_ids, &path, args.dry_run) {
-                            Ok(ids) => {
-                                report.skiller_created += ids.len();
-                                report.created_ids.extend(ids);
-                            }
-                            Err(error) => report.warnings.push(format!(
-                                "skipped Skiller agent proposal index {}: {error}",
-                                path.display()
-                            )),
-                        }
-                    }
-                    Err(error) => report.warnings.push(error.to_string()),
-                }
-            }
-        }
-
-        if json_output {
-            println!("{}", serde_json::to_string_pretty(&report)?);
-        } else {
-            println!("Registered built-in agents: {}", report.builtin_created);
-            println!("Registered Skiller agents: {}", report.skiller_created);
-            if args.dry_run {
-                println!("Dry run: no profiles written.");
-            }
-            if !report.created_ids.is_empty() {
-                println!("IDs: {}", report.created_ids.join(","));
-            }
-            if !report.warnings.is_empty() {
-                println!("\nWarnings:");
-                for warning in &report.warnings {
-                    println!("- {warning}");
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub(super) fn validate(&self, id: Option<&str>, json_output: bool) -> anyhow::Result<()> {
-        if let Some(id) = id {
-            let profile = self.store.load(id)?;
-            let report = self.validate_profile(&profile)?;
-            if json_output {
-                println!("{}", serde_json::to_string_pretty(&report)?);
-            } else {
-                print_validation_report(&report);
-            }
-            return Ok(());
-        }
-        let (profiles, warnings) = self.store.list_lossy()?;
-        let mut reports = Vec::new();
-        for profile in &profiles {
-            reports.push(self.validate_profile(profile)?);
-        }
-        if json_output {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json!({
-                    "agents_root": self.store.root,
-                    "load_warnings": warnings,
-                    "reports": reports,
-                }))?
-            );
-        } else {
-            println!(
-                "Validated {} profile(s) in {}",
-                reports.len(),
-                self.store.root.display()
-            );
-            for warning in warnings {
-                println!("Load warning: {warning}");
-            }
-            for report in &reports {
-                print_validation_report(report);
-            }
-        }
-        Ok(())
-    }
-
-    pub(super) fn metrics(&self, id: &str, json_output: bool) -> anyhow::Result<()> {
-        self.store.load(id)?;
-        let mut report = load_metrics_report(&self.data_root, id)?;
-        report.id = normalize_agent_id(id);
-        let task_total = report.metrics.tasks_completed
-            + report.metrics.tasks_failed
-            + report.metrics.tasks_cancelled;
-        report.task_success_rate = ratio(report.metrics.tasks_completed, task_total);
-        if task_total == 0 {
-            report
-                .warnings
-                .push("no recorded task metrics for this agent".to_string());
-        }
-        if json_output {
-            println!("{}", serde_json::to_string_pretty(&report)?);
-        } else {
-            print_metrics_report(&report);
-        }
-        Ok(())
-    }
-
-    pub(super) fn compare(
-        &self,
-        left_id: &str,
-        right_id: &str,
-        prompts: bool,
-        json_output: bool,
-    ) -> anyhow::Result<()> {
-        let left = self.store.load(left_id)?;
-        let right = self.store.load(right_id)?;
-        let mut differences = Vec::new();
-        push_diff(
-            &mut differences,
-            "mode",
-            json!(left.mode),
-            json!(right.mode),
-        );
-        push_diff(
-            &mut differences,
-            "display_name",
-            json!(left.display_name),
-            json!(right.display_name),
-        );
-        push_diff(
-            &mut differences,
-            "description",
-            json!(left.description),
-            json!(right.description),
-        );
-        push_diff(
-            &mut differences,
-            "provider",
-            json!(left.current_provider),
-            json!(right.current_provider),
-        );
-        push_diff(
-            &mut differences,
-            "model",
-            json!(left.current_model),
-            json!(right.current_model),
-        );
-        push_diff(
-            &mut differences,
-            "tools",
-            json!(left.enabled_tools),
-            json!(right.enabled_tools),
-        );
-        push_diff(
-            &mut differences,
-            "skills",
-            json!(left.enabled_skills),
-            json!(right.enabled_skills),
-        );
-        push_diff(
-            &mut differences,
-            "mcp_servers",
-            json!(left.enabled_mcp_servers),
-            json!(right.enabled_mcp_servers),
-        );
-        push_diff(
-            &mut differences,
-            "usrl_contracts",
-            json!(left.usrl_contracts),
-            json!(right.usrl_contracts),
-        );
-        push_diff(
-            &mut differences,
-            "cms_user_id",
-            json!(left.cms_user_id),
-            json!(right.cms_user_id),
-        );
-        push_diff(
-            &mut differences,
-            "cms_project_id",
-            json!(left.cms_project_id),
-            json!(right.cms_project_id),
-        );
-        push_diff(
-            &mut differences,
-            "memory_policy",
-            json!(left.memory_policy),
-            json!(right.memory_policy),
-        );
-        push_diff(
-            &mut differences,
-            "status",
-            metadata_json(&left, "status"),
-            metadata_json(&right, "status"),
-        );
-        push_diff(
-            &mut differences,
-            "primary_scope",
-            metadata_json(&left, "primary_scope"),
-            metadata_json(&right, "primary_scope"),
-        );
-        push_diff(
-            &mut differences,
-            "tags",
-            metadata_json(&left, "tags"),
-            metadata_json(&right, "tags"),
-        );
-        if prompts {
-            push_diff(
-                &mut differences,
-                "system_prompt",
-                json!(left.system_prompt),
-                json!(right.system_prompt),
-            );
-        } else if left.system_prompt != right.system_prompt {
-            differences.push(FieldDifference {
-                field: "system_prompt".to_string(),
-                left: json!({"bytes": left.system_prompt.len(), "sha256": prompt_digest(&left.system_prompt)}),
-                right: json!({"bytes": right.system_prompt.len(), "sha256": prompt_digest(&right.system_prompt)}),
-            });
-        }
-        let comparison = AgentComparison {
-            left_id: left.id,
-            right_id: right.id,
-            differences,
-        };
-        if json_output {
-            println!("{}", serde_json::to_string_pretty(&comparison)?);
-        } else {
-            print_comparison(&comparison);
-        }
-        Ok(())
-    }
-
-    pub(super) fn history(&self, id: Option<&str>, json_output: bool) -> anyhow::Result<()> {
-        let mut events = self.load_history()?;
-        if let Some(id) = id {
-            let id = normalize_agent_id(id);
-            events.retain(|event| normalize_agent_id(&event.agent_id) == id);
-        }
-        if json_output {
-            println!("{}", serde_json::to_string_pretty(&events)?);
-        } else if events.is_empty() {
-            println!("No history recorded.");
-        } else {
-            for event in events.iter().rev().take(100) {
-                println!(
-                    "{} {:<18} {} {}",
-                    event.timestamp, event.agent_id, event.action, event.summary
-                );
-            }
-        }
-        Ok(())
-    }
-
-    pub(super) fn status(&self, id: &str, status: String, json_output: bool) -> anyhow::Result<()> {
-        let status = normalize_agent_id(&status);
-        let allowed = [
-            "draft",
-            "active",
-            "paused",
-            "deprecated",
-            "archived",
-            "broken",
-        ];
-        if !allowed.contains(&status.as_str()) {
-            bail!("status must be one of: {}", allowed.join(","));
-        }
-        let mut profile = self.store.load(id)?;
-        if status == "active" {
-            let report = self.validate_profile(&profile)?;
-            if !report.errors.is_empty() {
-                bail!(
-                    "refusing to activate {}: validation has {} error(s)",
-                    profile.id,
-                    report.errors.len()
-                );
-            }
-        }
-        profile
-            .metadata
-            .insert("status".to_string(), Value::String(status));
-        self.save_touched(profile, "status", json_output)
-    }
-
-    pub(super) fn scope(&self, args: ScopeArgs, json_output: bool) -> anyhow::Result<()> {
-        let mut profile = self.store.load(&args.id)?;
-        if let Some(primary) = args.primary {
-            profile
-                .metadata
-                .insert("primary_scope".to_string(), Value::String(primary));
-        }
-        if !args.secondary.is_empty() {
-            profile.metadata.insert(
-                "secondary_scopes".to_string(),
-                json!(clean_list(args.secondary)),
-            );
-        }
-        if let Some(workspace_scope) = args.workspace_scope {
-            profile.metadata.insert(
-                "workspace_scope".to_string(),
-                Value::String(workspace_scope),
-            );
-        }
-        if !args.file_scope.is_empty() {
-            profile.metadata.insert(
-                "file_scope_hints".to_string(),
-                json!(clean_list(args.file_scope)),
-            );
-        }
-        self.save_touched(profile, "scope", json_output)
-    }
-
-    pub(super) fn tags(
-        &self,
-        id: &str,
-        tags: Vec<String>,
-        json_output: bool,
-    ) -> anyhow::Result<()> {
-        let mut profile = self.store.load(id)?;
-        profile
-            .metadata
-            .insert("tags".to_string(), json!(clean_list(tags)));
-        self.save_touched(profile, "tags", json_output)
-    }
-
-    pub(super) fn budget(&self, args: BudgetArgs, json_output: bool) -> anyhow::Result<()> {
-        let mut profile = self.store.load(&args.id)?;
-        if args.clear {
-            profile.metadata.remove("default_work_budget");
-        } else {
-            let mut budget = profile
-                .metadata
-                .get("default_work_budget")
-                .cloned()
-                .unwrap_or_else(|| json!({}));
-            if !budget.is_object() {
-                budget = json!({});
-            }
-            let map = budget.as_object_mut().expect("object ensured");
-            if let Some(value) = args.max_steps {
-                map.insert("max_steps".to_string(), json!(value));
-            }
-            if let Some(value) = args.max_tool_calls {
-                map.insert("max_tool_calls".to_string(), json!(value));
-            }
-            if let Some(value) = args.max_read_bytes {
-                map.insert("max_read_bytes".to_string(), json!(value));
-            }
-            if let Some(value) = args.max_output_bytes {
-                map.insert("max_output_bytes".to_string(), json!(value));
-            }
-            if !args.allowed_tools.is_empty() {
-                map.insert(
-                    "allowed_tools".to_string(),
-                    json!(clean_list(args.allowed_tools)),
-                );
-            }
-            if let Some(notes) = args.notes {
-                map.insert("notes".to_string(), json!(notes));
-            }
-            profile
-                .metadata
-                .insert("default_work_budget".to_string(), budget);
-        }
-        self.save_touched(profile, "budget", json_output)
-    }
-
-    pub(super) fn templates(&self, id: Option<&str>, json_output: bool) -> anyhow::Result<()> {
-        if let Some(id) = id {
-            let template = agent_template(id).with_context(|| format!("unknown template: {id}"))?;
-            if json_output {
-                println!("{}", serde_json::to_string_pretty(&template)?);
-            } else {
-                print_template(&template);
-            }
-            return Ok(());
-        }
-        let templates = agent_templates();
-        if json_output {
-            println!("{}", serde_json::to_string_pretty(&templates)?);
-        } else {
-            for template in templates {
-                println!(
-                    "{:<14} {:<22} tools={} skills={}",
-                    template.mode,
-                    template.display_name,
-                    list_or_dash(&template.enabled_tools),
-                    list_or_dash(&template.enabled_skills)
-                );
-            }
-        }
-        Ok(())
-    }
-
-    pub(super) fn list(&self, args: ListArgs, json_output: bool) -> anyhow::Result<()> {
-        let (mut profiles, warnings) = self.store.list_lossy()?;
-        if let Some(mode) = args.mode {
-            let mode = normalize_agent_id(&mode);
-            profiles.retain(|profile| normalize_agent_id(&profile.mode) == mode);
-        }
-        if json_output {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json!({
-                    "agents_root": self.store.root,
-                    "profiles": profiles,
-                    "warnings": warnings,
-                }))?
-            );
-            return Ok(());
-        }
-        if profiles.is_empty() {
-            println!("No agents found in {}", self.store.root.display());
-        } else {
-            for profile in profiles {
-                println!(
-                    "{:<24} mode={:<14} name={} provider={} model={} tools={} skills={}",
-                    profile.id,
-                    profile.mode,
-                    profile.display_name,
-                    profile.current_provider.as_deref().unwrap_or("-"),
-                    profile.current_model.as_deref().unwrap_or("-"),
-                    list_or_dash(&profile.enabled_tools),
-                    list_or_dash(&profile.enabled_skills),
-                );
-                if args.long {
-                    println!("  description: {}", dash_if_empty(&profile.description));
-                    println!("  cms: {}/{}", profile.cms_user_id, profile.cms_project_id);
-                    println!("  mcp: {}", list_or_dash(&profile.enabled_mcp_servers));
-                    println!("  usrl: {}", list_or_dash(&profile.usrl_contracts));
-                    println!("  memory_policy: {}", profile.memory_policy);
-                    println!("  prompt_bytes: {}", profile.system_prompt.len());
-                }
-            }
-        }
-        if !warnings.is_empty() {
-            println!("\nWarnings:");
-            for warning in warnings {
-                println!("- {warning}");
-            }
-        }
-        Ok(())
-    }
-
-    pub(super) fn show(&self, id: &str, json_output: bool) -> anyhow::Result<()> {
-        let profile = self.store.load(id)?;
-        if json_output {
-            println!("{}", serde_json::to_string_pretty(&profile)?);
-        } else {
-            print_profile(&profile);
-        }
-        Ok(())
-    }
-
-    pub(super) fn create(&self, args: CreateArgs, json_output: bool) -> anyhow::Result<()> {
-        let id = normalize_agent_id(&args.id);
-        if id.is_empty() {
-            bail!("agent id must contain at least one letter or number");
-        }
-        self.ensure_can_write(&id, args.force)?;
-
-        let mut profile = if let Some(template_id) = &args.template {
-            profile_from_template(template_id, &id, args.name.as_deref())?
-        } else {
-            let prompt = read_prompt(args.prompt.clone(), args.prompt_file.clone())?.unwrap_or_else(|| {
-                format!(
-                    "You are {name}, a Vegvisir custom agent. Work evidence-first, preserve user work, follow tool and secret boundaries, and report verification clearly.",
-                    name = args.name.as_deref().unwrap_or(&id)
-                )
-            });
-            AgentProfile::new(&id, args.name.clone().unwrap_or_else(|| id.clone()), prompt)?
-        };
-
-        if args.template.is_none() || args.mode != "custom" {
-            profile.mode = normalized_or_default(&args.mode, "custom");
-        }
-        if let Some(name) = args.name {
-            profile.display_name = name;
-        }
-        if let Some(description) = args.description {
-            profile.description = description;
-        }
-        if let Some(prompt) = read_prompt(args.prompt, args.prompt_file)? {
-            profile.system_prompt = prompt;
-        }
-        profile.current_provider = args.provider.and_then(none_marker);
-        profile.current_model = args.model.and_then(none_marker);
-        if !args.tools.is_empty() {
-            let tools = clean_list(args.tools);
-            if args.add_tools {
-                append_unique(&mut profile.enabled_tools, tools);
-            } else {
-                profile.enabled_tools = tools;
-            }
-        }
-        if !args.skills.is_empty() {
-            let skills = clean_list(args.skills);
-            if args.add_skills {
-                append_unique(&mut profile.enabled_skills, skills);
-            } else {
-                profile.enabled_skills = skills;
-            }
-        }
-        if !args.mcp.is_empty() {
-            profile.enabled_mcp_servers = clean_list(args.mcp);
-        }
-        if !args.usrl.is_empty() {
-            profile.usrl_contracts = clean_list(args.usrl);
-        }
-        if let Some(policy) = args.memory_policy.filter(|value| !value.trim().is_empty()) {
-            profile.memory_policy = policy;
-        }
-        touch_metadata(&mut profile, "created");
-        let path = self.store.save(&profile)?;
-        self.append_history(&profile, "created", &path)?;
-        print_saved(&profile, &path, json_output)
-    }
-
-    pub(super) fn create_template(
-        &self,
-        args: CreateTemplateArgs,
-        json_output: bool,
-    ) -> anyhow::Result<()> {
-        let id = normalize_agent_id(&args.id);
-        if id.is_empty() {
-            bail!("agent id must contain at least one letter or number");
-        }
-        self.ensure_can_write(&id, args.force)?;
-        let mut profile = profile_from_template(&args.mode, &id, args.name.as_deref())?;
-        if let Some(description) = args.description {
-            profile.description = description;
-        }
-        touch_metadata(&mut profile, "created-from-template");
-        let path = self.store.save(&profile)?;
-        self.append_history(&profile, "created-from-template", &path)?;
-        print_saved(&profile, &path, json_output)
-    }
-
-    pub(super) fn design(&self, args: DesignArgs, json_output: bool) -> anyhow::Result<()> {
-        let prompt = read_prompt(args.prompt, args.prompt_file)?
-            .with_context(|| "design requires --prompt or --prompt-file")?;
-        let create_args = CreateArgs {
-            id: args.id,
-            template: agent_template(&args.mode).map(|_| args.mode.clone()),
-            mode: args.mode,
-            name: Some(args.name),
-            description: args.description,
-            prompt: Some(prompt),
-            prompt_file: None,
-            provider: args.provider,
-            model: args.model,
-            tools: args.tools,
-            add_tools: false,
-            skills: args.skills,
-            add_skills: false,
-            mcp: args.mcp,
-            usrl: args.usrl,
-            memory_policy: args.memory_policy,
-            force: args.force,
-        };
-        self.create(create_args, json_output)
-    }
-
-    pub(super) fn set(&self, args: SetArgs, json_output: bool) -> anyhow::Result<()> {
-        let mut profile = self.store.load(&args.id)?;
-        if let Some(mode) = args.mode {
-            profile.mode = normalized_or_default(&mode, "custom");
-        }
-        if let Some(name) = args.name {
-            profile.display_name = name;
-        }
-        if let Some(description) = args.description {
-            profile.description = description;
-        }
-        if let Some(prompt) = read_prompt(args.prompt, args.prompt_file)? {
-            profile.system_prompt = prompt;
-        }
-        if let Some(provider) = args.provider {
-            profile.current_provider = none_marker(provider);
-            if profile.current_provider.is_none() {
-                profile.current_model = None;
-            }
-        }
-        if let Some(model) = args.model {
-            profile.current_model = none_marker(model);
-        }
-        if let Some(tools) = args.tools {
-            profile.enabled_tools = clean_list(tools);
-        }
-        append_unique(&mut profile.enabled_tools, clean_list(args.add_tools));
-        remove_all(&mut profile.enabled_tools, &clean_list(args.remove_tools));
-        if let Some(skills) = args.skills {
-            profile.enabled_skills = clean_list(skills);
-        }
-        append_unique(&mut profile.enabled_skills, clean_list(args.add_skills));
-        remove_all(&mut profile.enabled_skills, &clean_list(args.remove_skills));
-        if let Some(mcp) = args.mcp {
-            profile.enabled_mcp_servers = clean_list(mcp);
-        }
-        append_unique(&mut profile.enabled_mcp_servers, clean_list(args.add_mcp));
-        remove_all(
-            &mut profile.enabled_mcp_servers,
-            &clean_list(args.remove_mcp),
-        );
-        if let Some(usrl) = args.usrl {
-            profile.usrl_contracts = clean_list(usrl);
-        }
-        append_unique(&mut profile.usrl_contracts, clean_list(args.add_usrl));
-        remove_all(&mut profile.usrl_contracts, &clean_list(args.remove_usrl));
-        if let Some(policy) = args.memory_policy {
-            profile.memory_policy = policy;
-        }
-        match (args.cms_user, args.cms_project) {
-            (Some(user), Some(project)) => {
-                profile.cms_user_id = user;
-                profile.cms_project_id = project;
-            }
-            (None, None) => {}
-            _ => bail!("--cms-user and --cms-project must be passed together"),
-        }
-        self.save_touched(profile, "set", json_output)
-    }
-
-    pub(super) fn name(&self, id: &str, name: String, json_output: bool) -> anyhow::Result<()> {
-        let mut profile = self.store.load(id)?;
-        profile.display_name = name;
-        self.save_touched(profile, "name", json_output)
-    }
-
-    pub(super) fn mode(&self, id: &str, mode: String, json_output: bool) -> anyhow::Result<()> {
-        let mut profile = self.store.load(id)?;
-        profile.mode = normalized_or_default(&mode, "custom");
-        self.save_touched(profile, "mode", json_output)
-    }
-
-    pub(super) fn describe(
-        &self,
-        id: &str,
-        description: String,
-        json_output: bool,
-    ) -> anyhow::Result<()> {
-        let mut profile = self.store.load(id)?;
-        profile.description = description;
-        self.save_touched(profile, "describe", json_output)
-    }
-
-    pub(super) fn provider(
-        &self,
-        id: &str,
-        provider: String,
-        json_output: bool,
-    ) -> anyhow::Result<()> {
-        let mut profile = self.store.load(id)?;
-        profile.current_provider = none_marker(provider);
-        if profile.current_provider.is_none() {
-            profile.current_model = None;
-        }
-        self.save_touched(profile, "provider", json_output)
-    }
-
-    pub(super) fn model(&self, id: &str, model: String, json_output: bool) -> anyhow::Result<()> {
-        let mut profile = self.store.load(id)?;
-        profile.current_model = none_marker(model);
-        self.save_touched(profile, "model", json_output)
-    }
-
-    pub(super) fn prompt(&self, args: PromptArgs, json_output: bool) -> anyhow::Result<()> {
-        let mut profile = self.store.load(&args.id)?;
-        let prompt = if let Some(path) = args.prompt_file {
-            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?
-        } else {
-            join_required("prompt", args.prompt)?
-        };
-        profile.system_prompt = prompt;
-        self.save_touched(profile, "prompt", json_output)
-    }
-
-    pub(super) fn add_to_list(
-        &self,
-        id: &str,
-        field: ListField,
-        value: String,
-        json_output: bool,
-    ) -> anyhow::Result<()> {
-        let mut profile = self.store.load(id)?;
-        append_unique(field.get_mut(&mut profile), clean_list(vec![value]));
-        self.save_touched(profile, &format!("add-{}", field.label()), json_output)
-    }
-
-    pub(super) fn remove_from_list(
-        &self,
-        id: &str,
-        field: ListField,
-        value: &str,
-        json_output: bool,
-    ) -> anyhow::Result<()> {
-        let mut profile = self.store.load(id)?;
-        remove_all(
-            field.get_mut(&mut profile),
-            &clean_list(vec![value.to_string()]),
-        );
-        self.save_touched(profile, &format!("remove-{}", field.label()), json_output)
-    }
-
-    pub(super) fn replace_list(
-        &self,
-        id: &str,
-        field: ListField,
-        values: Vec<String>,
-        json_output: bool,
-    ) -> anyhow::Result<()> {
-        let mut profile = self.store.load(id)?;
-        *field.get_mut(&mut profile) = clean_list(values);
-        self.save_touched(profile, &format!("set-{}", field.label()), json_output)
-    }
-
-    pub(super) fn memory_policy(
-        &self,
-        id: &str,
-        policy: String,
-        json_output: bool,
-    ) -> anyhow::Result<()> {
-        let mut profile = self.store.load(id)?;
-        profile.memory_policy = policy;
-        self.save_touched(profile, "memory-policy", json_output)
-    }
-
-    pub(super) fn cms_scope(
-        &self,
-        id: &str,
-        user: String,
-        project: String,
-        json_output: bool,
-    ) -> anyhow::Result<()> {
-        if user.trim().is_empty() || project.trim().is_empty() {
-            bail!("CMS user and project ids must be non-empty");
-        }
-        let mut profile = self.store.load(id)?;
-        profile.cms_user_id = user;
-        profile.cms_project_id = project;
-        self.save_touched(profile, "cms-scope", json_output)
-    }
-
-    pub(super) fn reset_cms_scope(&self, id: &str, json_output: bool) -> anyhow::Result<()> {
-        let mut profile = self.store.load(id)?;
-        let scope = format!("agent:{}", profile.id);
-        profile.cms_user_id = scope.clone();
-        profile.cms_project_id = scope;
-        self.save_touched(profile, "reset-cms-scope", json_output)
-    }
-
-    pub(super) fn clone_profile(
-        &self,
-        source_id: &str,
-        new_id: &str,
-        name: Option<String>,
-        force: bool,
-        json_output: bool,
-    ) -> anyhow::Result<()> {
-        let mut profile = self.store.load(source_id)?;
-        let normalized = normalize_agent_id(new_id);
-        if normalized.is_empty() {
-            bail!("new agent id must contain at least one letter or number");
-        }
-        self.ensure_can_write(&normalized, force)?;
-        profile.id = normalized.clone();
-        if let Some(name) = name {
-            profile.display_name = name;
-        }
-        let cms_scope = format!("agent:{normalized}");
-        profile.cms_user_id = cms_scope.clone();
-        profile.cms_project_id = cms_scope;
-        profile.created_at = chrono::Utc::now();
-        profile.updated_at = profile.created_at;
-        profile.metadata = admin_metadata("cloned");
-        profile.metadata.insert(
-            "cloned_from".to_string(),
-            Value::String(source_id.to_string()),
-        );
-        let path = self.store.save(&profile)?;
-        self.append_history(&profile, "cloned", &path)?;
-        print_saved(&profile, &path, json_output)
-    }
-
-    pub(super) fn delete(&self, id: &str, yes: bool, json_output: bool) -> anyhow::Result<()> {
-        if !yes {
-            bail!("refusing to delete {id} without --yes");
-        }
-        let path = self.store.delete(id)?;
-        if json_output {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json!({
-                    "deleted": id,
-                    "path": path,
-                }))?
-            );
-        } else {
-            println!("Deleted agent {id} at {}", path.display());
-        }
-        Ok(())
-    }
-
-    pub(super) fn export(&self, id: &str, out: Option<PathBuf>) -> anyhow::Result<()> {
-        let profile = self.store.load(id)?;
-        let text = serde_json::to_string_pretty(&profile)?;
-        if let Some(path) = out {
-            std::fs::write(&path, text)?;
-            println!("Exported agent {} to {}", profile.id, path.display());
-        } else {
-            println!("{text}");
-        }
-        Ok(())
-    }
-
-    pub(super) fn import(
-        &self,
-        path: &PathBuf,
-        force: bool,
-        json_output: bool,
-    ) -> anyhow::Result<()> {
-        let mut profile: AgentProfile = serde_json::from_str(
-            &std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?,
-        )?;
-        profile.id = normalize_agent_id(&profile.id);
-        if profile.id.is_empty() {
-            bail!("imported agent id must contain at least one letter or number");
-        }
-        self.ensure_can_write(&profile.id, force)?;
-        profile.updated_at = chrono::Utc::now();
-        profile.metadata.insert(
-            "last_admin_action".to_string(),
-            Value::String("imported".to_string()),
-        );
-        profile.metadata.insert(
-            "imported_from".to_string(),
-            Value::String(path.display().to_string()),
-        );
-        let saved = self.store.save(&profile)?;
-        self.append_history(&profile, "imported", &saved)?;
-        print_saved(&profile, &saved, json_output)
-    }
-
-    pub(super) fn tui(&self) -> anyhow::Result<()> {
-        run_admin_tui(self)
-    }
-
-    fn validate_profile(&self, profile: &AgentProfile) -> anyhow::Result<ValidationReport> {
-        validate_profile(profile, &self.workspace, &self.data_root)
-    }
-
-    fn load_history(&self) -> anyhow::Result<Vec<HistoryEvent>> {
-        load_history(&self.data_root)
-    }
-
-    fn append_history(
+    pub(super) fn append_history(
         &self,
         profile: &AgentProfile,
         action: &str,
         path: &Path,
     ) -> anyhow::Result<()> {
-        append_history(&self.data_root, profile, action, path)
+        super::history::append_history(&self.data_root, profile, action, path)
     }
 
-    fn register_skiller_pack(
+    pub(super) fn load_history(&self) -> anyhow::Result<Vec<HistoryEvent>> {
+        super::history::load_history(&self.data_root)
+    }
+
+    pub(super) fn validate_profile(&self, profile: &AgentProfile) -> anyhow::Result<ValidationReport> {
+        super::validation::validate_profile(profile, &self.workspace, &self.data_root)
+    }
+
+    pub(super) fn ensure_can_write(&self, id: &str, force: bool) -> anyhow::Result<()> {
+        let normalized = normalize_agent_id(id);
+        if normalized.is_empty() {
+            bail!("agent id must contain at least one letter or number");
+        }
+        let path = self.store.path_for(&normalized);
+        if path.exists() && !force {
+            bail!(
+                "profile {normalized} already exists at {}; use --force to overwrite",
+                path.display()
+            );
+        }
+        Ok(())
+    }
+
+    pub(super) fn save_touched(
+        &self,
+        mut profile: AgentProfile,
+        action: &str,
+        json_output: bool,
+    ) -> anyhow::Result<()> {
+        touch_metadata(&mut profile, action);
+        profile.updated_at = chrono::Utc::now();
+        let path = self.store.save(&profile)?;
+        self.append_history(&profile, action, &path)?;
+        print_saved(&profile, &path, json_output)
+    }
+
+    pub(super) fn save_touched_quiet(&self, mut profile: AgentProfile, action: &str) -> anyhow::Result<()> {
+        touch_metadata(&mut profile, action);
+        profile.updated_at = chrono::Utc::now();
+        let path = self.store.save(&profile)?;
+        self.append_history(&profile, action, &path)?;
+        Ok(())
+    }
+
+    pub(super) fn register_skiller_pack(
         &self,
         known_ids: &mut BTreeSet<String>,
         path: &Path,
@@ -1092,72 +140,61 @@ impl AgentRegistryAdmin {
         if id.is_empty() || known_ids.contains(&id) {
             return Ok(None);
         }
-        if !dry_run {
-            let prompt = if pack.system_prompt_material.trim().is_empty() {
-                format!(
-                    "You are {}. Operate as a Skiller-generated specialist agent for source-grounded technical work. Use selected Skiller skills as evidence, respect runtime policy, cite sources when possible, and escalate unsupported or unsafe requests.",
-                    pack.agent_name
-                )
-            } else {
-                pack.system_prompt_material.clone()
-            };
-            let mut profile = AgentProfile::new(&id, &pack.agent_name, prompt)?;
-            profile.mode = "skiller".to_string();
-            profile.description = if pack.description.trim().is_empty() {
-                format!(
-                    "Skiller-generated agent pack loaded from {}",
-                    path.display()
-                )
-            } else {
-                pack.description.clone()
-            };
-            profile.enabled_skills = pack.skill_ids.clone();
-            profile.enabled_tools = pack
-                .tool_permissions
-                .iter()
-                .filter_map(|permission| permission.split(':').next())
-                .map(str::trim)
-                .filter(|tool| !tool.is_empty())
-                .map(str::to_string)
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect();
-            profile.memory_policy = if pack.memory_policy.trim().is_empty() {
-                "agent-scoped".to_string()
-            } else {
-                pack.memory_policy.clone()
-            };
-            profile
-                .metadata
-                .insert("registered_identity".to_string(), json!(true));
-            profile
-                .metadata
-                .insert("identity_source".to_string(), json!("skiller-agent-pack"));
-            profile.metadata.insert(
-                "artifact_path".to_string(),
-                json!(path.display().to_string()),
-            );
-            profile.metadata.insert(
-                "source_bundle_ids".to_string(),
-                json!(pack.source_bundle_ids),
-            );
-            profile.metadata.insert(
-                "source_bundle_name".to_string(),
-                json!(pack.source_bundle_name),
-            );
-            profile.metadata.insert(
-                "source_bundle_version".to_string(),
-                json!(pack.source_bundle_version),
-            );
-            touch_metadata(&mut profile, "register-skiller-pack");
-            let saved = self.store.save(&profile)?;
-            self.append_history(&profile, "register-skiller-pack", &saved)?;
-        }
         known_ids.insert(id.clone());
+        if dry_run {
+            return Ok(Some(id));
+        }
+        let prompt = if pack.system_prompt_material.trim().is_empty() {
+            format!(
+                "You are {}. Operate as a Skiller-generated specialist agent for source-grounded technical work. Use selected Skiller skills as evidence, respect runtime policy, cite sources when possible, and escalate unsupported or unsafe requests.",
+                pack.agent_name
+            )
+        } else {
+            pack.system_prompt_material.clone()
+        };
+        let mut profile = AgentProfile::new(&id, &pack.agent_name, prompt)?;
+        profile.mode = "skiller".to_string();
+        profile.description = if pack.description.trim().is_empty() {
+            format!("Skiller-generated agent pack loaded from {}", path.display())
+        } else {
+            pack.description.clone()
+        };
+        profile.enabled_skills = pack.skill_ids.clone();
+        profile.enabled_tools = pack
+            .tool_permissions
+            .iter()
+            .filter_map(|permission| permission.split(':').next())
+            .map(str::trim)
+            .filter(|tool| !tool.is_empty())
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        profile.memory_policy = if pack.memory_policy.trim().is_empty() {
+            "agent-scoped".to_string()
+        } else {
+            pack.memory_policy.clone()
+        };
+        profile.metadata.insert("registered_identity".to_string(), json!(true));
+        profile.metadata.insert("identity_source".to_string(), json!("skiller-agent-pack"));
+        profile
+            .metadata
+            .insert("artifact_path".to_string(), json!(path.display().to_string()));
+        profile
+            .metadata
+            .insert("source_bundle_ids".to_string(), json!(pack.source_bundle_ids));
+        profile
+            .metadata
+            .insert("source_bundle_name".to_string(), json!(pack.source_bundle_name));
+        profile
+            .metadata
+            .insert("source_bundle_version".to_string(), json!(pack.source_bundle_version));
+        let saved = self.store.save(&profile)?;
+        self.append_history(&profile, "register-skiller-pack", &saved)?;
         Ok(Some(id))
     }
 
-    fn register_skiller_proposals(
+    pub(super) fn register_skiller_proposals(
         &self,
         known_ids: &mut BTreeSet<String>,
         index_path: &Path,
@@ -1174,94 +211,1056 @@ impl AgentRegistryAdmin {
             let proposal_path = base.join(&entry.file);
             let proposal: skiller::models::AgentProfileProposal =
                 serde_yaml::from_str(&fs::read_to_string(&proposal_path)?)?;
-            let id = normalize_agent_id(&proposal.agent_id);
-            if id.is_empty() || known_ids.contains(&id) {
-                continue;
+            if let Some(id) = self.register_skiller_proposal(
+                known_ids,
+                &index,
+                &proposal,
+                &proposal_path,
+                dry_run,
+            )? {
+                created.push(id);
             }
-            if !dry_run {
-                let prompt = format!(
-                    "You are {}.\n\nPurpose: {}\n\nRuntime context policy: {}\nReview policy: {}\nEscalation policy: {}\n\nRecommended Skiller skills:\n{}",
-                    proposal.agent_name,
-                    proposal.agent_purpose,
-                    proposal.runtime_context_policy,
-                    proposal.review_policy,
-                    proposal.escalation_policy,
-                    proposal
-                        .recommended_skills
-                        .iter()
-                        .map(|skill| format!("- {skill}"))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                );
-                let mut profile = AgentProfile::new(&id, &proposal.agent_name, prompt)?;
-                profile.mode = "skiller".to_string();
-                profile.description = proposal.agent_purpose.clone();
-                profile.enabled_skills = proposal.recommended_skills.clone();
-                profile.enabled_tools = proposal.required_tools.clone();
-                profile.memory_policy = "agent-scoped".to_string();
-                profile
-                    .metadata
-                    .insert("registered_identity".to_string(), json!(true));
-                profile.metadata.insert(
-                    "identity_source".to_string(),
-                    json!("skiller-agent-proposal"),
-                );
-                profile.metadata.insert(
-                    "artifact_path".to_string(),
-                    json!(proposal_path.display().to_string()),
-                );
-                profile
-                    .metadata
-                    .insert("source_bundle_id".to_string(), json!(index.bundle_id));
-                profile
-                    .metadata
-                    .insert("source_bundle_name".to_string(), json!(index.bundle_name));
-                profile.metadata.insert(
-                    "ready_for_packaging".to_string(),
-                    json!(proposal.proposal_readiness.ready_for_packaging),
-                );
-                profile.metadata.insert(
-                    "ready_for_default_use_candidate".to_string(),
-                    json!(proposal.proposal_readiness.ready_for_default_use_candidate),
-                );
-                touch_metadata(&mut profile, "register-skiller-proposal");
-                let saved = self.store.save(&profile)?;
-                self.append_history(&profile, "register-skiller-proposal", &saved)?;
-            }
-            known_ids.insert(id.clone());
-            created.push(id);
         }
         Ok(created)
     }
 
-    fn save_touched(
+    fn register_skiller_proposal(
         &self,
-        profile: AgentProfile,
-        action: &str,
-        json_output: bool,
-    ) -> anyhow::Result<()> {
-        let (profile, path) = self.save_touched_quiet(profile, action)?;
-        print_saved(&profile, &path, json_output)
-    }
-
-    fn save_touched_quiet(
-        &self,
-        mut profile: AgentProfile,
-        action: &str,
-    ) -> anyhow::Result<(AgentProfile, PathBuf)> {
-        profile.updated_at = chrono::Utc::now();
-        touch_metadata(&mut profile, action);
-        let path = self.store.save(&profile)?;
-        self.append_history(&profile, action, &path)?;
-        Ok((profile, path))
-    }
-
-    fn ensure_can_write(&self, id: &str, force: bool) -> anyhow::Result<()> {
-        if self.store.path_for(id).exists() && !force {
-            bail!("agent {id} already exists; pass --force to overwrite");
+        known_ids: &mut BTreeSet<String>,
+        index: &skiller::agents::AgentProposalIndex,
+        proposal: &skiller::models::AgentProfileProposal,
+        path: &Path,
+        dry_run: bool,
+    ) -> anyhow::Result<Option<String>> {
+        let id = normalize_agent_id(&proposal.agent_id);
+        if id.is_empty() || known_ids.contains(&id) {
+            return Ok(None);
         }
-        Ok(())
+        known_ids.insert(id.clone());
+        if dry_run {
+            return Ok(Some(id));
+        }
+        let prompt = format!(
+            "You are {}.\n\nPurpose: {}\n\nRuntime context policy: {}\nReview policy: {}\nEscalation policy: {}\n\nRecommended Skiller skills:\n{}",
+            proposal.agent_name,
+            proposal.agent_purpose,
+            proposal.runtime_context_policy,
+            proposal.review_policy,
+            proposal.escalation_policy,
+            proposal
+                .recommended_skills
+                .iter()
+                .map(|skill| format!("- {skill}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let mut profile = AgentProfile::new(&id, &proposal.agent_name, prompt)?;
+        profile.mode = "skiller".to_string();
+        profile.description = proposal.agent_purpose.clone();
+        profile.enabled_skills = proposal.recommended_skills.clone();
+        profile.enabled_tools = proposal.required_tools.clone();
+        profile.memory_policy = "agent-scoped".to_string();
+        profile
+            .metadata
+            .insert("registered_identity".to_string(), json!(true));
+        profile
+            .metadata
+            .insert("identity_source".to_string(), json!("skiller-agent-proposal"));
+        profile
+            .metadata
+            .insert("artifact_path".to_string(), json!(path.display().to_string()));
+        profile
+            .metadata
+            .insert("source_bundle_id".to_string(), json!(index.bundle_id));
+        profile
+            .metadata
+            .insert("source_bundle_name".to_string(), json!(index.bundle_name));
+        profile.metadata.insert(
+            "ready_for_packaging".to_string(),
+            json!(proposal.proposal_readiness.ready_for_packaging),
+        );
+        profile.metadata.insert(
+            "ready_for_default_use_candidate".to_string(),
+            json!(proposal.proposal_readiness.ready_for_default_use_candidate),
+        );
+        let saved = self.store.save(&profile)?;
+        self.append_history(&profile, "register-skiller-proposal", &saved)?;
+        Ok(Some(id))
     }
+
+pub(super) fn print_paths(&self, json_output: bool) -> anyhow::Result<()> {
+    print_json_or_text(
+        json_output,
+        &json!({
+            "data_root": self.data_root,
+            "agents_root": self.store.root,
+            "workspace": self.workspace,
+        }),
+        || {
+            println!("data_root: {}", self.data_root.display());
+            println!("agents_root: {}", self.store.root.display());
+            println!("workspace: {}", self.workspace.display());
+            Ok(())
+        },
+    )
+}
+
+pub(super) fn doctor(&self, json_output: bool) -> anyhow::Result<()> {
+    let (profiles, invalid_files) = self.store.list_lossy()?;
+    let mut warnings = Vec::new();
+    let mut ids = BTreeSet::new();
+    let mut cms_scopes: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+    for profile in &profiles {
+        if !ids.insert(profile.id.clone()) {
+            warnings.push(format!("duplicate profile id loaded: {}", profile.id));
+        }
+        let expected_path = self.store.path_for(&profile.id);
+        if !expected_path.exists() {
+            warnings.push(format!(
+                "profile {} is not stored at expected path {}",
+                profile.id,
+                expected_path.display()
+            ));
+        }
+        if profile.system_prompt.trim().is_empty() {
+            warnings.push(format!("profile {} has an empty system prompt", profile.id));
+        }
+        if profile.display_name.trim().is_empty() {
+            warnings.push(format!("profile {} has an empty display name", profile.id));
+        }
+        if profile
+            .enabled_tools
+            .iter()
+            .any(|tool| tool.trim().is_empty())
+        {
+            warnings.push(format!("profile {} has an empty tool entry", profile.id));
+        }
+        if profile.current_model.is_some() && profile.current_provider.is_none() {
+            warnings.push(format!(
+                "profile {} sets a model but no provider; runtime will inherit current provider",
+                profile.id
+            ));
+        }
+        cms_scopes
+            .entry((profile.cms_user_id.clone(), profile.cms_project_id.clone()))
+            .or_default()
+            .push(profile.id.clone());
+    }
+    for ((user, project), profile_ids) in cms_scopes {
+        if profile_ids.len() > 1 {
+            warnings.push(format!(
+                "profiles share CMS scope {user}/{project}: {}",
+                profile_ids.join(",")
+            ));
+        }
+    }
+    let report = DoctorReport {
+        agents_root: self.store.root.clone(),
+        profile_count: profiles.len(),
+        invalid_files,
+        warnings,
+    };
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("Agent registry: {}", report.agents_root.display());
+        println!("Profiles: {}", report.profile_count);
+        if report.invalid_files.is_empty() && report.warnings.is_empty() {
+            println!("Status: ok");
+        }
+        if !report.invalid_files.is_empty() {
+            println!("\nInvalid files:");
+            for item in &report.invalid_files {
+                println!("- {item}");
+            }
+        }
+        if !report.warnings.is_empty() {
+            println!("\nWarnings:");
+            for item in &report.warnings {
+                println!("- {item}");
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn register(&self, args: RegisterArgs, json_output: bool) -> anyhow::Result<()> {
+    let mut report = RegisterReport {
+        dry_run: args.dry_run,
+        ..RegisterReport::default()
+    };
+    let (profiles, warnings) = self.store.list_lossy()?;
+    report.warnings.extend(warnings);
+    let mut known_ids = profiles
+        .into_iter()
+        .map(|profile| profile.id)
+        .collect::<BTreeSet<_>>();
+
+    if !args.skiller_only {
+        for template in agent_templates() {
+            if known_ids.contains(&template.mode) {
+                continue;
+            }
+            report.created_ids.push(template.mode.clone());
+            report.builtin_created += 1;
+            if !args.dry_run {
+                let mut profile = profile_from_template(&template.mode, &template.mode, None)?;
+                profile
+                    .metadata
+                    .insert("registered_identity".to_string(), Value::Bool(true));
+                profile
+                    .metadata
+                    .insert("identity_source".to_string(), json!("builtin-template"));
+                touch_metadata(&mut profile, "register-builtin");
+                let saved = self.store.save(&profile)?;
+                self.append_history(&profile, "register-builtin", &saved)?;
+            }
+            known_ids.insert(template.mode);
+        }
+    }
+
+    if !args.builtins_only {
+        for artifact in find_skiller_agent_artifacts(&self.workspace, &self.data_root) {
+            match artifact {
+                Ok(SkillerAgentArtifact::Pack(path)) => {
+                    match self.register_skiller_pack(&mut known_ids, &path, args.dry_run) {
+                        Ok(Some(id)) => {
+                            report.skiller_created += 1;
+                            report.created_ids.push(id);
+                        }
+                        Ok(None) => {}
+                        Err(error) => report.warnings.push(format!(
+                            "skipped Skiller agent pack {}: {error}",
+                            path.display()
+                        )),
+                    }
+                }
+                Ok(SkillerAgentArtifact::ProposalIndex(path)) => {
+                    match self.register_skiller_proposals(&mut known_ids, &path, args.dry_run) {
+                        Ok(ids) => {
+                            report.skiller_created += ids.len();
+                            report.created_ids.extend(ids);
+                        }
+                        Err(error) => report.warnings.push(format!(
+                            "skipped Skiller agent proposal index {}: {error}",
+                            path.display()
+                        )),
+                    }
+                }
+                Err(error) => report.warnings.push(error.to_string()),
+            }
+        }
+    }
+
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("Registered built-in agents: {}", report.builtin_created);
+        println!("Registered Skiller agents: {}", report.skiller_created);
+        if args.dry_run {
+            println!("Dry run: no profiles written.");
+        }
+        if !report.created_ids.is_empty() {
+            println!("IDs: {}", report.created_ids.join(","));
+        }
+        if !report.warnings.is_empty() {
+            println!("\nWarnings:");
+            for warning in &report.warnings {
+                println!("- {warning}");
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn validate(&self, id: Option<&str>, json_output: bool) -> anyhow::Result<()> {
+    if let Some(id) = id {
+        let profile = self.store.load(id)?;
+        let report = self.validate_profile(&profile)?;
+        if json_output {
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        } else {
+            print_validation_report(&report);
+        }
+        return Ok(());
+    }
+    let (profiles, warnings) = self.store.list_lossy()?;
+    let mut reports = Vec::new();
+    for profile in &profiles {
+        reports.push(self.validate_profile(profile)?);
+    }
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "agents_root": self.store.root,
+                "load_warnings": warnings,
+                "reports": reports,
+            }))?
+        );
+    } else {
+        println!(
+            "Validated {} profile(s) in {}",
+            reports.len(),
+            self.store.root.display()
+        );
+        for warning in warnings {
+            println!("Load warning: {warning}");
+        }
+        for report in &reports {
+            print_validation_report(report);
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn metrics(&self, id: &str, json_output: bool) -> anyhow::Result<()> {
+    self.store.load(id)?;
+    let mut report = load_metrics_report(&self.data_root, id)?;
+    report.id = normalize_agent_id(id);
+    let task_total = report.metrics.tasks_completed
+        + report.metrics.tasks_failed
+        + report.metrics.tasks_cancelled;
+    report.task_success_rate = ratio(report.metrics.tasks_completed, task_total);
+    if task_total == 0 {
+        report
+            .warnings
+            .push("no recorded task metrics for this agent".to_string());
+    }
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        print_metrics_report(&report);
+    }
+    Ok(())
+}
+
+pub(super) fn compare(
+    &self,
+    left_id: &str,
+    right_id: &str,
+    prompts: bool,
+    json_output: bool,
+) -> anyhow::Result<()> {
+    let left = self.store.load(left_id)?;
+    let right = self.store.load(right_id)?;
+    let mut differences = Vec::new();
+    push_diff(
+        &mut differences,
+        "mode",
+        json!(left.mode),
+        json!(right.mode),
+    );
+    push_diff(
+        &mut differences,
+        "display_name",
+        json!(left.display_name),
+        json!(right.display_name),
+    );
+    push_diff(
+        &mut differences,
+        "description",
+        json!(left.description),
+        json!(right.description),
+    );
+    push_diff(
+        &mut differences,
+        "provider",
+        json!(left.current_provider),
+        json!(right.current_provider),
+    );
+    push_diff(
+        &mut differences,
+        "model",
+        json!(left.current_model),
+        json!(right.current_model),
+    );
+    push_diff(
+        &mut differences,
+        "tools",
+        json!(left.enabled_tools),
+        json!(right.enabled_tools),
+    );
+    push_diff(
+        &mut differences,
+        "skills",
+        json!(left.enabled_skills),
+        json!(right.enabled_skills),
+    );
+    push_diff(
+        &mut differences,
+        "mcp_servers",
+        json!(left.enabled_mcp_servers),
+        json!(right.enabled_mcp_servers),
+    );
+    push_diff(
+        &mut differences,
+        "usrl_contracts",
+        json!(left.usrl_contracts),
+        json!(right.usrl_contracts),
+    );
+    push_diff(
+        &mut differences,
+        "cms_user_id",
+        json!(left.cms_user_id),
+        json!(right.cms_user_id),
+    );
+    push_diff(
+        &mut differences,
+        "cms_project_id",
+        json!(left.cms_project_id),
+        json!(right.cms_project_id),
+    );
+    push_diff(
+        &mut differences,
+        "memory_policy",
+        json!(left.memory_policy),
+        json!(right.memory_policy),
+    );
+    push_diff(
+        &mut differences,
+        "status",
+        metadata_json(&left, "status"),
+        metadata_json(&right, "status"),
+    );
+    push_diff(
+        &mut differences,
+        "primary_scope",
+        metadata_json(&left, "primary_scope"),
+        metadata_json(&right, "primary_scope"),
+    );
+    push_diff(
+        &mut differences,
+        "tags",
+        metadata_json(&left, "tags"),
+        metadata_json(&right, "tags"),
+    );
+    if prompts {
+        push_diff(
+            &mut differences,
+            "system_prompt",
+            json!(left.system_prompt),
+            json!(right.system_prompt),
+        );
+    } else if left.system_prompt != right.system_prompt {
+        differences.push(FieldDifference {
+                field: "system_prompt".to_string(),
+                left: json!({"bytes": left.system_prompt.len(), "sha256": prompt_digest(&left.system_prompt)}),
+                right: json!({"bytes": right.system_prompt.len(), "sha256": prompt_digest(&right.system_prompt)}),
+            });
+    }
+    let comparison = AgentComparison {
+        left_id: left.id,
+        right_id: right.id,
+        differences,
+    };
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&comparison)?);
+    } else {
+        print_comparison(&comparison);
+    }
+    Ok(())
+}
+
+pub(super) fn history(&self, id: Option<&str>, json_output: bool) -> anyhow::Result<()> {
+    let mut events = self.load_history()?;
+    if let Some(id) = id {
+        let id = normalize_agent_id(id);
+        events.retain(|event| normalize_agent_id(&event.agent_id) == id);
+    }
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&events)?);
+    } else if events.is_empty() {
+        println!("No history recorded.");
+    } else {
+        for event in events.iter().rev().take(100) {
+            println!(
+                "{} {:<18} {} {}",
+                event.timestamp, event.agent_id, event.action, event.summary
+            );
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn status(&self, id: &str, status: String, json_output: bool) -> anyhow::Result<()> {
+    let status = normalize_agent_id(&status);
+    let allowed = [
+        "draft",
+        "active",
+        "paused",
+        "deprecated",
+        "archived",
+        "broken",
+    ];
+    if !allowed.contains(&status.as_str()) {
+        bail!("status must be one of: {}", allowed.join(","));
+    }
+    let mut profile = self.store.load(id)?;
+    if status == "active" {
+        let report = self.validate_profile(&profile)?;
+        if !report.errors.is_empty() {
+            bail!(
+                "refusing to activate {}: validation has {} error(s)",
+                profile.id,
+                report.errors.len()
+            );
+        }
+    }
+    profile
+        .metadata
+        .insert("status".to_string(), Value::String(status));
+    self.save_touched(profile, "status", json_output)
+}
+
+pub(super) fn scope(&self, args: ScopeArgs, json_output: bool) -> anyhow::Result<()> {
+    let mut profile = self.store.load(&args.id)?;
+    if let Some(primary) = args.primary {
+        profile
+            .metadata
+            .insert("primary_scope".to_string(), Value::String(primary));
+    }
+    if !args.secondary.is_empty() {
+        profile.metadata.insert(
+            "secondary_scopes".to_string(),
+            json!(clean_list(args.secondary)),
+        );
+    }
+    if let Some(workspace_scope) = args.workspace_scope {
+        profile.metadata.insert(
+            "workspace_scope".to_string(),
+            Value::String(workspace_scope),
+        );
+    }
+    if !args.file_scope.is_empty() {
+        profile.metadata.insert(
+            "file_scope_hints".to_string(),
+            json!(clean_list(args.file_scope)),
+        );
+    }
+    self.save_touched(profile, "scope", json_output)
+}
+
+pub(super) fn tags(&self, id: &str, tags: Vec<String>, json_output: bool) -> anyhow::Result<()> {
+    let mut profile = self.store.load(id)?;
+    profile
+        .metadata
+        .insert("tags".to_string(), json!(clean_list(tags)));
+    self.save_touched(profile, "tags", json_output)
+}
+
+pub(super) fn budget(&self, args: BudgetArgs, json_output: bool) -> anyhow::Result<()> {
+    let mut profile = self.store.load(&args.id)?;
+    if args.clear {
+        profile.metadata.remove("default_work_budget");
+    } else {
+        let mut budget = profile
+            .metadata
+            .get("default_work_budget")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        if !budget.is_object() {
+            budget = json!({});
+        }
+        let map = budget.as_object_mut().expect("object ensured");
+        if let Some(value) = args.max_steps {
+            map.insert("max_steps".to_string(), json!(value));
+        }
+        if let Some(value) = args.max_tool_calls {
+            map.insert("max_tool_calls".to_string(), json!(value));
+        }
+        if let Some(value) = args.max_read_bytes {
+            map.insert("max_read_bytes".to_string(), json!(value));
+        }
+        if let Some(value) = args.max_output_bytes {
+            map.insert("max_output_bytes".to_string(), json!(value));
+        }
+        if !args.allowed_tools.is_empty() {
+            map.insert(
+                "allowed_tools".to_string(),
+                json!(clean_list(args.allowed_tools)),
+            );
+        }
+        if let Some(notes) = args.notes {
+            map.insert("notes".to_string(), json!(notes));
+        }
+        profile
+            .metadata
+            .insert("default_work_budget".to_string(), budget);
+    }
+    self.save_touched(profile, "budget", json_output)
+}
+
+pub(super) fn templates(&self, id: Option<&str>, json_output: bool) -> anyhow::Result<()> {
+    if let Some(id) = id {
+        let template = agent_template(id).with_context(|| format!("unknown template: {id}"))?;
+        if json_output {
+            println!("{}", serde_json::to_string_pretty(&template)?);
+        } else {
+            print_template(&template);
+        }
+        return Ok(());
+    }
+    let templates = agent_templates();
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&templates)?);
+    } else {
+        for template in templates {
+            println!(
+                "{:<14} {:<22} tools={} skills={}",
+                template.mode,
+                template.display_name,
+                list_or_dash(&template.enabled_tools),
+                list_or_dash(&template.enabled_skills)
+            );
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn list(&self, args: ListArgs, json_output: bool) -> anyhow::Result<()> {
+    let (mut profiles, warnings) = self.store.list_lossy()?;
+    if let Some(mode) = args.mode {
+        let mode = normalize_agent_id(&mode);
+        profiles.retain(|profile| normalize_agent_id(&profile.mode) == mode);
+    }
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "agents_root": self.store.root,
+                "profiles": profiles,
+                "warnings": warnings,
+            }))?
+        );
+        return Ok(());
+    }
+    if profiles.is_empty() {
+        println!("No agents found in {}", self.store.root.display());
+    } else {
+        for profile in profiles {
+            println!(
+                "{:<24} mode={:<14} name={} provider={} model={} tools={} skills={}",
+                profile.id,
+                profile.mode,
+                profile.display_name,
+                profile.current_provider.as_deref().unwrap_or("-"),
+                profile.current_model.as_deref().unwrap_or("-"),
+                list_or_dash(&profile.enabled_tools),
+                list_or_dash(&profile.enabled_skills),
+            );
+            if args.long {
+                println!("  description: {}", dash_if_empty(&profile.description));
+                println!("  cms: {}/{}", profile.cms_user_id, profile.cms_project_id);
+                println!("  mcp: {}", list_or_dash(&profile.enabled_mcp_servers));
+                println!("  usrl: {}", list_or_dash(&profile.usrl_contracts));
+                println!("  memory_policy: {}", profile.memory_policy);
+                println!("  prompt_bytes: {}", profile.system_prompt.len());
+            }
+        }
+    }
+    if !warnings.is_empty() {
+        println!("\nWarnings:");
+        for warning in warnings {
+            println!("- {warning}");
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn show(&self, id: &str, json_output: bool) -> anyhow::Result<()> {
+    let profile = self.store.load(id)?;
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&profile)?);
+    } else {
+        print_profile(&profile);
+    }
+    Ok(())
+}
+
+pub(super) fn create(&self, args: CreateArgs, json_output: bool) -> anyhow::Result<()> {
+    let id = normalize_agent_id(&args.id);
+    if id.is_empty() {
+        bail!("agent id must contain at least one letter or number");
+    }
+    self.ensure_can_write(&id, args.force)?;
+
+    let mut profile = if let Some(template_id) = &args.template {
+        profile_from_template(template_id, &id, args.name.as_deref())?
+    } else {
+        let prompt = read_prompt(args.prompt.clone(), args.prompt_file.clone())?.unwrap_or_else(|| {
+                format!(
+                    "You are {name}, a Vegvisir custom agent. Work evidence-first, preserve user work, follow tool and secret boundaries, and report verification clearly.",
+                    name = args.name.as_deref().unwrap_or(&id)
+                )
+            });
+        AgentProfile::new(&id, args.name.clone().unwrap_or_else(|| id.clone()), prompt)?
+    };
+
+    if args.template.is_none() || args.mode != "custom" {
+        profile.mode = normalized_or_default(&args.mode, "custom");
+    }
+    if let Some(name) = args.name {
+        profile.display_name = name;
+    }
+    if let Some(description) = args.description {
+        profile.description = description;
+    }
+    if let Some(prompt) = read_prompt(args.prompt, args.prompt_file)? {
+        profile.system_prompt = prompt;
+    }
+    profile.current_provider = args.provider.and_then(none_marker);
+    profile.current_model = args.model.and_then(none_marker);
+    if !args.tools.is_empty() {
+        let tools = clean_list(args.tools);
+        if args.add_tools {
+            append_unique(&mut profile.enabled_tools, tools);
+        } else {
+            profile.enabled_tools = tools;
+        }
+    }
+    if !args.skills.is_empty() {
+        let skills = clean_list(args.skills);
+        if args.add_skills {
+            append_unique(&mut profile.enabled_skills, skills);
+        } else {
+            profile.enabled_skills = skills;
+        }
+    }
+    if !args.mcp.is_empty() {
+        profile.enabled_mcp_servers = clean_list(args.mcp);
+    }
+    if !args.usrl.is_empty() {
+        profile.usrl_contracts = clean_list(args.usrl);
+    }
+    if let Some(policy) = args.memory_policy.filter(|value| !value.trim().is_empty()) {
+        profile.memory_policy = policy;
+    }
+    touch_metadata(&mut profile, "created");
+    let path = self.store.save(&profile)?;
+    self.append_history(&profile, "created", &path)?;
+    print_saved(&profile, &path, json_output)
+}
+
+pub(super) fn create_template(
+    &self,
+    args: CreateTemplateArgs,
+    json_output: bool,
+) -> anyhow::Result<()> {
+    let id = normalize_agent_id(&args.id);
+    if id.is_empty() {
+        bail!("agent id must contain at least one letter or number");
+    }
+    self.ensure_can_write(&id, args.force)?;
+    let mut profile = profile_from_template(&args.mode, &id, args.name.as_deref())?;
+    if let Some(description) = args.description {
+        profile.description = description;
+    }
+    touch_metadata(&mut profile, "created-from-template");
+    let path = self.store.save(&profile)?;
+    self.append_history(&profile, "created-from-template", &path)?;
+    print_saved(&profile, &path, json_output)
+}
+
+pub(super) fn design(&self, args: DesignArgs, json_output: bool) -> anyhow::Result<()> {
+    let prompt = read_prompt(args.prompt, args.prompt_file)?
+        .with_context(|| "design requires --prompt or --prompt-file")?;
+    let create_args = CreateArgs {
+        id: args.id,
+        template: agent_template(&args.mode).map(|_| args.mode.clone()),
+        mode: args.mode,
+        name: Some(args.name),
+        description: args.description,
+        prompt: Some(prompt),
+        prompt_file: None,
+        provider: args.provider,
+        model: args.model,
+        tools: args.tools,
+        add_tools: false,
+        skills: args.skills,
+        add_skills: false,
+        mcp: args.mcp,
+        usrl: args.usrl,
+        memory_policy: args.memory_policy,
+        force: args.force,
+    };
+    self.create(create_args, json_output)
+}
+
+pub(super) fn set(&self, args: SetArgs, json_output: bool) -> anyhow::Result<()> {
+    let mut profile = self.store.load(&args.id)?;
+    if let Some(mode) = args.mode {
+        profile.mode = normalized_or_default(&mode, "custom");
+    }
+    if let Some(name) = args.name {
+        profile.display_name = name;
+    }
+    if let Some(description) = args.description {
+        profile.description = description;
+    }
+    if let Some(prompt) = read_prompt(args.prompt, args.prompt_file)? {
+        profile.system_prompt = prompt;
+    }
+    if let Some(provider) = args.provider {
+        profile.current_provider = none_marker(provider);
+        if profile.current_provider.is_none() {
+            profile.current_model = None;
+        }
+    }
+    if let Some(model) = args.model {
+        profile.current_model = none_marker(model);
+    }
+    if let Some(tools) = args.tools {
+        profile.enabled_tools = clean_list(tools);
+    }
+    append_unique(&mut profile.enabled_tools, clean_list(args.add_tools));
+    remove_all(&mut profile.enabled_tools, &clean_list(args.remove_tools));
+    if let Some(skills) = args.skills {
+        profile.enabled_skills = clean_list(skills);
+    }
+    append_unique(&mut profile.enabled_skills, clean_list(args.add_skills));
+    remove_all(&mut profile.enabled_skills, &clean_list(args.remove_skills));
+    if let Some(mcp) = args.mcp {
+        profile.enabled_mcp_servers = clean_list(mcp);
+    }
+    append_unique(&mut profile.enabled_mcp_servers, clean_list(args.add_mcp));
+    remove_all(
+        &mut profile.enabled_mcp_servers,
+        &clean_list(args.remove_mcp),
+    );
+    if let Some(usrl) = args.usrl {
+        profile.usrl_contracts = clean_list(usrl);
+    }
+    append_unique(&mut profile.usrl_contracts, clean_list(args.add_usrl));
+    remove_all(&mut profile.usrl_contracts, &clean_list(args.remove_usrl));
+    if let Some(policy) = args.memory_policy {
+        profile.memory_policy = policy;
+    }
+    match (args.cms_user, args.cms_project) {
+        (Some(user), Some(project)) => {
+            profile.cms_user_id = user;
+            profile.cms_project_id = project;
+        }
+        (None, None) => {}
+        _ => bail!("--cms-user and --cms-project must be passed together"),
+    }
+    self.save_touched(profile, "set", json_output)
+}
+
+pub(super) fn name(&self, id: &str, name: String, json_output: bool) -> anyhow::Result<()> {
+    let mut profile = self.store.load(id)?;
+    profile.display_name = name;
+    self.save_touched(profile, "name", json_output)
+}
+
+pub(super) fn mode(&self, id: &str, mode: String, json_output: bool) -> anyhow::Result<()> {
+    let mut profile = self.store.load(id)?;
+    profile.mode = normalized_or_default(&mode, "custom");
+    self.save_touched(profile, "mode", json_output)
+}
+
+pub(super) fn describe(
+    &self,
+    id: &str,
+    description: String,
+    json_output: bool,
+) -> anyhow::Result<()> {
+    let mut profile = self.store.load(id)?;
+    profile.description = description;
+    self.save_touched(profile, "describe", json_output)
+}
+
+pub(super) fn provider(&self, id: &str, provider: String, json_output: bool) -> anyhow::Result<()> {
+    let mut profile = self.store.load(id)?;
+    profile.current_provider = none_marker(provider);
+    if profile.current_provider.is_none() {
+        profile.current_model = None;
+    }
+    self.save_touched(profile, "provider", json_output)
+}
+
+pub(super) fn model(&self, id: &str, model: String, json_output: bool) -> anyhow::Result<()> {
+    let mut profile = self.store.load(id)?;
+    profile.current_model = none_marker(model);
+    self.save_touched(profile, "model", json_output)
+}
+
+pub(super) fn prompt(&self, args: PromptArgs, json_output: bool) -> anyhow::Result<()> {
+    let mut profile = self.store.load(&args.id)?;
+    let prompt = if let Some(path) = args.prompt_file {
+        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?
+    } else {
+        join_required("prompt", args.prompt)?
+    };
+    profile.system_prompt = prompt;
+    self.save_touched(profile, "prompt", json_output)
+}
+
+pub(super) fn add_to_list(
+    &self,
+    id: &str,
+    field: ListField,
+    value: String,
+    json_output: bool,
+) -> anyhow::Result<()> {
+    let mut profile = self.store.load(id)?;
+    append_unique(field.get_mut(&mut profile), clean_list(vec![value]));
+    self.save_touched(profile, &format!("add-{}", field.label()), json_output)
+}
+
+pub(super) fn remove_from_list(
+    &self,
+    id: &str,
+    field: ListField,
+    value: &str,
+    json_output: bool,
+) -> anyhow::Result<()> {
+    let mut profile = self.store.load(id)?;
+    remove_all(
+        field.get_mut(&mut profile),
+        &clean_list(vec![value.to_string()]),
+    );
+    self.save_touched(profile, &format!("remove-{}", field.label()), json_output)
+}
+
+pub(super) fn replace_list(
+    &self,
+    id: &str,
+    field: ListField,
+    values: Vec<String>,
+    json_output: bool,
+) -> anyhow::Result<()> {
+    let mut profile = self.store.load(id)?;
+    *field.get_mut(&mut profile) = clean_list(values);
+    self.save_touched(profile, &format!("set-{}", field.label()), json_output)
+}
+
+pub(super) fn memory_policy(
+    &self,
+    id: &str,
+    policy: String,
+    json_output: bool,
+) -> anyhow::Result<()> {
+    let mut profile = self.store.load(id)?;
+    profile.memory_policy = policy;
+    self.save_touched(profile, "memory-policy", json_output)
+}
+
+pub(super) fn cms_scope(
+    &self,
+    id: &str,
+    user: String,
+    project: String,
+    json_output: bool,
+) -> anyhow::Result<()> {
+    if user.trim().is_empty() || project.trim().is_empty() {
+        bail!("CMS user and project ids must be non-empty");
+    }
+    let mut profile = self.store.load(id)?;
+    profile.cms_user_id = user;
+    profile.cms_project_id = project;
+    self.save_touched(profile, "cms-scope", json_output)
+}
+
+pub(super) fn reset_cms_scope(&self, id: &str, json_output: bool) -> anyhow::Result<()> {
+    let mut profile = self.store.load(id)?;
+    let scope = format!("agent:{}", profile.id);
+    profile.cms_user_id = scope.clone();
+    profile.cms_project_id = scope;
+    self.save_touched(profile, "reset-cms-scope", json_output)
+}
+
+pub(super) fn clone_profile(
+    &self,
+    source_id: &str,
+    new_id: &str,
+    name: Option<String>,
+    force: bool,
+    json_output: bool,
+) -> anyhow::Result<()> {
+    let mut profile = self.store.load(source_id)?;
+    let normalized = normalize_agent_id(new_id);
+    if normalized.is_empty() {
+        bail!("new agent id must contain at least one letter or number");
+    }
+    self.ensure_can_write(&normalized, force)?;
+    profile.id = normalized.clone();
+    if let Some(name) = name {
+        profile.display_name = name;
+    }
+    let cms_scope = format!("agent:{normalized}");
+    profile.cms_user_id = cms_scope.clone();
+    profile.cms_project_id = cms_scope;
+    profile.created_at = chrono::Utc::now();
+    profile.updated_at = profile.created_at;
+    profile.metadata = admin_metadata("cloned");
+    profile.metadata.insert(
+        "cloned_from".to_string(),
+        Value::String(source_id.to_string()),
+    );
+    let path = self.store.save(&profile)?;
+    self.append_history(&profile, "cloned", &path)?;
+    print_saved(&profile, &path, json_output)
+}
+
+pub(super) fn delete(&self, id: &str, yes: bool, json_output: bool) -> anyhow::Result<()> {
+    if !yes {
+        bail!("refusing to delete {id} without --yes");
+    }
+    let path = self.store.delete(id)?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "deleted": id,
+                "path": path,
+            }))?
+        );
+    } else {
+        println!("Deleted agent {id} at {}", path.display());
+    }
+    Ok(())
+}
+
+pub(super) fn export(&self, id: &str, out: Option<PathBuf>) -> anyhow::Result<()> {
+    let profile = self.store.load(id)?;
+    let text = serde_json::to_string_pretty(&profile)?;
+    if let Some(path) = out {
+        std::fs::write(&path, text)?;
+        println!("Exported agent {} to {}", profile.id, path.display());
+    } else {
+        println!("{text}");
+    }
+    Ok(())
+}
+
+pub(super) fn import(&self, path: &PathBuf, force: bool, json_output: bool) -> anyhow::Result<()> {
+    let mut profile: AgentProfile = serde_json::from_str(
+        &std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?,
+    )?;
+    profile.id = normalize_agent_id(&profile.id);
+    if profile.id.is_empty() {
+        bail!("imported agent id must contain at least one letter or number");
+    }
+    self.ensure_can_write(&profile.id, force)?;
+    profile.updated_at = chrono::Utc::now();
+    profile.metadata.insert(
+        "last_admin_action".to_string(),
+        Value::String("imported".to_string()),
+    );
+    profile.metadata.insert(
+        "imported_from".to_string(),
+        Value::String(path.display().to_string()),
+    );
+    let saved = self.store.save(&profile)?;
+    self.append_history(&profile, "imported", &saved)?;
+    print_saved(&profile, &saved, json_output)
+}
+
+pub(super) fn tui(&self) -> anyhow::Result<()> {
+    run_admin_tui(self)
+}
+
 }
 
 const TUI_BG: Color = Color::Rgb(8, 9, 10);
