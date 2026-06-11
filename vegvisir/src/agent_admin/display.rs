@@ -38,7 +38,7 @@ pub fn tui_help_text() -> &'static str {
     "Keyboard:
   Esc         quit, or close help when help is open
   Ctrl+C      quit
-  F1          toggle help
+  F1 / ?      toggle help / show all TUI commands
   F2 / A      open conventional action menu
   F / Ctrl+F  search agents by id, name, mode, profile text, permissions, and metadata
   E           edit primary scope metadata for selected agent
@@ -59,6 +59,11 @@ pub fn tui_help_text() -> &'static str {
   H           show history count for selected agent
   R           refresh
 
+When help is open:
+  F1 / ?      close help
+  Esc         close help
+  Ctrl+C      quit
+
 Action menu:
   ↑/↓         move action selection
   Enter       apply selected action
@@ -66,7 +71,7 @@ Action menu:
 
 Scope/memory/budget/provider/model/permission/tag edit modes:
   type text   edit the selected field
-  Enter       save the field
+  Enter       save the field; invalid entries stay in the TUI and show an error
   Esc         cancel
 
 Search mode:
