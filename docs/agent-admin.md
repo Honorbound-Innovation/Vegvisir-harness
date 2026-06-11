@@ -10,6 +10,26 @@ ${VEGVISIR_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/vegvisir}/agents/*.json
 
 It stores only profile configuration. Do not put plaintext secrets in agent prompts, metadata, provider fields, MCP configuration, or imported JSON. Credential-bearing integrations should continue to use HBSE secret references.
 
+## Install
+
+The top-level installer installs `vegvisir-agent-admin` by default:
+
+```text
+./install.sh --prefix "$HOME/.local"
+```
+
+To skip only this binary:
+
+```text
+./install.sh --no-agent-admin
+```
+
+After install, the binary should be available at:
+
+```text
+$HOME/.local/bin/vegvisir-agent-admin
+```
+
 ## Build
 
 ```text
