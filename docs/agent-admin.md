@@ -227,6 +227,7 @@ Current TUI keys:
 Esc         quit, or close help/popups
 Ctrl+C      quit
 F1 / ?      toggle help / show all TUI commands
+N           create a new draft agent with `id[, template[, display name]]`
 F2 / A      open the action menu
 F / Ctrl+F  search agents by id, name, mode, profile text, permissions, and metadata
 E           edit primary scope metadata for the selected agent
@@ -248,7 +249,9 @@ H           show history count
 R           refresh
 ```
 
-The action menu supports validation, metrics, history count, lifecycle status changes, scope metadata edits, memory-policy edits, budget edits, provider/model edits, tool/skill/MCP/USRL permission edits, and tag edits. `status active` still uses the same hard-error validation gate as the CLI command.
+The action menu supports creating a new draft agent, validation, metrics, history count, lifecycle status changes, scope metadata edits, memory-policy edits, budget edits, provider/model edits, tool/skill/MCP/USRL permission edits, and tag edits. `status active` still uses the same hard-error validation gate as the CLI command.
+
+Create mode is a simple one-line form opened with `N` or the action menu. Enter `id`, `id, template`, or `id, template, display name`; templates may be `planner`, `researcher`, `orchestrator`, `engineer`, `coder`, `tester`, or `agent-red`. New TUI-created agents are saved as `draft`, reuse the normal profile schema, and refuse duplicate or invalid ids without exiting the TUI.
 
 Scope/memory/budget/provider/model/permission/tag edit modes are simple text inputs: type the new value, press `Enter` to save, or press `Esc` to cancel. Invalid entries show an in-TUI error message and keep the TUI open instead of exiting. `E` edits the primary scope directly; the action menu also exposes secondary scopes, workspace scope, file-scope hints, and a clear-scope action. Empty input, `-`, or `clear` removes string scope fields. Empty comma-separated scope lists clear the stored list. `Y` edits the memory policy, and empty input, `-`, or `clear` resets it to `agent-scoped`. `B` edits `default_work_budget.max_steps` directly; the action menu also exposes max tool calls, read/output byte limits, allowed tools, notes, and a clear-budget action. Empty input, `-`, or `clear` removes numeric budget fields and notes; empty allowed-tools input clears the budget tool list. Budget allowed-tools entries are validated against the default tool catalog. Provider/model clear markers match the CLI: empty input, `-`, or `clear` means inherit/clear. Clearing the provider also clears the model because model validity is provider-scoped. TUI provider/model edits validate catalog names and provider/model compatibility, but they do not check live provider credentials. Tool, skill, MCP, and USRL edits replace the full comma-separated list. Tool and skill names are validated against the current default tool catalog and workspace/data-root skill catalog before saving. MCP server ids are validated against `<data-root>/mcp.json`. `*` is accepted for tools only when it is the sole entry. Known USRL contract skills are expanded to their declared contract ids when available; otherwise the entered contract ref is stored as-is, matching `/agent bind-usrl` behavior.
 
@@ -325,7 +328,7 @@ The admin history log records profile-management actions only. It does not recor
 The full-screen TUI is for safe, high-frequency profile inspection and small reversible edits. Keep using explicit CLI subcommands for multi-field, destructive, or script-oriented operations:
 
 ```text
-create / create-template / design
+create-template / design
 clone / import / export / delete
 prompt replacement
 bulk set operations

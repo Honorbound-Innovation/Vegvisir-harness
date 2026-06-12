@@ -39,6 +39,7 @@ pub fn tui_help_text() -> &'static str {
   Esc         quit, or close help when help is open
   Ctrl+C      quit
   F1 / ?      toggle help / show all TUI commands
+  N           create a new draft agent: id[, template[, display name]]
   F2 / A      open conventional action menu
   F / Ctrl+F  search agents by id, name, mode, profile text, permissions, and metadata
   E           edit primary scope metadata for selected agent
@@ -65,8 +66,14 @@ When help is open:
   Ctrl+C      quit
 
 Action menu:
+  Create new agent opens the same one-line create form as N.
   ↑/↓         move action selection
   Enter       apply selected action
+  Esc         cancel
+
+Create mode:
+  type text   id[, template[, display name]]; template may be planner, researcher, orchestrator, engineer, coder, tester, or agent-red
+  Enter       create a draft agent; duplicate/invalid ids stay in the TUI and show an error
   Esc         cancel
 
 Scope/memory/budget/provider/model/permission/tag edit modes:
@@ -79,7 +86,7 @@ Search mode:
   Enter       apply and exit
   Esc         cancel and exit
 
-Create, clone, delete, import, export, prompt replacement, bulk set operations,
+Clone, delete, import, export, prompt replacement, bulk set operations,
 and registry-wide operations still use explicit vegvisir-agent-admin CLI
 subcommands outside the TUI. There is no ':' command
 entry in this TUI."

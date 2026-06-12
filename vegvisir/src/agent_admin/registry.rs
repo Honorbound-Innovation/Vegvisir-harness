@@ -1324,6 +1324,7 @@ enum AdminTuiMode {
     Browse,
     Search,
     ActionMenu,
+    CreateAgentInput,
     TagsInput,
     PrimaryScopeInput,
     SecondaryScopesInput,
@@ -1346,6 +1347,7 @@ enum AdminTuiMode {
 
 #[derive(Copy, Clone)]
 enum TuiAction {
+    CreateAgent,
     Validate,
     Metrics,
     History,
@@ -1385,6 +1387,7 @@ enum TuiAction {
 impl TuiAction {
     fn label(self) -> &'static str {
         match self {
+            Self::CreateAgent => "Create new agent",
             Self::Validate => "Validate selected agent",
             Self::Metrics => "Show selected metrics summary",
             Self::History => "Show selected history count",
@@ -1424,6 +1427,9 @@ impl TuiAction {
 
     fn help(self) -> &'static str {
         match self {
+            Self::CreateAgent => {
+                "Create a new agent profile from a blank custom profile or built-in template."
+            }
             Self::Validate => "Run validation and summarize errors/warnings.",
             Self::Metrics => "Load the agent metrics file and show task success.",
             Self::History => "Count recorded admin history events for this agent.",
@@ -1487,6 +1493,7 @@ impl TuiAction {
 }
 
 const TUI_ACTIONS: &[TuiAction] = &[
+    TuiAction::CreateAgent,
     TuiAction::Validate,
     TuiAction::Metrics,
     TuiAction::History,
@@ -1544,7 +1551,7 @@ fn run_admin_tui_inner(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
 ) -> anyhow::Result<()> {
     let mut state = AdminTuiState {
-        message: "F/Ctrl+F search, F2/A actions, E scope, Y memory, B budget, P provider, O model, U tools, S skills, D MCP, L USRL, T tags, F1/? help"
+        message: "N new agent, F/Ctrl+F search, F2/A actions, E scope, Y memory, B budget, P provider, O model, U tools, S skills, D MCP, L USRL, T tags, F1/? help"
             .to_string(),
         ..Default::default()
     };
@@ -1626,6 +1633,9 @@ fn handle_admin_tui_key(
         AdminTuiMode::Search => return handle_admin_tui_search_key(state, key),
         AdminTuiMode::ActionMenu => {
             return handle_admin_tui_action_key(admin, state, profiles, key);
+        }
+        AdminTuiMode::CreateAgentInput => {
+            return handle_admin_tui_create_agent_key(admin, state, key);
         }
         AdminTuiMode::TagsInput => {
             return handle_admin_tui_tags_key(admin, state, profiles, key);
@@ -1723,6 +1733,7 @@ fn handle_admin_tui_key(
             state.mode = AdminTuiMode::Search;
             state.message = "type to search agents; Enter applies, Esc cancels".to_string();
         }
+        KeyCode::Char('n') | KeyCode::Char('N') => begin_create_agent_input(state),
         KeyCode::F(2) | KeyCode::Char('a') | KeyCode::Char('A') => {
             state.mode = AdminTuiMode::ActionMenu;
             state.action_selected = state
@@ -1836,6 +1847,36 @@ fn handle_admin_tui_action_key(
             if state.mode == AdminTuiMode::ActionMenu {
                 state.mode = AdminTuiMode::Browse;
             }
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_admin_tui_create_agent_key(
+    admin: &AgentRegistryAdmin,
+    state: &mut AdminTuiState,
+    key: KeyEvent,
+) -> anyhow::Result<bool> {
+    match key.code {
+        KeyCode::Esc => {
+            state.mode = AdminTuiMode::Browse;
+            state.message = "create agent cancelled".to_string();
+        }
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
+        KeyCode::Enter => {
+            let id = tui_create_agent(admin, &state.input)?;
+            state.filter.clear();
+            state.input.clear();
+            state.selected = 0;
+            state.mode = AdminTuiMode::Browse;
+            state.message = format!("created agent {id}");
+        }
+        KeyCode::Backspace => {
+            state.input.pop();
+        }
+        KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            state.input.push(c);
         }
         _ => {}
     }
@@ -2371,6 +2412,12 @@ fn handle_admin_tui_usrl_key(
     Ok(false)
 }
 
+fn begin_create_agent_input(state: &mut AdminTuiState) {
+    state.input.clear();
+    state.mode = AdminTuiMode::CreateAgentInput;
+    state.message = "creating agent: id[, template[, display name]]".to_string();
+}
+
 fn begin_tags_input(state: &mut AdminTuiState, profiles: &[AgentProfile]) {
     if let Some(profile) = profiles.get(state.selected) {
         state.input = profile_tags(profile).join(", ");
@@ -2593,11 +2640,16 @@ fn apply_tui_action(
     profiles: &[AgentProfile],
     action: TuiAction,
 ) -> anyhow::Result<()> {
+    if matches!(action, TuiAction::CreateAgent) {
+        begin_create_agent_input(state);
+        return Ok(());
+    }
     let Some(profile) = profiles.get(state.selected) else {
         state.message = "no selected agent".to_string();
         return Ok(());
     };
     match action {
+        TuiAction::CreateAgent => unreachable!("handled before selected-agent gate"),
         TuiAction::Validate => {
             let report = admin.validate_profile(profile)?;
             state.message = format!(
@@ -2696,6 +2748,44 @@ fn apply_tui_action(
         }
     }
     Ok(())
+}
+
+fn tui_create_agent(admin: &AgentRegistryAdmin, input: &str) -> anyhow::Result<String> {
+    let parts = input.splitn(3, ',').map(str::trim).collect::<Vec<_>>();
+    let raw_id = parts.first().copied().unwrap_or_default();
+    let id = normalize_agent_id(raw_id);
+    if id.is_empty() {
+        bail!("agent id must contain at least one letter or number");
+    }
+    admin.ensure_can_write(&id, false)?;
+
+    let template = parts
+        .get(1)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty());
+    let name = parts
+        .get(2)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty());
+
+    let mut profile = if let Some(template) = template {
+        profile_from_template(template, &id, name)?
+    } else {
+        let display_name = name.unwrap_or(&id);
+        let prompt = format!(
+            "You are {display_name}, a Vegvisir custom agent. Work evidence-first, preserve user work, follow tool and secret boundaries, and report verification clearly."
+        );
+        let mut profile = AgentProfile::new(&id, display_name, prompt)?;
+        profile.mode = "custom".to_string();
+        profile
+    };
+    profile
+        .metadata
+        .insert("status".to_string(), Value::String("draft".to_string()));
+    touch_metadata(&mut profile, "tui-created");
+    let path = admin.store.save(&profile)?;
+    admin.append_history(&profile, "tui-created", &path)?;
+    Ok(profile.id)
 }
 
 fn tui_set_status(admin: &AgentRegistryAdmin, id: &str, status: &str) -> anyhow::Result<()> {
@@ -3307,6 +3397,15 @@ fn draw_admin_tui(
 
     match state.mode {
         AdminTuiMode::ActionMenu => render_action_menu(frame, area, state),
+        AdminTuiMode::CreateAgentInput => render_text_input(
+            frame,
+            area,
+            state,
+            Some("new"),
+            " Create new agent ",
+            "id[, template[, display name]]",
+            "Examples: repo-tester or repo-tester, tester or repo-tester, tester, Repo Tester. Enter saves, Esc cancels.",
+        ),
         AdminTuiMode::TagsInput => render_text_input(
             frame,
             area,
@@ -4139,6 +4238,67 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn tui_create_agent_key_creates_draft_agents_and_handles_duplicates() -> anyhow::Result<()> {
+        let tmp = tempdir()?;
+        let admin = AgentRegistryAdmin::new(tmp.path().join("data"), tmp.path().join("workspace"))?;
+        let profiles = Vec::new();
+        let mut state = AdminTuiState {
+            mode: AdminTuiMode::CreateAgentInput,
+            input: "repo-tester, tester, Repo Tester".to_string(),
+            ..Default::default()
+        };
+
+        let should_quit = handle_admin_tui_key_safely(
+            &admin,
+            &mut state,
+            &profiles,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )?;
+
+        assert!(!should_quit);
+        assert_eq!(state.mode, AdminTuiMode::Browse);
+        assert!(state.message.contains("created agent repo-tester"));
+        let profile = admin.store.load("repo-tester")?;
+        assert_eq!(profile.display_name, "Repo Tester");
+        assert_eq!(profile.mode, "tester");
+        assert_eq!(
+            profile.metadata.get("status").and_then(Value::as_str),
+            Some("draft")
+        );
+        assert!(
+            profile
+                .metadata
+                .get("last_admin_action")
+                .and_then(Value::as_str)
+                == Some("tui-created")
+        );
+
+        state.mode = AdminTuiMode::CreateAgentInput;
+        state.input = "repo-tester".to_string();
+        let should_quit = handle_admin_tui_key_safely(
+            &admin,
+            &mut state,
+            &profiles,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )?;
+        assert!(!should_quit);
+        assert_eq!(state.mode, AdminTuiMode::CreateAgentInput);
+        assert!(
+            state.message.contains("error:") && state.message.contains("already exists"),
+            "expected duplicate-id in-TUI error, got {:?}",
+            state.message
+        );
+
+        state.input = "custom-helper".to_string();
+        let id = tui_create_agent(&admin, &state.input)?;
+        assert_eq!(id, "custom-helper");
+        let profile = admin.store.load("custom-helper")?;
+        assert_eq!(profile.mode, "custom");
+        assert!(profile.system_prompt.contains("custom-helper"));
+        Ok(())
+    }
+
+    #[test]
     fn tui_safe_key_handler_captures_invalid_entry_errors_and_stays_open() -> anyhow::Result<()> {
         let tmp = tempdir()?;
         let admin = AgentRegistryAdmin::new(tmp.path().join("data"), tmp.path().join("workspace"))?;
@@ -4205,6 +4365,7 @@ mod tests {
         let help = tui_help_text();
         for expected in [
             "F1 / ?",
+            "N           create a new draft agent",
             "F2 / A",
             "F / Ctrl+F",
             "E           edit primary scope metadata",
@@ -4221,6 +4382,7 @@ mod tests {
             "M           show metrics",
             "H           show history",
             "R           refresh",
+            "Create mode:",
             "invalid entries stay in the TUI and show an error",
         ] {
             assert!(help.contains(expected), "missing help entry: {expected}");
