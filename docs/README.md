@@ -15,6 +15,7 @@ Start here if you need the real system picture rather than only command help:
 
 Command and component references:
 
+- [Installation and upgrade](install-upgrade.md)
 - [Vegvisir usage and command reference](vegvisir-usage.md)
 - [CMS-v2 usage and command reference](cms-v2-usage.md)
 - [HBSE usage and command reference](hbse-usage.md)

@@ -11,6 +11,7 @@ Usage:
 
 Options:
   --core-only              Install only dependencies needed for the Rust harness and core CLIs.
+  --no-rustup              Do not install the optional rustup package.
   --no-desktop             Skip Tauri/WebKit/GTK desktop build dependencies.
   --no-browser             Skip Playwright/Solarium browser runtime dependencies.
   --no-ghidra              Skip Java/Ghidra runtime support dependencies.
@@ -23,7 +24,8 @@ Supported package managers:
 
 Notes:
   - This script installs OS packages only. It does not install provider credentials.
-  - Rust crates, npm packages, and Python venv packages are still installed/built by ./install.sh.
+  - Rust/Cargo are bootstrapped by ./install.sh with rustup if still missing.
+  - Rust crates, npm packages, npm audit repair, and Python venv packages are still handled by ./install.sh.
   - Ghidra itself is not redistributed here; this installs Java/runtime prerequisites and wrappers support.
 USAGE
 }
@@ -35,6 +37,7 @@ install_browser=1
 install_ghidra=1
 install_optional_tools=1
 dry_run=0
+install_rustup=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -43,6 +46,10 @@ while [[ $# -gt 0 ]]; do
       install_browser=0
       install_ghidra=0
       install_optional_tools=0
+      shift
+      ;;
+    --no-rustup)
+      install_rustup=0
       shift
       ;;
     --no-desktop)
@@ -139,12 +146,18 @@ install_with_apt() {
     libdbus-1-dev
     libtss2-dev
     bubblewrap
+    rustc
+    cargo
     nodejs
     npm
     python3
     python3-pip
     python3-venv
   )
+
+  if [[ "$install_rustup" -eq 1 ]]; then
+    append_if_available_apt rustup
+  fi
 
   if [[ "$install_ghidra" -eq 1 ]]; then
     append_first_available_apt openjdk-21-jdk openjdk-17-jdk default-jdk
@@ -220,11 +233,17 @@ install_with_dnf() {
     dbus-devel
     tpm2-tss-devel
     bubblewrap
+    rustc
+    cargo
     nodejs
     npm
     python3
     python3-pip
   )
+
+  if [[ "$install_rustup" -eq 1 ]]; then
+    DNF_PACKAGES+=(rustup)
+  fi
 
   if [[ "$install_ghidra" -eq 1 ]]; then
     DNF_PACKAGES+=(java-21-openjdk-devel)
@@ -286,11 +305,17 @@ install_with_pacman() {
     dbus
     tpm2-tss
     bubblewrap
+    rustc
+    cargo
     nodejs
     npm
     python
     python-pip
   )
+
+  if [[ "$install_rustup" -eq 1 ]]; then
+    PACMAN_PACKAGES+=(rustup)
+  fi
 
   if [[ "$install_ghidra" -eq 1 ]]; then
     PACMAN_PACKAGES+=(jdk21-openjdk)
@@ -356,6 +381,9 @@ Next steps from the repository root:
   ./install.sh
 
 Useful focused checks:
+  cargo --version
+  node --version && npm --version
+  python3 --version
   cargo check --workspace
   cd components/desktop && npm ci && npm run check && cargo check --manifest-path src-tauri/Cargo.toml
 DONE
