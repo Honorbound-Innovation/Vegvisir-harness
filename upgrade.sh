@@ -17,7 +17,7 @@ Upgrade options:
                         HBSE vault auto-init, and HBSE user broker setup.
   --repo-url <url>      Git repository to upgrade from.
                          Default: https://github.com/Honorbound-Innovation/Vegvisir-harness.git
-  --branch <name>        Branch to upgrade from. Default: main
+  --branch <name>        Branch to upgrade from. Default: current branch inside a git checkout, or main otherwise.
   --download-root <path> Directory used for the temporary clone when not upgrading
                          an existing checkout. Default: ${TMPDIR:-/tmp}
   --force               Reinstall even when the local checkout is already current.
@@ -49,7 +49,7 @@ USAGE
 }
 
 repo_url="$DEFAULT_REPO_URL"
-branch="$DEFAULT_BRANCH"
+branch=""
 download_root="${TMPDIR:-/tmp}"
 force=0
 sync_checkout=1
@@ -157,12 +157,7 @@ require_cmd mktemp
 
 mkdir -p "$download_root"
 
-remote_sha="$(git ls-remote --heads "$repo_url" "$branch" | awk '{print $1}' | head -n 1)"
-if [[ -z "$remote_sha" ]]; then
-  echo "could not find branch '$branch' at $repo_url" >&2
-  exit 1
-fi
-
+# Detect whether we're running inside a git checkout of the requested repo.
 repo_root=""
 local_sha=""
 matching_remote=""
@@ -170,6 +165,25 @@ if git -C "$current_script_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1;
   repo_root="$(git -C "$current_script_dir" rev-parse --show-toplevel)"
   local_sha="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || true)"
   matching_remote="$(find_matching_remote "$repo_root" || true)"
+fi
+
+# Resolve default branch from current checkout unless overridden with --branch.
+if [[ -z "$branch" && -n "$repo_root" && -n "$matching_remote" ]]; then
+  current_branch="$(git -C "$repo_root" branch --show-current 2>/dev/null || true)"
+  if [[ -n "$current_branch" ]] && git ls-remote --heads "$repo_url" "$current_branch" >/dev/null 2>&1; then
+    branch="$current_branch"
+  fi
+fi
+# Fall back to main when no branch is specified, we are not in a checkout,
+# or the current branch is not published to the requested remote.
+if [[ -z "$branch" ]]; then
+  branch="$DEFAULT_BRANCH"
+fi
+
+remote_sha="$(git ls-remote --heads "$repo_url" "$branch" | awk '{print $1}' | head -n 1)"
+if [[ -z "$remote_sha" ]]; then
+  echo "could not find branch '$branch' at $repo_url" >&2
+  exit 1
 fi
 
 cat <<EOF
