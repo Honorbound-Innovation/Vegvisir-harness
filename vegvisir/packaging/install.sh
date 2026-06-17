@@ -13,6 +13,7 @@ Options:
   --no-build                         Reuse existing release artifacts in the bundle.
   --online                           Allow Cargo to use the network instead of packaged vendor deps.
   --install-system-deps              Install native build/runtime packages on Debian-like systems.
+  --no-agent-admin                   Do not install the standalone agent registry admin binary.
   --no-cms-cli                       Do not install the CMS-v2 CLI.
   --no-hbse                          Do not install HBSE binaries.
   --no-skiller                       Do not install the Skiller CLI.
@@ -47,6 +48,7 @@ prefix="${VEGVISIR_INSTALL_PREFIX:-$HOME/.local}"
 build=1
 online=0
 install_system_deps=0
+install_agent_admin=1
 install_cms_cli=1
 install_hbse=1
 install_skiller=1
@@ -83,6 +85,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --install-system-deps)
       install_system_deps=1
+      shift
+      ;;
+    --no-agent-admin)
+      install_agent_admin=0
       shift
       ;;
     --no-cms-cli)
@@ -308,6 +314,9 @@ install -d "$bin_dir" "$etc_dir" "$share_dir" "$component_share_dir"
 
 if [[ "$build" -eq 1 ]]; then
   cargo build --manifest-path "$app_dir/Cargo.toml" --release
+  if [[ "$install_agent_admin" -eq 1 ]]; then
+    cargo build --manifest-path "$app_dir/Cargo.toml" --release --bin vegvisir-agent-admin
+  fi
   if [[ "$install_cms_cli" -eq 1 ]]; then
     cargo build --manifest-path "$cms_dir/Cargo.toml" --release --bin cms
   fi
@@ -315,6 +324,9 @@ fi
 
 install -m 0755 "$app_dir/target/release/vegvisir-rust" "$bin_dir/vegvisir-rust"
 ln -sfn "vegvisir-rust" "$bin_dir/vegvisir"
+if [[ "$install_agent_admin" -eq 1 ]]; then
+  install -m 0755 "$app_dir/target/release/vegvisir-agent-admin" "$bin_dir/vegvisir-agent-admin"
+fi
 if [[ -f "$app_dir/scripts/hbse-provider-onboard.sh" ]]; then
   install -m 0755 "$app_dir/scripts/hbse-provider-onboard.sh" "$bin_dir/vegvisir-hbse-provider-onboard"
 fi
@@ -622,6 +634,9 @@ Installed Vegvisir:
   $bin_dir/vegvisir-rust
   $bin_dir/vegvisir -> vegvisir-rust
 EOF
+if [[ "$install_agent_admin" -eq 1 ]]; then
+  echo "  $bin_dir/vegvisir-agent-admin"
+fi
 if [[ "$install_cms_cli" -eq 1 ]]; then
   echo "  $bin_dir/cms-v2"
 fi

@@ -606,6 +606,7 @@ pub fn publish_bundle(bundle: &SkillBundle, registry: &Path, force: bool) -> Res
         .join(&bundle.package.bundle_id)
         .join(&bundle.package.version);
     write_bundle(bundle, &dest)?;
+    write_manifest(&dest)?;
     let content_manifest_hash = manifest_file_hash(&dest)?;
     let provenance =
         ProvenanceRecord::from_bundle(bundle, &readiness, force, content_manifest_hash);
@@ -613,7 +614,6 @@ pub fn publish_bundle(bundle: &SkillBundle, registry: &Path, force: bool) -> Res
         dest.join("PROVENANCE.json"),
         serde_json::to_string_pretty(&provenance)?,
     )?;
-    write_manifest(&dest)?;
     write_registry_index(registry)?;
     Ok(())
 }
@@ -1013,7 +1013,9 @@ pub fn verify_manifest(root: &Path) -> Result<ManifestVerificationReport> {
     {
         let path = entry.path();
         let rel = path.strip_prefix(root).unwrap().to_path_buf();
-        if rel.as_path() == std::path::Path::new("MANIFEST.sha256") {
+        if rel.as_path() == std::path::Path::new("MANIFEST.sha256")
+            || rel.as_path() == std::path::Path::new("PROVENANCE.json")
+        {
             continue;
         }
         if !expected_paths.contains(&rel) {
@@ -1069,7 +1071,7 @@ fn write_manifest(root: &Path) -> Result<()> {
         .filter(|e| e.file_type().is_file())
     {
         let path = entry.path();
-        if path.file_name().and_then(|s| s.to_str()) == Some("MANIFEST.sha256") {
+        if matches!(path.file_name().and_then(|s| s.to_str()), Some("MANIFEST.sha256") | Some("PROVENANCE.json")) {
             continue;
         }
         let rel = path.strip_prefix(root).unwrap();
