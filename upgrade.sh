@@ -12,7 +12,10 @@ Usage:
   ./upgrade.sh [upgrade options] [-- install.sh options]
 
 Upgrade options:
-  --repo-url <url>       Git repository to upgrade from.
+  --complete            Forward install.sh --complete after upgrading source. This performs
+                        full dependency bootstrap, npm audit repair, Playwright setup,
+                        HBSE vault auto-init, and HBSE user broker setup.
+  --repo-url <url>      Git repository to upgrade from.
                          Default: https://github.com/Honorbound-Innovation/Vegvisir-harness.git
   --branch <name>        Branch to upgrade from. Default: main
   --download-root <path> Directory used for the temporary clone when not upgrading
@@ -24,11 +27,15 @@ Upgrade options:
   --dry-run             Check versions and print what would happen, but do not sync/install.
   -h, --help            Show this help.
 
-Everything after -- is passed directly to install.sh.
+Everything after -- is passed directly to install.sh. Unknown options before -- are also
+forwarded for backward compatibility, so installer options such as --install-system-deps,
+--hbse-init auto, --npm-audit force, and --no-desktop can be used directly.
 Examples:
   ./upgrade.sh
+  ./upgrade.sh --complete
   ./upgrade.sh -- --prefix "$HOME/.local" --no-usrl
   ./upgrade.sh --force -- --hbse-service user --enable-hbse-service --start-hbse-service
+  OPENAI_API_KEY=... ./upgrade.sh -- --hbse-init auto --hbse-model-provider openai --hbse-model-api-key-env OPENAI_API_KEY
 
 Notes:
   - When run inside a Git checkout for the requested repository, this script now fetches
@@ -52,6 +59,10 @@ install_args=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --complete)
+      install_args+=(--complete)
+      shift
+      ;;
     --repo-url)
       repo_url="${2:?--repo-url requires a URL}"
       shift 2
@@ -273,6 +284,7 @@ cat <<EOF
 Running install.sh:
   Source:  $install_source
   Version: $(short_sha "${installed_sha:-$remote_sha}")
+  Install args: ${install_args[*]:-(default)}
 EOF
 
 "$install_source/install.sh" "${install_args[@]}"

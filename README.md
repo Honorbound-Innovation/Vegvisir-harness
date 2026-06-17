@@ -148,32 +148,36 @@ See [New runtime features](docs/new-runtime-features.md), [Command sandboxing an
 
 ## Install
 
-Prerequisites:
+For a fresh Linux machine, use the complete bootstrap path:
 
-- Rust toolchain with Cargo.
-- Node.js and npm for USRL, Solarium, and desktop web assets.
-- Python 3 with `venv` for Python-backed binary-intelligence components.
-- JDK 21 for running an installed Ghidra runtime when Ghidra integrations are enabled.
-- Linux for the full HBSE broker service workflow.
+```bash
+./install.sh --complete
+```
 
-Install native/system dependencies first when building from a fresh Linux system:
+`--complete` installs native/system dependencies, bootstraps Rust/Cargo if missing, builds Rust CLIs, installs npm dependencies for USRL/Solarium/desktop, runs `npm audit fix`, installs Playwright browsers, initializes HBSE with provider auto-detection, and installs/enables/starts a user HBSE broker service.
+
+If you prefer explicit phases, install native/system dependencies first:
 
 ```bash
 sudo bash scripts/install-system-deps.sh
 ```
 
-This installs the core Rust/Node/Python build tools plus Tauri/WebKit/GTK desktop dependencies such as `glib-2.0`, Playwright/Solarium runtime libraries, and Java/Ghidra support packages where available. On Debian-like systems, `./install.sh --install-system-deps` delegates to the same script.
-
-Install the full system:
+Then install the full system:
 
 ```bash
 ./install.sh
 ```
 
-Install with a user HBSE broker service:
+Install with explicit HBSE setup and user broker service:
 
 ```bash
-./install.sh --hbse-service user --enable-hbse-service --start-hbse-service
+./install.sh --hbse-init auto --hbse-service user --enable-hbse-service --start-hbse-service --hbse-run-doctor
+```
+
+Force the system-fingerprint HBSE fallback on a TPM-less host:
+
+```bash
+./install.sh --hbse-init system-fingerprint --hbse-service user --enable-hbse-service --start-hbse-service
 ```
 
 Install into a specific prefix:
@@ -194,13 +198,19 @@ Upgrade an existing local install:
 ./upgrade.sh
 ```
 
+Run a complete upgrade that also refreshes dependencies, repairs npm audit issues, and reapplies HBSE setup checks:
+
+```bash
+./upgrade.sh --complete
+```
+
 Uninstall:
 
 ```bash
 ./uninstall.sh
 ```
 
-The installer places these commands under `$prefix/bin` where applicable. Optional component flags such as `--no-solarium`, `--no-biw`, `--no-ghidra`, `--no-ghidra-headless-mcp`, `--no-desktop`, `--no-skiller`, `--no-usrl`, `--no-hbse`, and `--no-cms-cli` can omit individual systems. When Ghidra is enabled, the installer discovers an existing Ghidra installation from `GHIDRA_HOME`, `GHIDRA_HEADLESS`, or PATH and creates `ghidra`/`analyzeHeadless` wrappers that point to that installation. The upgrade script reruns `install.sh` from the upgraded source, and the uninstall script removes these installed commands and component trees unless data is explicitly kept.
+The installer places these commands under `$prefix/bin` where applicable. Optional component flags such as `--no-solarium`, `--no-biw`, `--no-ghidra`, `--no-ghidra-headless-mcp`, `--no-desktop`, `--no-skiller`, `--no-usrl`, `--no-hbse`, and `--no-cms-cli` can omit individual systems. npm handling is controlled with `--npm-audit <off|check|fix|force>`, and Playwright browser installation with `--install-playwright-browsers` / `--no-playwright-browsers`. When Ghidra is enabled, the installer discovers an existing Ghidra installation from `GHIDRA_HOME`, `GHIDRA_HEADLESS`, or PATH and creates `ghidra`/`analyzeHeadless` wrappers that point to that installation. The upgrade script reruns `install.sh` from the upgraded source, and the uninstall script removes these installed commands and component trees unless data is explicitly kept. See [Installation and upgrade](docs/install-upgrade.md) for the complete operator guide.
 
 - `vegvisir`
 - `vegvisir-rust`
