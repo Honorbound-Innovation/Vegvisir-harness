@@ -943,6 +943,7 @@ Boundaries:
 - never let two active subagents own/edit the same files at the same time
 - default active subagent limit is 3; current session limit is {active_subagent_limit}
 - default provider/model is {subagent_provider}/{subagent_model} unless a subagent request explicitly sets provider/model
+- subagent runs must not overwrite the main agent's provider or model settings
 - change the session limit with /agents max=<n> or /subagents max <n>
 - change default subagent provider/model with /subagents config provider <provider> model <model>
 - subagent spawning remains locked to YOLO mode for now
