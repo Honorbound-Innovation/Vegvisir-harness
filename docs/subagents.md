@@ -32,7 +32,7 @@ The default configuration file currently contains:
 ```json
 {
   "default_provider": "openai-sso",
-  "default_model": "gpt-5.4-mini",
+  "default_model": "gpt-5.5",
   "active_limit": 3,
   "default_max_steps": 4,
   "min_max_steps": 1,

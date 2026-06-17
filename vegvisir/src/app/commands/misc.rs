@@ -1169,6 +1169,7 @@ Boundaries:
 - default provider/model is {subagent_provider}/{subagent_model} unless a subagent request explicitly sets provider/model
 - default max_steps is {subagent_default_max_steps}, clamped by configured range {subagent_min_max_steps}..={subagent_max_max_steps}
 - default work_budget is max_tool_calls={subagent_default_max_tool_calls}, max_read_bytes={subagent_default_max_read_bytes}, max_output_bytes={subagent_default_max_output_bytes}, allowed_tools={subagent_default_allowed_tools}
+- subagent runs must not overwrite the main agent's provider or model settings
 - change the session limit with /agents max=<n> or /subagents max <n>
 - change persistent subagent defaults with /subagents config provider <provider> model <model> max-steps <n> tool-calls <n> read-bytes <n> output-bytes <n> allowed-tools <tool-a,tool-b>
 - subagent spawning remains locked to YOLO mode for now
@@ -1234,7 +1235,21 @@ Commands:
         if !path.exists() {
             return Ok(Vec::new());
         }
-        Ok(serde_json::from_str(&std::fs::read_to_string(path)?)?)
+        let text = std::fs::read_to_string(&path)?;
+        if text.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        match serde_json::from_str::<Vec<SubAgentTaskRecord>>(&text) {
+            Ok(records) => Ok(records),
+            Err(original_error) => {
+                if let Some(records) = recover_subagent_board_records(&text) {
+                    let _ = self.save_subagent_records(&records);
+                    Ok(records)
+                } else {
+                    Err(original_error.into())
+                }
+            }
+        }
     }
 
     fn save_subagent_records(&self, records: &[SubAgentTaskRecord]) -> anyhow::Result<()> {
@@ -1242,7 +1257,7 @@ Commands:
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(path, serde_json::to_string_pretty(records)?)?;
+        atomic_write_json(&path, &serde_json::to_string_pretty(records)?)?;
         Ok(())
     }
 
@@ -1288,6 +1303,23 @@ Commands:
         self.session.pending_attachments.push(attachment);
         Ok(format!("Attached {name}"))
     }
+}
+
+fn recover_subagent_board_records(text: &str) -> Option<Vec<SubAgentTaskRecord>> {
+    let trimmed = text.trim_start_matches(['\u{feff}', '\u{200b}', '\u{2060}']);
+    let start = trimmed.find('[')?;
+    let candidate = &trimmed[start..];
+    serde_json::from_str::<Vec<SubAgentTaskRecord>>(candidate).ok()
+}
+
+fn atomic_write_json(path: &std::path::Path, content: &str) -> anyhow::Result<()> {
+    use uuid::Uuid;
+    let tmp = path.with_extension(format!("{}.tmp", Uuid::new_v4().simple()));
+    std::fs::write(&tmp, content)?;
+    std::fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })?;
+    Ok(())
 }
 
 fn format_duration(seconds: i64) -> String {

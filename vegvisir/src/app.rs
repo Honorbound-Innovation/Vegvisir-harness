@@ -1160,14 +1160,19 @@ impl TuiApplication {
 
     fn save_config_defaults(&self) -> anyhow::Result<()> {
         let mut data = self.config.load().unwrap_or_default();
-        data.insert(
-            "current_provider".to_string(),
-            json!(self.session.current_provider),
-        );
-        data.insert(
-            "current_model".to_string(),
-            json!(self.session.current_model),
-        );
+        // Subagent processes share the data root but must never overwrite the
+        // main agent's provider/model settings.
+        let is_subagent = std::env::var("VEGVISIR_SUBAGENT_RUN").is_ok();
+        if !is_subagent {
+            data.insert(
+                "current_provider".to_string(),
+                json!(self.session.current_provider),
+            );
+            data.insert(
+                "current_model".to_string(),
+                json!(self.session.current_model),
+            );
+        }
         if let Some(level) = &self.session.current_reasoning_level {
             data.insert("current_reasoning_level".to_string(), json!(level));
         } else {
@@ -3171,6 +3176,8 @@ mod tests {
         let defaults = super::default_subagent_provider_defaults();
 
         assert_eq!(app.subagent_provider_defaults, defaults);
+        assert_eq!(app.subagent_provider_defaults.provider, "openai-sso");
+        assert_eq!(app.subagent_provider_defaults.model, "gpt-5.5");
         assert_eq!(
             app.active_subagent_limit,
             super::default_subagent_active_limit()
@@ -3253,6 +3260,39 @@ mod tests {
                 .get("subagent_default_max_tool_calls")
                 .and_then(serde_json::Value::as_u64),
             Some(11)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn subagents_config_command_does_not_overwrite_main_provider() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let data_root = tmp.path().join("home");
+        std::fs::create_dir_all(&data_root)?;
+        std::fs::write(
+            data_root.join("config.json"),
+            r#"{"current_provider":"main-provider","current_model":"main-model"}"#,
+        )?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), &data_root)?;
+
+        app.execute_command("/subagents config provider sub-provider model sub-model max 4")?;
+
+        let saved = app.config.load().unwrap_or_default();
+        assert_eq!(
+            saved.get("current_provider").and_then(serde_json::Value::as_str),
+            Some("main-provider")
+        );
+        assert_eq!(
+            saved.get("current_model").and_then(serde_json::Value::as_str),
+            Some("main-model")
+        );
+        assert_eq!(
+            saved.get("subagent_provider").and_then(serde_json::Value::as_str),
+            Some("sub-provider")
+        );
+        assert_eq!(
+            saved.get("subagent_model").and_then(serde_json::Value::as_str),
+            Some("sub-model")
         );
         Ok(())
     }

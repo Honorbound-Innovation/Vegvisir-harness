@@ -171,7 +171,9 @@ fn draw_chat(f: &mut Frame<'_>, app: &mut TuiApplication, area: Rect) {
 
     let tool_log_height = tool_log_panel_height(app, inner.height);
     let show_tool_log = app.tool_log_visible && tool_log_height > 0;
-    let chat_height = inner.height.saturating_sub(if show_tool_log { tool_log_height } else { 0 });
+    let chat_height = inner
+        .height
+        .saturating_sub(if show_tool_log { tool_log_height } else { 0 });
     let (chat_area, tool_log_area) = if show_tool_log {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
