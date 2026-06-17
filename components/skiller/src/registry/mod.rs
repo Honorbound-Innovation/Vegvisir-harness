@@ -4,10 +4,50 @@ use crate::source_meta;
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 pub fn write_bundle(bundle: &SkillBundle, out: &Path) -> Result<()> {
+    let parent = out
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    fs::create_dir_all(parent)?;
+    let file_name = out
+        .file_name()
+        .map(|s| s.to_string_lossy())
+        .unwrap_or_default();
+    let tmp_name = format!(".{}.tmp.{}", file_name, Uuid::new_v4());
+    let tmp = parent.join(tmp_name);
+    if let Err(e) = write_bundle_files(bundle, &tmp) {
+        let _ = fs::remove_dir_all(&tmp);
+        return Err(e);
+    }
+    if out.exists() {
+        let backup_name = format!(".{}.old.{}", file_name, Uuid::new_v4());
+        let backup = parent.join(backup_name);
+        if fs::rename(out, &backup).is_ok() {
+            if fs::rename(&tmp, out).is_ok() {
+                let _ = fs::remove_dir_all(&backup);
+                Ok(())
+            } else {
+                let _ = fs::rename(&backup, out);
+                let _ = fs::remove_dir_all(&tmp);
+                bail!("failed to promote new bundle to {}", out.display())
+            }
+        } else {
+            fs::remove_dir_all(out)?;
+            fs::rename(&tmp, out)?;
+            Ok(())
+        }
+    } else {
+        fs::rename(&tmp, out)?;
+        Ok(())
+    }
+}
+
+fn write_bundle_files(bundle: &SkillBundle, out: &Path) -> Result<()> {
     fs::create_dir_all(out.join("skills"))?;
     fs::create_dir_all(out.join("sources"))?;
     fs::create_dir_all(out.join("graph"))?;
@@ -21,6 +61,7 @@ pub fn write_bundle(bundle: &SkillBundle, out: &Path) -> Result<()> {
         &out.join("graph/dependencies.yaml"),
         &bundle.graph.dependencies,
     )?;
+    write_yaml(&out.join("graph/related.yaml"), &bundle.graph.related)?;
     write_yaml(&out.join("audit/events.yaml"), &bundle.audit_events)?;
     write_yaml(&out.join("forge_requests.yaml"), &bundle.forge_requests)?;
     write_yaml(&out.join("forge_responses.yaml"), &bundle.forge_responses)?;
@@ -56,6 +97,8 @@ pub fn read_bundle(path: &Path) -> Result<SkillBundle> {
         read_yaml(&path.join("graph/concepts.yaml")).unwrap_or_default();
     let dependencies: Vec<SkillDependency> =
         read_yaml(&path.join("graph/dependencies.yaml")).unwrap_or_default();
+    let related: Vec<RelatedSkill> =
+        read_yaml(&path.join("graph/related.yaml")).unwrap_or_default();
     let audit_events: Vec<AuditEvent> =
         read_yaml(&path.join("audit/events.yaml")).unwrap_or_default();
     let capability_candidates: Vec<CapabilityCandidate> =
@@ -79,7 +122,7 @@ pub fn read_bundle(path: &Path) -> Result<SkillBundle> {
         skills,
         graph: SkillGraph {
             dependencies,
-            related: vec![],
+            related,
             concepts,
         },
         audit_events,
@@ -605,7 +648,10 @@ pub fn publish_bundle(bundle: &SkillBundle, registry: &Path, force: bool) -> Res
     let dest = registry
         .join(&bundle.package.bundle_id)
         .join(&bundle.package.version);
-    write_bundle(bundle, &dest)?;
+    let mut published_bundle = bundle.clone();
+    published_bundle.package.review_status = SkillStatus::Published;
+    published_bundle.package.publish_status = PublishStatus::Published;
+    write_bundle(&published_bundle, &dest)?;
     write_manifest(&dest)?;
     let content_manifest_hash = manifest_file_hash(&dest)?;
     let provenance =
@@ -1081,4 +1127,89 @@ fn write_manifest(root: &Path) -> Result<()> {
     lines.sort();
     fs::write(root.join("MANIFEST.sha256"), lines.join("\n"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::tempdir;
+
+    const SAMPLE_MD: &str = "# Example skill\n\nUse the command:\n\nkubectl get pods\n";
+    const OTHER_MD: &str = "# Other skill\n\nUse the command:\n\nkubectl describe node\n";
+    const SAME_TITLE_MD: &str = "# Do Something\n\nUse the command:\n\nkubectl get pods\n";
+
+    fn sample_dir_with_doc(name: &str, content: &str) -> tempfile::TempDir {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(name);
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(content.as_bytes()).unwrap();
+        dir
+    }
+
+    #[test]
+    fn publish_bundle_marks_package_published() {
+        let dir = sample_dir_with_doc("doc.md", SAMPLE_MD);
+        let bundle = crate::compiler::compile_path(dir.path(), "sample", None).unwrap();
+        assert!(!bundle.skills.is_empty(), "sample bundle should contain skills");
+        let registry = tempdir().unwrap();
+        publish_bundle(&bundle, registry.path(), true).unwrap();
+        let published = read_bundle(&registry.path().join(&bundle.package.bundle_id).join(&bundle.package.version)).unwrap();
+        assert_eq!(published.package.publish_status, PublishStatus::Published);
+        assert_eq!(published.package.review_status, SkillStatus::Published);
+    }
+
+    #[test]
+    fn write_bundle_round_trips_related_graph() {
+        let dir = sample_dir_with_doc("doc.md", SAMPLE_MD);
+        let mut bundle = crate::compiler::compile_path(dir.path(), "sample", None).unwrap();
+        bundle.graph.related.push(RelatedSkill {
+            skill_a: "skill-a".into(),
+            skill_b: "skill-b".into(),
+            reason: "see-also".into(),
+        });
+        let out = tempdir().unwrap();
+        write_bundle(&bundle, out.path()).unwrap();
+        let loaded = read_bundle(out.path()).unwrap();
+        assert_eq!(loaded.graph.related.len(), 1);
+        assert_eq!(loaded.graph.related[0].skill_a, "skill-a");
+    }
+
+    #[test]
+    fn write_bundle_removes_stale_files() {
+        let dir = sample_dir_with_doc("doc.md", SAMPLE_MD);
+        let bundle_a = crate::compiler::compile_path(dir.path(), "sample", None).unwrap();
+        assert!(!bundle_a.skills.is_empty(), "sample bundle should contain skills");
+        let out = tempdir().unwrap();
+        write_bundle(&bundle_a, out.path()).unwrap();
+        // Inject a stale skill file from a previous version.
+        std::fs::write(out.path().join("skills").join("stale.yaml"), "id: stale\n").unwrap();
+        let dir_b = sample_dir_with_doc("doc.md", OTHER_MD);
+        let bundle_b = crate::compiler::compile_path(dir_b.path(), "sample", None).unwrap();
+        assert!(!bundle_b.skills.is_empty(), "sample bundle should contain skills");
+        write_bundle(&bundle_b, out.path()).unwrap();
+        let entries: Vec<_> = std::fs::read_dir(out.path().join("skills"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(!entries.contains(&"stale.yaml".to_string()));
+        assert!(entries.iter().any(|n| n.ends_with(".yaml")));
+    }
+
+    #[test]
+    fn dedup_keeps_distinct_skills_with_same_title() {
+        let dir = tempdir().unwrap();
+        for name in ["a.md", "b.md"] {
+            let path = dir.path().join(name);
+            let mut f = std::fs::File::create(&path).unwrap();
+            f.write_all(SAME_TITLE_MD.as_bytes()).unwrap();
+        }
+        let bundle = crate::compiler::compile_path(dir.path(), "sample", None).unwrap();
+        assert!(
+            bundle.skills.len() >= 2,
+            "expected at least two skills, got titles {:?}",
+            bundle.skills.iter().map(|s| &s.title).collect::<Vec<_>>()
+        );
+    }
 }

@@ -10,7 +10,7 @@ install -Dm755 target/release/hbse "$HOME/.local/bin/hbse"
 install -Dm755 target/release/hbse-broker "$HOME/.local/bin/hbse-broker"
 
 if command -v npm >/dev/null 2>&1; then
-  (cd components/usrl && npm install && npm run build)
+  (cd components/usrl && npm ci && npm run build)
 fi
 
 biw_share_dir="$HOME/.local/share/vegvisir/binary-intelligence-workbench"
@@ -78,5 +78,16 @@ else
   echo "Skipping Vegvisir Desktop install because npm is not available." >&2
 fi
 
-echo "Installed vegvisir, hbse, hbse-broker, biw, solarium, and vegvisir-desktop into $HOME/.local/bin"
+installed=()
+skipped=()
+installed+=(vegvisir hbse hbse-broker biw)
+if command -v npm >/dev/null 2>&1; then
+  installed+=(usrl solarium vegvisir-desktop)
+else
+  skipped+=(usrl solarium vegvisir-desktop)
+fi
+echo "Installed ${installed[*]} into $HOME/.local/bin"
+if [[ ${#skipped[@]} -gt 0 ]]; then
+  echo "Skipped ${skipped[*]} because npm is not available" >&2
+fi
 

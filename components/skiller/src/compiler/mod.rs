@@ -483,7 +483,7 @@ fn dedup(skills: Vec<Skill>) -> Vec<Skill> {
     let mut seen = BTreeSet::new();
     skills
         .into_iter()
-        .filter(|s| seen.insert(s.title.clone()))
+        .filter(|s| seen.insert(s.id.clone()))
         .collect()
 }
 fn build_graph(skills: &[Skill], _sections: &[DocumentSection]) -> SkillGraph {

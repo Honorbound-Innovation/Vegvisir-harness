@@ -154,6 +154,12 @@ export class SolariumJsonRpcClient {
     this.rejectAll(new Error("JSON-RPC client closed"));
   }
 
+  /** Reject any pending requests with the given error and close the client. */
+  fail(error: Error): void {
+    this.rejectAll(error);
+    this.close();
+  }
+
   private handleLine(line: string): void {
     const trimmed = line.trim();
     if (!trimmed) return;
@@ -217,8 +223,8 @@ export function launchSolariumServer(options: LaunchSolariumServerOptions = {}):
   });
 
   child.on("error", (error) => {
-    // Surface spawn failures to any in-flight request. Future calls fail because stdio closes.
-    child.stderr.emit("error", error);
+    // Surface spawn failures to any in-flight request and close the client cleanly.
+    client.fail(error as Error);
   });
 
   return {

@@ -1044,6 +1044,10 @@ function validateAction(action: unknown, index: number): AgentAction {
       return candidate as AgentAction;
     case "screenshot":
     case "extract":
+      if (candidate.format !== undefined && !["text", "html", "markdown"].includes(String(candidate.format))) {
+        throw new Error(`Action ${index}.format must be text, html, or markdown`);
+      }
+      return candidate as AgentAction;
     case "observe":
       return candidate as AgentAction;
     default:

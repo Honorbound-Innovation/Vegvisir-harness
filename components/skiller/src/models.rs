@@ -616,7 +616,7 @@ pub enum SkillMaturity {
     Level6Certified,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum PublishStatus {
     #[default]
     Unpublished,

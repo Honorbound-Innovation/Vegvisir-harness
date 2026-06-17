@@ -85,7 +85,7 @@ fn list_directory_blocking(path: Option<String>) -> Result<FileExplorerListing, 
         let is_symlink = file_type.as_ref().is_some_and(|kind| kind.is_symlink());
         let metadata = if is_file { item.metadata().ok() } else { None };
         let name = item.file_name().to_string_lossy().to_string();
-        let git_repo = false;
+        let git_repo = is_dir && path.join(".git").exists();
         entries.push(FileExplorerEntry {
             name,
             path: path.display().to_string(),
