@@ -36,6 +36,7 @@ components/t3code-overlay/
 !licenses/**
 plan.md
 hardend-plan.md
+VEGVISIR_BUILD_PLAN_FROM_REFERENCE.md
 
 # Tauri-generated schema/cache output.
 components/desktop/src-tauri/gen/
