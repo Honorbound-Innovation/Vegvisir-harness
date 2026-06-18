@@ -509,9 +509,19 @@ impl TuiApplication {
         if should_show_info_overlay(command, response) {
             self.info_scroll_offset = 0;
             self.info_overlay = Some(InfoOverlay {
-                title: command.trim_start_matches('/').replace('-', " "),
+                title: command_overlay_title(command),
                 body: response.to_string(),
             });
         }
+    }
+}
+
+fn command_overlay_title(command: &str) -> String {
+    match command {
+        // Historical UI compatibility: /agent and /agents share the agent management
+        // surface, but they must remain distinct registry commands so /agent does not
+        // canonicalize to /agents.
+        "/agent" => "agents".to_string(),
+        _ => command.trim_start_matches('/').replace('-', " "),
     }
 }

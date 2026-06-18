@@ -1,6 +1,8 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use crate::core::CommandDefinition;
+use serde::{Deserialize, Serialize};
+
+use crate::core::{CommandDefinition, ToolDefinition};
 
 #[derive(Clone, Debug, Default)]
 pub struct CommandRegistry {
@@ -30,6 +32,23 @@ impl CommandRegistry {
 
     pub fn all(&self) -> Vec<&CommandDefinition> {
         self.definitions.values().collect()
+    }
+
+    pub fn specs(&self) -> Vec<CommandSpec> {
+        self.definitions
+            .values()
+            .map(CommandSpec::from_definition)
+            .collect()
+    }
+
+    pub fn metadata_dump(&self) -> CommandRegistryDump {
+        CommandRegistryDump {
+            commands: self.specs(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), RegistryValidationError> {
+        validate_command_definitions(self.definitions.values())
     }
 
     pub fn suggest(&self, prefix: &str) -> Vec<String> {
@@ -71,6 +90,359 @@ impl CommandRegistry {
             format!("/{name}")
         };
         self.aliases.get(&normalized).cloned().unwrap_or(normalized)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CommandRegistryDump {
+    pub commands: Vec<CommandSpec>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CommandSpec {
+    pub id: String,
+    pub name: String,
+    pub aliases: Vec<String>,
+    pub summary: String,
+    pub description: Option<String>,
+    pub category: CommandCategory,
+    pub availability: CommandAvailability,
+    pub safety: CommandSafety,
+    pub contexts: Vec<ExecutionContext>,
+    pub argument_hint: Option<String>,
+    pub supports_noninteractive: bool,
+    pub hidden: bool,
+    pub source: CommandSource,
+}
+
+impl CommandSpec {
+    pub fn from_definition(definition: &CommandDefinition) -> Self {
+        let category = infer_command_category(&definition.name);
+        let safety = infer_command_safety(&definition.name);
+        let contexts = infer_command_contexts(&definition.name, &category, &safety);
+        let availability = if definition.delegates_to_agent {
+            CommandAvailability::ModelInvocable
+        } else {
+            CommandAvailability::UserInvocable
+        };
+        Self {
+            id: command_id(&definition.name),
+            name: definition.name.clone(),
+            aliases: definition.aliases.clone(),
+            summary: definition.description.clone(),
+            description: Some(definition.description.clone()),
+            category,
+            availability,
+            safety,
+            contexts,
+            argument_hint: argument_hint_from_usage(&definition.usage),
+            supports_noninteractive: supports_noninteractive(&definition.name),
+            hidden: false,
+            source: CommandSource::Builtin,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandCategory {
+    CoreSession,
+    Workspace,
+    MemoryContext,
+    ModelProvider,
+    AgentsTasks,
+    Skills,
+    SecurityPermissions,
+    Diagnostics,
+    Media,
+    Configuration,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandAvailability {
+    UserInvocable,
+    ModelInvocable,
+    Internal,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandSafety {
+    ReadOnly,
+    SessionMutation,
+    WorkspaceMutation,
+    ExternalEffect,
+    Destructive,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionContext {
+    LocalCli,
+    Tui,
+    Api,
+    BackgroundWorker,
+    Subagent,
+    RemoteBridge,
+    Mcp,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandSource {
+    Builtin,
+    Filesystem,
+    Skill,
+    Mcp,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolRegistryDump {
+    pub tools: Vec<ToolSpec>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ToolRegistry {
+    specs: BTreeMap<String, ToolSpec>,
+}
+
+impl ToolRegistry {
+    pub fn from_definitions(definitions: impl IntoIterator<Item = ToolDefinition>) -> Self {
+        let mut registry = Self::default();
+        for definition in definitions {
+            registry.register(ToolSpec::from_definition(&definition));
+        }
+        registry
+    }
+
+    pub fn register(&mut self, spec: ToolSpec) {
+        self.specs.insert(spec.id.clone(), spec);
+    }
+
+    pub fn get(&self, id: &str) -> Option<&ToolSpec> {
+        self.specs.get(id)
+    }
+
+    pub fn all(&self) -> Vec<&ToolSpec> {
+        self.specs.values().collect()
+    }
+
+    pub fn metadata_dump(&self) -> ToolRegistryDump {
+        ToolRegistryDump {
+            tools: self.specs.values().cloned().collect(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), RegistryValidationError> {
+        let mut errors = Vec::new();
+        for spec in self.specs.values() {
+            if spec.id.trim().is_empty() {
+                errors.push("tool id must not be empty".to_string());
+            }
+            if spec.display_name.trim().is_empty() {
+                errors.push(format!("tool {} display_name must not be empty", spec.id));
+            }
+            if spec.contexts.is_empty() {
+                errors.push(format!(
+                    "tool {} must declare at least one context",
+                    spec.id
+                ));
+            }
+            if spec.safety.read_only && spec.safety.destructive {
+                errors.push(format!(
+                    "tool {} cannot be both read_only and destructive",
+                    spec.id
+                ));
+            }
+            if spec.safety.requires_hbse
+                && spec.contexts.contains(&ExecutionContext::RemoteBridge)
+                && !spec.safety.transcript_visibility.redacts_secrets()
+            {
+                errors.push(format!(
+                    "tool {} requires HBSE but does not declare secret-redacting transcript visibility",
+                    spec.id
+                ));
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(RegistryValidationError { errors })
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolSpec {
+    pub id: String,
+    pub display_name: String,
+    pub summary: String,
+    pub read_only: bool,
+    pub destructive: bool,
+    pub concurrency_safe: bool,
+    pub requires_user_interaction: bool,
+    pub interrupt_behavior: InterruptBehavior,
+    pub approval_category: ApprovalCategory,
+    pub transcript_visibility: TranscriptVisibility,
+    pub contexts: Vec<ExecutionContext>,
+    pub safety: ToolSafety,
+}
+
+impl ToolSpec {
+    pub fn from_definition(definition: &ToolDefinition) -> Self {
+        let read_only = !definition.risky;
+        let destructive = matches!(definition.name.as_str(), "write_file" | "run_command");
+        let approval_category = if destructive || definition.risky {
+            ApprovalCategory::RiskyTool
+        } else {
+            ApprovalCategory::None
+        };
+        let transcript_visibility = if definition.category == "memory" {
+            TranscriptVisibility::RedactedArguments
+        } else {
+            TranscriptVisibility::Visible
+        };
+        let safety = ToolSafety {
+            read_only,
+            destructive,
+            requires_hbse: false,
+            transcript_visibility: transcript_visibility.clone(),
+        };
+        Self {
+            id: definition.name.clone(),
+            display_name: definition.name.clone(),
+            summary: definition.description.clone(),
+            read_only,
+            destructive,
+            concurrency_safe: read_only,
+            requires_user_interaction: approval_category != ApprovalCategory::None,
+            interrupt_behavior: InterruptBehavior::CancelSafe,
+            approval_category,
+            transcript_visibility,
+            contexts: infer_tool_contexts(definition),
+            safety,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolSafety {
+    pub read_only: bool,
+    pub destructive: bool,
+    pub requires_hbse: bool,
+    pub transcript_visibility: TranscriptVisibility,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum InterruptBehavior {
+    CancelSafe,
+    BestEffort,
+    NotInterruptible,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalCategory {
+    None,
+    RiskyTool,
+    Destructive,
+    ExternalEffect,
+    SecretAccess,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptVisibility {
+    Visible,
+    RedactedArguments,
+    RedactedOutput,
+    Hidden,
+}
+
+impl TranscriptVisibility {
+    fn redacts_secrets(&self) -> bool {
+        matches!(
+            self,
+            TranscriptVisibility::RedactedArguments
+                | TranscriptVisibility::RedactedOutput
+                | TranscriptVisibility::Hidden
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RegistryValidationError {
+    pub errors: Vec<String>,
+}
+
+impl std::fmt::Display for RegistryValidationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "registry validation failed: {}",
+            self.errors.join("; ")
+        )
+    }
+}
+
+impl std::error::Error for RegistryValidationError {}
+
+pub fn validate_default_command_definitions() -> Result<(), RegistryValidationError> {
+    validate_command_definitions(default_command_definitions().iter())
+}
+
+fn validate_command_definitions<'a>(
+    definitions: impl IntoIterator<Item = &'a CommandDefinition>,
+) -> Result<(), RegistryValidationError> {
+    let definitions = definitions.into_iter().collect::<Vec<_>>();
+    let names = definitions
+        .iter()
+        .map(|definition| definition.name.clone())
+        .collect::<BTreeSet<_>>();
+    let mut seen_names = BTreeSet::new();
+    let mut seen_aliases: BTreeMap<String, String> = BTreeMap::new();
+    let mut errors = Vec::new();
+    for definition in definitions {
+        if !definition.name.starts_with('/') {
+            errors.push(format!("command {} must start with '/'", definition.name));
+        }
+        if !seen_names.insert(definition.name.clone()) {
+            errors.push(format!("duplicate command name {}", definition.name));
+        }
+        let spec = CommandSpec::from_definition(definition);
+        if spec.contexts.is_empty() {
+            errors.push(format!(
+                "command {} must declare at least one execution context",
+                definition.name
+            ));
+        }
+        for alias in &definition.aliases {
+            if !alias.starts_with('/') {
+                errors.push(format!(
+                    "alias {} for command {} must start with '/'",
+                    alias, definition.name
+                ));
+            }
+            if names.contains(alias) {
+                errors.push(format!(
+                    "alias {} for command {} conflicts with command name",
+                    alias, definition.name
+                ));
+            }
+            if let Some(owner) = seen_aliases.insert(alias.clone(), definition.name.clone()) {
+                errors.push(format!(
+                    "alias {} is shared by commands {} and {}",
+                    alias, owner, definition.name
+                ));
+            }
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(RegistryValidationError { errors })
     }
 }
 
@@ -177,7 +549,7 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
             "/agents",
             "inspect agents and configure subagent concurrency",
             "/agents [max=<n>|max <n>|list]",
-            &["/agent"],
+            &[],
         ),
         cmd(
             "/attach",
@@ -227,12 +599,6 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
             "show available tools",
             "/tools [status|explain <tool>|allow-risky|deny-risky|require-approval|no-approval|max-rounds <rounds>|max-rounds default]",
             &[],
-        ),
-        cmd(
-            "/auto",
-            "enable or disable autonomous working mode for unattended project work",
-            "/auto [status|on|off|level <0-6>]",
-            &["/autonomous"],
         ),
         cmd(
             "/tool-limit",
@@ -371,6 +737,132 @@ fn cmd(name: &str, description: &str, usage: &str, aliases: &[&str]) -> CommandD
     }
 }
 
+fn command_id(name: &str) -> String {
+    name.trim_start_matches('/').replace('-', "_")
+}
+
+fn argument_hint_from_usage(usage: &str) -> Option<String> {
+    usage.split_once(char::is_whitespace).and_then(|(_, hint)| {
+        let hint = hint.trim();
+        (!hint.is_empty()).then(|| hint.to_string())
+    })
+}
+
+fn supports_noninteractive(name: &str) -> bool {
+    matches!(
+        name,
+        "/help"
+            | "/commands"
+            | "/tools"
+            | "/status"
+            | "/providers"
+            | "/models"
+            | "/model"
+            | "/provider"
+            | "/verify"
+            | "/eval"
+            | "/trace"
+            | "/memory"
+            | "/context"
+            | "/model-request"
+            | "/skills"
+            | "/subagents"
+            | "/mcp"
+            | "/hbse"
+            | "/config"
+            | "/runs"
+            | "/diff"
+    )
+}
+
+fn infer_command_category(name: &str) -> CommandCategory {
+    match name {
+        "/workspace" | "/projects" | "/attach" | "/diff" => CommandCategory::Workspace,
+        "/recall" | "/memory" | "/remember" | "/context" | "/model-request" | "/compress" => {
+            CommandCategory::MemoryContext
+        }
+        "/models" | "/model" | "/effort" | "/fast" | "/provider" | "/providers" | "/auth" => {
+            CommandCategory::ModelProvider
+        }
+        "/agent" | "/agents" | "/subagents" | "/work" | "/auto" | "/autonomy" => {
+            CommandCategory::AgentsTasks
+        }
+        "/skills" => CommandCategory::Skills,
+        "/tools" | "/approvals" | "/hbse" | "/mcp" => CommandCategory::SecurityPermissions,
+        "/status" | "/verify" | "/eval" | "/trace" | "/runs" | "/recover" | "/turn-repair" => {
+            CommandCategory::Diagnostics
+        }
+        "/speech" | "/tts" => CommandCategory::Media,
+        "/system" | "/system-prompt" | "/profile" | "/ka" | "/config" => {
+            CommandCategory::Configuration
+        }
+        _ => CommandCategory::CoreSession,
+    }
+}
+
+fn infer_command_safety(name: &str) -> CommandSafety {
+    match name {
+        "/exit" | "/quit" | "/reset" | "/clear" | "/cancel" | "/stop" => {
+            CommandSafety::SessionMutation
+        }
+        "/workspace" | "/projects" | "/system" | "/agent" | "/agents" | "/ka" | "/profile"
+        | "/model" | "/provider" | "/effort" | "/fast" | "/tools" | "/approvals" | "/skills"
+        | "/memory" | "/remember" | "/hbse" | "/mcp" | "/config" => CommandSafety::SessionMutation,
+        "/attach" | "/speech" | "/tts" => CommandSafety::ExternalEffect,
+        "/diff" | "/eval" | "/verify" => CommandSafety::ReadOnly,
+        _ => CommandSafety::ReadOnly,
+    }
+}
+
+fn infer_command_contexts(
+    name: &str,
+    category: &CommandCategory,
+    safety: &CommandSafety,
+) -> Vec<ExecutionContext> {
+    let mut contexts = vec![ExecutionContext::LocalCli, ExecutionContext::Tui];
+    if supports_noninteractive(name) {
+        contexts.push(ExecutionContext::Api);
+    }
+    if matches!(safety, CommandSafety::ReadOnly)
+        && !matches!(
+            category,
+            CommandCategory::CoreSession | CommandCategory::Media
+        )
+    {
+        contexts.push(ExecutionContext::Subagent);
+    }
+    if supports_noninteractive(name)
+        && matches!(
+            safety,
+            CommandSafety::ReadOnly | CommandSafety::SessionMutation
+        )
+        && !matches!(category, CommandCategory::Media)
+    {
+        contexts.push(ExecutionContext::RemoteBridge);
+    }
+    contexts.sort();
+    contexts.dedup();
+    contexts
+}
+
+fn infer_tool_contexts(definition: &ToolDefinition) -> Vec<ExecutionContext> {
+    let mut contexts = vec![
+        ExecutionContext::LocalCli,
+        ExecutionContext::Tui,
+        ExecutionContext::Api,
+    ];
+    if !definition.risky {
+        contexts.push(ExecutionContext::Subagent);
+        contexts.push(ExecutionContext::RemoteBridge);
+    }
+    if definition.category == "memory" || definition.category == "context" {
+        contexts.push(ExecutionContext::Subagent);
+    }
+    contexts.sort();
+    contexts.dedup();
+    contexts
+}
+
 fn split_command(raw: &str) -> (&str, &str) {
     raw.split_once(char::is_whitespace)
         .map(|(command, rest)| (command, rest.trim()))
@@ -423,6 +915,83 @@ fn command_args(command_name: &str, rest: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::default_tool_definitions;
+
+    #[test]
+    fn default_command_registry_validates_unique_names_and_aliases() {
+        validate_default_command_definitions().expect("default command registry should validate");
+        CommandRegistry::with_defaults()
+            .validate()
+            .expect("registered default commands should validate");
+    }
+
+    #[test]
+    fn registry_rejects_duplicate_command_names() {
+        let duplicate = vec![
+            cmd("/same", "one", "/same", &[]),
+            cmd("/same", "two", "/same", &[]),
+        ];
+        let error = validate_command_definitions(duplicate.iter()).unwrap_err();
+        assert!(
+            error
+                .errors
+                .iter()
+                .any(|line| line.contains("duplicate command name /same")),
+            "unexpected errors: {:#?}",
+            error.errors
+        );
+    }
+
+    #[test]
+    fn registry_rejects_alias_conflicting_with_command_name() {
+        let definitions = vec![
+            cmd("/agent", "one", "/agent", &[]),
+            cmd("/agents", "two", "/agents", &["/agent"]),
+        ];
+        let error = validate_command_definitions(definitions.iter()).unwrap_err();
+        assert!(
+            error.errors.iter().any(|line| line
+                .contains("alias /agent for command /agents conflicts with command name")),
+            "unexpected errors: {:#?}",
+            error.errors
+        );
+    }
+
+    #[test]
+    fn command_registry_dump_is_deterministic_and_typed() {
+        let registry = CommandRegistry::with_defaults();
+        let dump = registry.metadata_dump();
+        assert!(
+            dump.commands
+                .windows(2)
+                .all(|pair| pair[0].name <= pair[1].name)
+        );
+        let help = dump
+            .commands
+            .iter()
+            .find(|command| command.name == "/help")
+            .expect("help command has spec");
+        assert_eq!(help.category, CommandCategory::CoreSession);
+        assert_eq!(help.source, CommandSource::Builtin);
+        assert!(help.contexts.contains(&ExecutionContext::Tui));
+    }
+
+    #[test]
+    fn default_tool_registry_validates_current_tools() -> anyhow::Result<()> {
+        let registry = ToolRegistry::from_definitions(default_tool_definitions()?);
+        registry.validate()?;
+        let read_file = registry
+            .get("read_file")
+            .expect("read_file tool registered");
+        assert!(read_file.read_only);
+        assert_eq!(read_file.approval_category, ApprovalCategory::None);
+        let write_file = registry
+            .get("write_file")
+            .expect("write_file tool registered");
+        assert!(write_file.destructive);
+        assert_eq!(write_file.approval_category, ApprovalCategory::RiskyTool);
+        Ok(())
+    }
 
     #[test]
     fn ka_command_aliases_parse_to_canonical_command() {
@@ -442,6 +1011,13 @@ mod tests {
         let ka = registry.get("/ka").expect("ka command exists");
         assert!(ka.aliases.contains(&"/persona".to_string()));
         assert!(ka.aliases.contains(&"/soul".to_string()));
+    }
+
+    #[test]
+    fn agent_and_agents_commands_remain_distinct() {
+        let registry = CommandRegistry::with_defaults();
+        assert_eq!(registry.canonical("/agent"), "/agent");
+        assert_eq!(registry.canonical("/agents"), "/agents");
     }
 
     #[test]
