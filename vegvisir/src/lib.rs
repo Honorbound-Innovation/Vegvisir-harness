@@ -10,6 +10,7 @@ pub mod context;
 pub mod core;
 pub mod environment;
 pub mod evals;
+pub mod events;
 pub mod guardrails;
 pub mod hooks;
 pub mod lsl;
