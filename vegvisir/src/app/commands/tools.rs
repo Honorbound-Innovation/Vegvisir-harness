@@ -2,6 +2,15 @@ use super::super::*;
 
 impl TuiApplication {
     pub(crate) fn tools_command(&mut self, args: &[String]) -> String {
+        if wants_json(args) {
+            return self.tools_inventory_json(args);
+        }
+        if matches!(
+            args.first().map(String::as_str),
+            Some("inventory" | "list" | "registry")
+        ) {
+            return self.tools_inventory_text(&args[1..]);
+        }
         if matches!(
             args.first().map(String::as_str),
             Some("max-rounds" | "tool-rounds" | "tool-limit" | "limit")

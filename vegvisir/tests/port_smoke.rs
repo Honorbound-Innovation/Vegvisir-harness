@@ -3455,6 +3455,64 @@ fn tui_approval_queue_selects_and_resolves_chosen_request() -> anyhow::Result<()
 }
 
 #[test]
+fn registry_backed_help_commands_and_tools_have_json_discovery() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let home = tmp.path().join("home");
+    let mut app = TuiApplication::with_data_root(tmp.path(), &home)?;
+
+    let help = app.execute_command("/help")?.unwrap();
+    assert!(help.contains("/help [--json] [--context <name>]"));
+    assert!(help.contains("/commands [--json]"));
+
+    let commands = app.execute_command("/commands")?.unwrap();
+    assert!(commands.contains("Command registry:"));
+    assert!(commands.contains("Core session"));
+    assert!(commands.contains("/commands"));
+    assert!(commands.contains("aliases:"));
+
+    let commands_json: Value =
+        serde_json::from_str(&app.execute_command("/commands --json")?.unwrap())?;
+    let command_names = commands_json["commands"]
+        .as_array()
+        .expect("commands array")
+        .iter()
+        .filter_map(|command| command["name"].as_str())
+        .collect::<Vec<_>>();
+    assert!(command_names.contains(&"/commands"));
+    assert!(command_names.contains(&"/tools"));
+
+    let subagent_json: Value = serde_json::from_str(
+        &app.execute_command("/commands --json --context subagent")?
+            .unwrap(),
+    )?;
+    let subagent_commands = subagent_json["commands"]
+        .as_array()
+        .expect("commands array");
+    assert!(subagent_commands.iter().all(|command| {
+        command["contexts"]
+            .as_array()
+            .expect("contexts array")
+            .iter()
+            .any(|context| context == "subagent")
+    }));
+
+    let tools = app.execute_command("/tools inventory")?.unwrap();
+    assert!(tools.contains("Tool registry:"));
+    assert!(tools.contains("read_file"));
+
+    let tools_json: Value = serde_json::from_str(&app.execute_command("/tools --json")?.unwrap())?;
+    let tool_names = tools_json["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .filter_map(|tool| tool["id"].as_str())
+        .collect::<Vec<_>>();
+    assert!(tool_names.contains(&"read_file"));
+    assert!(tool_names.contains(&"write_file"));
+    Ok(())
+}
+
+#[test]
 fn command_registry_suggests_and_preserves_system_text() {
     let registry = CommandRegistry::with_defaults();
 

@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 
 use crate::{
     attachments::{attachment_for, extract_attachments},
-    command_registry::CommandRegistry,
+    command_registry::{CommandRegistry, ExecutionContext, ToolRegistry as ToolMetadataRegistry},
     core::{
         AgentProfileStore, ChatMessage, ConfigStore, HbseServiceRef, HbseServiceRefStore,
         McpConfigStore, McpServerConfig, McpToolConfig, McpTransport, ModelRegistry,
@@ -543,7 +543,8 @@ fn should_show_info_overlay(command: &str, response: &str) -> bool {
     }
     matches!(
         command,
-        "/tools"
+        "/commands"
+            | "/tools"
             | "/skills"
             | "/context"
             | "/agent"
@@ -565,6 +566,82 @@ fn should_show_info_overlay(command: &str, response: &str) -> bool {
             | "/mcp"
             | "/hbse"
     )
+}
+
+#[derive(Clone, Debug, Default)]
+struct RegistryListingOptions {
+    context: Option<ExecutionContext>,
+    include_hidden: bool,
+}
+
+impl RegistryListingOptions {
+    fn from_args(args: &[String]) -> Self {
+        let mut options = Self::default();
+        let mut index = 0usize;
+        while index < args.len() {
+            match args[index].as_str() {
+                "--all" | "--hidden" => options.include_hidden = true,
+                "--context" | "context" => {
+                    if let Some(value) = args.get(index + 1) {
+                        options.context = parse_execution_context(value);
+                        index += 1;
+                    }
+                }
+                value if value.starts_with("--context=") => {
+                    options.context =
+                        parse_execution_context(value.trim_start_matches("--context=").trim());
+                }
+                "local-cli" | "local_cli" | "tui" | "api" | "subagent" | "remote-bridge"
+                | "remote_bridge" | "mcp" | "background-worker" | "background_worker" => {
+                    options.context = parse_execution_context(args[index].as_str());
+                }
+                _ => {}
+            }
+            index += 1;
+        }
+        options
+    }
+}
+
+fn wants_json(args: &[String]) -> bool {
+    args.iter()
+        .any(|arg| matches!(arg.as_str(), "--json" | "json" | "-j"))
+}
+
+fn parse_execution_context(value: &str) -> Option<ExecutionContext> {
+    match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
+        "local-cli" | "local" | "cli" => Some(ExecutionContext::LocalCli),
+        "tui" => Some(ExecutionContext::Tui),
+        "api" => Some(ExecutionContext::Api),
+        "background-worker" | "background" | "worker" => Some(ExecutionContext::BackgroundWorker),
+        "subagent" | "sub-agent" => Some(ExecutionContext::Subagent),
+        "remote-bridge" | "remote" | "bridge" => Some(ExecutionContext::RemoteBridge),
+        "mcp" => Some(ExecutionContext::Mcp),
+        _ => None,
+    }
+}
+
+fn command_usage_text(command: &crate::command_registry::CommandSpec) -> String {
+    command
+        .argument_hint
+        .as_ref()
+        .map(|hint| format!("{} {hint}", command.name))
+        .unwrap_or_else(|| command.name.clone())
+}
+
+fn command_category_label(category: &crate::command_registry::CommandCategory) -> &'static str {
+    match category {
+        crate::command_registry::CommandCategory::CoreSession => "Core session",
+        crate::command_registry::CommandCategory::Workspace => "Workspace",
+        crate::command_registry::CommandCategory::MemoryContext => "Memory/context",
+        crate::command_registry::CommandCategory::ModelProvider => "Model/provider",
+        crate::command_registry::CommandCategory::AgentsTasks => "Agents/tasks",
+        crate::command_registry::CommandCategory::Skills => "Skills",
+        crate::command_registry::CommandCategory::SecurityPermissions => "Security/permissions",
+        crate::command_registry::CommandCategory::Diagnostics => "Diagnostics",
+        crate::command_registry::CommandCategory::Media => "Media",
+        crate::command_registry::CommandCategory::Configuration => "Configuration",
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1121,13 +1198,134 @@ impl TuiApplication {
         }
     }
 
-    fn help(&self) -> String {
-        self.commands
-            .all()
+    fn help(&self, args: &[String]) -> String {
+        if wants_json(args) {
+            return self.commands_json(args);
+        }
+        let options = RegistryListingOptions::from_args(args);
+        self.command_specs_for_options(&options)
             .into_iter()
-            .map(|cmd| format!("{:<28} {}", cmd.usage, cmd.description))
+            .map(|cmd| {
+                let usage = command_usage_text(&cmd);
+                format!("{:<28} {}", usage, cmd.summary)
+            })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn commands_command(&self, args: &[String]) -> String {
+        if wants_json(args) {
+            return self.commands_json(args);
+        }
+        let options = RegistryListingOptions::from_args(args);
+        let mut commands = self.command_specs_for_options(&options);
+        commands.sort_by(|left, right| {
+            left.category
+                .cmp(&right.category)
+                .then_with(|| left.name.cmp(&right.name))
+        });
+        let mut lines = Vec::new();
+        lines.push("Command registry:".to_string());
+        let mut current_category = None;
+        for command in commands {
+            if current_category.as_ref() != Some(&command.category) {
+                current_category = Some(command.category.clone());
+                lines.push(format!("\n{}", command_category_label(&command.category)));
+            }
+            let aliases = if command.aliases.is_empty() {
+                String::new()
+            } else {
+                format!(" aliases: {}", command.aliases.join(", "))
+            };
+            let args = command
+                .argument_hint
+                .as_ref()
+                .map(|hint| format!(" {hint}"))
+                .unwrap_or_default();
+            lines.push(format!(
+                "  {:<20} {:<28} {}{}",
+                command.name, args, command.summary, aliases
+            ));
+        }
+        lines.push("".to_string());
+        lines.push("Use /commands --json for machine-readable metadata.".to_string());
+        lines.join("\n")
+    }
+
+    fn commands_json(&self, args: &[String]) -> String {
+        let options = RegistryListingOptions::from_args(args);
+        serde_json::to_string_pretty(&json!({
+            "commands": self.command_specs_for_options(&options),
+        }))
+        .unwrap_or_else(|error| format!("Failed to serialize command registry: {error}"))
+    }
+
+    fn command_specs_for_options(
+        &self,
+        options: &RegistryListingOptions,
+    ) -> Vec<crate::command_registry::CommandSpec> {
+        self.commands
+            .specs()
+            .into_iter()
+            .filter(|command| options.include_hidden || !command.hidden)
+            .filter(|command| {
+                options
+                    .context
+                    .as_ref()
+                    .map(|context| command.contexts.contains(context))
+                    .unwrap_or(true)
+            })
+            .collect()
+    }
+
+    fn tools_inventory_json(&self, args: &[String]) -> String {
+        let options = RegistryListingOptions::from_args(args);
+        let registry = ToolMetadataRegistry::from_definitions(self.session.enabled_tools.clone());
+        if let Err(error) = registry.validate() {
+            return format!("Tool registry validation failed: {error}");
+        }
+        let tools = registry
+            .metadata_dump()
+            .tools
+            .into_iter()
+            .filter(|tool| {
+                options
+                    .context
+                    .as_ref()
+                    .map(|context| tool.contexts.contains(context))
+                    .unwrap_or(true)
+            })
+            .collect::<Vec<_>>();
+        serde_json::to_string_pretty(&json!({ "tools": tools }))
+            .unwrap_or_else(|error| format!("Failed to serialize tool registry: {error}"))
+    }
+
+    fn tools_inventory_text(&self, args: &[String]) -> String {
+        let options = RegistryListingOptions::from_args(args);
+        let registry = ToolMetadataRegistry::from_definitions(self.session.enabled_tools.clone());
+        if let Err(error) = registry.validate() {
+            return format!("Tool registry validation failed: {error}");
+        }
+        let mut lines = vec!["Tool registry:".to_string()];
+        for tool in registry.metadata_dump().tools.into_iter().filter(|tool| {
+            options
+                .context
+                .as_ref()
+                .map(|context| tool.contexts.contains(context))
+                .unwrap_or(true)
+        }) {
+            let flags = [
+                tool.read_only.then_some("read-only"),
+                tool.destructive.then_some("destructive"),
+                tool.concurrency_safe.then_some("concurrency-safe"),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(", ");
+            lines.push(format!("  {:<24} {:<22} {}", tool.id, flags, tool.summary));
+        }
+        lines.join("\n")
     }
 
     fn prepare_lsl_for_content(
@@ -3279,19 +3477,27 @@ mod tests {
 
         let saved = app.config.load().unwrap_or_default();
         assert_eq!(
-            saved.get("current_provider").and_then(serde_json::Value::as_str),
+            saved
+                .get("current_provider")
+                .and_then(serde_json::Value::as_str),
             Some("main-provider")
         );
         assert_eq!(
-            saved.get("current_model").and_then(serde_json::Value::as_str),
+            saved
+                .get("current_model")
+                .and_then(serde_json::Value::as_str),
             Some("main-model")
         );
         assert_eq!(
-            saved.get("subagent_provider").and_then(serde_json::Value::as_str),
+            saved
+                .get("subagent_provider")
+                .and_then(serde_json::Value::as_str),
             Some("sub-provider")
         );
         assert_eq!(
-            saved.get("subagent_model").and_then(serde_json::Value::as_str),
+            saved
+                .get("subagent_model")
+                .and_then(serde_json::Value::as_str),
             Some("sub-model")
         );
         Ok(())

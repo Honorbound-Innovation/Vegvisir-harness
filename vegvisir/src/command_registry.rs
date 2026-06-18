@@ -593,7 +593,18 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
             "/handoff [--save] [--file <path>] [--memory] [--global]",
             &[],
         ),
-        cmd("/help", "show command reference", "/help", &[]),
+        cmd(
+            "/help",
+            "show command reference",
+            "/help [--json] [--context <name>]",
+            &[],
+        ),
+        cmd(
+            "/commands",
+            "list command registry metadata",
+            "/commands [--json] [--context <local-cli|tui|api|subagent|remote-bridge>]",
+            &[],
+        ),
         cmd(
             "/tools",
             "show available tools",
