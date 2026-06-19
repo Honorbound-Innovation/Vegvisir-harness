@@ -655,6 +655,17 @@ Steering: {display_content}{attachment_note}"
                         "Warning: failed to write run artifact approvals: {error}"
                     ));
                 }
+                if let Err(error) = manager.append_runtime_event(
+                    crate::events::VegvisirEvent::UserMessage(crate::events::UserMessage {
+                        message_id: format!("{}:user", manager.run_id),
+                        content_preview: prompt.chars().take(512).collect(),
+                        attachment_count: self.session.pending_attachments.len() as u32,
+                    }),
+                ) {
+                    self.push_system_message(format!(
+                        "Warning: failed to append run artifact user event: {error}"
+                    ));
+                }
                 self.pending_run_artifact = Some((manager, manifest));
             }
             Err(error) => self.push_system_message(format!(
@@ -686,16 +697,38 @@ Steering: {display_content}{attachment_note}"
         }
     }
 
+    fn append_tui_turn_runtime_event(&mut self, event: crate::events::VegvisirEvent) {
+        if let Some((manager, _)) = self.pending_run_artifact.as_ref()
+            && let Err(error) = manager.append_runtime_event(event)
+        {
+            self.push_system_message(format!(
+                "Warning: failed to append run runtime event: {error}"
+            ));
+        }
+    }
+
     fn finish_tui_turn_artifact(&mut self, status: RunStatus, response: Option<&str>) {
         let Some((manager, mut manifest)) = self.pending_run_artifact.take() else {
             return;
         };
-        if let Some(response) = response
-            && let Err(error) = manager.write_result(response)
-        {
-            self.push_system_message(format!(
-                "Warning: failed to write run artifact result: {error}"
-            ));
+        if let Some(response) = response {
+            if let Err(error) = manager.append_runtime_event(
+                crate::events::VegvisirEvent::AssistantMessageCompleted(
+                    crate::events::AssistantMessageCompleted {
+                        message_id: format!("{}:assistant", manager.run_id),
+                        output_tokens: None,
+                    },
+                ),
+            ) {
+                self.push_system_message(format!(
+                    "Warning: failed to append run assistant completion event: {error}"
+                ));
+            }
+            if let Err(error) = manager.write_result(response) {
+                self.push_system_message(format!(
+                    "Warning: failed to write run artifact result: {error}"
+                ));
+            }
         }
         if let Err(error) =
             manager.write_approvals_from_pending(&self.tool_executor.guardrails.approvals.pending())
@@ -889,6 +922,18 @@ Steering: {display_content}{attachment_note}"
                     self.session.messages[assistant_index]
                         .content
                         .push_str(&delta);
+                    self.append_tui_turn_runtime_event(
+                        crate::events::VegvisirEvent::AssistantDelta(
+                            crate::events::AssistantDelta {
+                                message_id: self
+                                    .pending_run_artifact
+                                    .as_ref()
+                                    .map(|(manager, _)| format!("{}:assistant", manager.run_id))
+                                    .unwrap_or_else(|| "assistant".to_string()),
+                                delta,
+                            },
+                        ),
+                    );
                 }
                 StreamEvent::PromptEnvelope(envelope) => {
                     self.write_tui_turn_context_artifacts(&envelope);

@@ -4,6 +4,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::Command,
+    sync::{Mutex, OnceLock},
 };
 
 use chrono::{DateTime, Utc};
@@ -14,6 +15,11 @@ use uuid::Uuid;
 use cms_v2::{cms_api::CommitResult, prompt_cache::CachedPromptEnvelope};
 
 use crate::{
+    events::{
+        ContextPrepared, EventEnvelope, MemoryRead, MemoryWritten, RunCompleted,
+        RunCompletionStatus, RunFailed as RuntimeRunFailed, RunStarted, ToolCompleted, ToolFailed,
+        ToolStarted, VegvisirEvent, to_jsonl_record,
+    },
     guardrails::ApprovalRequest,
     provider::ProviderRunEvent,
     subagents::{SubAgentStatus, SubAgentTaskRecord},
@@ -150,6 +156,13 @@ impl RunArtifactManager {
         };
         let manifest = RunManifest::new(run_id, session_id, workspace, provider, model, agent);
         manager.write_manifest(&manifest)?;
+        manager.append_runtime_event(VegvisirEvent::RunStarted(RunStarted {
+            session_id: manifest.session_id.clone(),
+            workspace: manifest.workspace.display().to_string(),
+            provider: manifest.provider.clone(),
+            model: manifest.model.clone(),
+            agent: manifest.agent.clone(),
+        }))?;
         Ok((manager, manifest))
     }
 
@@ -194,20 +207,35 @@ impl RunArtifactManager {
     pub fn write_context_artifacts(&self, envelope: &CachedPromptEnvelope) -> anyhow::Result<()> {
         self.write_context(&envelope.model_request.prompt)?;
         self.write_context_sources(&context_sources_from_envelope(envelope))?;
-        self.write_memory_used(envelope)
+        self.write_memory_used(envelope)?;
+        self.append_runtime_event(VegvisirEvent::ContextPrepared(ContextPrepared {
+            system: "ecm".to_string(),
+            input_tokens: Some(envelope.manifest.total_prompt_tokens as u64),
+            output_tokens: None,
+            source_count: envelope
+                .blocks
+                .len()
+                .saturating_add(envelope.capsules.len()) as u32,
+        }))?;
+        Ok(())
     }
 
     pub fn write_memory_used(&self, envelope: &CachedPromptEnvelope) -> anyhow::Result<()> {
         let evidence = RunMemoryUseEvidence::from_envelope(self.run_id.clone(), envelope);
-        self.write_json_file("memory-used.json", &evidence)
+        self.write_json_file("memory-used.json", &evidence)?;
+        self.append_runtime_event(VegvisirEvent::MemoryRead(MemoryRead {
+            system: "cms-v2".to_string(),
+            query: None,
+            result_count: evidence.memory_ids.len() as u32,
+        }))?;
+        Ok(())
     }
 
     pub fn write_memory_written_from_results(
         &self,
         results: &[CommitResult],
     ) -> anyhow::Result<()> {
-        let evidence = RunMemoryWriteEvidence::from_results(self.run_id.clone(), results);
-        self.write_json_file("memory-written.json", &evidence)
+        self.write_memory_written_from_outcome(results, None)
     }
 
     pub fn write_memory_written_from_outcome(
@@ -216,7 +244,15 @@ impl RunArtifactManager {
         error: Option<&str>,
     ) -> anyhow::Result<()> {
         let evidence = RunMemoryWriteEvidence::from_outcome(self.run_id.clone(), results, error);
-        self.write_json_file("memory-written.json", &evidence)
+        self.write_json_file("memory-written.json", &evidence)?;
+        for write in &evidence.writes {
+            self.append_runtime_event(VegvisirEvent::MemoryWritten(MemoryWritten {
+                system: "cms-v2".to_string(),
+                memory_id: Some(write.memory_id.clone()),
+                title: "completion_writeback".to_string(),
+            }))?;
+        }
+        Ok(())
     }
 
     pub fn write_memory_written_unavailable(&self, note: impl Into<String>) -> anyhow::Result<()> {
@@ -355,18 +391,48 @@ impl RunArtifactManager {
     pub fn append_observed_provider_event(&self, event: &ProviderRunEvent) -> anyhow::Result<()> {
         self.append_provider_event(event)?;
         match event {
-            ProviderRunEvent::ToolStart { name, args } => self.append_tool_event(
-                &ToolRunEvent::start(self.run_id.clone(), name.clone(), Some(args.clone()), None),
-            )?,
+            ProviderRunEvent::ToolStart { name, args } => {
+                self.append_tool_event(&ToolRunEvent::start(
+                    self.run_id.clone(),
+                    name.clone(),
+                    Some(args.clone()),
+                    None,
+                ))?;
+                self.append_runtime_event(VegvisirEvent::ToolStarted(ToolStarted {
+                    tool_call_id: legacy_provider_tool_call_id(&self.run_id, name),
+                    tool_name: name.clone(),
+                    approval_id: None,
+                }))?;
+            }
             ProviderRunEvent::ToolEnd {
-                name, ok, summary, ..
-            } => self.append_tool_event(&ToolRunEvent::end(
-                self.run_id.clone(),
-                name.clone(),
-                *ok,
-                summary.clone(),
-                None,
-            ))?,
+                name,
+                ok,
+                summary,
+                detail,
+            } => {
+                self.append_tool_event(&ToolRunEvent::end(
+                    self.run_id.clone(),
+                    name.clone(),
+                    *ok,
+                    summary.clone(),
+                    None,
+                ))?;
+                if *ok {
+                    self.append_runtime_event(VegvisirEvent::ToolCompleted(ToolCompleted {
+                        tool_call_id: legacy_provider_tool_call_id(&self.run_id, name),
+                        tool_name: name.clone(),
+                        ok: true,
+                        summary: summary.clone(),
+                    }))?;
+                } else {
+                    self.append_runtime_event(VegvisirEvent::ToolFailed(ToolFailed {
+                        tool_call_id: legacy_provider_tool_call_id(&self.run_id, name),
+                        tool_name: name.clone(),
+                        error: detail.clone().unwrap_or_else(|| summary.clone()),
+                        recoverable: true,
+                    }))?;
+                }
+            }
             ProviderRunEvent::Activity(_) => {}
         }
         self.record_verification_from_provider_event(event)
@@ -376,7 +442,44 @@ impl RunArtifactManager {
         self.append_jsonl_value("tool-events.jsonl", &serde_json::to_value(event)?)
     }
 
+    pub fn append_runtime_event(&self, event: VegvisirEvent) -> anyhow::Result<EventEnvelope> {
+        let _guard = runtime_event_append_lock()
+            .lock()
+            .expect("runtime event append lock poisoned");
+        let envelope =
+            EventEnvelope::new(self.run_id.clone(), self.next_runtime_event_seq(), event);
+        self.append_jsonl_record("runtime-events.jsonl", &to_jsonl_record(&envelope)?)?;
+        Ok(envelope)
+    }
+
     pub fn finish(&self, manifest: &mut RunManifest, status: RunStatus) -> anyhow::Result<()> {
+        let completion_status = match status {
+            RunStatus::Cancelled => RunCompletionStatus::Cancelled,
+            RunStatus::Running | RunStatus::Completed | RunStatus::Failed => {
+                RunCompletionStatus::Ok
+            }
+        };
+        match status {
+            RunStatus::Failed => {
+                let failure = self.read_run_failure();
+                self.append_runtime_event(VegvisirEvent::RunFailed(RuntimeRunFailed {
+                    error: failure
+                        .as_ref()
+                        .map(|failure| failure.message.clone())
+                        .unwrap_or_else(|| "run failed".to_string()),
+                    recoverable: failure
+                        .as_ref()
+                        .map(|failure| failure.recoverable)
+                        .unwrap_or(true),
+                }))?;
+            }
+            _ => {
+                self.append_runtime_event(VegvisirEvent::RunCompleted(RunCompleted {
+                    status: completion_status,
+                    summary: None,
+                }))?;
+            }
+        }
         self.write_verification_if_absent(&status)?;
         manifest.status = status;
         manifest.finished_at = Some(Utc::now());
@@ -440,6 +543,22 @@ impl RunArtifactManager {
         Ok(())
     }
 
+    fn append_jsonl_record(&self, name: &str, record: &str) -> anyhow::Result<()> {
+        fs::create_dir_all(&self.run_dir)?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.artifact_path(name))?;
+        writeln!(file, "{record}")?;
+        Ok(())
+    }
+
+    fn next_runtime_event_seq(&self) -> u64 {
+        fs::read_to_string(self.artifact_path("runtime-events.jsonl"))
+            .map(|text| text.lines().count() as u64 + 1)
+            .unwrap_or(1)
+    }
+
     fn record_verification_from_provider_event(
         &self,
         event: &ProviderRunEvent,
@@ -462,6 +581,12 @@ impl RunArtifactManager {
 
     fn read_verification_evidence(&self) -> Option<RunVerificationEvidence> {
         let path = self.artifact_path("verification.json");
+        let text = fs::read_to_string(path).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+
+    fn read_run_failure(&self) -> Option<RunFailure> {
+        let path = self.artifact_path("failure.json");
         let text = fs::read_to_string(path).ok()?;
         serde_json::from_str(&text).ok()
     }
@@ -1245,6 +1370,15 @@ pub enum ToolRunPhase {
     End,
 }
 
+fn runtime_event_append_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn legacy_provider_tool_call_id(run_id: &str, tool_name: &str) -> String {
+    format!("legacy-provider:{run_id}:{tool_name}")
+}
+
 pub fn context_sources_from_envelope(envelope: &CachedPromptEnvelope) -> Value {
     json!({
         "schema_version": RUN_ARTIFACT_SCHEMA_VERSION,
@@ -1314,6 +1448,10 @@ fn default_artifact_paths() -> BTreeMap<String, PathBuf> {
         (
             "tool_events".to_string(),
             PathBuf::from("tool-events.jsonl"),
+        ),
+        (
+            "runtime_events".to_string(),
+            PathBuf::from("runtime-events.jsonl"),
         ),
         (
             "file_changes".to_string(),
@@ -1544,6 +1682,7 @@ mod tests {
             ("context_sources", "context-sources.json"),
             ("provider_events", "provider-events.jsonl"),
             ("tool_events", "tool-events.jsonl"),
+            ("runtime_events", "runtime-events.jsonl"),
             ("file_changes", "file-changes.json"),
             ("diff", "diff.patch"),
             ("memory_used", "memory-used.json"),
@@ -1881,6 +2020,80 @@ mod tests {
         assert_eq!(verification.checks.len(), 1);
         assert_eq!(verification.checks[0].name, "run_tests");
         assert_eq!(verification.checks[0].ok, Some(true));
+        Ok(())
+    }
+
+    #[test]
+    fn run_artifacts_writes_runtime_events_for_lifecycle_context_and_tools() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        fs::create_dir_all(&workspace)?;
+        let (manager, mut manifest) = RunArtifactManager::start_with_run_id(
+            &workspace,
+            tmp.path().join("data"),
+            "run-runtime-events",
+            Option::<&Path>::None,
+            "session-1",
+            "demo",
+            "demo-model",
+            Some("tester".to_string()),
+        )?;
+
+        let runtime_path = manager.artifact_path("runtime-events.jsonl");
+        let initial = fs::read_to_string(&runtime_path)?;
+        assert_eq!(initial.lines().count(), 1);
+        assert!(initial.contains(r#""type":"run_started""#));
+        assert!(initial.contains(r#""run_id":"run-runtime-events""#));
+
+        manager.append_observed_provider_event(&ProviderRunEvent::ToolStart {
+            name: "read_file".to_string(),
+            args: r#"{"path":"src/lib.rs"}"#.to_string(),
+        })?;
+        manager.append_observed_provider_event(&ProviderRunEvent::ToolEnd {
+            name: "read_file".to_string(),
+            ok: true,
+            summary: "read complete".to_string(),
+            detail: None,
+        })?;
+        manager.finish(&mut manifest, RunStatus::Completed)?;
+
+        let lines = fs::read_to_string(&runtime_path)?
+            .lines()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert_eq!(lines.len(), 4);
+        for (idx, line) in lines.iter().enumerate() {
+            assert!(line.contains(&format!(r#""seq":{}"#, idx + 1)));
+            assert_eq!(line.lines().count(), 1);
+        }
+        assert!(lines[1].contains(r#""type":"tool_started""#));
+        assert!(lines[2].contains(r#""type":"tool_completed""#));
+        assert!(lines[3].contains(r#""type":"run_completed""#));
+        Ok(())
+    }
+
+    #[test]
+    fn run_artifacts_writes_runtime_failed_event_with_failure_message() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        fs::create_dir_all(&workspace)?;
+        let (manager, mut manifest) = RunArtifactManager::start_with_run_id(
+            &workspace,
+            tmp.path().join("data"),
+            "run-runtime-failed",
+            Option::<&Path>::None,
+            "session-1",
+            "demo",
+            "demo-model",
+            None,
+        )?;
+
+        manager.fail(&mut manifest, "provider timed out", true)?;
+
+        let runtime_events = fs::read_to_string(manager.artifact_path("runtime-events.jsonl"))?;
+        assert!(runtime_events.contains(r#""type":"run_failed""#));
+        assert!(runtime_events.contains("provider timed out"));
+        assert!(!runtime_events.contains("api_key"));
         Ok(())
     }
 

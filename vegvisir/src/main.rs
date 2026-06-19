@@ -932,19 +932,6 @@ fn run_headless_provider(
         &workspace,
         dangerously_bypass_approvals_and_sandbox,
     )?;
-    let mut artifact_bundle = if artifacts || artifact_dir.is_some() {
-        Some(RunArtifactManager::start_in(
-            &workspace,
-            default_vegvisir_data_root(),
-            artifact_dir.as_deref(),
-            app.session.session_id.clone(),
-            app.session.current_provider.clone(),
-            app.session.current_model.clone(),
-            app.session.active_agent_id.clone(),
-        )?)
-    } else {
-        None
-    };
 
     let selection_result = (|| -> anyhow::Result<()> {
         if let Some(provider) = provider {
@@ -959,8 +946,16 @@ fn run_headless_provider(
         Ok(())
     })();
     if let Err(error) = selection_result {
-        if let Some((manager, mut manifest)) = artifact_bundle.take() {
-            sync_manifest_selection_from_app(&mut manifest, &app);
+        if artifacts || artifact_dir.is_some() {
+            let (manager, mut manifest) = RunArtifactManager::start_in(
+                &workspace,
+                default_vegvisir_data_root(),
+                artifact_dir.as_deref(),
+                app.session.session_id.clone(),
+                app.session.current_provider.clone(),
+                app.session.current_model.clone(),
+                app.session.active_agent_id.clone(),
+            )?;
             manager.write_request(&serde_json::json!({
                 "goal": prompt,
                 "mode": "provider_runtime",
@@ -975,9 +970,19 @@ fn run_headless_provider(
         return Err(error);
     }
 
-    if let Some((_, manifest)) = artifact_bundle.as_mut() {
-        sync_manifest_selection_from_app(manifest, &app);
-    }
+    let artifact_bundle = if artifacts || artifact_dir.is_some() {
+        Some(RunArtifactManager::start_in(
+            &workspace,
+            default_vegvisir_data_root(),
+            artifact_dir.as_deref(),
+            app.session.session_id.clone(),
+            app.session.current_provider.clone(),
+            app.session.current_model.clone(),
+            app.session.active_agent_id.clone(),
+        )?)
+    } else {
+        None
+    };
 
     if json_output {
         let (observed, artifact_dir) = if let Some((manager, manifest)) = artifact_bundle {
@@ -1017,12 +1022,6 @@ fn run_headless_provider(
         println!("{response}");
     }
     Ok(())
-}
-
-fn sync_manifest_selection_from_app(manifest: &mut RunManifest, app: &TuiApplication) {
-    manifest.provider = app.session.current_provider.clone();
-    manifest.model = app.session.current_model.clone();
-    manifest.agent = app.session.active_agent_id.clone();
 }
 
 fn run_status_from_harness_status(status: &str) -> RunStatus {

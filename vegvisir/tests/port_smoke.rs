@@ -578,6 +578,10 @@ fn cli_prompt_and_legacy_run_headless_modes_work() -> anyhow::Result<()> {
         "tool-events.jsonl"
     );
     assert_eq!(
+        scripted_manifest["artifact_paths"]["runtime_events"],
+        "runtime-events.jsonl"
+    );
+    assert_eq!(
         scripted_manifest["artifact_paths"]["file_changes"],
         "file-changes.json"
     );
@@ -4907,6 +4911,19 @@ fn tui_submit_message_uses_cms_memory_and_demo_provider() -> anyhow::Result<()> 
     assert_eq!(request["mode"], "tui_turn");
     assert_eq!(request["goal"], "hello from tui");
     assert!(fs::read_to_string(run_dir.join("result.md"))?.contains("CMS-v2 model request"));
+    let runtime_events = fs::read_to_string(run_dir.join("runtime-events.jsonl"))?;
+    assert!(runtime_events.contains(r#""type":"run_started""#));
+    assert!(runtime_events.contains(r#""type":"user_message""#));
+    assert!(runtime_events.contains(r#""type":"memory_read""#));
+    assert!(runtime_events.contains(r#""type":"context_prepared""#));
+    assert!(runtime_events.contains(r#""type":"assistant_delta""#));
+    assert!(runtime_events.contains(r#""type":"assistant_message_completed""#));
+    assert!(runtime_events.contains(r#""type":"run_completed""#));
+    let runtime_lines = runtime_events.lines().collect::<Vec<_>>();
+    assert!(runtime_lines.len() >= 7);
+    for (idx, line) in runtime_lines.iter().enumerate() {
+        assert!(line.contains(&format!(r#""seq":{}"#, idx + 1)));
+    }
     let file_changes: Value =
         serde_json::from_str(&fs::read_to_string(run_dir.join("file-changes.json"))?)?;
     assert_eq!(file_changes["status"], "unavailable");
