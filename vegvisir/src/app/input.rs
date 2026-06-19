@@ -18,13 +18,17 @@ impl TuiApplication {
         self.input.update_suggestions(Vec::new());
 
         if raw.starts_with('/') {
-            let suppress_command_chat_response = self
+            let parsed_command = self
                 .commands
                 .parse_with_aliases(&raw)
-                .map(|(command, _)| command_response_is_chat_suppressed(&command))
-                .unwrap_or(false);
+                .map(|(command, _)| command);
             match self.execute_command(&raw) {
                 Ok(Some(response)) if !response.is_empty() => {
+                    let suppress_command_chat_response =
+                        parsed_command.as_deref().is_some_and(|command| {
+                            command_response_is_chat_suppressed(command)
+                                || should_show_info_overlay(command, &response)
+                        });
                     if !suppress_command_chat_response {
                         self.push_system_message(response);
                     }

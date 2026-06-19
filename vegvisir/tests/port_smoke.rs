@@ -3361,6 +3361,27 @@ fn inspector_commands_open_tui_info_overlay() -> anyhow::Result<()> {
 }
 
 #[test]
+fn slash_command_submit_routes_overlay_output_without_chat_spam() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let home = tmp.path().join("home");
+    let mut app = TuiApplication::with_data_root(tmp.path(), &home)?;
+    let message_count = app.session.messages.len();
+
+    app.input.set_buffer("/trace --limit 5");
+    app.handle_submit();
+
+    assert_eq!(app.session.messages.len(), message_count);
+    let overlay = app
+        .info_overlay
+        .as_ref()
+        .expect("/trace output should be constrained to the info overlay");
+    assert_eq!(overlay.title, "trace");
+    assert!(overlay.body.contains("command_start"));
+    assert!(overlay.body.contains("/trace"));
+    Ok(())
+}
+
+#[test]
 fn work_command_opens_activity_overlay_and_mouse_scrolls_active_overlay() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let home = tmp.path().join("home");
