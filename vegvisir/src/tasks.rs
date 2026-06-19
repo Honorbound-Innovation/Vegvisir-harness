@@ -172,6 +172,17 @@ pub enum TaskLifecycleEvent {
 }
 
 impl TaskLifecycleEvent {
+    pub fn task_id(&self) -> &str {
+        match self {
+            Self::Registered { task_id, .. }
+            | Self::Started { task_id, .. }
+            | Self::Backgrounded { task_id }
+            | Self::WaitingForInput { task_id }
+            | Self::Output { task_id, .. }
+            | Self::Completed { task_id, .. } => task_id,
+        }
+    }
+
     pub fn to_vegvisir_event(&self, record: &TaskRecord) -> Option<VegvisirEvent> {
         match self {
             Self::Started { .. } => Some(VegvisirEvent::TaskStarted(TaskStarted {

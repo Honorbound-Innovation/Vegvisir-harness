@@ -45,6 +45,7 @@ use crate::{
     run_artifacts::{RunArtifactManager, RunFailure, RunManifest, RunStatus},
     speech::{ActiveSpeechRecording, DEFAULT_PTT_KEY, DEFAULT_PTT_SECONDS, PushToTalkKey},
     subagents::{SubAgentStatus, SubAgentTaskRecord},
+    tasks::TaskManager,
     tools::{
         DEFAULT_ACTIVE_SUBAGENT_LIMIT, SubagentProviderDefaults, SubagentSpawnDefaults,
         ToolExecutor, ToolRegistry, build_builtin_registry_with_cms_mode_subagent_config,
@@ -84,6 +85,7 @@ pub struct TuiApplication {
     pub cms: VegvisirCms,
     pub tool_registry: ToolRegistry,
     pub tool_executor: ToolExecutor,
+    pub task_manager: TaskManager,
     pub profile_store: UserProfileStore,
     pub user_profile: UserProfile,
     pub logger: EventLogger,
@@ -851,6 +853,7 @@ impl TuiApplication {
             cms,
             tool_registry,
             tool_executor,
+            task_manager: TaskManager::new(),
             profile_store,
             user_profile,
             logger,
@@ -3590,6 +3593,74 @@ mod tests {
             app.session.system_prompt,
             "You are a focused review specialist."
         );
+        Ok(())
+    }
+
+    #[test]
+    fn tasks_command_reports_session_task_manager_records() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        let task_id = app.task_manager.register(
+            crate::tasks::TaskSpawnRequest::new(
+                crate::tasks::TaskKind::Shell,
+                "cargo test",
+                tmp.path(),
+                "run-1",
+            )
+            .command("cargo test"),
+        );
+        app.task_manager.start_foreground(&task_id)?;
+        app.task_manager.append_output(&task_id, "ok")?;
+        app.task_manager.complete(&task_id, 0)?;
+
+        let list = app.execute_command("/tasks")?.unwrap();
+        assert!(list.contains(&task_id));
+        assert!(list.contains("cargo test"));
+
+        let show = app
+            .execute_command(&format!("/tasks show {task_id}"))?
+            .unwrap();
+        assert!(show.contains("Retained output"));
+        assert!(show.contains("ok"));
+
+        let json = app.execute_command("/tasks --json")?.unwrap();
+        assert!(json.contains("active_task_count"));
+        assert!(json.contains(&task_id));
+        Ok(())
+    }
+
+    #[test]
+    fn task_lifecycle_events_drain_into_pending_run_artifact() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.start_tui_turn_artifact("task event test");
+        let run_dir = app
+            .pending_run_artifact
+            .as_ref()
+            .map(|(manager, _)| manager.run_dir.clone())
+            .expect("run artifact started");
+
+        let task_id = app.task_manager.register(
+            crate::tasks::TaskSpawnRequest::new(
+                crate::tasks::TaskKind::Build,
+                "cargo build",
+                tmp.path(),
+                "run-1",
+            )
+            .command("cargo build"),
+        );
+        app.task_manager.start_foreground(&task_id)?;
+        app.task_manager.append_output(&task_id, "building")?;
+        app.task_manager.complete(&task_id, 0)?;
+
+        app.drain_task_lifecycle_events_to_run_artifact();
+        assert!(app.task_manager.events().is_empty());
+
+        let runtime_events = std::fs::read_to_string(run_dir.join("runtime-events.jsonl"))?;
+        assert!(runtime_events.contains("task_started"));
+        assert!(runtime_events.contains("task_output"));
+        assert!(runtime_events.contains("task_completed"));
+        assert!(runtime_events.contains(&task_id));
         Ok(())
     }
 

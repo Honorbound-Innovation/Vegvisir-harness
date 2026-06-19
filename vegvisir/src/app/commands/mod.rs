@@ -13,4 +13,5 @@ mod sessions;
 mod skills;
 mod speech;
 mod summary;
+mod tasks;
 mod tools;

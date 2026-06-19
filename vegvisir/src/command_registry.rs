@@ -630,6 +630,12 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
             &["/permission"],
         ),
         cmd(
+            "/tasks",
+            "list and inspect session task manager records",
+            "/tasks [list|show <task-id>|events|--json]",
+            &["/jobs"],
+        ),
+        cmd(
             "/skills",
             "show, compile, route, or load skills",
             "/skills [status|audit|trust|provenance|registry status|compile|route|load|eval|forge|patch|curate|detect|trace|promote|archive]",
@@ -780,6 +786,7 @@ fn supports_noninteractive(name: &str) -> bool {
             | "/eval"
             | "/trace"
             | "/permissions"
+            | "/tasks"
             | "/memory"
             | "/context"
             | "/model-request"
@@ -802,7 +809,7 @@ fn infer_command_category(name: &str) -> CommandCategory {
         "/models" | "/model" | "/effort" | "/fast" | "/provider" | "/providers" | "/auth" => {
             CommandCategory::ModelProvider
         }
-        "/agent" | "/agents" | "/subagents" | "/work" | "/auto" | "/autonomy" => {
+        "/agent" | "/agents" | "/subagents" | "/tasks" | "/work" | "/auto" | "/autonomy" => {
             CommandCategory::AgentsTasks
         }
         "/skills" => CommandCategory::Skills,
@@ -1008,6 +1015,20 @@ mod tests {
         assert_eq!(spec.category, CommandCategory::SecurityPermissions);
         assert!(spec.supports_noninteractive);
         assert!(spec.contexts.contains(&ExecutionContext::Api));
+    }
+
+    #[test]
+    fn tasks_command_is_registered_for_discovery() {
+        let registry = CommandRegistry::with_defaults();
+        let tasks = registry.get("/tasks").expect("tasks command is registered");
+        assert_eq!(tasks.name, "/tasks");
+        assert!(tasks.aliases.contains(&"/jobs".to_string()));
+        let spec = CommandSpec::from_definition(tasks);
+        assert_eq!(spec.category, CommandCategory::AgentsTasks);
+        assert_eq!(spec.safety, CommandSafety::ReadOnly);
+        assert!(spec.supports_noninteractive);
+        assert!(spec.contexts.contains(&ExecutionContext::Api));
+        assert!(spec.contexts.contains(&ExecutionContext::Subagent));
     }
     #[test]
     fn default_tool_registry_validates_current_tools() -> anyhow::Result<()> {

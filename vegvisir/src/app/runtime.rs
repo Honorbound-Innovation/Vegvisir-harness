@@ -707,7 +707,33 @@ Steering: {display_content}{attachment_note}"
         }
     }
 
+    pub(crate) fn drain_task_lifecycle_events_to_run_artifact(&mut self) {
+        let Some(manager) = self
+            .pending_run_artifact
+            .as_ref()
+            .map(|(manager, _)| manager.clone())
+        else {
+            return;
+        };
+        let events = self.task_manager.drain_events();
+        for event in events {
+            let task_id = event.task_id().to_string();
+            let Some(record) = self.task_manager.record(&task_id) else {
+                continue;
+            };
+            let Some(runtime_event) = event.to_vegvisir_event(record) else {
+                continue;
+            };
+            if let Err(error) = manager.append_runtime_event(runtime_event) {
+                self.push_system_message(format!(
+                    "Warning: failed to append task runtime event: {error}"
+                ));
+            }
+        }
+    }
+
     fn finish_tui_turn_artifact(&mut self, status: RunStatus, response: Option<&str>) {
+        self.drain_task_lifecycle_events_to_run_artifact();
         let Some((manager, mut manifest)) = self.pending_run_artifact.take() else {
             return;
         };
@@ -759,6 +785,7 @@ Steering: {display_content}{attachment_note}"
         message: &str,
         recoverable: bool,
     ) -> Option<(String, std::path::PathBuf)> {
+        self.drain_task_lifecycle_events_to_run_artifact();
         let (manager, mut manifest) = self.pending_run_artifact.take()?;
         let failed_run = Some((manager.run_id.clone(), manager.run_dir.clone()));
         let failure = RunFailure {
