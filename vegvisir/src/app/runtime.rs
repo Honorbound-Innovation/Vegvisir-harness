@@ -759,9 +759,7 @@ Steering: {display_content}{attachment_note}"
         message: &str,
         recoverable: bool,
     ) -> Option<(String, std::path::PathBuf)> {
-        let Some((manager, mut manifest)) = self.pending_run_artifact.take() else {
-            return None;
-        };
+        let (manager, mut manifest) = self.pending_run_artifact.take()?;
         let failed_run = Some((manager.run_id.clone(), manager.run_dir.clone()));
         let failure = RunFailure {
             schema_version: crate::run_artifacts::RUN_ARTIFACT_SCHEMA_VERSION,
@@ -1497,10 +1495,10 @@ pub(crate) fn apply_user_profile_context(profile_context: Option<&str>, content:
 }
 
 pub(crate) fn apply_autonomous_mode_contract(content: &str, level: u8) -> String {
+    let level = level.min(6);
+    let description = autonomy_level_runtime_description(level);
     format!(
-        "{contract}\n\nUser task:\n{content}",
-        contract = format!(
-            r#"[Vegvisir autonomous working mode is ENABLED]
+        r#"[Vegvisir autonomous working mode is ENABLED]
 Autonomy level: {level} - {description}
 
 You are operating in an unattended project-work mode for this turn.
@@ -1514,11 +1512,10 @@ Runtime contract:
 - Continue through routine fix/test iterations until the workflow is complete, blocked, cancelled, or requires user authority.
 - Stop and request approval for destructive operations, privileged actions, secret use, external side effects, ambiguous scope, or policy-required approvals.
 - Never ask for plaintext secrets; use HBSE secret refs when credentials are required.
-- End with a concise completion report: changed files, tests/checks run, unresolved risks, and exact next steps if blocked."#,
-            level = level.min(6),
-            description = autonomy_level_runtime_description(level.min(6))
-        ),
-        content = content
+- End with a concise completion report: changed files, tests/checks run, unresolved risks, and exact next steps if blocked.
+
+User task:
+{content}"#
     )
 }
 

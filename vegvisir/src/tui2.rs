@@ -1970,9 +1970,10 @@ fn inkjet_scope_style(highlight_index: usize) -> Style {
         style = style.fg(GREEN);
     } else if scope == "diff.minus" {
         style = style.fg(RED);
-    } else if scope.starts_with("diff.delta") || scope == "diff" {
-        style = style.fg(CYAN).add_modifier(Modifier::BOLD);
-    } else if scope.starts_with("markup.heading") {
+    } else if scope.starts_with("diff.delta")
+        || scope == "diff"
+        || scope.starts_with("markup.heading")
+    {
         style = style.fg(CYAN).add_modifier(Modifier::BOLD);
     } else if scope.starts_with("markup") {
         style = style.fg(AMBER);

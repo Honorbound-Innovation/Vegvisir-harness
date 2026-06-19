@@ -4,6 +4,7 @@ mod autonomy_plan;
 mod mcp_hbse;
 mod memory;
 mod misc;
+mod permissions;
 mod persona;
 mod profile;
 mod providers;

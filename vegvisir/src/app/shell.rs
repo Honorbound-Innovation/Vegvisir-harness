@@ -466,6 +466,7 @@ impl TuiApplication {
             "/tools" => self.tools_command(&args),
             "/tool-limit" => self.tool_limit_command(&args),
             "/approvals" => self.approvals_command(&args),
+            "/permissions" => self.permissions_command(&args),
             "/runs" => self.runs_command(&args)?,
             "/skills" => self.skills_command(&args)?,
             "/recall" => self.recall_command(&args)?,

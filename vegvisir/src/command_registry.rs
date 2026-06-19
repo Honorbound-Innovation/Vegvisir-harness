@@ -624,6 +624,12 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
             &["/approval"],
         ),
         cmd(
+            "/permissions",
+            "explain active permission policy and guardrail decisions",
+            "/permissions [status|explain <tool-name> [json-args]|pending [approval-id]|--json]",
+            &["/permission"],
+        ),
+        cmd(
             "/skills",
             "show, compile, route, or load skills",
             "/skills [status|audit|trust|provenance|registry status|compile|route|load|eval|forge|patch|curate|detect|trace|promote|archive]",
@@ -773,6 +779,7 @@ fn supports_noninteractive(name: &str) -> bool {
             | "/verify"
             | "/eval"
             | "/trace"
+            | "/permissions"
             | "/memory"
             | "/context"
             | "/model-request"
@@ -799,7 +806,9 @@ fn infer_command_category(name: &str) -> CommandCategory {
             CommandCategory::AgentsTasks
         }
         "/skills" => CommandCategory::Skills,
-        "/tools" | "/approvals" | "/hbse" | "/mcp" => CommandCategory::SecurityPermissions,
+        "/tools" | "/approvals" | "/permissions" | "/hbse" | "/mcp" => {
+            CommandCategory::SecurityPermissions
+        }
         "/status" | "/verify" | "/eval" | "/trace" | "/runs" | "/recover" | "/turn-repair" => {
             CommandCategory::Diagnostics
         }
@@ -938,7 +947,7 @@ mod tests {
 
     #[test]
     fn registry_rejects_duplicate_command_names() {
-        let duplicate = vec![
+        let duplicate = [
             cmd("/same", "one", "/same", &[]),
             cmd("/same", "two", "/same", &[]),
         ];
@@ -955,7 +964,7 @@ mod tests {
 
     #[test]
     fn registry_rejects_alias_conflicting_with_command_name() {
-        let definitions = vec![
+        let definitions = [
             cmd("/agent", "one", "/agent", &[]),
             cmd("/agents", "two", "/agents", &["/agent"]),
         ];
@@ -987,6 +996,19 @@ mod tests {
         assert!(help.contexts.contains(&ExecutionContext::Tui));
     }
 
+    #[test]
+    fn permissions_command_is_registered_for_discovery() {
+        let registry = CommandRegistry::with_defaults();
+        let permissions = registry
+            .get("/permissions")
+            .expect("permissions command is registered");
+        assert_eq!(permissions.name, "/permissions");
+        assert!(permissions.aliases.contains(&"/permission".to_string()));
+        let spec = CommandSpec::from_definition(permissions);
+        assert_eq!(spec.category, CommandCategory::SecurityPermissions);
+        assert!(spec.supports_noninteractive);
+        assert!(spec.contexts.contains(&ExecutionContext::Api));
+    }
     #[test]
     fn default_tool_registry_validates_current_tools() -> anyhow::Result<()> {
         let registry = ToolRegistry::from_definitions(default_tool_definitions()?);

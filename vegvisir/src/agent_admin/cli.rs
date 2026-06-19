@@ -69,14 +69,14 @@ pub(super) enum Command {
     /// Show one agent profile.
     Show { id: String },
     /// Create a new agent profile.
-    Create(CreateArgs),
+    Create(Box<CreateArgs>),
     /// Create a new profile from a built-in template.
     #[command(name = "create-template", alias = "from-template")]
     CreateTemplate(CreateTemplateArgs),
     /// Design a profile with one command, including permissions and defaults.
     Design(DesignArgs),
     /// Update fields on an existing agent profile.
-    Set(SetArgs),
+    Set(Box<SetArgs>),
     /// Set display name.
     Name { id: String, name: Vec<String> },
     /// Set mode.
@@ -424,10 +424,10 @@ pub fn run_agent_admin_cli() -> anyhow::Result<()> {
         Command::Templates { id } => registry.templates(id.as_deref(), cli.json),
         Command::List(args) => registry.list(args, cli.json),
         Command::Show { id } => registry.show(&id, cli.json),
-        Command::Create(args) => registry.create(args, cli.json),
+        Command::Create(args) => registry.create(*args, cli.json),
         Command::CreateTemplate(args) => registry.create_template(args, cli.json),
         Command::Design(args) => registry.design(args, cli.json),
-        Command::Set(args) => registry.set(args, cli.json),
+        Command::Set(args) => registry.set(*args, cli.json),
         Command::Name { id, name } => registry.name(&id, join_required("name", name)?, cli.json),
         Command::Mode { id, mode } => registry.mode(&id, mode, cli.json),
         Command::Describe { id, description } => {

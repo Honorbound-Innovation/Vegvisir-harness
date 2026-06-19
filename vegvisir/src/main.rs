@@ -321,10 +321,10 @@ fn run_desktop(binary: Option<PathBuf>, dev: bool) -> anyhow::Result<()> {
                 child.id()
             );
             // Reap immediately if the process exits during startup; otherwise return after launch.
-            if let Some(status) = child.try_wait()? {
-                if !status.success() {
-                    anyhow::bail!("Vegvisir Desktop exited during startup: {status}");
-                }
+            if let Some(status) = child.try_wait()?
+                && !status.success()
+            {
+                anyhow::bail!("Vegvisir Desktop exited during startup: {status}");
             }
             Ok(())
         }
@@ -521,6 +521,7 @@ fn is_runnable_file(path: &Path) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod desktop_launcher_tests {
     use super::*;
 

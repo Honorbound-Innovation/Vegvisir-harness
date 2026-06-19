@@ -56,7 +56,7 @@ impl ListField {
         }
     }
 
-    fn get_mut<'a>(self, profile: &'a mut AgentProfile) -> &'a mut Vec<String> {
+    fn get_mut(self, profile: &mut AgentProfile) -> &mut Vec<String> {
         match self {
             Self::Tools => &mut profile.enabled_tools,
             Self::Skills => &mut profile.enabled_skills,
@@ -1567,12 +1567,11 @@ fn run_admin_tui_inner(
             .get(state.selected)
             .map(|profile| profile.id.as_str());
         terminal.draw(|frame| draw_admin_tui(frame, &profiles, selected_id, &state))?;
-        if event::poll(Duration::from_millis(150))? {
-            if let Event::Key(key) = event::read()? {
-                if handle_admin_tui_key_safely(admin, &mut state, &profiles, key)? {
-                    break;
-                }
-            }
+        if event::poll(Duration::from_millis(150))?
+            && let Event::Key(key) = event::read()?
+            && handle_admin_tui_key_safely(admin, &mut state, &profiles, key)?
+        {
+            break;
         }
     }
     Ok(())
@@ -4017,7 +4016,7 @@ mod tests {
                 .and_then(Value::as_str),
             Some("implementation")
         );
-        assert!(profile.metadata.get("default_work_budget").is_some());
+        assert!(profile.metadata.contains_key("default_work_budget"));
         let history = admin.load_history()?;
         assert!(history.iter().any(|event| event.agent_id == "engineer"));
         Ok(())

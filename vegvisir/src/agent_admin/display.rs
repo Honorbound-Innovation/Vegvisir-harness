@@ -217,7 +217,7 @@ pub fn profile_tags(profile: &AgentProfile) -> Vec<String> {
         .unwrap_or_default()
 }
 
-pub fn filtered_profiles<'a>(profiles: &'a [AgentProfile], filter: &str) -> Vec<AgentProfile> {
+pub fn filtered_profiles(profiles: &[AgentProfile], filter: &str) -> Vec<AgentProfile> {
     let needle = filter.trim().to_ascii_lowercase();
     if needle.is_empty() {
         return profiles.to_vec();

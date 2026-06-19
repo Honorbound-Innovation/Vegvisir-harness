@@ -534,6 +534,7 @@ fn command_response_is_chat_suppressed(command: &str) -> bool {
             | "/model"
             | "/provider"
             | "/providers"
+            | "/permissions"
     )
 }
 
@@ -557,6 +558,7 @@ fn should_show_info_overlay(command: &str, response: &str) -> bool {
             | "/providers"
             | "/projects"
             | "/approvals"
+            | "/permissions"
             | "/system"
             | "/system-prompt"
             | "/trace"
@@ -1615,6 +1617,60 @@ mod tests {
         time::Instant,
     };
 
+    #[test]
+    fn permissions_command_exposes_policy_status_and_explanations() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+
+        let status = app.execute_command("/permissions")?.unwrap_or_default();
+        assert!(status.contains("Permission policy:"));
+        assert!(status.contains("Policy gates:"));
+        assert!(status.contains("HBSE secret boundary"));
+
+        let explanation = app
+            .execute_command("/permissions explain write_file")?
+            .unwrap_or_default();
+        assert!(explanation.contains("Tool: write_file"));
+        assert!(explanation.contains("Policy gates:"));
+        assert!(explanation.contains("Decision:"));
+
+        let json = app
+            .execute_command("/permissions --json")?
+            .unwrap_or_default();
+        let value: serde_json::Value = serde_json::from_str(&json)?;
+        assert_eq!(
+            value["permission_policy"]["hard_policy"]["dangerous_bypass_startup_only"],
+            serde_json::Value::Bool(true)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn permissions_command_explains_pending_approval() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        let request = crate::guardrails::ApprovalRequest {
+            id: "approval-1".to_string(),
+            reason: "test risky write".to_string(),
+            tool_name: "write_file".to_string(),
+            args: serde_json::Map::new(),
+            risk_label: "filesystem-write".to_string(),
+        };
+        app.tool_executor.guardrails.approvals.enqueue(request);
+
+        let pending = app
+            .execute_command("/permissions pending")?
+            .unwrap_or_default();
+        assert!(pending.contains("approval-1"));
+        assert!(pending.contains("write_file"));
+
+        let explanation = app
+            .execute_command("/permissions pending approval-1")?
+            .unwrap_or_default();
+        assert!(explanation.contains("approval_id=approval-1"));
+        assert!(explanation.contains("queued for human approval"));
+        Ok(())
+    }
     #[test]
     fn terminal_frame_returns_carriage_on_each_rendered_line() {
         assert_eq!(
