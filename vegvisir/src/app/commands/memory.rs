@@ -450,6 +450,10 @@ struct ContextUsageReport {
     used_tokens: usize,
     max_tokens: usize,
     percentage: f64,
+    remaining_tokens: Option<usize>,
+    overflow_tokens: usize,
+    action: crate::context::ContextBudgetAction,
+    policy: crate::context::ContextBudgetPolicy,
     categories: Vec<ContextUsageCategory>,
     strategy: String,
     warnings: Vec<String>,
@@ -483,21 +487,9 @@ impl ContextUsageReport {
         }
 
         let used_tokens = prepared.token_estimate;
-        let percentage = if max_tokens == 0 {
-            0.0
-        } else {
-            (used_tokens as f64 / max_tokens as f64) * 100.0
-        };
-        let mut warnings = Vec::new();
-        if max_tokens == 0 {
-            warnings.push("session context limit is unknown".to_string());
-        } else if percentage >= 95.0 {
-            warnings.push("context usage is at or above the blocking threshold".to_string());
-        } else if percentage >= 80.0 {
-            warnings.push("context usage is above the compaction threshold".to_string());
-        } else if percentage >= 60.0 {
-            warnings.push("context usage is above the warning threshold".to_string());
-        }
+        let policy = crate::context::ContextBudgetPolicy::default().normalized();
+        let decision = policy.evaluate(used_tokens, max_tokens);
+        let mut warnings = decision.warnings.clone();
         if prepared.excluded_memory_ids.is_empty() {
             warnings.push("no CMS memories were excluded by the current budget".to_string());
         } else {
@@ -511,7 +503,11 @@ impl ContextUsageReport {
             model,
             used_tokens,
             max_tokens,
-            percentage,
+            percentage: decision.percentage,
+            remaining_tokens: decision.remaining_tokens,
+            overflow_tokens: decision.overflow_tokens,
+            action: decision.action,
+            policy,
             categories: categories.into_values().collect(),
             strategy: format!(
                 "ECM prepared {} frame(s), included {} CMS memory id(s), excluded {} CMS memory id(s)",
@@ -530,6 +526,20 @@ impl ContextUsageReport {
             format!("used_tokens={}", self.used_tokens),
             format!("context_limit={}", self.max_tokens),
             format!("percent={:.2}%", self.percentage),
+            format!(
+                "remaining_tokens={}",
+                self.remaining_tokens
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "unknown".to_string())
+            ),
+            format!("overflow_tokens={}", self.overflow_tokens),
+            format!("action={}", self.action.as_str()),
+            format!(
+                "policy=warn@{:.0}% compact@{:.0}% block@{:.0}%",
+                self.policy.warning_percent,
+                self.policy.compaction_percent,
+                self.policy.block_percent
+            ),
             format!("strategy={}", self.strategy),
             "categories:".to_string(),
         ];

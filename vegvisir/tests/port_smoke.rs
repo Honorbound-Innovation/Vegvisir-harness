@@ -5040,6 +5040,10 @@ fn application_exposes_cms_commands() -> anyhow::Result<()> {
         .execute_command("/context budget Continue command surface work")?
         .unwrap();
     assert!(context_budget.contains("Context budget"));
+    assert!(context_budget.contains("remaining_tokens="));
+    assert!(context_budget.contains("overflow_tokens="));
+    assert!(context_budget.contains("action="));
+    assert!(context_budget.contains("policy=warn@60% compact@80% block@95%"));
     assert!(context_budget.contains("categories:"));
     assert!(context_budget.contains("warnings:"));
     assert!(context_budget.contains("strategy=ECM prepared"));
@@ -5052,6 +5056,24 @@ fn application_exposes_cms_commands() -> anyhow::Result<()> {
         Some(app.session.current_model.as_str())
     );
     assert!(context_budget_json["used_tokens"].as_u64().is_some());
+    assert!(context_budget_json["remaining_tokens"].as_u64().is_some());
+    assert_eq!(context_budget_json["overflow_tokens"].as_u64(), Some(0));
+    assert!(matches!(
+        context_budget_json["action"].as_str(),
+        Some("ok" | "warn" | "compact_recommended" | "block")
+    ));
+    assert_eq!(
+        context_budget_json["policy"]["warning_percent"].as_f64(),
+        Some(60.0)
+    );
+    assert_eq!(
+        context_budget_json["policy"]["compaction_percent"].as_f64(),
+        Some(80.0)
+    );
+    assert_eq!(
+        context_budget_json["policy"]["block_percent"].as_f64(),
+        Some(95.0)
+    );
     assert!(context_budget_json["categories"].as_array().is_some());
     assert!(context_budget_json["warnings"].as_array().is_some());
     let model_request = app
