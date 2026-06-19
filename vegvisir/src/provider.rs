@@ -17,6 +17,7 @@ use cms_v2::prompt_cache::CachedPromptEnvelope;
 use serde_json::{Map, Value, json};
 
 use crate::{
+    control_requests::{ApprovalControlPayload, ControlRequest},
     core::{ChatMessage, ModelInfo, ProviderConfig, ProviderRegistry, SessionState},
     environment::get_env,
     guardrails::ApprovalResolution,
@@ -4231,6 +4232,9 @@ pub struct ConversationRunner<P: ProviderAdapter> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProviderRunEvent {
     Activity(String),
+    ApprovalRequired {
+        request: ControlRequest<ApprovalControlPayload>,
+    },
     ToolStart {
         name: String,
         args: String,
@@ -4254,6 +4258,16 @@ impl serde::Serialize for ProviderRunEvent {
                 let mut map = serializer.serialize_map(Some(2))?;
                 map.serialize_entry("kind", "activity")?;
                 map.serialize_entry("activity", activity)?;
+                map.end()
+            }
+            ProviderRunEvent::ApprovalRequired { request } => {
+                let mut map = serializer.serialize_map(Some(6))?;
+                map.serialize_entry("kind", "approval_required")?;
+                map.serialize_entry("request_id", &request.request_id)?;
+                map.serialize_entry("subtype", &request.subtype)?;
+                map.serialize_entry("approval_id", &request.payload.approval_id)?;
+                map.serialize_entry("tool_name", &request.payload.tool_name)?;
+                map.serialize_entry("risk_label", &request.payload.risk_label)?;
                 map.end()
             }
             ProviderRunEvent::ToolStart { name, args } => {
@@ -4378,6 +4392,20 @@ fn approval_id_from_observation(observation: &Observation) -> Option<String> {
             .to_string(),
     )
     .filter(|id| !id.is_empty())
+}
+
+fn approval_control_request_from_pending(
+    executor: &ToolExecutor,
+    run_id: &str,
+    approval_id: &str,
+) -> Option<ControlRequest<ApprovalControlPayload>> {
+    executor
+        .guardrails
+        .approvals
+        .pending()
+        .get(approval_id)
+        .cloned()
+        .map(|request| ControlRequest::approval(run_id.to_string(), request, None))
 }
 
 fn wait_for_tool_approval(
@@ -4579,6 +4607,7 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
             );
         }
         let started = Instant::now();
+        let event_sink = self.event_sink.clone();
         let provider_response = if self
             .provider
             .supports_tool_calls(model, &session.current_provider)
@@ -4606,6 +4635,16 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
                     if let Some(approval_id) = approval_id_from_observation(&observation)
                         && self.cancel_token.is_some()
                     {
+                        if let Some(request) = approval_control_request_from_pending(
+                            executor,
+                            &session_id,
+                            &approval_id,
+                        ) {
+                            emit_provider_event(
+                                &event_sink,
+                                ProviderRunEvent::ApprovalRequired { request },
+                            );
+                        }
                         session.activity = format!("waiting for approval {approval_id}");
                         match wait_for_tool_approval(
                             executor,
@@ -4754,6 +4793,7 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
                 .as_ref()
                 .map(ToolRegistry::schemas)
                 .unwrap_or_default();
+            let session_id = session.session_id.clone();
             let current_provider = session.current_provider.clone();
             let steering_rx = self.steering_rx.take();
             let mut approval_required = None::<String>;
@@ -4775,6 +4815,16 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
                     if let Some(approval_id) = approval_id_from_observation(&observation)
                         && self.cancel_token.is_some()
                     {
+                        if let Some(request) = approval_control_request_from_pending(
+                            executor,
+                            &session_id,
+                            &approval_id,
+                        ) {
+                            emit_provider_event(
+                                &event_sink,
+                                ProviderRunEvent::ApprovalRequired { request },
+                            );
+                        }
                         session.activity = format!("waiting for approval {approval_id}");
                         emit_provider_event(
                             &event_sink,

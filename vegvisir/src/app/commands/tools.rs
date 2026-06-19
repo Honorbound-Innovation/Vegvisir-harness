@@ -397,12 +397,24 @@ Usage: /tool-limit <rounds>|unlimited",
                     .approve_once_request(id)
                 {
                     Some(request) if self.pending_send.is_some() => {
+                        self.resolve_approval_control_request(
+                            &request.id,
+                            "local_ui",
+                            crate::events::ApprovalDecision::Allow,
+                        );
                         format!(
                             "Approved once: {}. In-flight model run will resume.",
                             request.tool_name
                         )
                     }
-                    Some(request) => self.execute_approved_request("Approved once", request),
+                    Some(request) => {
+                        self.resolve_approval_control_request(
+                            &request.id,
+                            "local_ui",
+                            crate::events::ApprovalDecision::Allow,
+                        );
+                        self.execute_approved_request("Approved once", request)
+                    }
                     None => format!("Unknown pending approval: {id}"),
                 }
             }
@@ -435,6 +447,11 @@ Usage: /tool-limit <rounds>|unlimited",
                                 "Approved matching call and allowed shell command `{command}` for this running session"
                             );
                         }
+                        self.resolve_approval_control_request(
+                            &request.id,
+                            "local_ui",
+                            crate::events::ApprovalDecision::AllowForSession,
+                        );
                         if self.pending_send.is_some() {
                             format!(
                                 "{prefix}: {}. In-flight model run will resume.",
@@ -460,11 +477,17 @@ Usage: /tool-limit <rounds>|unlimited",
                     Err(error) => return format!("Invalid approval args JSON: {error}"),
                 };
                 match self.tool_executor.guardrails.approvals.edit(id, args) {
-                    Some(request) => format!(
-                        "Edited approval {id}; new approval id is {} args={}",
-                        request.id,
-                        serde_json::to_string(&request.args).unwrap_or_default()
-                    ),
+                    Some(request) => {
+                        self.cancel_approval_control_request(
+                            id,
+                            "approval edited; superseded by new approval id",
+                        );
+                        format!(
+                            "Edited approval {id}; new approval id is {} args={}",
+                            request.id,
+                            serde_json::to_string(&request.args).unwrap_or_default()
+                        )
+                    }
                     None => format!("Unknown pending approval: {id}"),
                 }
             }
@@ -473,6 +496,11 @@ Usage: /tool-limit <rounds>|unlimited",
                     return "Usage: /approvals deny <id>".to_string();
                 };
                 if self.tool_executor.guardrails.approvals.deny(id) {
+                    self.resolve_approval_control_request(
+                        id,
+                        "local_ui",
+                        crate::events::ApprovalDecision::Deny,
+                    );
                     format!("Denied approval {id}.")
                 } else {
                     format!("Unknown pending approval: {id}")

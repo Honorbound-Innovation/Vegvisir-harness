@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 use crate::{
     attachments::{attachment_for, extract_attachments},
     command_registry::{CommandRegistry, ExecutionContext, ToolRegistry as ToolMetadataRegistry},
+    control_requests::{ApprovalControlPayload, ControlRequest, PendingControlRequests},
     core::{
         AgentProfileStore, ChatMessage, ConfigStore, HbseServiceRef, HbseServiceRefStore,
         McpConfigStore, McpServerConfig, McpToolConfig, McpTransport, ModelRegistry,
@@ -87,6 +88,7 @@ pub struct TuiApplication {
     pub tool_executor: ToolExecutor,
     pub task_manager: TaskManager,
     pub task_runner: TaskRunner,
+    pub control_requests: PendingControlRequests,
     pub active_tool_tasks: BTreeMap<String, String>,
     pub profile_store: UserProfileStore,
     pub user_profile: UserProfile,
@@ -161,6 +163,9 @@ enum StreamEvent {
     PromptEnvelope(Box<CachedPromptEnvelope>),
     Delta(String),
     Activity(String),
+    ApprovalRequired {
+        request: ControlRequest<ApprovalControlPayload>,
+    },
     ToolStart {
         name: String,
         args: String,
@@ -857,6 +862,7 @@ impl TuiApplication {
             tool_executor,
             task_manager: TaskManager::new(),
             task_runner: TaskRunner::new(),
+            control_requests: PendingControlRequests::new(),
             active_tool_tasks: BTreeMap::new(),
             profile_store,
             user_profile,

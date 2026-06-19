@@ -16,9 +16,9 @@ use cms_v2::{cms_api::CommitResult, prompt_cache::CachedPromptEnvelope};
 
 use crate::{
     events::{
-        ContextPrepared, EventEnvelope, MemoryRead, MemoryWritten, RunCompleted,
-        RunCompletionStatus, RunFailed as RuntimeRunFailed, RunStarted, ToolCompleted, ToolFailed,
-        ToolStarted, VegvisirEvent, to_jsonl_record,
+        ApprovalRequested, ContextPrepared, ControlRequestCreated, EventEnvelope, MemoryRead,
+        MemoryWritten, RunCompleted, RunCompletionStatus, RunFailed as RuntimeRunFailed,
+        RunStarted, ToolCompleted, ToolFailed, ToolStarted, VegvisirEvent, to_jsonl_record,
     },
     guardrails::ApprovalRequest,
     provider::ProviderRunEvent,
@@ -391,6 +391,20 @@ impl RunArtifactManager {
     pub fn append_observed_provider_event(&self, event: &ProviderRunEvent) -> anyhow::Result<()> {
         self.append_provider_event(event)?;
         match event {
+            ProviderRunEvent::ApprovalRequired { request } => {
+                self.append_runtime_event(VegvisirEvent::ApprovalRequested(ApprovalRequested {
+                    approval_id: request.payload.approval_id.clone(),
+                    category: request.payload.risk_label.clone(),
+                    reason: request.payload.reason.clone(),
+                }))?;
+                self.append_runtime_event(VegvisirEvent::ControlRequestCreated(
+                    ControlRequestCreated {
+                        request_id: request.request_id.clone(),
+                        subtype: request.subtype.clone(),
+                        expires_at: request.expires_at,
+                    },
+                ))?;
+            }
             ProviderRunEvent::ToolStart { name, args } => {
                 self.append_tool_event(&ToolRunEvent::start(
                     self.run_id.clone(),
@@ -2069,6 +2083,49 @@ mod tests {
         assert!(lines[1].contains(r#""type":"tool_started""#));
         assert!(lines[2].contains(r#""type":"tool_completed""#));
         assert!(lines[3].contains(r#""type":"run_completed""#));
+        Ok(())
+    }
+
+    #[test]
+    fn run_artifacts_writes_approval_control_request_events() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        fs::create_dir_all(&workspace)?;
+        let (manager, _manifest) = RunArtifactManager::start_with_run_id(
+            &workspace,
+            tmp.path().join("data"),
+            "run-approval-events",
+            Option::<&Path>::None,
+            "session-1",
+            "demo",
+            "demo-model",
+            None,
+        )?;
+
+        let mut args = serde_json::Map::new();
+        args.insert("path".to_string(), json!("example.txt"));
+        let request = crate::control_requests::ControlRequest::approval(
+            "run-approval-events",
+            ApprovalRequest {
+                id: "apr_test".to_string(),
+                reason: "Risky tool requires human approval: write_file".to_string(),
+                tool_name: "write_file".to_string(),
+                args,
+                risk_label: "filesystem-write".to_string(),
+            },
+            None,
+        );
+
+        manager.append_observed_provider_event(&ProviderRunEvent::ApprovalRequired { request })?;
+
+        let runtime_events = fs::read_to_string(manager.artifact_path("runtime-events.jsonl"))?;
+        assert!(runtime_events.contains(r#""type":"approval_requested""#));
+        assert!(runtime_events.contains(r#""type":"control_request_created""#));
+        assert!(runtime_events.contains(r#""approval_id":"apr_test""#));
+        assert!(runtime_events.contains(r#""request_id":"ctrl_apr_test""#));
+        let provider_events = fs::read_to_string(manager.artifact_path("provider-events.jsonl"))?;
+        assert!(provider_events.contains(r#""kind":"approval_required""#));
+        assert!(provider_events.contains(r#""tool_name":"write_file""#));
         Ok(())
     }
 

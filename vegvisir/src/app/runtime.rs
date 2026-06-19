@@ -97,6 +97,9 @@ impl TuiApplication {
                     move |event| {
                         let event = match event {
                             ProviderRunEvent::Activity(activity) => StreamEvent::Activity(activity),
+                            ProviderRunEvent::ApprovalRequired { request } => {
+                                StreamEvent::ApprovalRequired { request }
+                            }
                             ProviderRunEvent::ToolStart { name, args } => {
                                 StreamEvent::ToolStart { name, args }
                             }
@@ -711,6 +714,78 @@ Steering: {display_content}{attachment_note}"
         }
     }
 
+    pub(crate) fn register_approval_control_request(
+        &mut self,
+        request: crate::control_requests::ControlRequest<
+            crate::control_requests::ApprovalControlPayload,
+        >,
+    ) {
+        let json_request = match serde_json::to_value(&request.payload) {
+            Ok(payload) => request.clone().map_payload(|_| payload),
+            Err(error) => {
+                self.push_system_message(format!(
+                    "Warning: failed to serialize approval control request {}: {error}",
+                    request.request_id
+                ));
+                return;
+            }
+        };
+        let _ = self
+            .control_requests
+            .insert(json_request, chrono::Utc::now());
+        self.append_tui_turn_provider_event(&ProviderRunEvent::ApprovalRequired { request });
+    }
+
+    pub(crate) fn resolve_approval_control_request(
+        &mut self,
+        approval_id: &str,
+        decision_source: &str,
+        decision: crate::events::ApprovalDecision,
+    ) {
+        let request_id = format!("ctrl_{approval_id}");
+        let response = crate::control_requests::ControlResponse {
+            request_id: request_id.clone(),
+            decision_source: decision_source.to_string(),
+            payload: serde_json::json!({"decision": format!("{:?}", decision).to_ascii_lowercase()}),
+        };
+        let outcome = self.control_requests.resolve(response, chrono::Utc::now());
+        if matches!(
+            outcome,
+            crate::control_requests::ControlResolveOutcome::Applied { .. }
+                | crate::control_requests::ControlResolveOutcome::UnknownRequest { .. }
+        ) {
+            self.append_tui_turn_runtime_event(
+                crate::events::VegvisirEvent::ControlRequestResolved(
+                    crate::events::ControlRequestResolved {
+                        request_id,
+                        subtype: crate::control_requests::CONTROL_SUBTYPE_APPROVAL.to_string(),
+                        decision_source: decision_source.to_string(),
+                    },
+                ),
+            );
+            self.append_tui_turn_runtime_event(crate::events::VegvisirEvent::ApprovalResolved(
+                crate::events::ApprovalResolved {
+                    approval_id: approval_id.to_string(),
+                    decision,
+                },
+            ));
+        }
+    }
+
+    pub(crate) fn cancel_approval_control_request(&mut self, approval_id: &str, reason: &str) {
+        let request_id = format!("ctrl_{approval_id}");
+        let _ = self
+            .control_requests
+            .cancel(&request_id, reason.to_string(), chrono::Utc::now());
+        self.append_tui_turn_runtime_event(crate::events::VegvisirEvent::ControlRequestCancelled(
+            crate::events::ControlRequestCancelled {
+                request_id,
+                subtype: crate::control_requests::CONTROL_SUBTYPE_APPROVAL.to_string(),
+                reason: reason.to_string(),
+            },
+        ));
+    }
+
     fn append_tui_turn_provider_event(&mut self, event: &ProviderRunEvent) {
         if let Some((manager, _)) = self.pending_run_artifact.as_ref()
             && let Err(error) = manager.append_observed_provider_event(event)
@@ -1220,6 +1295,9 @@ Steering: {display_content}{attachment_note}"
                         activity.clone(),
                     ));
                     self.session.activity = activity;
+                }
+                StreamEvent::ApprovalRequired { request } => {
+                    self.register_approval_control_request(request);
                 }
                 StreamEvent::ToolStart { name, args } => {
                     self.append_tui_turn_provider_event(&ProviderRunEvent::ToolStart {
