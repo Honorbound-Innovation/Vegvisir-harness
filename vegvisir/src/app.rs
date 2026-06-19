@@ -45,7 +45,7 @@ use crate::{
     run_artifacts::{RunArtifactManager, RunFailure, RunManifest, RunStatus},
     speech::{ActiveSpeechRecording, DEFAULT_PTT_KEY, DEFAULT_PTT_SECONDS, PushToTalkKey},
     subagents::{SubAgentStatus, SubAgentTaskRecord},
-    tasks::TaskManager,
+    tasks::{TaskKind, TaskManager, TaskSpawnRequest},
     tools::{
         DEFAULT_ACTIVE_SUBAGENT_LIMIT, SubagentProviderDefaults, SubagentSpawnDefaults,
         ToolExecutor, ToolRegistry, build_builtin_registry_with_cms_mode_subagent_config,
@@ -86,6 +86,7 @@ pub struct TuiApplication {
     pub tool_registry: ToolRegistry,
     pub tool_executor: ToolExecutor,
     pub task_manager: TaskManager,
+    pub active_tool_tasks: BTreeMap<String, String>,
     pub profile_store: UserProfileStore,
     pub user_profile: UserProfile,
     pub logger: EventLogger,
@@ -854,6 +855,7 @@ impl TuiApplication {
             tool_registry,
             tool_executor,
             task_manager: TaskManager::new(),
+            active_tool_tasks: BTreeMap::new(),
             profile_store,
             user_profile,
             logger,
@@ -3661,6 +3663,111 @@ mod tests {
         assert!(runtime_events.contains("task_output"));
         assert!(runtime_events.contains("task_completed"));
         assert!(runtime_events.contains(&task_id));
+        Ok(())
+    }
+
+    #[test]
+    fn run_command_tool_events_register_persist_and_complete_task() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        let (tx, rx) = mpsc::channel();
+        app.pending_stream = Some(rx);
+
+        tx.send(StreamEvent::ToolStart {
+            name: "run_command".to_string(),
+            args: r#"{"command":["cargo","check"]}"#.to_string(),
+        })?;
+        tx.send(StreamEvent::ToolEnd {
+            name: "run_command".to_string(),
+            ok: true,
+            summary: "ok: cargo check passed".to_string(),
+            detail: Some("stdout line".to_string()),
+        })?;
+        app.poll_stream_events();
+
+        assert!(app.active_tool_tasks.is_empty());
+        let records = app.task_manager.records();
+        assert_eq!(records.len(), 1);
+        let record = records[0];
+        assert_eq!(record.kind, crate::tasks::TaskKind::Shell);
+        assert_eq!(record.state, crate::tasks::TaskState::Completed);
+        assert_eq!(record.command.as_deref(), Some("cargo check"));
+        assert_eq!(record.exit_code, Some(0));
+        assert!(record.retained_output.contains("cargo check passed"));
+        assert!(record.retained_output.contains("stdout line"));
+        let persisted = std::fs::read_to_string(&record.output_file)?;
+        assert!(persisted.contains("cargo check passed"));
+        assert!(persisted.contains("stdout line"));
+        let transcript = app
+            .session
+            .messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(transcript.contains("Task registered for tool `run_command`"));
+        Ok(())
+    }
+
+    #[test]
+    fn run_tests_tool_events_register_failed_test_task() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        let (tx, rx) = mpsc::channel();
+        app.pending_stream = Some(rx);
+
+        tx.send(StreamEvent::ToolStart {
+            name: "run_tests".to_string(),
+            args: r#"{"command":["cargo","test","focused"]}"#.to_string(),
+        })?;
+        tx.send(StreamEvent::ToolEnd {
+            name: "run_tests".to_string(),
+            ok: false,
+            summary: "TestsFailed: one failure".to_string(),
+            detail: None,
+        })?;
+        app.poll_stream_events();
+
+        let record = app.task_manager.records()[0];
+        assert_eq!(record.kind, crate::tasks::TaskKind::Test);
+        assert_eq!(record.state, crate::tasks::TaskState::Failed);
+        assert_eq!(record.command.as_deref(), Some("cargo test focused"));
+        assert_eq!(record.exit_code, Some(1));
+        assert!(record.retained_output.contains("TestsFailed"));
+        Ok(())
+    }
+
+    #[test]
+    fn tool_event_tasks_drain_into_run_artifact() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.start_tui_turn_artifact("task bridge test");
+        let run_dir = app
+            .pending_run_artifact
+            .as_ref()
+            .map(|(manager, _)| manager.run_dir.clone())
+            .expect("run artifact started");
+        let (tx, rx) = mpsc::channel();
+        app.pending_stream = Some(rx);
+
+        tx.send(StreamEvent::ToolStart {
+            name: "run_command".to_string(),
+            args: r#"{"command":["echo","hi"]}"#.to_string(),
+        })?;
+        tx.send(StreamEvent::ToolEnd {
+            name: "run_command".to_string(),
+            ok: true,
+            summary: "hi".to_string(),
+            detail: None,
+        })?;
+        app.poll_stream_events();
+        app.drain_task_lifecycle_events_to_run_artifact();
+
+        let runtime_events = std::fs::read_to_string(run_dir.join("runtime-events.jsonl"))?;
+        assert!(runtime_events.contains("task_started"));
+        assert!(runtime_events.contains("task_output"));
+        assert!(runtime_events.contains("task_completed"));
+        assert!(runtime_events.contains("shell-000001"));
         Ok(())
     }
 

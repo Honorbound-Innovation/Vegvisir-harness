@@ -234,6 +234,9 @@ impl TuiApplication {
                 self.clear_pending_turn_runtime_handles();
                 self.pop_empty_assistant_placeholder();
                 if error.to_string() == "Cancelled" {
+                    self.finish_active_tool_tasks_without_tool_end(
+                        crate::tasks::TaskState::Cancelled,
+                    );
                     self.finish_tui_turn_artifact(RunStatus::Cancelled, None);
                     self.pop_last_assistant_response();
                     self.push_system_message("Cancelled in-flight model response.");
@@ -243,6 +246,7 @@ impl TuiApplication {
                         self.autonomy.last_status = "cancelled".to_string();
                     }
                 } else {
+                    self.finish_active_tool_tasks_without_tool_end(crate::tasks::TaskState::Failed);
                     let failed_run = self.fail_tui_turn_artifact(&error.to_string(), true);
                     self.push_turn_failure_summary(error.to_string());
                     self.auto_recover_failed_turn(
@@ -264,6 +268,7 @@ impl TuiApplication {
                 self.session.activity.clear();
                 self.clear_pending_turn_runtime_handles();
                 self.pop_empty_assistant_placeholder();
+                self.finish_active_tool_tasks_without_tool_end(crate::tasks::TaskState::Failed);
                 let failed_run = self.fail_tui_turn_artifact(
                     "provider worker panicked before completing the turn",
                     true,
@@ -496,6 +501,8 @@ Steering: {display_content}{attachment_note}"
         self.session.status = "ready".to_string();
         self.session.activity.clear();
         self.pop_last_assistant_response();
+        self.finish_active_tool_tasks_without_tool_end(crate::tasks::TaskState::Cancelled);
+        self.finish_tui_turn_artifact(RunStatus::Cancelled, None);
         self.push_system_message("Cancelled in-flight model response.");
         self.autosave_session();
         self.chat_scroll_offset = 0;
@@ -556,6 +563,7 @@ Steering: {display_content}{attachment_note}"
                 self.session.status = "ready".to_string();
                 self.session.activity.clear();
                 self.pop_empty_assistant_placeholder();
+                self.finish_active_tool_tasks_without_tool_end(crate::tasks::TaskState::Cancelled);
                 let reason = if force {
                     "turn_repair was forced by the operator while a provider worker was still in-flight".to_string()
                 } else {
@@ -616,6 +624,22 @@ Steering: {display_content}{attachment_note}"
         }
         self.finish_turn_repair_housekeeping(&reason);
         Some(format!("Turn repair: revived dead turn ({reason})."))
+    }
+
+    fn finish_active_tool_tasks_without_tool_end(&mut self, state: crate::tasks::TaskState) {
+        let active = std::mem::take(&mut self.active_tool_tasks);
+        for (tool_name, task_id) in active {
+            let outcome = match state {
+                crate::tasks::TaskState::Cancelled => self.task_manager.cancel(&task_id),
+                crate::tasks::TaskState::TimedOut => self.task_manager.timeout(&task_id),
+                _ => self.task_manager.complete(&task_id, 1),
+            };
+            if let Err(error) = outcome {
+                self.push_system_message(format!(
+                    "Warning: failed to finish task {task_id} for interrupted tool `{tool_name}`: {error}"
+                ));
+            }
+        }
     }
 
     fn clear_pending_turn_runtime_handles(&mut self) {
@@ -705,6 +729,90 @@ Steering: {display_content}{attachment_note}"
                 "Warning: failed to append run runtime event: {error}"
             ));
         }
+    }
+
+    fn register_task_for_tool_start(&mut self, tool_name: &str, args: &str) {
+        let Some(kind) = task_kind_for_tool(tool_name) else {
+            return;
+        };
+        if self.active_tool_tasks.contains_key(tool_name) {
+            return;
+        }
+        let owner_run_id = self
+            .pending_run_artifact
+            .as_ref()
+            .map(|(manager, _)| manager.run_id.clone())
+            .unwrap_or_else(|| self.session.session_id.clone());
+        let command = command_string_from_tool_args(args);
+        let description = command
+            .as_deref()
+            .map(|command| format!("{tool_name}: {command}"))
+            .unwrap_or_else(|| tool_name.to_string());
+        let mut request = TaskSpawnRequest::new(kind, description, self.cwd.clone(), owner_run_id);
+        if let Some(command) = command {
+            request = request.command(command);
+        }
+        if let Some(agent_id) = &self.session.active_agent_id {
+            request = request.owner_agent_id(agent_id.clone());
+        }
+        let task_id = self.task_manager.register(request);
+        if let Err(error) = self.task_manager.start_foreground(&task_id) {
+            self.push_system_message(format!(
+                "Warning: failed to mark task {task_id} as foreground: {error}"
+            ));
+        }
+        self.active_tool_tasks
+            .insert(tool_name.to_string(), task_id.clone());
+        self.push_system_message(format!("Task registered for tool `{tool_name}`: {task_id}"));
+    }
+
+    fn complete_task_for_tool_end(
+        &mut self,
+        tool_name: &str,
+        ok: bool,
+        summary: &str,
+        detail: Option<&str>,
+    ) {
+        let Some(task_id) = self.active_tool_tasks.remove(tool_name) else {
+            return;
+        };
+        let mut output = String::new();
+        output.push_str(summary.trim_end());
+        if let Some(detail) = detail.map(str::trim).filter(|detail| !detail.is_empty()) {
+            if !output.is_empty() {
+                output.push_str("\n\n");
+            }
+            output.push_str(detail);
+        }
+        if !output.is_empty() {
+            if let Err(error) = self.persist_task_output(&task_id, &output) {
+                self.push_system_message(format!(
+                    "Warning: failed to persist task output for {task_id}: {error}"
+                ));
+            }
+            if let Err(error) = self.task_manager.append_output(&task_id, &output) {
+                self.push_system_message(format!(
+                    "Warning: failed to append task output for {task_id}: {error}"
+                ));
+            }
+        }
+        let exit_code = if ok { 0 } else { 1 };
+        if let Err(error) = self.task_manager.complete(&task_id, exit_code) {
+            self.push_system_message(format!(
+                "Warning: failed to complete task {task_id}: {error}"
+            ));
+        }
+    }
+
+    fn persist_task_output(&self, task_id: &str, output: &str) -> anyhow::Result<()> {
+        let Some(record) = self.task_manager.record(task_id) else {
+            return Ok(());
+        };
+        if let Some(parent) = record.output_file.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&record.output_file, output)?;
+        Ok(())
     }
 
     pub(crate) fn drain_task_lifecycle_events_to_run_artifact(&mut self) {
@@ -974,6 +1082,7 @@ Steering: {display_content}{attachment_note}"
                         name: name.clone(),
                         args: args.clone(),
                     });
+                    self.register_task_for_tool_start(&name, &args);
                     self.session.activity = format!("using tool {name}");
                     self.push_live_tool_message(format!("Running tool: {name} {args}"));
                 }
@@ -997,7 +1106,8 @@ Steering: {display_content}{attachment_note}"
                         content.push_str("\n\n");
                         content.push_str(detail);
                     }
-                    self.push_live_tool_message(content);
+                    self.push_live_tool_message(content.clone());
+                    self.complete_task_for_tool_end(&name, ok, &summary, detail);
                     if ok && let Some(detail) = detail {
                         self.push_assistant_tool_artifact(&name, detail);
                     }
@@ -1307,6 +1417,28 @@ Next step: retry or continue from the last successful step instead of leaving th
         if !self.session.activity.trim().is_empty() {
             self.redraw_requested = true;
         }
+    }
+}
+
+fn task_kind_for_tool(tool_name: &str) -> Option<TaskKind> {
+    match tool_name {
+        "run_tests" => Some(TaskKind::Test),
+        "run_command" => Some(TaskKind::Shell),
+        _ => None,
+    }
+}
+
+fn command_string_from_tool_args(args: &str) -> Option<String> {
+    let value = serde_json::from_str::<serde_json::Value>(args).ok()?;
+    let command = value.get("command")?.as_array()?;
+    let parts = command
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect::<Vec<_>>();
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" "))
     }
 }
 
