@@ -194,12 +194,47 @@ struct BridgeEvent {
     payload: Value,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum BridgeTrustMode {
+    #[default]
+    TrustedStdio,
+    RemoteSafeOnly,
+}
+
+impl BridgeTrustMode {
+    fn from_env() -> Self {
+        match std::env::var("VEGVISIR_BRIDGE_TRUST_MODE") {
+            Ok(value) if Self::is_remote_safe_only_value(&value) => Self::RemoteSafeOnly,
+            _ => Self::TrustedStdio,
+        }
+    }
+
+    fn is_remote_safe_only_value(value: &str) -> bool {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "remote_safe_only" | "remote-safe-only" | "restricted" | "untrusted"
+        )
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::TrustedStdio => "trusted_stdio",
+            Self::RemoteSafeOnly => "remote_safe_only",
+        }
+    }
+
+    const fn remote_safe_only_enforced(self) -> bool {
+        matches!(self, Self::RemoteSafeOnly)
+    }
+}
+
 #[derive(Default)]
 struct BridgeState {
     initialized: bool,
     server_started_at: i64,
     last_heartbeat_at: Option<i64>,
     heartbeat_count: u64,
+    trust_mode: BridgeTrustMode,
     threads: HashMap<String, ThreadRuntime>,
     pending_approval_turns: HashMap<String, PendingApprovalTurn>,
 }
@@ -208,6 +243,7 @@ impl BridgeState {
     fn new() -> Self {
         Self {
             server_started_at: unix_now(),
+            trust_mode: BridgeTrustMode::from_env(),
             ..Self::default()
         }
     }
@@ -307,6 +343,11 @@ fn handle_request(
     dangerously_bypass_approvals_and_sandbox: bool,
     stdout: &mut dyn Write,
 ) -> anyhow::Result<BridgeControl> {
+    if let Some(message) = bridge_trust_gate_rejection(state.trust_mode, &request.method) {
+        emit_error(stdout, request.id, "bridge_method_not_remote_safe", message)?;
+        return Ok(BridgeControl::Continue);
+    }
+
     match request.method.as_str() {
         "initialize" if request.id.is_some() => {
             let params: InitializeParams =
@@ -738,7 +779,7 @@ fn handle_request(
                 BridgeEvent {
                     kind: "bridge.capabilities",
                     id: request.id,
-                    payload: bridge_capabilities(app),
+                    payload: bridge_capabilities(app, state.trust_mode),
                 },
             )?;
         }
@@ -2476,7 +2517,7 @@ fn command_backed_bridge_spec(method: &str) -> Option<CommandBackedBridgeSpec> {
         .find(|spec| spec.method == method)
 }
 
-fn bridge_capabilities(app: &TuiApplication) -> Value {
+fn bridge_capabilities(app: &TuiApplication, trust_mode: BridgeTrustMode) -> Value {
     let command_backed_methods = COMMAND_BACKED_BRIDGE_SPECS
         .iter()
         .map(|spec| {
@@ -2492,8 +2533,9 @@ fn bridge_capabilities(app: &TuiApplication) -> Value {
             })
         })
         .collect::<Vec<_>>();
-    let method_registry = bridge_method_registry();
-    let security_posture = bridge_security_posture(app);
+    let method_registry = bridge_method_registry(trust_mode);
+    let trust_policy = bridge_trust_policy(trust_mode);
+    let security_posture = bridge_security_posture(app, trust_mode);
     json!({
         "session": snapshot(app),
         "security_posture": security_posture,
@@ -2501,15 +2543,21 @@ fn bridge_capabilities(app: &TuiApplication) -> Value {
         "native_methods": NATIVE_BRIDGE_METHODS,
         "method_registry": method_registry,
         "methodRegistry": method_registry,
+        "trust_mode": trust_mode.as_str(),
+        "trustMode": trust_mode.as_str(),
+        "remote_safe_only_enforced": trust_mode.remote_safe_only_enforced(),
+        "remoteSafeOnlyEnforced": trust_mode.remote_safe_only_enforced(),
+        "trust_policy": trust_policy,
+        "trustPolicy": trust_policy,
         "lease": bridge_lease_capabilities(),
         "sessionLease": bridge_lease_capabilities(),
         "command_backed_methods": command_backed_methods,
         "commands": app.commands.all().into_iter().collect::<Vec<_>>(),
-        "note": "command-backed methods execute the same Vegvisir slash-command handlers as the TUI and return structured envelope metadata plus command text output; command.invoke remains the universal escape hatch. Capability classification is metadata-only in this slice; actual execution still routes through GuardrailEngine, RuntimePolicy, approval ledger, and sandbox.",
+        "note": "command-backed methods execute the same Vegvisir slash-command handlers as the TUI and return structured envelope metadata plus command text output; command.invoke remains the universal escape hatch. Capability classification is enforced only when trust_mode=remote_safe_only; all trusted-stdio execution still routes through GuardrailEngine, RuntimePolicy, approval ledger, and sandbox.",
     })
 }
 
-fn bridge_method_registry() -> Value {
+fn bridge_method_registry(trust_mode: BridgeTrustMode) -> Value {
     let native = NATIVE_BRIDGE_METHODS
         .iter()
         .map(|method| {
@@ -2540,10 +2588,59 @@ fn bridge_method_registry() -> Value {
         .collect::<Vec<_>>();
     json!({
         "schema_version": 1,
-        "enforcement": "metadata_only",
-        "remote_safe_policy": "Only remote_safe=true methods are suitable for untrusted remote wrappers. All methods still rely on stdio locality plus GuardrailEngine/RuntimePolicy/ApprovalLedger enforcement.",
+        "enforcement": if trust_mode.remote_safe_only_enforced() { "remote_safe_only" } else { "metadata_only" },
+        "trust_mode": trust_mode.as_str(),
+        "trustMode": trust_mode.as_str(),
+        "remote_safe_only_enforced": trust_mode.remote_safe_only_enforced(),
+        "remoteSafeOnlyEnforced": trust_mode.remote_safe_only_enforced(),
+        "remote_safe_policy": "Only remote_safe=true methods are allowed when trust_mode=remote_safe_only. Trusted stdio keeps backwards-compatible behavior while still relying on GuardrailEngine/RuntimePolicy/ApprovalLedger enforcement.",
         "native": native,
         "command_backed": command_backed,
+    })
+}
+
+fn bridge_trust_gate_rejection(trust_mode: BridgeTrustMode, method: &str) -> Option<String> {
+    if !trust_mode.remote_safe_only_enforced() {
+        return None;
+    }
+
+    let classification = classify_bridge_method(method);
+    if classification.remote_safe {
+        return None;
+    }
+
+    Some(format!(
+        "Bridge method '{method}' is not remote_safe and is blocked while trust_mode=remote_safe_only"
+    ))
+}
+
+fn classify_bridge_method(method: &str) -> BridgeMethodClassification {
+    if let Some(spec) = command_backed_bridge_spec(method) {
+        classify_command_backed_method(&spec)
+    } else {
+        classify_native_bridge_method(method)
+    }
+}
+
+fn bridge_trust_policy(trust_mode: BridgeTrustMode) -> Value {
+    json!({
+        "mode": trust_mode.as_str(),
+        "remote_safe_only_enforced": trust_mode.remote_safe_only_enforced(),
+        "configuration": {
+            "environment_variable": "VEGVISIR_BRIDGE_TRUST_MODE",
+            "remote_safe_only_values": [
+                "remote_safe_only",
+                "remote-safe-only",
+                "restricted",
+                "untrusted"
+            ]
+        },
+        "trusted_stdio_default": true,
+        "policy": if trust_mode.remote_safe_only_enforced() {
+            "Only bridge methods classified remote_safe=true are allowed before dispatch; non-remote-safe native and command-backed methods are rejected without executing handlers."
+        } else {
+            "Backwards-compatible trusted stdio mode: all bridge methods remain available, with execution still governed by GuardrailEngine, RuntimePolicy, ApprovalLedger, sandboxing, and startup dangerous-bypass policy."
+        }
     })
 }
 
@@ -2747,7 +2844,7 @@ fn bridge_lease_status(app: &TuiApplication, state: &BridgeState) -> Value {
     })
 }
 
-fn bridge_security_posture(app: &TuiApplication) -> Value {
+fn bridge_security_posture(app: &TuiApplication, trust_mode: BridgeTrustMode) -> Value {
     let tools = app.tool_registry.list();
     let remote_safe_tools = tools.iter().filter(|tool| !tool.risky).count();
     json!({
@@ -2762,7 +2859,11 @@ fn bridge_security_posture(app: &TuiApplication) -> Value {
             "activation": "explicit app-server command",
             "feature_flag_required": false,
             "dangerously_bypass_approvals_and_sandbox": app.dangerously_bypass_approvals_and_sandbox,
-            "dangerous_bypass_startup_only": true
+            "dangerous_bypass_startup_only": true,
+            "trust_mode": trust_mode.as_str(),
+            "trustMode": trust_mode.as_str(),
+            "remote_safe_only_enforced": trust_mode.remote_safe_only_enforced(),
+            "remoteSafeOnlyEnforced": trust_mode.remote_safe_only_enforced()
         },
         "session_lease": bridge_lease_capabilities(),
         "registry_remote_safe_filtering": {
@@ -3300,7 +3401,7 @@ mod tests {
     #[test]
     fn bridge_capabilities_report_stdio_local_security_posture() -> anyhow::Result<()> {
         let (_tmp, app) = test_app()?;
-        let capabilities = bridge_capabilities(&app);
+        let capabilities = bridge_capabilities(&app, BridgeTrustMode::TrustedStdio);
 
         assert_eq!(
             capabilities["security_posture"]["transport"]["mode"],
@@ -3338,13 +3439,15 @@ mod tests {
         );
         assert_eq!(capabilities["lease"]["mode"], "process_scoped_stdio");
         assert_eq!(capabilities["lease"]["timeout_enforced"], false);
+        assert_eq!(capabilities["trust_mode"], "trusted_stdio");
+        assert_eq!(capabilities["remote_safe_only_enforced"], false);
         Ok(())
     }
 
     #[test]
     fn bridge_capabilities_classify_remote_safe_and_trusted_methods() -> anyhow::Result<()> {
         let (_tmp, app) = test_app()?;
-        let capabilities = bridge_capabilities(&app);
+        let capabilities = bridge_capabilities(&app, BridgeTrustMode::TrustedStdio);
         let native = capabilities["method_registry"]["native"]
             .as_array()
             .expect("native method registry");
@@ -3394,6 +3497,123 @@ mod tests {
             command_method("verify.run")["classification"]["class"],
             "execution"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn bridge_remote_safe_only_capabilities_report_enforcement() -> anyhow::Result<()> {
+        let (_tmp, app) = test_app()?;
+        let capabilities = bridge_capabilities(&app, BridgeTrustMode::RemoteSafeOnly);
+
+        assert_eq!(capabilities["trust_mode"], "remote_safe_only");
+        assert_eq!(capabilities["trustMode"], "remote_safe_only");
+        assert_eq!(capabilities["remote_safe_only_enforced"], true);
+        assert_eq!(
+            capabilities["method_registry"]["enforcement"],
+            "remote_safe_only"
+        );
+        assert_eq!(
+            capabilities["security_posture"]["serving"]["remote_safe_only_enforced"],
+            true
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn bridge_remote_safe_only_blocks_untrusted_methods_before_dispatch() -> anyhow::Result<()> {
+        let (_tmp, mut app) = test_app()?;
+        let mut state = BridgeState {
+            initialized: true,
+            trust_mode: BridgeTrustMode::RemoteSafeOnly,
+            ..BridgeState::new()
+        };
+        let mut output = Vec::new();
+
+        handle_request(
+            &mut app,
+            &mut state,
+            BridgeRequest {
+                id: Some(BridgeRequestId::String("turn".to_string())),
+                method: "turn.send".to_string(),
+                params: json!({"content": "should not run"}),
+            },
+            None,
+            false,
+            &mut output,
+        )?;
+        handle_request(
+            &mut app,
+            &mut state,
+            BridgeRequest {
+                id: Some(BridgeRequestId::String("tools".to_string())),
+                method: "tools.allowRisky".to_string(),
+                params: json!({}),
+            },
+            None,
+            false,
+            &mut output,
+        )?;
+        handle_request(
+            &mut app,
+            &mut state,
+            BridgeRequest {
+                id: Some(BridgeRequestId::String("ping".to_string())),
+                method: "bridge.ping".to_string(),
+                params: json!({}),
+            },
+            None,
+            false,
+            &mut output,
+        )?;
+
+        let events = String::from_utf8(output)?
+            .lines()
+            .map(serde_json::from_str::<Value>)
+            .collect::<Result<Vec<_>, _>>()?;
+        let blocked = events
+            .iter()
+            .filter(|event| event["error"]["data"]["code"] == "bridge_method_not_remote_safe")
+            .count();
+        assert_eq!(blocked, 2);
+        assert!(events.iter().any(|event| event["type"] == "bridge.pong"));
+        assert!(
+            !events
+                .iter()
+                .any(|event| event["type"] == "tools.allowRisky")
+        );
+        assert!(!app.risky_tools_enabled);
+        Ok(())
+    }
+
+    #[test]
+    fn bridge_trusted_stdio_still_allows_command_backed_dispatch() -> anyhow::Result<()> {
+        let (_tmp, mut app) = test_app()?;
+        let mut state = BridgeState {
+            initialized: true,
+            trust_mode: BridgeTrustMode::TrustedStdio,
+            ..BridgeState::new()
+        };
+        let mut output = Vec::new();
+
+        handle_request(
+            &mut app,
+            &mut state,
+            BridgeRequest {
+                id: Some(BridgeRequestId::String("tools".to_string())),
+                method: "tools.status".to_string(),
+                params: json!({}),
+            },
+            None,
+            false,
+            &mut output,
+        )?;
+
+        let events = String::from_utf8(output)?
+            .lines()
+            .map(serde_json::from_str::<Value>)
+            .collect::<Result<Vec<_>, _>>()?;
+        assert!(events.iter().any(|event| event["type"] == "tools.status"));
+        assert!(events.iter().all(|event| event.get("error").is_none()));
         Ok(())
     }
 
