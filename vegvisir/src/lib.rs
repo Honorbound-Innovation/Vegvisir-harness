@@ -7,6 +7,7 @@ pub mod command_registry;
 pub mod command_sandbox;
 pub mod compat_server;
 pub mod context;
+pub mod control_requests;
 pub mod core;
 pub mod environment;
 pub mod evals;

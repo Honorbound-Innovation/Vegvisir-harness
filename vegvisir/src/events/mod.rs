@@ -58,6 +58,9 @@ pub enum VegvisirEvent {
     ToolFailed(ToolFailed),
     ApprovalRequested(ApprovalRequested),
     ApprovalResolved(ApprovalResolved),
+    ControlRequestCreated(ControlRequestCreated),
+    ControlRequestResolved(ControlRequestResolved),
+    ControlRequestCancelled(ControlRequestCancelled),
     MemoryRead(MemoryRead),
     MemoryWritten(MemoryWritten),
     ContextPrepared(ContextPrepared),
@@ -161,6 +164,27 @@ pub enum ApprovalDecision {
     AllowForSession,
     Deny,
     Cancelled,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlRequestCreated {
+    pub request_id: String,
+    pub subtype: String,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlRequestResolved {
+    pub request_id: String,
+    pub subtype: String,
+    pub decision_source: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlRequestCancelled {
+    pub request_id: String,
+    pub subtype: String,
+    pub reason: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -603,18 +627,57 @@ mod tests {
                     "run-abc",
                     4,
                     fixed_ts(),
+                    VegvisirEvent::ControlRequestCreated(ControlRequestCreated {
+                        request_id: "ctrl-approval-1".to_string(),
+                        subtype: "approval".to_string(),
+                        expires_at: Some(fixed_ts()),
+                    }),
+                ),
+                r#"{"expires_at":"2026-01-02T03:04:05Z","request_id":"ctrl-approval-1","run_id":"run-abc","seq":4,"subtype":"approval","ts":"2026-01-02T03:04:05Z","type":"control_request_created","v":1}"#,
+            ),
+            (
+                EventEnvelope::at(
+                    "run-abc",
+                    5,
+                    fixed_ts(),
+                    VegvisirEvent::ControlRequestResolved(ControlRequestResolved {
+                        request_id: "ctrl-approval-1".to_string(),
+                        subtype: "approval".to_string(),
+                        decision_source: "local_ui".to_string(),
+                    }),
+                ),
+                r#"{"decision_source":"local_ui","request_id":"ctrl-approval-1","run_id":"run-abc","seq":5,"subtype":"approval","ts":"2026-01-02T03:04:05Z","type":"control_request_resolved","v":1}"#,
+            ),
+            (
+                EventEnvelope::at(
+                    "run-abc",
+                    6,
+                    fixed_ts(),
+                    VegvisirEvent::ControlRequestCancelled(ControlRequestCancelled {
+                        request_id: "ctrl-approval-2".to_string(),
+                        subtype: "approval".to_string(),
+                        reason: "run aborted".to_string(),
+                    }),
+                ),
+                r#"{"reason":"run aborted","request_id":"ctrl-approval-2","run_id":"run-abc","seq":6,"subtype":"approval","ts":"2026-01-02T03:04:05Z","type":"control_request_cancelled","v":1}"#,
+            ),
+            (
+                EventEnvelope::at(
+                    "run-abc",
+                    7,
+                    fixed_ts(),
                     VegvisirEvent::MemoryRead(MemoryRead {
                         system: "cms-v2".to_string(),
                         query: Some("registry plan".to_string()),
                         result_count: 2,
                     }),
                 ),
-                r#"{"query":"registry plan","result_count":2,"run_id":"run-abc","seq":4,"system":"cms-v2","ts":"2026-01-02T03:04:05Z","type":"memory_read","v":1}"#,
+                r#"{"query":"registry plan","result_count":2,"run_id":"run-abc","seq":7,"system":"cms-v2","ts":"2026-01-02T03:04:05Z","type":"memory_read","v":1}"#,
             ),
             (
                 EventEnvelope::at(
                     "run-abc",
-                    5,
+                    8,
                     fixed_ts(),
                     VegvisirEvent::MemoryWritten(MemoryWritten {
                         system: "cms-v2".to_string(),
@@ -622,12 +685,12 @@ mod tests {
                         title: "Decision".to_string(),
                     }),
                 ),
-                r#"{"memory_id":"mem_123","run_id":"run-abc","seq":5,"system":"cms-v2","title":"Decision","ts":"2026-01-02T03:04:05Z","type":"memory_written","v":1}"#,
+                r#"{"memory_id":"mem_123","run_id":"run-abc","seq":8,"system":"cms-v2","title":"Decision","ts":"2026-01-02T03:04:05Z","type":"memory_written","v":1}"#,
             ),
             (
                 EventEnvelope::at(
                     "run-abc",
-                    6,
+                    9,
                     fixed_ts(),
                     VegvisirEvent::ContextPrepared(ContextPrepared {
                         system: "ecm".to_string(),
@@ -636,12 +699,12 @@ mod tests {
                         source_count: 3,
                     }),
                 ),
-                r#"{"input_tokens":100,"output_tokens":50,"run_id":"run-abc","seq":6,"source_count":3,"system":"ecm","ts":"2026-01-02T03:04:05Z","type":"context_prepared","v":1}"#,
+                r#"{"input_tokens":100,"output_tokens":50,"run_id":"run-abc","seq":9,"source_count":3,"system":"ecm","ts":"2026-01-02T03:04:05Z","type":"context_prepared","v":1}"#,
             ),
             (
                 EventEnvelope::at(
                     "run-abc",
-                    7,
+                    10,
                     fixed_ts(),
                     VegvisirEvent::ContextCompacted(ContextCompacted {
                         strategy: "manual".to_string(),
@@ -649,31 +712,31 @@ mod tests {
                         after_tokens: Some(300),
                     }),
                 ),
-                r#"{"after_tokens":300,"before_tokens":1000,"run_id":"run-abc","seq":7,"strategy":"manual","ts":"2026-01-02T03:04:05Z","type":"context_compacted","v":1}"#,
+                r#"{"after_tokens":300,"before_tokens":1000,"run_id":"run-abc","seq":10,"strategy":"manual","ts":"2026-01-02T03:04:05Z","type":"context_compacted","v":1}"#,
             ),
             (
                 EventEnvelope::at(
                     "run-abc",
-                    8,
+                    11,
                     fixed_ts(),
                     VegvisirEvent::RunCompleted(RunCompleted {
                         status: RunCompletionStatus::Ok,
                         summary: Some("done".to_string()),
                     }),
                 ),
-                r#"{"run_id":"run-abc","seq":8,"status":"ok","summary":"done","ts":"2026-01-02T03:04:05Z","type":"run_completed","v":1}"#,
+                r#"{"run_id":"run-abc","seq":11,"status":"ok","summary":"done","ts":"2026-01-02T03:04:05Z","type":"run_completed","v":1}"#,
             ),
             (
                 EventEnvelope::at(
                     "run-abc",
-                    9,
+                    12,
                     fixed_ts(),
                     VegvisirEvent::RunFailed(RunFailed {
                         error: "provider timed out".to_string(),
                         recoverable: true,
                     }),
                 ),
-                r#"{"error":"provider timed out","recoverable":true,"run_id":"run-abc","seq":9,"ts":"2026-01-02T03:04:05Z","type":"run_failed","v":1}"#,
+                r#"{"error":"provider timed out","recoverable":true,"run_id":"run-abc","seq":12,"ts":"2026-01-02T03:04:05Z","type":"run_failed","v":1}"#,
             ),
         ];
 
