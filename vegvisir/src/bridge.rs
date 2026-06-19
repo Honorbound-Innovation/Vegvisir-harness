@@ -197,8 +197,20 @@ struct BridgeEvent {
 #[derive(Default)]
 struct BridgeState {
     initialized: bool,
+    server_started_at: i64,
+    last_heartbeat_at: Option<i64>,
+    heartbeat_count: u64,
     threads: HashMap<String, ThreadRuntime>,
     pending_approval_turns: HashMap<String, PendingApprovalTurn>,
+}
+
+impl BridgeState {
+    fn new() -> Self {
+        Self {
+            server_started_at: unix_now(),
+            ..Self::default()
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -242,7 +254,7 @@ pub fn run_app_server_with_io<R: BufRead, W: Write>(
         options.agent,
         options.dangerously_bypass_approvals_and_sandbox,
     )?;
-    let mut state = BridgeState::default();
+    let mut state = BridgeState::new();
 
     emit_legacy(
         stdout,
@@ -671,6 +683,52 @@ fn handle_request(
                         "canonical": canonical,
                         "command": app.commands.get(&canonical),
                     }),
+                },
+            )?;
+        }
+        "bridge.ping" | "ping" => {
+            emit_legacy(
+                stdout,
+                BridgeEvent {
+                    kind: "bridge.pong",
+                    id: request.id,
+                    payload: json!({
+                        "now": unix_now(),
+                        "session": snapshot(app),
+                        "lease": bridge_lease_status(app, state),
+                    }),
+                },
+            )?;
+        }
+        "bridge.heartbeat" | "session.heartbeat" => {
+            state.last_heartbeat_at = Some(unix_now());
+            state.heartbeat_count = state.heartbeat_count.saturating_add(1);
+            let payload = bridge_lease_status(app, state);
+            app.logger.emit(
+                "bridge_heartbeat",
+                json!({
+                    "session": app.session.session_id,
+                    "workspace": app.cwd.display().to_string(),
+                    "heartbeat_count": state.heartbeat_count,
+                    "last_heartbeat_at": state.last_heartbeat_at,
+                }),
+            );
+            emit_legacy(
+                stdout,
+                BridgeEvent {
+                    kind: "bridge.heartbeat",
+                    id: request.id,
+                    payload,
+                },
+            )?;
+        }
+        "bridge.lease" | "session.lease" => {
+            emit_legacy(
+                stdout,
+                BridgeEvent {
+                    kind: "bridge.lease",
+                    id: request.id,
+                    payload: bridge_lease_status(app, state),
                 },
             )?;
         }
@@ -2304,6 +2362,12 @@ fn bridge_capabilities(app: &TuiApplication) -> Value {
             "commands.list",
             "commands.suggest",
             "commands.describe",
+            "bridge.ping",
+            "ping",
+            "bridge.heartbeat",
+            "session.heartbeat",
+            "bridge.lease",
+            "session.lease",
             "bridge.capabilities",
             "provider.select",
             "model.select",
@@ -2337,9 +2401,41 @@ fn bridge_capabilities(app: &TuiApplication) -> Value {
             "system.prompt.set",
             "shutdown"
         ],
+        "lease": bridge_lease_capabilities(),
+        "sessionLease": bridge_lease_capabilities(),
         "command_backed_methods": command_backed_methods,
         "commands": app.commands.all().into_iter().collect::<Vec<_>>(),
         "note": "command-backed methods execute the same Vegvisir slash-command handlers as the TUI and return structured envelope metadata plus command text output; command.invoke remains the universal escape hatch.",
+    })
+}
+
+fn bridge_lease_capabilities() -> Value {
+    json!({
+        "mode": "process_scoped_stdio",
+        "authority": "bridge process lifetime",
+        "timeout_enforced": false,
+        "recommended_heartbeat_interval_ms": 30_000,
+        "methods": {
+            "ping": ["bridge.ping", "ping"],
+            "heartbeat": ["bridge.heartbeat", "session.heartbeat"],
+            "status": ["bridge.lease", "session.lease"]
+        },
+        "note": "The initial lease is process-scoped: if the stdio bridge process exits, the lease ends. Heartbeats are observable/auditable but do not yet enforce timeout-based revocation."
+    })
+}
+
+fn bridge_lease_status(app: &TuiApplication, state: &BridgeState) -> Value {
+    json!({
+        "mode": "process_scoped_stdio",
+        "lease_id": format!("bridge:{}", app.session.session_id),
+        "session_id": app.session.session_id,
+        "initialized": state.initialized,
+        "server_started_at": state.server_started_at,
+        "now": unix_now(),
+        "last_heartbeat_at": state.last_heartbeat_at,
+        "heartbeat_count": state.heartbeat_count,
+        "timeout_enforced": false,
+        "recommended_heartbeat_interval_ms": 30_000,
     })
 }
 
@@ -2360,6 +2456,7 @@ fn bridge_security_posture(app: &TuiApplication) -> Value {
             "dangerously_bypass_approvals_and_sandbox": app.dangerously_bypass_approvals_and_sandbox,
             "dangerous_bypass_startup_only": true
         },
+        "session_lease": bridge_lease_capabilities(),
         "registry_remote_safe_filtering": {
             "status": "metadata_reported_not_enforced",
             "policy": "Bridge calls still route through the same TUI command handlers, GuardrailEngine, RuntimePolicy, approval ledger, and sandbox as local calls.",
@@ -2924,6 +3021,91 @@ mod tests {
                 .iter()
                 .any(|method| method == "control.respond")
         );
+        assert!(
+            capabilities["native_methods"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|method| method == "bridge.heartbeat")
+        );
+        assert_eq!(capabilities["lease"]["mode"], "process_scoped_stdio");
+        assert_eq!(capabilities["lease"]["timeout_enforced"], false);
+        Ok(())
+    }
+
+    #[test]
+    fn bridge_ping_and_heartbeat_report_process_scoped_lease() -> anyhow::Result<()> {
+        let (_tmp, mut app) = test_app()?;
+        let mut state = BridgeState {
+            initialized: true,
+            ..BridgeState::new()
+        };
+        let mut output = Vec::new();
+
+        handle_request(
+            &mut app,
+            &mut state,
+            BridgeRequest {
+                id: Some(BridgeRequestId::String("ping".to_string())),
+                method: "bridge.ping".to_string(),
+                params: json!({}),
+            },
+            None,
+            false,
+            &mut output,
+        )?;
+        handle_request(
+            &mut app,
+            &mut state,
+            BridgeRequest {
+                id: Some(BridgeRequestId::String("heartbeat".to_string())),
+                method: "bridge.heartbeat".to_string(),
+                params: json!({}),
+            },
+            None,
+            false,
+            &mut output,
+        )?;
+        handle_request(
+            &mut app,
+            &mut state,
+            BridgeRequest {
+                id: Some(BridgeRequestId::String("lease".to_string())),
+                method: "bridge.lease".to_string(),
+                params: json!({}),
+            },
+            None,
+            false,
+            &mut output,
+        )?;
+
+        let events = String::from_utf8(output)?
+            .lines()
+            .map(serde_json::from_str::<Value>)
+            .collect::<Result<Vec<_>, _>>()?;
+        let pong = events
+            .iter()
+            .find(|event| event["type"] == "bridge.pong")
+            .expect("bridge.pong event");
+        assert_eq!(pong["payload"]["lease"]["mode"], "process_scoped_stdio");
+        assert_eq!(pong["payload"]["lease"]["timeout_enforced"], false);
+
+        let heartbeat = events
+            .iter()
+            .find(|event| event["type"] == "bridge.heartbeat")
+            .expect("bridge.heartbeat event");
+        assert_eq!(heartbeat["payload"]["heartbeat_count"], 1);
+        assert!(heartbeat["payload"]["last_heartbeat_at"].is_number());
+
+        let lease = events
+            .iter()
+            .find(|event| event["type"] == "bridge.lease")
+            .expect("bridge.lease event");
+        assert_eq!(lease["payload"]["heartbeat_count"], 1);
+        assert_eq!(
+            lease["payload"]["lease_id"],
+            format!("bridge:{}", app.session.session_id)
+        );
         Ok(())
     }
 
@@ -2934,7 +3116,7 @@ mod tests {
         app.execute_command("/tools allow-risky")?;
         let mut state = BridgeState {
             initialized: true,
-            ..BridgeState::default()
+            ..BridgeState::new()
         };
         let mut output = Vec::new();
 
@@ -2998,7 +3180,7 @@ mod tests {
 
         let mut state = BridgeState {
             initialized: true,
-            ..BridgeState::default()
+            ..BridgeState::new()
         };
         let mut output = Vec::new();
         let request = BridgeRequest {
