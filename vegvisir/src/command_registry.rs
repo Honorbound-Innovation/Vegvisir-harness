@@ -631,8 +631,8 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
         ),
         cmd(
             "/tasks",
-            "list and inspect session task manager records",
-            "/tasks [list|show <task-id>|events|--json]",
+            "list, inspect, tail, run, or cancel session task manager records",
+            "/tasks [list|show <task-id>|tail <task-id> [--bytes=<bytes>]|run [--timeout=<seconds>] [--stall-timeout=<seconds>|--no-stall-timeout] -- <cmd> [args...]|cancel <task-id>|events|--json]",
             &["/jobs"],
         ),
         cmd(
@@ -835,6 +835,7 @@ fn infer_command_safety(name: &str) -> CommandSafety {
         "/workspace" | "/projects" | "/system" | "/agent" | "/agents" | "/ka" | "/profile"
         | "/model" | "/provider" | "/effort" | "/fast" | "/tools" | "/approvals" | "/skills"
         | "/memory" | "/remember" | "/hbse" | "/mcp" | "/config" => CommandSafety::SessionMutation,
+        "/tasks" => CommandSafety::Destructive,
         "/attach" | "/speech" | "/tts" => CommandSafety::ExternalEffect,
         "/diff" | "/eval" | "/verify" => CommandSafety::ReadOnly,
         _ => CommandSafety::ReadOnly,
@@ -1025,10 +1026,22 @@ mod tests {
         assert!(tasks.aliases.contains(&"/jobs".to_string()));
         let spec = CommandSpec::from_definition(tasks);
         assert_eq!(spec.category, CommandCategory::AgentsTasks);
-        assert_eq!(spec.safety, CommandSafety::ReadOnly);
+        assert_eq!(spec.safety, CommandSafety::Destructive);
+        assert!(
+            spec.argument_hint
+                .as_deref()
+                .unwrap()
+                .contains("tail <task-id>")
+        );
+        assert!(
+            spec.argument_hint
+                .as_deref()
+                .unwrap()
+                .contains("run [--timeout")
+        );
         assert!(spec.supports_noninteractive);
         assert!(spec.contexts.contains(&ExecutionContext::Api));
-        assert!(spec.contexts.contains(&ExecutionContext::Subagent));
+        assert!(!spec.contexts.contains(&ExecutionContext::Subagent));
     }
     #[test]
     fn default_tool_registry_validates_current_tools() -> anyhow::Result<()> {

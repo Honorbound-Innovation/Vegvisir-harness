@@ -3634,6 +3634,39 @@ mod tests {
     }
 
     #[test]
+    fn tasks_tail_command_reads_persisted_output_tail() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        let task_id = app.task_manager.register(
+            crate::tasks::TaskSpawnRequest::new(
+                crate::tasks::TaskKind::Shell,
+                "tail-test",
+                tmp.path(),
+                "run-1",
+            )
+            .command("tail-test"),
+        );
+        let output_file = app
+            .task_manager
+            .record(&task_id)
+            .expect("task record")
+            .output_file
+            .clone();
+        std::fs::create_dir_all(output_file.parent().expect("task output parent"))?;
+        std::fs::write(&output_file, "0123456789abcdef")?;
+
+        let tail = app
+            .execute_command(&format!("/tasks tail {task_id} --bytes=6"))?
+            .unwrap();
+
+        assert!(tail.contains("output tail"));
+        assert!(tail.contains("showing last 6 bytes of 16 total bytes"));
+        assert!(tail.contains("abcdef"));
+        assert!(!tail.contains("0123456789"));
+        Ok(())
+    }
+
+    #[test]
     fn task_lifecycle_events_drain_into_pending_run_artifact() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
