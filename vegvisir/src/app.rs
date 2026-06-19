@@ -45,7 +45,7 @@ use crate::{
     run_artifacts::{RunArtifactManager, RunFailure, RunManifest, RunStatus},
     speech::{ActiveSpeechRecording, DEFAULT_PTT_KEY, DEFAULT_PTT_SECONDS, PushToTalkKey},
     subagents::{SubAgentStatus, SubAgentTaskRecord},
-    tasks::{TaskKind, TaskManager, TaskSpawnRequest},
+    tasks::{TaskKind, TaskManager, TaskRunRequest, TaskRunner, TaskRunnerEvent, TaskSpawnRequest},
     tools::{
         DEFAULT_ACTIVE_SUBAGENT_LIMIT, SubagentProviderDefaults, SubagentSpawnDefaults,
         ToolExecutor, ToolRegistry, build_builtin_registry_with_cms_mode_subagent_config,
@@ -86,6 +86,7 @@ pub struct TuiApplication {
     pub tool_registry: ToolRegistry,
     pub tool_executor: ToolExecutor,
     pub task_manager: TaskManager,
+    pub task_runner: TaskRunner,
     pub active_tool_tasks: BTreeMap<String, String>,
     pub profile_store: UserProfileStore,
     pub user_profile: UserProfile,
@@ -855,6 +856,7 @@ impl TuiApplication {
             tool_registry,
             tool_executor,
             task_manager: TaskManager::new(),
+            task_runner: TaskRunner::new(),
             active_tool_tasks: BTreeMap::new(),
             profile_store,
             user_profile,
@@ -3768,6 +3770,68 @@ mod tests {
         assert!(runtime_events.contains("task_output"));
         assert!(runtime_events.contains("task_completed"));
         assert!(runtime_events.contains("shell-000001"));
+        Ok(())
+    }
+
+    #[test]
+    fn tasks_run_command_spawns_and_polls_background_shell_task() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.risky_tools_enabled = true;
+        app.tool_executor.guardrails.policy.allow_risky_tools = true;
+
+        let response = app
+            .execute_command("/tasks run --timeout=10 -- python3 -c print(12345)")?
+            .unwrap();
+        assert!(response.contains("Spawned background shell task"));
+        assert_eq!(app.task_runner.running_count(), 1);
+
+        let task_id = app.task_manager.records()[0].id.clone();
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        while Instant::now() < deadline {
+            app.poll_task_runner();
+            if !app.task_runner.is_running(&task_id) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        let record = app.task_manager.record(&task_id).unwrap();
+        assert_eq!(record.state, crate::tasks::TaskState::Completed);
+        assert_eq!(record.exit_code, Some(0));
+        assert!(record.retained_output.contains("12345"));
+        let persisted = std::fs::read_to_string(&record.output_file)?;
+        assert!(persisted.contains("12345"));
+        Ok(())
+    }
+
+    #[test]
+    fn tasks_cancel_command_requests_background_task_cancellation() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.risky_tools_enabled = true;
+        app.tool_executor.guardrails.policy.allow_risky_tools = true;
+
+        app.execute_command("/tasks run --timeout=60 -- python3 -c __import__('time').sleep(30)")?;
+        let task_id = app.task_manager.records()[0].id.clone();
+        let cancel = app
+            .execute_command(&format!("/tasks cancel {task_id}"))?
+            .unwrap();
+        assert!(cancel.contains("Cancellation requested"));
+
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        while Instant::now() < deadline {
+            app.poll_task_runner();
+            if !app.task_runner.is_running(&task_id) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        assert_eq!(
+            app.task_manager.record(&task_id).unwrap().state,
+            crate::tasks::TaskState::Cancelled
+        );
         Ok(())
     }
 

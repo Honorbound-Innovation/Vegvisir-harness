@@ -1,11 +1,25 @@
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fs::OpenOptions,
+    io::{BufRead, BufReader, Write},
+    path::PathBuf,
+    process::{Child, Command, Stdio},
+    sync::mpsc::{self, Receiver, TryRecvError},
+    thread::{self, JoinHandle},
+    time::{Duration, Instant},
+};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::events::{TaskCompleted, TaskOutput, TaskStarted, TaskStatus, VegvisirEvent};
+use crate::{
+    command_sandbox::{CommandSandboxConfig, build_sandboxed_command},
+    events::{TaskCompleted, TaskOutput, TaskStarted, TaskStatus, VegvisirEvent},
+};
 
 const DEFAULT_OUTPUT_RETENTION_BYTES: usize = 64 * 1024;
+const DEFAULT_BACKGROUND_TIMEOUT_SECONDS: u64 = 30 * 60;
+const DEFAULT_BACKGROUND_STALL_SECONDS: u64 = 10 * 60;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -478,6 +492,367 @@ impl TaskManager {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TaskRunRequest {
+    pub kind: TaskKind,
+    pub description: String,
+    pub command: Vec<String>,
+    pub workspace: PathBuf,
+    pub owner_run_id: String,
+    pub owner_agent_id: Option<String>,
+    pub timeout: Duration,
+    pub stall_timeout: Option<Duration>,
+}
+
+impl TaskRunRequest {
+    pub fn shell(
+        command: Vec<String>,
+        workspace: impl Into<PathBuf>,
+        owner_run_id: impl Into<String>,
+    ) -> Self {
+        let description = command.join(" ");
+        Self {
+            kind: TaskKind::Shell,
+            description,
+            command,
+            workspace: workspace.into(),
+            owner_run_id: owner_run_id.into(),
+            owner_agent_id: None,
+            timeout: Duration::from_secs(DEFAULT_BACKGROUND_TIMEOUT_SECONDS),
+            stall_timeout: Some(Duration::from_secs(DEFAULT_BACKGROUND_STALL_SECONDS)),
+        }
+    }
+
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into();
+        self
+    }
+
+    pub fn owner_agent_id(mut self, owner_agent_id: impl Into<String>) -> Self {
+        self.owner_agent_id = Some(owner_agent_id.into());
+        self
+    }
+
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
+    pub fn stall_timeout(mut self, stall_timeout: Option<Duration>) -> Self {
+        self.stall_timeout = stall_timeout;
+        self
+    }
+}
+
+#[derive(Debug)]
+pub enum TaskRunnerEvent {
+    Output { task_id: String, chunk: String },
+    Completed { task_id: String, exit_code: i32 },
+    Cancelled { task_id: String },
+    TimedOut { task_id: String },
+    Failed { task_id: String, error: String },
+}
+
+#[derive(Debug)]
+struct RunningTask {
+    child: Child,
+    output_rx: Receiver<String>,
+    output_threads: Vec<JoinHandle<()>>,
+    started_at: Instant,
+    last_output_at: Instant,
+    timeout: Duration,
+    stall_timeout: Option<Duration>,
+    cancel_requested: bool,
+    timeout_requested: bool,
+}
+
+#[derive(Debug, Default)]
+pub struct TaskRunner {
+    running: HashMap<String, RunningTask>,
+}
+
+impl TaskRunner {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn is_running(&self, id: &str) -> bool {
+        self.running.contains_key(id)
+    }
+
+    pub fn running_count(&self) -> usize {
+        self.running.len()
+    }
+
+    pub fn spawn_background(
+        &mut self,
+        manager: &mut TaskManager,
+        request: TaskRunRequest,
+        sandbox_config: &CommandSandboxConfig,
+    ) -> anyhow::Result<String> {
+        if request.command.is_empty() {
+            anyhow::bail!("Empty task command");
+        }
+        let command_display = request.command.join(" ");
+        let task_id = manager.register(
+            TaskSpawnRequest::new(
+                request.kind,
+                request.description,
+                request.workspace.clone(),
+                request.owner_run_id,
+            )
+            .command(command_display)
+            .owner_agent_id_optional(request.owner_agent_id),
+        );
+        manager.background(&task_id)?;
+        let record = manager
+            .record(&task_id)
+            .ok_or_else(|| anyhow::anyhow!("task disappeared after registration: {task_id}"))?;
+        if let Some(parent) = record.output_file.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&record.output_file)?;
+
+        let parts = request
+            .command
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let sandboxed_command = match build_sandboxed_command(&parts, sandbox_config) {
+            Ok(command) => command,
+            Err(error) => {
+                let message = format!(
+                    "Task spawn failed before process start: {error}
+"
+                );
+                let _ = append_output_file(&record.output_file, &message);
+                let _ = manager.append_output(&task_id, &message);
+                let _ = manager.complete(&task_id, 1);
+                return Err(error);
+            }
+        };
+        let mut command = Command::new(&sandboxed_command.program);
+        command
+            .args(&sandboxed_command.args)
+            .current_dir(&sandboxed_command.current_dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = match spawn_command_in_own_process_group(&mut command) {
+            Ok(child) => child,
+            Err(error) => {
+                let message = format!(
+                    "Task process spawn failed: {error}
+"
+                );
+                let _ = append_output_file(&record.output_file, &message);
+                let _ = manager.append_output(&task_id, &message);
+                let _ = manager.complete(&task_id, 1);
+                return Err(error.into());
+            }
+        };
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        let (output_tx, output_rx) = mpsc::channel();
+        let output_file = record.output_file.clone();
+        let mut output_threads = Vec::new();
+        if let Some(stdout) = stdout {
+            output_threads.push(spawn_output_reader(
+                stdout,
+                output_tx.clone(),
+                output_file.clone(),
+            ));
+        }
+        if let Some(stderr) = stderr {
+            output_threads.push(spawn_output_reader(stderr, output_tx, output_file));
+        }
+        let now = Instant::now();
+        self.running.insert(
+            task_id.clone(),
+            RunningTask {
+                child,
+                output_rx,
+                output_threads,
+                started_at: now,
+                last_output_at: now,
+                timeout: request.timeout,
+                stall_timeout: request.stall_timeout,
+                cancel_requested: false,
+                timeout_requested: false,
+            },
+        );
+        Ok(task_id)
+    }
+
+    pub fn cancel(&mut self, id: &str) -> anyhow::Result<()> {
+        let Some(task) = self.running.get_mut(id) else {
+            anyhow::bail!("task is not running: {id}");
+        };
+        task.cancel_requested = true;
+        terminate_child_process_group(&mut task.child);
+        Ok(())
+    }
+
+    pub fn poll(&mut self) -> Vec<TaskRunnerEvent> {
+        let mut events = Vec::new();
+        let ids = self.running.keys().cloned().collect::<Vec<_>>();
+        for task_id in ids {
+            let Some(task) = self.running.get_mut(&task_id) else {
+                continue;
+            };
+            loop {
+                match task.output_rx.try_recv() {
+                    Ok(chunk) => {
+                        task.last_output_at = Instant::now();
+                        events.push(TaskRunnerEvent::Output {
+                            task_id: task_id.clone(),
+                            chunk,
+                        });
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => break,
+                }
+            }
+
+            let now = Instant::now();
+            let timed_out = now.duration_since(task.started_at) >= task.timeout;
+            let stalled = task
+                .stall_timeout
+                .is_some_and(|timeout| now.duration_since(task.last_output_at) >= timeout);
+            if (timed_out || stalled) && !task.timeout_requested {
+                task.timeout_requested = true;
+                terminate_child_process_group(&mut task.child);
+            }
+
+            match task.child.try_wait() {
+                Ok(Some(status)) => {
+                    let mut task = self.running.remove(&task_id).expect("running task exists");
+                    drain_remaining_output(&mut task, &task_id, &mut events);
+                    join_output_threads(task.output_threads);
+                    if task.cancel_requested {
+                        events.push(TaskRunnerEvent::Cancelled { task_id });
+                    } else if task.timeout_requested {
+                        events.push(TaskRunnerEvent::TimedOut { task_id });
+                    } else {
+                        events.push(TaskRunnerEvent::Completed {
+                            task_id,
+                            exit_code: status.code().unwrap_or(-1),
+                        });
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    let mut task = self.running.remove(&task_id).expect("running task exists");
+                    terminate_child_process_group(&mut task.child);
+                    join_output_threads(task.output_threads);
+                    events.push(TaskRunnerEvent::Failed {
+                        task_id,
+                        error: error.to_string(),
+                    });
+                }
+            }
+        }
+        events
+    }
+}
+
+trait TaskSpawnRequestExt {
+    fn owner_agent_id_optional(self, owner_agent_id: Option<String>) -> Self;
+}
+
+impl TaskSpawnRequestExt for TaskSpawnRequest {
+    fn owner_agent_id_optional(mut self, owner_agent_id: Option<String>) -> Self {
+        self.owner_agent_id = owner_agent_id;
+        self
+    }
+}
+
+fn spawn_output_reader<R>(
+    reader: R,
+    output_tx: mpsc::Sender<String>,
+    output_file: PathBuf,
+) -> JoinHandle<()>
+where
+    R: std::io::Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut reader = BufReader::new(reader);
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            match reader.read_until(b'\n', &mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    let chunk = String::from_utf8_lossy(&line).to_string();
+                    let _ = append_output_file(&output_file, &chunk);
+                    if output_tx.send(chunk).is_err() {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    let _ = output_tx.send(format!("[task output read error: {error}]\n"));
+                    break;
+                }
+            }
+        }
+    })
+}
+
+fn append_output_file(path: &std::path::Path, chunk: &str) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    file.write_all(chunk.as_bytes())?;
+    Ok(())
+}
+
+fn drain_remaining_output(
+    task: &mut RunningTask,
+    task_id: &str,
+    events: &mut Vec<TaskRunnerEvent>,
+) {
+    while let Ok(chunk) = task.output_rx.try_recv() {
+        events.push(TaskRunnerEvent::Output {
+            task_id: task_id.to_string(),
+            chunk,
+        });
+    }
+}
+
+fn join_output_threads(threads: Vec<JoinHandle<()>>) {
+    for thread in threads {
+        let _ = thread.join();
+    }
+}
+
+fn spawn_command_in_own_process_group(command: &mut Command) -> std::io::Result<Child> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    command.spawn()
+}
+
+fn terminate_child_process_group(child: &mut Child) {
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(-(child.id() as i32), libc::SIGKILL);
+    }
+    let _ = child.kill();
+}
+
 fn truncate_to_tail(text: &mut String, max_bytes: usize) -> bool {
     if max_bytes == 0 {
         let truncated = !text.is_empty();
@@ -710,5 +1085,93 @@ mod tests {
         let drained = manager.drain_events();
         assert_eq!(drained.len(), 1);
         assert!(manager.events().is_empty());
+    }
+
+    #[test]
+    fn task_runner_spawns_streams_and_completes_background_command() -> anyhow::Result<()> {
+        let workspace = tempfile::tempdir()?;
+        let mut manager = TaskManager::new();
+        let mut runner = TaskRunner::new();
+        let config = CommandSandboxConfig::path_only(workspace.path());
+        let id = runner.spawn_background(
+            &mut manager,
+            TaskRunRequest::shell(
+                vec![
+                    "python3".to_string(),
+                    "-c".to_string(),
+                    "print('hello task')".to_string(),
+                ],
+                workspace.path(),
+                "run-1",
+            )
+            .timeout(Duration::from_secs(10)),
+            &config,
+        )?;
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            for event in runner.poll() {
+                match event {
+                    TaskRunnerEvent::Output { task_id, chunk } => {
+                        manager.append_output(&task_id, &chunk)?;
+                    }
+                    TaskRunnerEvent::Completed { task_id, exit_code } => {
+                        manager.complete(&task_id, exit_code)?;
+                    }
+                    other => panic!("unexpected event: {other:?}"),
+                }
+            }
+            if !runner.is_running(&id) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        let record = manager.record(&id).unwrap();
+        assert_eq!(record.state, TaskState::Completed);
+        assert_eq!(record.exit_code, Some(0));
+        assert!(record.retained_output.contains("hello task"));
+        let persisted = std::fs::read_to_string(&record.output_file)?;
+        assert!(persisted.contains("hello task"));
+        Ok(())
+    }
+
+    #[test]
+    fn task_runner_cancels_background_command() -> anyhow::Result<()> {
+        let workspace = tempfile::tempdir()?;
+        let mut manager = TaskManager::new();
+        let mut runner = TaskRunner::new();
+        let config = CommandSandboxConfig::path_only(workspace.path());
+        let id = runner.spawn_background(
+            &mut manager,
+            TaskRunRequest::shell(
+                vec![
+                    "python3".to_string(),
+                    "-c".to_string(),
+                    "import time; time.sleep(30)".to_string(),
+                ],
+                workspace.path(),
+                "run-1",
+            )
+            .timeout(Duration::from_secs(60)),
+            &config,
+        )?;
+
+        runner.cancel(&id)?;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            for event in runner.poll() {
+                if let TaskRunnerEvent::Cancelled { task_id } = event {
+                    manager.cancel(&task_id)?;
+                }
+            }
+            if !runner.is_running(&id) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        assert_eq!(manager.record(&id).unwrap().state, TaskState::Cancelled);
+        Ok(())
     }
 }

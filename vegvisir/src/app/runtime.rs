@@ -815,6 +815,144 @@ Steering: {display_content}{attachment_note}"
         Ok(())
     }
 
+    pub(crate) fn poll_task_runner(&mut self) -> bool {
+        let events = self.task_runner.poll();
+        if events.is_empty() {
+            return false;
+        }
+        let mut changed = false;
+        for event in events {
+            match event {
+                TaskRunnerEvent::Output { task_id, chunk } => {
+                    if let Err(error) = self.task_manager.append_output(&task_id, &chunk) {
+                        self.push_system_message(format!(
+                            "Warning: failed to append task runner output for {task_id}: {error}"
+                        ));
+                    }
+                    changed = true;
+                }
+                TaskRunnerEvent::Completed { task_id, exit_code } => {
+                    if let Err(error) = self.task_manager.complete(&task_id, exit_code) {
+                        self.push_system_message(format!(
+                            "Warning: failed to complete task runner task {task_id}: {error}"
+                        ));
+                    } else {
+                        self.push_system_message(format!(
+                            "Task {task_id} completed with exit_code={exit_code}."
+                        ));
+                    }
+                    changed = true;
+                }
+                TaskRunnerEvent::Cancelled { task_id } => {
+                    if let Err(error) = self.task_manager.cancel(&task_id) {
+                        self.push_system_message(format!(
+                            "Warning: failed to cancel task runner task {task_id}: {error}"
+                        ));
+                    } else {
+                        self.push_system_message(format!("Task {task_id} cancelled."));
+                    }
+                    changed = true;
+                }
+                TaskRunnerEvent::TimedOut { task_id } => {
+                    if self
+                        .task_manager
+                        .record(&task_id)
+                        .is_some_and(|record| !record.is_terminal())
+                    {
+                        if let Err(error) = self.task_manager.timeout(&task_id) {
+                            self.push_system_message(format!(
+                                "Warning: failed to timeout task runner task {task_id}: {error}"
+                            ));
+                        } else {
+                            self.push_system_message(format!("Task {task_id} timed out."));
+                        }
+                    }
+                    changed = true;
+                }
+                TaskRunnerEvent::Failed { task_id, error } => {
+                    if let Err(transition_error) = self.task_manager.complete(&task_id, 1) {
+                        self.push_system_message(format!(
+                            "Warning: failed to mark task runner task {task_id} failed after {error}: {transition_error}"
+                        ));
+                    } else {
+                        self.push_system_message(format!("Task {task_id} failed: {error}"));
+                    }
+                    changed = true;
+                }
+            }
+        }
+        self.drain_task_lifecycle_events_to_run_artifact();
+        self.autosave_session();
+        self.redraw_requested = true;
+        changed
+    }
+
+    pub(crate) fn spawn_background_shell_task(
+        &mut self,
+        command: Vec<String>,
+        timeout_seconds: u64,
+        stall_timeout_seconds: Option<u64>,
+    ) -> anyhow::Result<String> {
+        self.authorize_background_shell_command(&command)?;
+        let owner_run_id = self
+            .pending_run_artifact
+            .as_ref()
+            .map(|(manager, _)| manager.run_id.clone())
+            .unwrap_or_else(|| self.session.session_id.clone());
+        let mut request = TaskRunRequest::shell(command, self.cwd.clone(), owner_run_id)
+            .timeout(Duration::from_secs(timeout_seconds.clamp(1, 86_400)))
+            .stall_timeout(
+                stall_timeout_seconds.map(|seconds| Duration::from_secs(seconds.max(1))),
+            );
+        if let Some(agent_id) = &self.session.active_agent_id {
+            request = request.owner_agent_id(agent_id.clone());
+        }
+        let sandbox_config = crate::command_sandbox::CommandSandboxConfig::from_env(
+            self.cwd.clone(),
+            self.dangerously_bypass_approvals_and_sandbox,
+        )?;
+        let task_id =
+            self.task_runner
+                .spawn_background(&mut self.task_manager, request, &sandbox_config)?;
+        self.push_system_message(format!(
+            "Spawned background shell task {task_id}. Use /tasks show {task_id} or /tasks cancel {task_id}."
+        ));
+        self.drain_task_lifecycle_events_to_run_artifact();
+        self.redraw_requested = true;
+        Ok(task_id)
+    }
+
+    pub(crate) fn cancel_background_task(&mut self, task_id: &str) -> anyhow::Result<()> {
+        self.task_runner.cancel(task_id)?;
+        self.push_system_message(format!("Cancellation requested for task {task_id}."));
+        self.redraw_requested = true;
+        Ok(())
+    }
+
+    fn authorize_background_shell_command(&mut self, command: &[String]) -> anyhow::Result<()> {
+        if command.is_empty() {
+            anyhow::bail!("Empty task command");
+        }
+        let args = serde_json::json!({"command": command})
+            .as_object()
+            .cloned()
+            .expect("object literal");
+        let tool = self.tool_executor.registry.get("run_command")?.clone();
+        self.tool_executor.guardrails.authorize_tool(&tool, &args)?;
+        if !self
+            .tool_executor
+            .guardrails
+            .policy
+            .bypass_approvals_and_sandbox
+        {
+            self.tool_executor
+                .runtime_policy
+                .authorize_tool("run_command", &args, &self.logger)
+                .map_err(anyhow::Error::msg)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn drain_task_lifecycle_events_to_run_artifact(&mut self) {
         let Some(manager) = self
             .pending_run_artifact

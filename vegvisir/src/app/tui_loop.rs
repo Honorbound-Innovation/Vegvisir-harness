@@ -57,6 +57,7 @@ impl TuiApplication {
             self.turn_repair(false);
             self.poll_autonomy_controller();
             self.poll_background_jobs();
+            self.poll_task_runner();
             if self.pending_editor_action.is_some() {
                 run_pending_editor_action(self, &mut terminal, &mut mouse_capture_applied)?;
             }
@@ -99,6 +100,7 @@ impl TuiApplication {
         self.redraw_requested
             || !self.pending_background_jobs.is_empty()
             || !self.pending_speech_jobs.is_empty()
+            || self.task_runner.running_count() > 0
             || self.active_speech_recording.is_some()
     }
 
@@ -106,6 +108,7 @@ impl TuiApplication {
         self.poll_stream_events();
         self.poll_pending_send();
         self.poll_background_jobs();
+        self.poll_task_runner();
     }
 }
 
