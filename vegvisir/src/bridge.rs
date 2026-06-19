@@ -1528,6 +1528,156 @@ fn continue_or_execute_approved_request(
     )
 }
 
+const NATIVE_BRIDGE_METHODS: &[&str] = &[
+    "initialize",
+    "initialized",
+    "thread/start",
+    "turn/start",
+    "model/list",
+    "session.status",
+    "session.start",
+    "workspace.switch",
+    "session.messages",
+    "session.list",
+    "session.load",
+    "session.exportMarkdown",
+    "turn.send",
+    "command.run",
+    "command.invoke",
+    "commands.list",
+    "commands.suggest",
+    "commands.describe",
+    "bridge.ping",
+    "ping",
+    "bridge.heartbeat",
+    "session.heartbeat",
+    "bridge.lease",
+    "session.lease",
+    "bridge.capabilities",
+    "provider.select",
+    "model.select",
+    "agent.select",
+    "effort.status",
+    "effort.set",
+    "fast.status",
+    "fast.set",
+    "toolLimit.status",
+    "toolLimit.set",
+    "runtime.status",
+    "openai.compat.info",
+    "workspace.status",
+    "tools.list",
+    "providers.list",
+    "models.list",
+    "hbse.onboarding.providers",
+    "agents.list",
+    "approvals.list",
+    "control.respond",
+    "controlRequests.respond",
+    "approvals.approveOnce",
+    "approvals.approveOnceAndExecute",
+    "approvals.approveSession",
+    "approvals.approveSessionAndExecute",
+    "approvals.deny",
+    "approvals.edit",
+    "diff.current",
+    "memory.status",
+    "system.prompt",
+    "system.prompt.set",
+    "shutdown",
+];
+
+#[derive(Clone, Copy)]
+struct BridgeMethodClassification {
+    class: &'static str,
+    side_effect: &'static str,
+    data_sensitivity: &'static str,
+    remote_safe: bool,
+    requires_trust: bool,
+}
+
+impl BridgeMethodClassification {
+    const fn read_low() -> Self {
+        Self {
+            class: "read",
+            side_effect: "none",
+            data_sensitivity: "low",
+            remote_safe: true,
+            requires_trust: false,
+        }
+    }
+
+    const fn read_workspace() -> Self {
+        Self {
+            class: "read",
+            side_effect: "none",
+            data_sensitivity: "workspace",
+            remote_safe: false,
+            requires_trust: true,
+        }
+    }
+
+    const fn lifecycle() -> Self {
+        Self {
+            class: "lifecycle",
+            side_effect: "session_state",
+            data_sensitivity: "workspace",
+            remote_safe: false,
+            requires_trust: true,
+        }
+    }
+
+    const fn mutation() -> Self {
+        Self {
+            class: "mutation",
+            side_effect: "state_mutation",
+            data_sensitivity: "workspace",
+            remote_safe: false,
+            requires_trust: true,
+        }
+    }
+
+    const fn execution() -> Self {
+        Self {
+            class: "execution",
+            side_effect: "model_or_command_execution",
+            data_sensitivity: "workspace",
+            remote_safe: false,
+            requires_trust: true,
+        }
+    }
+
+    const fn approval() -> Self {
+        Self {
+            class: "approval_control",
+            side_effect: "approval_ledger_mutation",
+            data_sensitivity: "approval_args",
+            remote_safe: false,
+            requires_trust: true,
+        }
+    }
+
+    const fn security() -> Self {
+        Self {
+            class: "security_configuration",
+            side_effect: "security_policy_mutation",
+            data_sensitivity: "policy",
+            remote_safe: false,
+            requires_trust: true,
+        }
+    }
+
+    const fn shutdown() -> Self {
+        Self {
+            class: "shutdown",
+            side_effect: "process_shutdown",
+            data_sensitivity: "low",
+            remote_safe: false,
+            requires_trust: true,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct CommandBackedBridgeSpec {
     method: &'static str,
@@ -2330,83 +2480,241 @@ fn bridge_capabilities(app: &TuiApplication) -> Value {
     let command_backed_methods = COMMAND_BACKED_BRIDGE_SPECS
         .iter()
         .map(|spec| {
+            let classification = classify_command_backed_method(spec);
             json!({
                 "method": spec.method,
                 "event": spec.event_kind,
                 "command": spec.command,
                 "default_subcommand": spec.default_subcommand,
+                "classification": bridge_classification_value(classification),
+                "remote_safe": classification.remote_safe,
+                "requires_trust": classification.requires_trust,
             })
         })
         .collect::<Vec<_>>();
+    let method_registry = bridge_method_registry();
     let security_posture = bridge_security_posture(app);
     json!({
         "session": snapshot(app),
         "security_posture": security_posture,
         "securityPosture": security_posture,
-        "native_methods": [
-            "initialize",
-            "initialized",
-            "thread/start",
-            "turn/start",
-            "model/list",
-            "session.status",
-            "session.start",
-            "workspace.switch",
-            "session.messages",
-            "session.list",
-            "session.load",
-            "session.exportMarkdown",
-            "turn.send",
-            "command.run",
-            "command.invoke",
-            "commands.list",
-            "commands.suggest",
-            "commands.describe",
-            "bridge.ping",
-            "ping",
-            "bridge.heartbeat",
-            "session.heartbeat",
-            "bridge.lease",
-            "session.lease",
-            "bridge.capabilities",
-            "provider.select",
-            "model.select",
-            "agent.select",
-            "effort.status",
-            "effort.set",
-            "fast.status",
-            "fast.set",
-            "toolLimit.status",
-            "toolLimit.set",
-            "runtime.status",
-            "openai.compat.info",
-            "workspace.status",
-            "tools.list",
-            "providers.list",
-            "models.list",
-            "hbse.onboarding.providers",
-            "agents.list",
-            "approvals.list",
-            "control.respond",
-            "controlRequests.respond",
-            "approvals.approveOnce",
-            "approvals.approveOnceAndExecute",
-            "approvals.approveSession",
-            "approvals.approveSessionAndExecute",
-            "approvals.deny",
-            "approvals.edit",
-            "diff.current",
-            "memory.status",
-            "system.prompt",
-            "system.prompt.set",
-            "shutdown"
-        ],
+        "native_methods": NATIVE_BRIDGE_METHODS,
+        "method_registry": method_registry,
+        "methodRegistry": method_registry,
         "lease": bridge_lease_capabilities(),
         "sessionLease": bridge_lease_capabilities(),
         "command_backed_methods": command_backed_methods,
         "commands": app.commands.all().into_iter().collect::<Vec<_>>(),
-        "note": "command-backed methods execute the same Vegvisir slash-command handlers as the TUI and return structured envelope metadata plus command text output; command.invoke remains the universal escape hatch.",
+        "note": "command-backed methods execute the same Vegvisir slash-command handlers as the TUI and return structured envelope metadata plus command text output; command.invoke remains the universal escape hatch. Capability classification is metadata-only in this slice; actual execution still routes through GuardrailEngine, RuntimePolicy, approval ledger, and sandbox.",
     })
+}
+
+fn bridge_method_registry() -> Value {
+    let native = NATIVE_BRIDGE_METHODS
+        .iter()
+        .map(|method| {
+            let classification = classify_native_bridge_method(method);
+            json!({
+                "method": method,
+                "kind": "native",
+                "classification": bridge_classification_value(classification),
+                "remote_safe": classification.remote_safe,
+                "requires_trust": classification.requires_trust,
+            })
+        })
+        .collect::<Vec<_>>();
+    let command_backed = COMMAND_BACKED_BRIDGE_SPECS
+        .iter()
+        .map(|spec| {
+            let classification = classify_command_backed_method(spec);
+            json!({
+                "method": spec.method,
+                "kind": "command_backed",
+                "command": spec.command,
+                "default_subcommand": spec.default_subcommand,
+                "classification": bridge_classification_value(classification),
+                "remote_safe": classification.remote_safe,
+                "requires_trust": classification.requires_trust,
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "schema_version": 1,
+        "enforcement": "metadata_only",
+        "remote_safe_policy": "Only remote_safe=true methods are suitable for untrusted remote wrappers. All methods still rely on stdio locality plus GuardrailEngine/RuntimePolicy/ApprovalLedger enforcement.",
+        "native": native,
+        "command_backed": command_backed,
+    })
+}
+
+fn bridge_classification_value(classification: BridgeMethodClassification) -> Value {
+    json!({
+        "class": classification.class,
+        "side_effect": classification.side_effect,
+        "data_sensitivity": classification.data_sensitivity,
+        "remote_safe": classification.remote_safe,
+        "requires_trust": classification.requires_trust,
+    })
+}
+
+fn classify_native_bridge_method(method: &str) -> BridgeMethodClassification {
+    match method {
+        "initialize"
+        | "initialized"
+        | "model/list"
+        | "session.status"
+        | "commands.list"
+        | "commands.suggest"
+        | "commands.describe"
+        | "bridge.ping"
+        | "ping"
+        | "bridge.heartbeat"
+        | "session.heartbeat"
+        | "bridge.lease"
+        | "session.lease"
+        | "bridge.capabilities"
+        | "runtime.status"
+        | "openai.compat.info"
+        | "workspace.status"
+        | "tools.list"
+        | "providers.list"
+        | "models.list"
+        | "hbse.onboarding.providers"
+        | "agents.list"
+        | "memory.status" => BridgeMethodClassification::read_low(),
+        "session.messages"
+        | "session.list"
+        | "session.exportMarkdown"
+        | "approvals.list"
+        | "diff.current"
+        | "system.prompt" => BridgeMethodClassification::read_workspace(),
+        "thread/start" | "session.start" | "workspace.switch" | "session.load"
+        | "provider.select" | "model.select" | "agent.select" | "effort.set" | "fast.set"
+        | "toolLimit.set" | "system.prompt.set" => BridgeMethodClassification::lifecycle(),
+        "turn/start" | "turn.send" | "command.run" | "command.invoke" => {
+            BridgeMethodClassification::execution()
+        }
+        "control.respond"
+        | "controlRequests.respond"
+        | "approvals.approveOnce"
+        | "approvals.approveOnceAndExecute"
+        | "approvals.approveSession"
+        | "approvals.approveSessionAndExecute"
+        | "approvals.deny"
+        | "approvals.edit" => BridgeMethodClassification::approval(),
+        "shutdown" => BridgeMethodClassification::shutdown(),
+        _ => BridgeMethodClassification::mutation(),
+    }
+}
+
+fn classify_command_backed_method(spec: &CommandBackedBridgeSpec) -> BridgeMethodClassification {
+    let method = spec.method;
+    let subcommand = spec.default_subcommand.unwrap_or_default();
+    match spec.command {
+        "/tools"
+            if matches!(
+                subcommand,
+                "allow-risky" | "deny-risky" | "require-approval" | "no-approval"
+            ) =>
+        {
+            BridgeMethodClassification::security()
+        }
+        "/mcp"
+            if matches!(
+                subcommand,
+                "add-http"
+                    | "add-http-service"
+                    | "add-stdio"
+                    | "add-tool"
+                    | "remove-tool"
+                    | "remove"
+                    | "enable"
+                    | "disable"
+                    | "reload"
+            ) =>
+        {
+            BridgeMethodClassification::security()
+        }
+        "/memory"
+            if matches!(
+                subcommand,
+                "remember" | "import-chatgpt" | "quarantine" | "forget" | "export"
+            ) =>
+        {
+            BridgeMethodClassification::mutation()
+        }
+        "/skills"
+            if matches!(
+                subcommand,
+                "compile"
+                    | "forge"
+                    | "patch"
+                    | "curate"
+                    | "promote"
+                    | "archive"
+                    | "config"
+                    | "invoke"
+            ) =>
+        {
+            BridgeMethodClassification::execution()
+        }
+        "/agent" if matches!(subcommand, "create" | "design" | "delete" | "clear") => {
+            BridgeMethodClassification::mutation()
+        }
+        "/subagents" if matches!(subcommand, "cancel" | "max" | "config") => {
+            BridgeMethodClassification::mutation()
+        }
+        "/ka"
+            if matches!(
+                subcommand,
+                "set" | "create" | "import" | "edit" | "clear" | "default"
+            ) =>
+        {
+            BridgeMethodClassification::mutation()
+        }
+        "/profile" if matches!(subcommand, "init" | "set" | "add" | "remove" | "clear") => {
+            BridgeMethodClassification::mutation()
+        }
+        "/speech" if matches!(subcommand, "transcribe" | "ptt" | "ptt-key" | "ptt-seconds") => {
+            BridgeMethodClassification::execution()
+        }
+        "/tts" | "/verify" | "/eval" => BridgeMethodClassification::execution(),
+        _ if method.starts_with("session.")
+            && !matches!(
+                method,
+                "session.history" | "session.summary" | "session.handoff"
+            ) =>
+        {
+            BridgeMethodClassification::lifecycle()
+        }
+        _ if method.starts_with("runtime.") => BridgeMethodClassification::lifecycle(),
+        _ if method.starts_with("projects.") && method != "projects.list" => {
+            BridgeMethodClassification::mutation()
+        }
+        _ if method.ends_with(".list")
+            || method.ends_with(".status")
+            || method.ends_with(".show")
+            || method.ends_with(".explain")
+            || method.ends_with(".path")
+            || method.ends_with(".templates")
+            || method.ends_with(".timeline")
+            || method.ends_with(".events")
+            || method.ends_with(".artifacts")
+            || method.ends_with(".ownership")
+            || method.ends_with(".policy")
+            || method.ends_with(".authMap")
+            || method.ends_with(".tools")
+            || method.ends_with(".services")
+            || method.ends_with(".usageThisSession")
+            || method.ends_with(".usageThisRun")
+            || method == "auth.status"
+            || method == "trace.list"
+            || method == "work.list" =>
+        {
+            BridgeMethodClassification::read_workspace()
+        }
+        _ => BridgeMethodClassification::mutation(),
+    }
 }
 
 fn bridge_lease_capabilities() -> Value {
@@ -3030,6 +3338,62 @@ mod tests {
         );
         assert_eq!(capabilities["lease"]["mode"], "process_scoped_stdio");
         assert_eq!(capabilities["lease"]["timeout_enforced"], false);
+        Ok(())
+    }
+
+    #[test]
+    fn bridge_capabilities_classify_remote_safe_and_trusted_methods() -> anyhow::Result<()> {
+        let (_tmp, app) = test_app()?;
+        let capabilities = bridge_capabilities(&app);
+        let native = capabilities["method_registry"]["native"]
+            .as_array()
+            .expect("native method registry");
+        let command_backed = capabilities["method_registry"]["command_backed"]
+            .as_array()
+            .expect("command-backed method registry");
+
+        let native_method = |name: &str| {
+            native
+                .iter()
+                .find(|entry| entry["method"] == name)
+                .unwrap_or_else(|| panic!("missing native method {name}"))
+        };
+        let command_method = |name: &str| {
+            command_backed
+                .iter()
+                .find(|entry| entry["method"] == name)
+                .unwrap_or_else(|| panic!("missing command-backed method {name}"))
+        };
+
+        assert_eq!(native_method("bridge.ping")["remote_safe"], true);
+        assert_eq!(native_method("turn.send")["remote_safe"], false);
+        assert_eq!(
+            native_method("turn.send")["classification"]["class"],
+            "execution"
+        );
+        assert_eq!(native_method("control.respond")["remote_safe"], false);
+        assert_eq!(
+            native_method("control.respond")["classification"]["class"],
+            "approval_control"
+        );
+        assert_eq!(
+            native_method("shutdown")["classification"]["class"],
+            "shutdown"
+        );
+
+        assert_eq!(command_method("tools.status")["remote_safe"], false);
+        assert_eq!(
+            command_method("tools.allowRisky")["classification"]["class"],
+            "security_configuration"
+        );
+        assert_eq!(
+            command_method("mcp.addHttp")["classification"]["class"],
+            "security_configuration"
+        );
+        assert_eq!(
+            command_method("verify.run")["classification"]["class"],
+            "execution"
+        );
         Ok(())
     }
 
