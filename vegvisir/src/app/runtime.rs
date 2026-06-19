@@ -838,7 +838,7 @@ Steering: {display_content}{attachment_note}"
                         ));
                     } else {
                         self.push_system_message(format!(
-                            "Task {task_id} completed with exit_code={exit_code}."
+                            "Task {task_id} completed with exit_code={exit_code}. Use /tasks show {task_id} or /tasks tail {task_id}."
                         ));
                     }
                     changed = true;
@@ -849,7 +849,9 @@ Steering: {display_content}{attachment_note}"
                             "Warning: failed to cancel task runner task {task_id}: {error}"
                         ));
                     } else {
-                        self.push_system_message(format!("Task {task_id} cancelled."));
+                        self.push_system_message(format!(
+                            "Task {task_id} cancelled. Use /tasks show {task_id} for details."
+                        ));
                     }
                     changed = true;
                 }
@@ -864,7 +866,9 @@ Steering: {display_content}{attachment_note}"
                                 "Warning: failed to timeout task runner task {task_id}: {error}"
                             ));
                         } else {
-                            self.push_system_message(format!("Task {task_id} timed out."));
+                            self.push_system_message(format!(
+                                "Task {task_id} timed out. Use /tasks show {task_id} or /tasks tail {task_id}."
+                            ));
                         }
                     }
                     changed = true;
@@ -875,7 +879,9 @@ Steering: {display_content}{attachment_note}"
                             "Warning: failed to mark task runner task {task_id} failed after {error}: {transition_error}"
                         ));
                     } else {
-                        self.push_system_message(format!("Task {task_id} failed: {error}"));
+                        self.push_system_message(format!(
+                            "Task {task_id} failed: {error}. Use /tasks show {task_id} or /tasks tail {task_id}."
+                        ));
                     }
                     changed = true;
                 }
@@ -915,7 +921,7 @@ Steering: {display_content}{attachment_note}"
             self.task_runner
                 .spawn_background(&mut self.task_manager, request, &sandbox_config)?;
         self.push_system_message(format!(
-            "Spawned background shell task {task_id}. Use /tasks show {task_id} or /tasks cancel {task_id}."
+            "Spawned background shell task {task_id}. Use /tasks show {task_id}, /tasks tail {task_id}, or /tasks cancel {task_id}."
         ));
         self.drain_task_lifecycle_events_to_run_artifact();
         self.redraw_requested = true;
@@ -1548,11 +1554,16 @@ Next step: retry or continue from the last successful step instead of leaving th
     }
 
     pub(crate) fn pulse_activity(&mut self) {
-        if self.session.status != "streaming" {
+        let has_background_task = self
+            .task_manager
+            .active_records()
+            .iter()
+            .any(|record| record.state == crate::tasks::TaskState::RunningBackground);
+        if self.session.status != "streaming" && !has_background_task {
             return;
         }
         self.session.activity_tick = self.session.activity_tick.saturating_add(1);
-        if !self.session.activity.trim().is_empty() {
+        if !self.session.activity.trim().is_empty() || has_background_task {
             self.redraw_requested = true;
         }
     }

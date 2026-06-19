@@ -123,6 +123,11 @@ pub fn draw(f: &mut Frame<'_>, app: &mut TuiApplication) {
 fn activity_strip_height(app: &TuiApplication, pending: Option<&ApprovalRequest>) -> u16 {
     let has_activity = pending.is_some()
         || app.session.status == "streaming"
+        || app
+            .task_manager
+            .active_records()
+            .iter()
+            .any(|record| record.state == crate::tasks::TaskState::RunningBackground)
         || !app.session.activity.trim().is_empty();
     let has_context = !app.session.pending_attachments.is_empty();
     match (has_activity, has_context) {
@@ -657,6 +662,13 @@ fn activity_line(
             },
             CYAN,
         )
+    } else if let Some(detail) = active_background_tasks_detail(app) {
+        (
+            streaming_spinner_dot(app.session.activity_tick),
+            "background tasks".to_string(),
+            detail,
+            CYAN,
+        )
     } else if !app.session.activity.trim().is_empty() {
         (
             "● ".to_string(),
@@ -683,6 +695,46 @@ fn activity_line(
         Span::styled(" ", Style::default().fg(DIM)),
         Span::styled(truncate(&detail, detail_budget), Style::default().fg(FG)),
     ]))
+}
+
+fn active_background_tasks_detail(app: &TuiApplication) -> Option<String> {
+    let active = app
+        .task_manager
+        .active_records()
+        .into_iter()
+        .filter(|record| record.state == crate::tasks::TaskState::RunningBackground)
+        .collect::<Vec<_>>();
+    if active.is_empty() {
+        return None;
+    }
+
+    let first = active[0];
+    let command_or_description = first
+        .command
+        .as_deref()
+        .unwrap_or(&first.description)
+        .trim();
+    let summary = if command_or_description.is_empty() {
+        first.description.trim()
+    } else {
+        command_or_description
+    };
+    let suffix = if active.len() == 1 {
+        format!("Use /tasks show {} or /tasks tail {}.", first.id, first.id)
+    } else {
+        format!(
+            "+{} more. Use /tasks list for all active tasks.",
+            active.len().saturating_sub(1)
+        )
+    };
+    Some(format!(
+        "{} active: {} {:?} — {} {}",
+        active.len(),
+        first.id,
+        first.kind,
+        summary,
+        suffix
+    ))
 }
 
 fn fixed_width(text: &str, width: usize) -> String {
@@ -4259,6 +4311,39 @@ four",
             risk_label: "write".to_string(),
         };
         assert_eq!(activity_strip_height(&app, Some(&approval)), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn ratatui_activity_strip_surfaces_running_background_tasks() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app =
+            crate::app::TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        let task_id = app.task_manager.register(
+            crate::tasks::TaskSpawnRequest::new(
+                crate::tasks::TaskKind::Shell,
+                "long running job",
+                tmp.path(),
+                "run-1",
+            )
+            .command("python3 -c import time; time.sleep(30)"),
+        );
+        app.task_manager.background(&task_id)?;
+        app.session.activity_tick = 0;
+
+        assert_eq!(activity_strip_height(&app, None), 3);
+        let line = activity_line(&app, None, 220).expect("background task activity line");
+        let text = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert!(text.contains("background tasks"));
+        assert!(text.contains(&task_id));
+        assert!(text.contains("1 active"));
+        assert!(text.contains("/tasks show"));
+        assert!(text.contains("/tasks tail"));
         Ok(())
     }
 

@@ -3869,6 +3869,62 @@ mod tests {
     }
 
     #[test]
+    fn background_task_completion_message_points_to_show_and_tail() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.risky_tools_enabled = true;
+        app.tool_executor.guardrails.policy.allow_risky_tools = true;
+
+        app.execute_command("/tasks run --timeout=10 -- python3 -c print(67890)")?;
+        let task_id = app.task_manager.records()[0].id.clone();
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        while Instant::now() < deadline {
+            app.poll_task_runner();
+            if !app.task_runner.is_running(&task_id) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        let transcript = app
+            .session
+            .messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(transcript.contains(&format!("Task {task_id} completed with exit_code=0")));
+        assert!(transcript.contains(&format!("/tasks show {task_id}")));
+        assert!(transcript.contains(&format!("/tasks tail {task_id}")));
+        Ok(())
+    }
+
+    #[test]
+    fn activity_pulse_animates_background_tasks_when_ready() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        let task_id = app.task_manager.register(
+            crate::tasks::TaskSpawnRequest::new(
+                crate::tasks::TaskKind::Shell,
+                "background job",
+                tmp.path(),
+                "run-1",
+            )
+            .command("sleep 30"),
+        );
+        app.task_manager.background(&task_id)?;
+        app.session.status = "ready".to_string();
+        app.session.activity_tick = 0;
+        app.redraw_requested = false;
+
+        app.pulse_activity();
+
+        assert_eq!(app.session.activity_tick, 1);
+        assert!(app.redraw_requested);
+        Ok(())
+    }
+
+    #[test]
     fn ctrl_c_cancels_in_flight_response_before_quitting() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
