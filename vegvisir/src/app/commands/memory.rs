@@ -313,21 +313,26 @@ impl TuiApplication {
     }
 
     fn context_budget(&mut self, args: &[String]) -> anyhow::Result<String> {
-        if args.is_empty() {
-            return Ok("Usage: /context budget <message>".to_string());
+        let json_output = wants_json(args);
+        let message = args
+            .iter()
+            .filter(|arg| !matches!(arg.as_str(), "--json" | "json" | "-j"))
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if message.trim().is_empty() {
+            return Ok("Usage: /context budget [--json] <message>".to_string());
         }
-        let prepared = self.cms.prepare_context(args.join(" "))?;
-        Ok(format!(
-            "Context budget\ntoken_estimate={}\ncontext_limit={}\npercent={:.2}%\nsections={}",
-            prepared.token_estimate,
-            self.session.context_limit,
-            if self.session.context_limit == 0 {
-                0.0
-            } else {
-                (prepared.token_estimate as f64 / self.session.context_limit as f64) * 100.0
-            },
-            prepared.frames.len()
-        ))
+        let prepared = self.cms.prepare_context(message)?;
+        let report = ContextUsageReport::from_prepared(
+            &prepared,
+            self.session.context_limit as usize,
+            self.session.current_model.clone(),
+        );
+        if json_output {
+            return Ok(serde_json::to_string_pretty(&report)?);
+        }
+        Ok(report.to_text())
     }
 
     fn context_sources(&mut self, args: &[String]) -> anyhow::Result<String> {
@@ -436,6 +441,134 @@ impl TuiApplication {
             .map(|m| format!("{}\n{}\n{}", m.title, m.memory_type, m.summary))
             .unwrap_or_else(|| "<missing>".to_string());
         Ok(simple_line_diff(left, &left_text, right, &right_text))
+    }
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+struct ContextUsageReport {
+    model: String,
+    used_tokens: usize,
+    max_tokens: usize,
+    percentage: f64,
+    categories: Vec<ContextUsageCategory>,
+    strategy: String,
+    warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+struct ContextUsageCategory {
+    name: String,
+    tokens: usize,
+    items: usize,
+}
+
+impl ContextUsageReport {
+    fn from_prepared(
+        prepared: &cms_v2::ecm::PreparedContext,
+        max_tokens: usize,
+        model: String,
+    ) -> Self {
+        let mut categories = std::collections::BTreeMap::<String, ContextUsageCategory>::new();
+        for frame in &prepared.frames {
+            let name = context_frame_category(frame.frame_type).to_string();
+            let entry = categories
+                .entry(name.clone())
+                .or_insert(ContextUsageCategory {
+                    name,
+                    tokens: 0,
+                    items: 0,
+                });
+            entry.tokens = entry.tokens.saturating_add(frame.token_estimate);
+            entry.items = entry.items.saturating_add(1);
+        }
+
+        let used_tokens = prepared.token_estimate;
+        let percentage = if max_tokens == 0 {
+            0.0
+        } else {
+            (used_tokens as f64 / max_tokens as f64) * 100.0
+        };
+        let mut warnings = Vec::new();
+        if max_tokens == 0 {
+            warnings.push("session context limit is unknown".to_string());
+        } else if percentage >= 95.0 {
+            warnings.push("context usage is at or above the blocking threshold".to_string());
+        } else if percentage >= 80.0 {
+            warnings.push("context usage is above the compaction threshold".to_string());
+        } else if percentage >= 60.0 {
+            warnings.push("context usage is above the warning threshold".to_string());
+        }
+        if prepared.excluded_memory_ids.is_empty() {
+            warnings.push("no CMS memories were excluded by the current budget".to_string());
+        } else {
+            warnings.push(format!(
+                "{} CMS memories were excluded by the current budget",
+                prepared.excluded_memory_ids.len()
+            ));
+        }
+
+        Self {
+            model,
+            used_tokens,
+            max_tokens,
+            percentage,
+            categories: categories.into_values().collect(),
+            strategy: format!(
+                "ECM prepared {} frame(s), included {} CMS memory id(s), excluded {} CMS memory id(s)",
+                prepared.frames.len(),
+                prepared.included_memory_ids.len(),
+                prepared.excluded_memory_ids.len()
+            ),
+            warnings,
+        }
+    }
+
+    fn to_text(&self) -> String {
+        let mut lines = vec![
+            "Context budget".to_string(),
+            format!("model={}", self.model),
+            format!("used_tokens={}", self.used_tokens),
+            format!("context_limit={}", self.max_tokens),
+            format!("percent={:.2}%", self.percentage),
+            format!("strategy={}", self.strategy),
+            "categories:".to_string(),
+        ];
+        if self.categories.is_empty() {
+            lines.push("  none".to_string());
+        } else {
+            for category in &self.categories {
+                lines.push(format!(
+                    "  {}: tokens={} items={}",
+                    category.name, category.tokens, category.items
+                ));
+            }
+        }
+        lines.push("warnings:".to_string());
+        if self.warnings.is_empty() {
+            lines.push("  none".to_string());
+        } else {
+            for warning in &self.warnings {
+                lines.push(format!("  - {warning}"));
+            }
+        }
+        lines.join("\n")
+    }
+}
+
+fn context_frame_category(frame_type: cms_v2::ecm::ContextFrameType) -> &'static str {
+    match frame_type {
+        cms_v2::ecm::ContextFrameType::System => "system_instructions",
+        cms_v2::ecm::ContextFrameType::UserRequest => "user_request",
+        cms_v2::ecm::ContextFrameType::UserPreference => "user_preferences",
+        cms_v2::ecm::ContextFrameType::ProjectState => "project_state",
+        cms_v2::ecm::ContextFrameType::TaskState => "task_state",
+        cms_v2::ecm::ContextFrameType::RetrievedMemory => "cms_memory",
+        cms_v2::ecm::ContextFrameType::ToolResult => "tool_results",
+        cms_v2::ecm::ContextFrameType::Decision => "decisions",
+        cms_v2::ecm::ContextFrameType::Constraint => "constraints",
+        cms_v2::ecm::ContextFrameType::Summary => "summaries",
+        cms_v2::ecm::ContextFrameType::Scratch => "scratch",
+        cms_v2::ecm::ContextFrameType::OutputContract => "output_contract",
     }
 }
 

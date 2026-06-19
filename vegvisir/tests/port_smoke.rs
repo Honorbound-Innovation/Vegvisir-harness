@@ -5036,6 +5036,24 @@ fn application_exposes_cms_commands() -> anyhow::Result<()> {
         .execute_command("/context Continue command surface work")?
         .unwrap();
     assert!(!context.contains("Runtime memory note"));
+    let context_budget = app
+        .execute_command("/context budget Continue command surface work")?
+        .unwrap();
+    assert!(context_budget.contains("Context budget"));
+    assert!(context_budget.contains("categories:"));
+    assert!(context_budget.contains("warnings:"));
+    assert!(context_budget.contains("strategy=ECM prepared"));
+    let context_budget_json: Value = serde_json::from_str(
+        &app.execute_command("/context budget --json Continue command surface work")?
+            .unwrap(),
+    )?;
+    assert_eq!(
+        context_budget_json["model"].as_str(),
+        Some(app.session.current_model.as_str())
+    );
+    assert!(context_budget_json["used_tokens"].as_u64().is_some());
+    assert!(context_budget_json["categories"].as_array().is_some());
+    assert!(context_budget_json["warnings"].as_array().is_some());
     let model_request = app
         .execute_command("/model-request Continue command surface work")?
         .unwrap();

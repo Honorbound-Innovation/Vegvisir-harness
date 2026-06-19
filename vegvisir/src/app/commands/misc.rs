@@ -34,6 +34,21 @@ fn strip_ansi(text: &str) -> String {
         .to_string()
 }
 
+fn recent_task_output_preview(output: &str) -> String {
+    let lines = output
+        .lines()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        return String::new();
+    }
+    lines.join(" | ")
+}
+
 impl TuiApplication {
     pub(crate) fn session_status_command(&mut self, _args: &[String]) -> String {
         let body = self.session_status_report();
@@ -240,6 +255,14 @@ impl TuiApplication {
                 ));
             }
         }
+
+        let mut task_lines = self.recent_task_activity_lines(limit);
+        if !task_lines.is_empty() {
+            lines.push(String::new());
+            lines.push("Recent tasks".to_string());
+            lines.append(&mut task_lines);
+        }
+
         lines.push(String::new());
         lines.push("Recent events".to_string());
         if events.is_empty() {
@@ -255,6 +278,58 @@ impl TuiApplication {
             }
         }
         lines.join("\n")
+    }
+
+    fn recent_task_activity_lines(&self, limit: usize) -> Vec<String> {
+        let mut records = self.task_manager.records();
+        if records.is_empty() {
+            return Vec::new();
+        }
+        records.sort_by(|left, right| {
+            right
+                .finished_at
+                .or(right.started_at)
+                .cmp(&left.finished_at.or(left.started_at))
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        records
+            .into_iter()
+            .take(limit.max(1))
+            .map(|record| {
+                let status = match record.state {
+                    crate::tasks::TaskState::Completed => "done",
+                    crate::tasks::TaskState::Failed => "failed",
+                    crate::tasks::TaskState::Cancelled => "cancelled",
+                    crate::tasks::TaskState::TimedOut => "timed out",
+                    crate::tasks::TaskState::RunningBackground => "running",
+                    crate::tasks::TaskState::RunningForeground => "foreground",
+                    crate::tasks::TaskState::WaitingForInput => "waiting",
+                    crate::tasks::TaskState::Queued => "queued",
+                };
+                let command = record.command.as_deref().unwrap_or(&record.description);
+                let mut line = format!(
+                    "- {} [{:?}] {} - {}",
+                    record.id, record.kind, status, command
+                );
+                if let Some(exit_code) = record.exit_code {
+                    line.push_str(&format!(" exit_code={exit_code}"));
+                }
+                if matches!(
+                    record.state,
+                    crate::tasks::TaskState::Completed
+                        | crate::tasks::TaskState::Failed
+                        | crate::tasks::TaskState::Cancelled
+                        | crate::tasks::TaskState::TimedOut
+                ) {
+                    let preview = recent_task_output_preview(&record.retained_output);
+                    if !preview.is_empty() {
+                        line.push_str("\n  output: ");
+                        line.push_str(&preview);
+                    }
+                }
+                line
+            })
+            .collect()
     }
 
     pub(crate) fn trace_command(&self, args: &[String]) -> anyhow::Result<String> {
@@ -1382,4 +1457,67 @@ fn format_subagent_events(record: &SubAgentTaskRecord) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn work_command_includes_recent_task_history_and_output_preview() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace)?;
+        let mut app =
+            crate::app::TuiApplication::with_data_root(&workspace, tmp.path().join("home"))?;
+
+        let task_id = app.task_manager.register(
+            crate::tasks::TaskSpawnRequest::new(
+                crate::tasks::TaskKind::Shell,
+                "cargo test",
+                &workspace,
+                app.session.session_id.clone(),
+            )
+            .command("cargo test -- --nocapture"),
+        );
+        app.task_manager.start_foreground(&task_id)?;
+        app.task_manager.append_output(
+            &task_id,
+            "line one
+line two
+line three
+line four
+line five",
+        )?;
+        app.task_manager.complete(&task_id, 0)?;
+
+        let body = app.work_command(&["--limit".to_string(), "5".to_string()]);
+        assert!(body.contains("Recent tasks"));
+        assert!(body.contains(&task_id));
+        assert!(body.contains("done"));
+        assert!(body.contains("cargo test -- --nocapture"));
+        assert!(body.contains("output:"));
+        assert!(body.contains("line two"));
+        assert!(body.contains("line five"));
+        assert!(
+            app.info_overlay
+                .as_ref()
+                .is_some_and(|overlay| overlay.title == "work activity")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn work_command_keeps_recent_trace_events_and_task_history_together() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace)?;
+        let mut app =
+            crate::app::TuiApplication::with_data_root(&workspace, tmp.path().join("home"))?;
+        app.logger
+            .emit("trace_test", serde_json::json!({"kind":"demo"}));
+
+        let body = app.work_command(&[]);
+        assert!(body.contains("Recent events"));
+        assert!(body.contains("trace_test"));
+        Ok(())
+    }
 }
