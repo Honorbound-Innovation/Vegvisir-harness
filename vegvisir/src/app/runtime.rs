@@ -736,40 +736,286 @@ Steering: {display_content}{attachment_note}"
         self.append_tui_turn_provider_event(&ProviderRunEvent::ApprovalRequired { request });
     }
 
-    pub(crate) fn resolve_approval_control_request(
+    pub(crate) fn apply_approval_control_response(
+        &mut self,
+        response: ControlResponse<ApprovalControlDecision>,
+    ) -> ApprovalControlApplication {
+        let request_id = response.request_id.clone();
+        let decision_source = response.decision_source.clone();
+        let decision = response.payload.decision.clone();
+        let approval_id = approval_id_from_control_request_id(&request_id)
+            .unwrap_or_else(|| request_id.trim_start_matches("ctrl_").to_string());
+        let json_response = match serde_json::to_value(&response.payload) {
+            Ok(payload) => ControlResponse {
+                request_id: request_id.clone(),
+                decision_source: decision_source.clone(),
+                payload,
+            },
+            Err(error) => {
+                return ApprovalControlApplication::not_applied(
+                    approval_id,
+                    request_id,
+                    decision,
+                    decision_source,
+                    format!("Failed to serialize approval control response: {error}"),
+                );
+            }
+        };
+
+        match self
+            .control_requests
+            .resolve(json_response, chrono::Utc::now())
+        {
+            crate::control_requests::ControlResolveOutcome::Applied { .. }
+            | crate::control_requests::ControlResolveOutcome::UnknownRequest { .. } => {}
+            crate::control_requests::ControlResolveOutcome::DuplicateIgnored {
+                existing_status,
+                ..
+            } => {
+                return ApprovalControlApplication::not_applied(
+                    approval_id,
+                    request_id,
+                    decision,
+                    decision_source,
+                    format!("Control request was already terminal: {existing_status:?}"),
+                );
+            }
+            crate::control_requests::ControlResolveOutcome::TimedOut { .. } => {
+                self.append_tui_turn_runtime_event(
+                    crate::events::VegvisirEvent::ControlRequestCancelled(
+                        crate::events::ControlRequestCancelled {
+                            request_id: request_id.clone(),
+                            subtype: crate::control_requests::CONTROL_SUBTYPE_APPROVAL.to_string(),
+                            reason: "control request timed out".to_string(),
+                        },
+                    ),
+                );
+                return ApprovalControlApplication::not_applied(
+                    approval_id,
+                    request_id,
+                    decision,
+                    decision_source,
+                    "Control request timed out before response could be applied.",
+                );
+            }
+        }
+
+        let approval_id = match response.payload.edited_args.clone() {
+            Some(edited_args)
+                if matches!(
+                    decision,
+                    ApprovalControlDecisionKind::AllowOnce
+                        | ApprovalControlDecisionKind::AllowForSession
+                ) =>
+            {
+                match self
+                    .tool_executor
+                    .guardrails
+                    .approvals
+                    .edit(&approval_id, edited_args)
+                {
+                    Some(edited) => edited.id,
+                    None => {
+                        return ApprovalControlApplication::not_applied(
+                            approval_id,
+                            request_id,
+                            decision,
+                            decision_source,
+                            "Unknown pending approval for edited control response.",
+                        );
+                    }
+                }
+            }
+            _ => approval_id,
+        };
+
+        match decision {
+            ApprovalControlDecisionKind::AllowOnce => {
+                self.apply_approval_allow_once(approval_id, request_id, decision_source)
+            }
+            ApprovalControlDecisionKind::AllowForSession => {
+                self.apply_approval_allow_for_session(approval_id, request_id, decision_source)
+            }
+            ApprovalControlDecisionKind::Deny => {
+                self.apply_approval_denial(approval_id, request_id, decision_source)
+            }
+            ApprovalControlDecisionKind::Cancel => {
+                self.cancel_approval_control_request(
+                    &approval_id,
+                    "approval control response cancelled",
+                );
+                ApprovalControlApplication::not_applied(
+                    approval_id,
+                    request_id,
+                    ApprovalControlDecisionKind::Cancel,
+                    decision_source,
+                    "Approval control response cancelled.",
+                )
+            }
+        }
+    }
+
+    pub(crate) fn apply_approval_control_decision(
         &mut self,
         approval_id: &str,
         decision_source: &str,
+        decision: ApprovalControlDecisionKind,
+    ) -> ApprovalControlApplication {
+        let response = ControlResponse {
+            request_id: format!("ctrl_{approval_id}"),
+            decision_source: decision_source.to_string(),
+            payload: ApprovalControlDecision {
+                decision,
+                edited_args: None,
+            },
+        };
+        self.apply_approval_control_response(response)
+    }
+
+    fn apply_approval_allow_once(
+        &mut self,
+        approval_id: String,
+        request_id: String,
+        decision_source: String,
+    ) -> ApprovalControlApplication {
+        match self
+            .tool_executor
+            .guardrails
+            .approvals
+            .approve_once_request(&approval_id)
+        {
+            Some(approval) => {
+                self.record_approval_control_resolution(
+                    &approval.id,
+                    &request_id,
+                    &decision_source,
+                    crate::events::ApprovalDecision::Allow,
+                );
+                ApprovalControlApplication {
+                    approval_id: approval.id.clone(),
+                    request_id,
+                    decision: ApprovalControlDecisionKind::AllowOnce,
+                    decision_source,
+                    approval: Some(approval),
+                    applied: true,
+                    message: "Approved once".to_string(),
+                }
+            }
+            None => ApprovalControlApplication::not_applied(
+                approval_id,
+                request_id,
+                ApprovalControlDecisionKind::AllowOnce,
+                decision_source,
+                "Unknown pending approval.",
+            ),
+        }
+    }
+
+    fn apply_approval_allow_for_session(
+        &mut self,
+        approval_id: String,
+        request_id: String,
+        decision_source: String,
+    ) -> ApprovalControlApplication {
+        match self
+            .tool_executor
+            .guardrails
+            .approvals
+            .approve_for_session(&approval_id)
+        {
+            Some(approval) => {
+                let mut message = "Approved matching call for this running session".to_string();
+                if approval.risk_label == "command-allow"
+                    && let Some(command) = command_name_from_args(&approval.args)
+                {
+                    self.tool_executor
+                        .guardrails
+                        .policy
+                        .allowed_commands
+                        .insert(command.clone());
+                    message = format!(
+                        "Approved matching call and allowed shell command `{command}` for this running session"
+                    );
+                }
+                self.record_approval_control_resolution(
+                    &approval.id,
+                    &request_id,
+                    &decision_source,
+                    crate::events::ApprovalDecision::AllowForSession,
+                );
+                ApprovalControlApplication {
+                    approval_id: approval.id.clone(),
+                    request_id,
+                    decision: ApprovalControlDecisionKind::AllowForSession,
+                    decision_source,
+                    approval: Some(approval),
+                    applied: true,
+                    message,
+                }
+            }
+            None => ApprovalControlApplication::not_applied(
+                approval_id,
+                request_id,
+                ApprovalControlDecisionKind::AllowForSession,
+                decision_source,
+                "Unknown pending approval.",
+            ),
+        }
+    }
+
+    fn apply_approval_denial(
+        &mut self,
+        approval_id: String,
+        request_id: String,
+        decision_source: String,
+    ) -> ApprovalControlApplication {
+        if self.tool_executor.guardrails.approvals.deny(&approval_id) {
+            self.record_approval_control_resolution(
+                &approval_id,
+                &request_id,
+                &decision_source,
+                crate::events::ApprovalDecision::Deny,
+            );
+            ApprovalControlApplication {
+                approval_id,
+                request_id,
+                decision: ApprovalControlDecisionKind::Deny,
+                decision_source,
+                approval: None,
+                applied: true,
+                message: "Denied approval".to_string(),
+            }
+        } else {
+            ApprovalControlApplication::not_applied(
+                approval_id,
+                request_id,
+                ApprovalControlDecisionKind::Deny,
+                decision_source,
+                "Unknown pending approval.",
+            )
+        }
+    }
+
+    fn record_approval_control_resolution(
+        &mut self,
+        approval_id: &str,
+        request_id: &str,
+        decision_source: &str,
         decision: crate::events::ApprovalDecision,
     ) {
-        let request_id = format!("ctrl_{approval_id}");
-        let response = crate::control_requests::ControlResponse {
-            request_id: request_id.clone(),
-            decision_source: decision_source.to_string(),
-            payload: serde_json::json!({"decision": format!("{:?}", decision).to_ascii_lowercase()}),
-        };
-        let outcome = self.control_requests.resolve(response, chrono::Utc::now());
-        if matches!(
-            outcome,
-            crate::control_requests::ControlResolveOutcome::Applied { .. }
-                | crate::control_requests::ControlResolveOutcome::UnknownRequest { .. }
-        ) {
-            self.append_tui_turn_runtime_event(
-                crate::events::VegvisirEvent::ControlRequestResolved(
-                    crate::events::ControlRequestResolved {
-                        request_id,
-                        subtype: crate::control_requests::CONTROL_SUBTYPE_APPROVAL.to_string(),
-                        decision_source: decision_source.to_string(),
-                    },
-                ),
-            );
-            self.append_tui_turn_runtime_event(crate::events::VegvisirEvent::ApprovalResolved(
-                crate::events::ApprovalResolved {
-                    approval_id: approval_id.to_string(),
-                    decision,
-                },
-            ));
-        }
+        self.append_tui_turn_runtime_event(crate::events::VegvisirEvent::ControlRequestResolved(
+            crate::events::ControlRequestResolved {
+                request_id: request_id.to_string(),
+                subtype: crate::control_requests::CONTROL_SUBTYPE_APPROVAL.to_string(),
+                decision_source: decision_source.to_string(),
+            },
+        ));
+        self.append_tui_turn_runtime_event(crate::events::VegvisirEvent::ApprovalResolved(
+            crate::events::ApprovalResolved {
+                approval_id: approval_id.to_string(),
+                decision,
+            },
+        ));
     }
 
     pub(crate) fn cancel_approval_control_request(&mut self, approval_id: &str, reason: &str) {
@@ -1771,6 +2017,13 @@ fn format_subagent_transcript_update(record: &SubAgentTaskRecord) -> String {
         message.push_str("\n```");
     }
     message
+}
+
+fn approval_id_from_control_request_id(request_id: &str) -> Option<String> {
+    request_id
+        .strip_prefix("ctrl_")
+        .map(str::to_string)
+        .filter(|id| !id.is_empty())
 }
 
 fn is_chat_visible_tool_artifact(detail: &str) -> bool {

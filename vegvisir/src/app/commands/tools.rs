@@ -390,31 +390,17 @@ Usage: /tool-limit <rounds>|unlimited",
                 let Some(id) = args.get(1) else {
                     return "Usage: /approvals approve <id>".to_string();
                 };
-                match self
-                    .tool_executor
-                    .guardrails
-                    .approvals
-                    .approve_once_request(id)
-                {
-                    Some(request) if self.pending_send.is_some() => {
-                        self.resolve_approval_control_request(
-                            &request.id,
-                            "local_ui",
-                            crate::events::ApprovalDecision::Allow,
-                        );
-                        format!(
-                            "Approved once: {}. In-flight model run will resume.",
-                            request.tool_name
-                        )
-                    }
-                    Some(request) => {
-                        self.resolve_approval_control_request(
-                            &request.id,
-                            "local_ui",
-                            crate::events::ApprovalDecision::Allow,
-                        );
-                        self.execute_approved_request("Approved once", request)
-                    }
+                let applied = self.apply_approval_control_decision(
+                    id,
+                    "local_ui",
+                    crate::control_requests::ApprovalControlDecisionKind::AllowOnce,
+                );
+                match applied.approval {
+                    Some(request) if self.pending_send.is_some() => format!(
+                        "Approved once: {}. In-flight model run will resume.",
+                        request.tool_name
+                    ),
+                    Some(request) => self.execute_approved_request("Approved once", request),
                     None => format!("Unknown pending approval: {id}"),
                 }
             }
@@ -426,41 +412,17 @@ Usage: /tool-limit <rounds>|unlimited",
                 let Some(id) = args.get(1) else {
                     return "Usage: /approvals session <id>".to_string();
                 };
-                match self
-                    .tool_executor
-                    .guardrails
-                    .approvals
-                    .approve_for_session(id)
-                {
-                    Some(request) => {
-                        let mut prefix =
-                            "Approved matching call for this running session".to_string();
-                        if request.risk_label == "command-allow"
-                            && let Some(command) = command_name_from_args(&request.args)
-                        {
-                            self.tool_executor
-                                .guardrails
-                                .policy
-                                .allowed_commands
-                                .insert(command.clone());
-                            prefix = format!(
-                                "Approved matching call and allowed shell command `{command}` for this running session"
-                            );
-                        }
-                        self.resolve_approval_control_request(
-                            &request.id,
-                            "local_ui",
-                            crate::events::ApprovalDecision::AllowForSession,
-                        );
-                        if self.pending_send.is_some() {
-                            format!(
-                                "{prefix}: {}. In-flight model run will resume.",
-                                request.tool_name
-                            )
-                        } else {
-                            self.execute_approved_request(&prefix, request)
-                        }
-                    }
+                let applied = self.apply_approval_control_decision(
+                    id,
+                    "local_ui",
+                    crate::control_requests::ApprovalControlDecisionKind::AllowForSession,
+                );
+                match applied.approval {
+                    Some(request) if self.pending_send.is_some() => format!(
+                        "{}: {}. In-flight model run will resume.",
+                        applied.message, request.tool_name
+                    ),
+                    Some(request) => self.execute_approved_request(&applied.message, request),
                     None => format!("Unknown pending approval: {id}"),
                 }
             }
@@ -495,12 +457,12 @@ Usage: /tool-limit <rounds>|unlimited",
                 let Some(id) = args.get(1) else {
                     return "Usage: /approvals deny <id>".to_string();
                 };
-                if self.tool_executor.guardrails.approvals.deny(id) {
-                    self.resolve_approval_control_request(
-                        id,
-                        "local_ui",
-                        crate::events::ApprovalDecision::Deny,
-                    );
+                let applied = self.apply_approval_control_decision(
+                    id,
+                    "local_ui",
+                    crate::control_requests::ApprovalControlDecisionKind::Deny,
+                );
+                if applied.applied {
                     format!("Denied approval {id}.")
                 } else {
                     format!("Unknown pending approval: {id}")

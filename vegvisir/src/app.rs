@@ -18,7 +18,10 @@ use serde_json::{Value, json};
 use crate::{
     attachments::{attachment_for, extract_attachments},
     command_registry::{CommandRegistry, ExecutionContext, ToolRegistry as ToolMetadataRegistry},
-    control_requests::{ApprovalControlPayload, ControlRequest, PendingControlRequests},
+    control_requests::{
+        ApprovalControlDecision, ApprovalControlDecisionKind, ApprovalControlPayload,
+        ControlRequest, ControlResponse, PendingControlRequests,
+    },
     core::{
         AgentProfileStore, ChatMessage, ConfigStore, HbseServiceRef, HbseServiceRefStore,
         McpConfigStore, McpServerConfig, McpToolConfig, McpTransport, ModelRegistry,
@@ -157,6 +160,37 @@ pub struct HeadlessObservedRun {
     pub prompt_envelope: CachedPromptEnvelope,
     pub memory_write_results: Vec<CommitResult>,
     pub memory_write_error: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ApprovalControlApplication {
+    pub approval_id: String,
+    pub request_id: String,
+    pub decision: ApprovalControlDecisionKind,
+    pub decision_source: String,
+    pub approval: Option<ApprovalRequest>,
+    pub applied: bool,
+    pub message: String,
+}
+
+impl ApprovalControlApplication {
+    pub(crate) fn not_applied(
+        approval_id: impl Into<String>,
+        request_id: impl Into<String>,
+        decision: ApprovalControlDecisionKind,
+        decision_source: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            approval_id: approval_id.into(),
+            request_id: request_id.into(),
+            decision,
+            decision_source: decision_source.into(),
+            approval: None,
+            applied: false,
+            message: message.into(),
+        }
+    }
 }
 
 enum StreamEvent {
@@ -1629,6 +1663,176 @@ mod tests {
         sync::{Arc, atomic::AtomicBool, mpsc},
         time::Instant,
     };
+
+    #[test]
+    fn typed_approval_control_response_applies_once_through_ledger() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        let request = crate::guardrails::ApprovalRequest {
+            id: "apr_once".to_string(),
+            reason: "Risky tool requires human approval: write_file".to_string(),
+            tool_name: "write_file".to_string(),
+            args: serde_json::json!({"path":"a.txt","content":"hello"})
+                .as_object()
+                .unwrap()
+                .clone(),
+            risk_label: "filesystem-write".to_string(),
+        };
+        app.tool_executor
+            .guardrails
+            .approvals
+            .enqueue(request.clone());
+        app.register_approval_control_request(crate::control_requests::ControlRequest::approval(
+            "run-test", request, None,
+        ));
+
+        let applied =
+            app.apply_approval_control_response(crate::control_requests::ControlResponse {
+                request_id: "ctrl_apr_once".to_string(),
+                decision_source: "bridge".to_string(),
+                payload: crate::control_requests::ApprovalControlDecision {
+                    decision: crate::control_requests::ApprovalControlDecisionKind::AllowOnce,
+                    edited_args: None,
+                },
+            });
+
+        assert!(applied.applied);
+        assert_eq!(applied.approval_id, "apr_once");
+        assert_eq!(applied.decision_source, "bridge");
+        assert_eq!(
+            applied.decision,
+            crate::control_requests::ApprovalControlDecisionKind::AllowOnce
+        );
+        assert!(applied.approval.is_some());
+        assert_eq!(app.tool_executor.guardrails.approvals.pending_len(), 1);
+        assert!(matches!(
+            app.control_requests.get("ctrl_apr_once").unwrap().status,
+            crate::control_requests::ControlRequestStatus::Resolved
+        ));
+
+        let duplicate =
+            app.apply_approval_control_response(crate::control_requests::ControlResponse {
+                request_id: "ctrl_apr_once".to_string(),
+                decision_source: "bridge".to_string(),
+                payload: crate::control_requests::ApprovalControlDecision {
+                    decision: crate::control_requests::ApprovalControlDecisionKind::AllowOnce,
+                    edited_args: None,
+                },
+            });
+        assert!(!duplicate.applied);
+        assert!(duplicate.message.contains("already terminal"));
+        Ok(())
+    }
+
+    #[test]
+    fn typed_approval_control_response_can_edit_args_before_allow_once() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        let request = crate::guardrails::ApprovalRequest {
+            id: "apr_edit".to_string(),
+            reason: "Risky tool requires human approval: write_file".to_string(),
+            tool_name: "write_file".to_string(),
+            args: serde_json::json!({"path":"old.txt","content":"old"})
+                .as_object()
+                .unwrap()
+                .clone(),
+            risk_label: "filesystem-write".to_string(),
+        };
+        app.tool_executor
+            .guardrails
+            .approvals
+            .enqueue(request.clone());
+        app.register_approval_control_request(crate::control_requests::ControlRequest::approval(
+            "run-test", request, None,
+        ));
+        let edited_args = serde_json::json!({"path":"new.txt","content":"new"})
+            .as_object()
+            .unwrap()
+            .clone();
+
+        let applied =
+            app.apply_approval_control_response(crate::control_requests::ControlResponse {
+                request_id: "ctrl_apr_edit".to_string(),
+                decision_source: "external_host".to_string(),
+                payload: crate::control_requests::ApprovalControlDecision {
+                    decision: crate::control_requests::ApprovalControlDecisionKind::AllowOnce,
+                    edited_args: Some(edited_args),
+                },
+            });
+
+        let approval = applied.approval.expect("edited approval should apply");
+        assert!(applied.applied);
+        assert_ne!(approval.id, "apr_edit");
+        assert_eq!(approval.args["path"], serde_json::json!("new.txt"));
+        assert_eq!(approval.args["content"], serde_json::json!("new"));
+        assert!(matches!(
+            app.control_requests.get("ctrl_apr_edit").unwrap().status,
+            crate::control_requests::ControlRequestStatus::Resolved
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn typed_session_approval_control_response_applies_command_allow_side_effect()
+    -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        let command = "customcmd";
+        assert!(
+            !app.tool_executor
+                .guardrails
+                .policy
+                .allowed_commands
+                .contains(command)
+        );
+        let request = crate::guardrails::ApprovalRequest {
+            id: "apr_cmd".to_string(),
+            reason: "Shell command is not allow-listed: customcmd".to_string(),
+            tool_name: "run_command".to_string(),
+            args: serde_json::json!({"command":[command,"--version"]})
+                .as_object()
+                .unwrap()
+                .clone(),
+            risk_label: "command-allow".to_string(),
+        };
+        app.tool_executor
+            .guardrails
+            .approvals
+            .enqueue(request.clone());
+        app.register_approval_control_request(crate::control_requests::ControlRequest::approval(
+            "run-test", request, None,
+        ));
+
+        let applied =
+            app.apply_approval_control_response(crate::control_requests::ControlResponse {
+                request_id: "ctrl_apr_cmd".to_string(),
+                decision_source: "external_host".to_string(),
+                payload: crate::control_requests::ApprovalControlDecision {
+                    decision: crate::control_requests::ApprovalControlDecisionKind::AllowForSession,
+                    edited_args: None,
+                },
+            });
+
+        assert!(applied.applied);
+        assert_eq!(
+            applied.decision,
+            crate::control_requests::ApprovalControlDecisionKind::AllowForSession
+        );
+        assert!(
+            applied
+                .message
+                .contains("allowed shell command `customcmd`")
+        );
+        assert!(
+            app.tool_executor
+                .guardrails
+                .policy
+                .allowed_commands
+                .contains(command)
+        );
+        assert_eq!(app.tool_executor.guardrails.approvals.pending_len(), 0);
+        Ok(())
+    }
 
     #[test]
     fn permissions_command_exposes_policy_status_and_explanations() -> anyhow::Result<()> {

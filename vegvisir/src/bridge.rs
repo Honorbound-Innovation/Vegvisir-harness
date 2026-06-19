@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use chrono::Utc;
 
-use crate::{app::TuiApplication, guardrails::command_name_from_args, types::ToolCall};
+use crate::{app::TuiApplication, types::ToolCall};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
@@ -123,6 +123,12 @@ struct OpenAiCompatInfoParams {
     host: String,
     #[serde(default = "default_openai_compat_port")]
     port: u16,
+}
+
+#[derive(Debug, Deserialize)]
+struct ControlRespondParams {
+    response:
+        crate::control_requests::ControlResponse<crate::control_requests::ApprovalControlDecision>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1024,55 +1030,83 @@ fn handle_request(
                 },
             )?;
         }
+        "control.respond" | "controlRequests.respond" => {
+            let params: ControlRespondParams = serde_json::from_value(request.params)?;
+            let applied = app.apply_approval_control_response(params.response);
+            if applied.applied
+                && matches!(
+                    applied.decision,
+                    crate::control_requests::ApprovalControlDecisionKind::Deny
+                        | crate::control_requests::ApprovalControlDecisionKind::Cancel
+                )
+            {
+                state.pending_approval_turns.remove(&applied.approval_id);
+            }
+            emit_legacy(
+                stdout,
+                BridgeEvent {
+                    kind: "control.responded",
+                    id: request.id,
+                    payload: json!({
+                        "ok": applied.applied,
+                        "request_id": applied.request_id,
+                        "approval_id": applied.approval_id,
+                        "decision": applied.decision,
+                        "decision_source": applied.decision_source,
+                        "message": applied.message,
+                        "approvals": pending_approvals(app),
+                        "session": snapshot(app),
+                    }),
+                },
+            )?;
+        }
         "approvals.approveOnce" => {
             let params: ApprovalIdParams = serde_json::from_value(request.params)?;
-            let ok = app
-                .tool_executor
-                .guardrails
-                .approvals
-                .approve_once(&params.id);
-            emit_approval_mutation(stdout, request.id, ok, app)?;
+            let applied = app.apply_approval_control_decision(
+                &params.id,
+                "bridge",
+                crate::control_requests::ApprovalControlDecisionKind::AllowOnce,
+            );
+            emit_approval_mutation(stdout, request.id, applied.applied, app)?;
         }
         "approvals.approveOnceAndExecute" => {
             let params: ApprovalIdParams = serde_json::from_value(request.params)?;
-            let approved = app
-                .tool_executor
-                .guardrails
-                .approvals
-                .approve_once_request(&params.id);
-            continue_or_execute_approved_request(app, state, request.id, approved, stdout)?;
+            let applied = app.apply_approval_control_decision(
+                &params.id,
+                "bridge",
+                crate::control_requests::ApprovalControlDecisionKind::AllowOnce,
+            );
+            continue_or_execute_approved_request(app, state, request.id, applied.approval, stdout)?;
         }
         "approvals.approveSession" => {
             let params: ApprovalIdParams = serde_json::from_value(request.params)?;
-            let approved = app
-                .tool_executor
-                .guardrails
-                .approvals
-                .approve_for_session(&params.id);
-            if let Some(approval) = approved.as_ref() {
-                apply_session_approval_side_effects(app, approval);
-            }
-            emit_approval_mutation(stdout, request.id, approved.is_some(), app)?;
+            let applied = app.apply_approval_control_decision(
+                &params.id,
+                "bridge",
+                crate::control_requests::ApprovalControlDecisionKind::AllowForSession,
+            );
+            emit_approval_mutation(stdout, request.id, applied.applied, app)?;
         }
         "approvals.approveSessionAndExecute" => {
             let params: ApprovalIdParams = serde_json::from_value(request.params)?;
-            let approved = app
-                .tool_executor
-                .guardrails
-                .approvals
-                .approve_for_session(&params.id);
-            if let Some(approval) = approved.as_ref() {
-                apply_session_approval_side_effects(app, approval);
-            }
-            continue_or_execute_approved_request(app, state, request.id, approved, stdout)?;
+            let applied = app.apply_approval_control_decision(
+                &params.id,
+                "bridge",
+                crate::control_requests::ApprovalControlDecisionKind::AllowForSession,
+            );
+            continue_or_execute_approved_request(app, state, request.id, applied.approval, stdout)?;
         }
         "approvals.deny" => {
             let params: ApprovalIdParams = serde_json::from_value(request.params)?;
-            let ok = app.tool_executor.guardrails.approvals.deny(&params.id);
-            if ok {
+            let applied = app.apply_approval_control_decision(
+                &params.id,
+                "bridge",
+                crate::control_requests::ApprovalControlDecisionKind::Deny,
+            );
+            if applied.applied {
                 state.pending_approval_turns.remove(&params.id);
             }
-            emit_approval_mutation(stdout, request.id, ok, app)?;
+            emit_approval_mutation(stdout, request.id, applied.applied, app)?;
         }
         "approvals.edit" => {
             let params: ApprovalEditParams = serde_json::from_value(request.params)?;
@@ -1083,9 +1117,14 @@ fn handle_request(
                 .edit(&params.id, params.args);
             if let Some(edited) = edited.as_ref()
                 && edited.id != params.id
-                && let Some(turn) = state.pending_approval_turns.remove(&params.id)
             {
-                state.pending_approval_turns.insert(edited.id.clone(), turn);
+                app.cancel_approval_control_request(
+                    &params.id,
+                    "approval edited by bridge; superseded by new approval id",
+                );
+                if let Some(turn) = state.pending_approval_turns.remove(&params.id) {
+                    state.pending_approval_turns.insert(edited.id.clone(), turn);
+                }
             }
             emit_legacy(
                 stdout,
@@ -2269,6 +2308,8 @@ fn bridge_capabilities(app: &TuiApplication) -> Value {
             "hbse.onboarding.providers",
             "agents.list",
             "approvals.list",
+            "control.respond",
+            "controlRequests.respond",
             "approvals.approveOnce",
             "approvals.approveOnceAndExecute",
             "approvals.approveSession",
@@ -2346,21 +2387,6 @@ fn join_command_args(command: &str, args: &[String]) -> String {
         command.to_string()
     } else {
         format!("{command} {}", args.join(" "))
-    }
-}
-
-fn apply_session_approval_side_effects(
-    app: &mut TuiApplication,
-    approval: &crate::guardrails::ApprovalRequest,
-) {
-    if approval.risk_label == "command-allow"
-        && let Some(command) = command_name_from_args(&approval.args)
-    {
-        app.tool_executor
-            .guardrails
-            .policy
-            .allowed_commands
-            .insert(command);
     }
 }
 

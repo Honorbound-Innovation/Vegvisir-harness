@@ -591,42 +591,42 @@ impl TuiApplication {
                 return true;
             }
             KeyCode::Char('1') | KeyCode::Enter | KeyCode::Char('a') | KeyCode::Char('A') => {
-                match self
-                    .tool_executor
-                    .guardrails
-                    .approvals
-                    .approve_once_request(&id)
-                {
-                    Some(request) if self.pending_send.is_some() => {
-                        format!(
-                            "Approved once: {}. In-flight model run will resume.",
-                            request.tool_name
-                        )
-                    }
+                let applied = self.apply_approval_control_decision(
+                    &id,
+                    "local_ui",
+                    crate::control_requests::ApprovalControlDecisionKind::AllowOnce,
+                );
+                match applied.approval {
+                    Some(request) if self.pending_send.is_some() => format!(
+                        "Approved once: {}. In-flight model run will resume.",
+                        request.tool_name
+                    ),
                     Some(request) => self.execute_approved_request("Approved once", request),
                     None => format!("Unknown pending approval: {id}"),
                 }
             }
             KeyCode::Char('2') | KeyCode::Char('s') | KeyCode::Char('S') => {
-                match self
-                    .tool_executor
-                    .guardrails
-                    .approvals
-                    .approve_for_session(&id)
-                {
+                let applied = self.apply_approval_control_decision(
+                    &id,
+                    "local_ui",
+                    crate::control_requests::ApprovalControlDecisionKind::AllowForSession,
+                );
+                match applied.approval {
                     Some(request) if self.pending_send.is_some() => format!(
-                        "Approved matching call for this running session: {}. In-flight model run will resume.",
-                        request.tool_name
+                        "{}: {}. In-flight model run will resume.",
+                        applied.message, request.tool_name
                     ),
-                    Some(request) => self.execute_approved_request(
-                        "Approved matching call for this running session",
-                        request,
-                    ),
+                    Some(request) => self.execute_approved_request(&applied.message, request),
                     None => format!("Unknown pending approval: {id}"),
                 }
             }
             KeyCode::Char('3') | KeyCode::Char('d') | KeyCode::Char('D') => {
-                if self.tool_executor.guardrails.approvals.deny(&id) {
+                let applied = self.apply_approval_control_decision(
+                    &id,
+                    "local_ui",
+                    crate::control_requests::ApprovalControlDecisionKind::Deny,
+                );
+                if applied.applied {
                     format!("Denied approval {id}.")
                 } else {
                     format!("Unknown pending approval: {id}")
