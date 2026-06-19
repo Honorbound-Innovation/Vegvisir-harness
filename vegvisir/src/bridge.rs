@@ -1042,6 +1042,9 @@ fn handle_request(
             {
                 state.pending_approval_turns.remove(&applied.approval_id);
             }
+            let audit = bridge_control_response_audit(app, &applied);
+            app.logger.emit("bridge_control_response", audit.clone());
+            let response_id = request.id.clone();
             emit_legacy(
                 stdout,
                 BridgeEvent {
@@ -1054,9 +1057,18 @@ fn handle_request(
                         "decision": applied.decision,
                         "decision_source": applied.decision_source,
                         "message": applied.message,
+                        "audit": audit,
                         "approvals": pending_approvals(app),
                         "session": snapshot(app),
                     }),
+                },
+            )?;
+            emit_legacy(
+                stdout,
+                BridgeEvent {
+                    kind: "control.respond.audit",
+                    id: response_id,
+                    payload: bridge_control_response_audit(app, &applied),
                 },
             )?;
         }
@@ -2268,8 +2280,11 @@ fn bridge_capabilities(app: &TuiApplication) -> Value {
             })
         })
         .collect::<Vec<_>>();
+    let security_posture = bridge_security_posture(app);
     json!({
         "session": snapshot(app),
+        "security_posture": security_posture,
+        "securityPosture": security_posture,
         "native_methods": [
             "initialize",
             "initialized",
@@ -2325,6 +2340,57 @@ fn bridge_capabilities(app: &TuiApplication) -> Value {
         "command_backed_methods": command_backed_methods,
         "commands": app.commands.all().into_iter().collect::<Vec<_>>(),
         "note": "command-backed methods execute the same Vegvisir slash-command handlers as the TUI and return structured envelope metadata plus command text output; command.invoke remains the universal escape hatch.",
+    })
+}
+
+fn bridge_security_posture(app: &TuiApplication) -> Value {
+    let tools = app.tool_registry.list();
+    let remote_safe_tools = tools.iter().filter(|tool| !tool.risky).count();
+    json!({
+        "transport": {
+            "mode": "stdio",
+            "network_listener": false,
+            "bind_address": null,
+            "local_only": true,
+            "note": "The app-server bridge is stdio IPC only; it does not bind a TCP listener. Network exposure, if any, must come from an explicit parent process wrapper outside Vegvisir."
+        },
+        "serving": {
+            "activation": "explicit app-server command",
+            "feature_flag_required": false,
+            "dangerously_bypass_approvals_and_sandbox": app.dangerously_bypass_approvals_and_sandbox,
+            "dangerous_bypass_startup_only": true
+        },
+        "registry_remote_safe_filtering": {
+            "status": "metadata_reported_not_enforced",
+            "policy": "Bridge calls still route through the same TUI command handlers, GuardrailEngine, RuntimePolicy, approval ledger, and sandbox as local calls.",
+            "total_tools": tools.len(),
+            "remote_safe_tool_count": remote_safe_tools,
+            "risky_tool_count": tools.len().saturating_sub(remote_safe_tools)
+        },
+        "approval_control": {
+            "control_respond_audited": true,
+            "authority": "ApprovalLedger + GuardrailEngine",
+            "external_response_grants_permission_directly": false
+        }
+    })
+}
+
+fn bridge_control_response_audit(
+    app: &TuiApplication,
+    applied: &crate::app::ApprovalControlApplication,
+) -> Value {
+    json!({
+        "method": "control.respond",
+        "request_id": applied.request_id,
+        "approval_id": applied.approval_id,
+        "decision": applied.decision,
+        "decision_source": applied.decision_source,
+        "applied": applied.applied,
+        "message": applied.message,
+        "dangerously_bypass_approvals_and_sandbox": app.dangerously_bypass_approvals_and_sandbox,
+        "pending_approvals": app.tool_executor.guardrails.approvals.pending_len(),
+        "policy_authority": "ApprovalLedger + GuardrailEngine",
+        "secret_payload_included": false
     })
 }
 
@@ -2801,5 +2867,177 @@ fn emit_error(
                 }),
             },
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use tempfile::tempdir;
+
+    fn test_app() -> anyhow::Result<(tempfile::TempDir, TuiApplication)> {
+        let tmp = tempdir()?;
+        let app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        Ok((tmp, app))
+    }
+
+    fn execute_sh(app: &mut TuiApplication, text: &str) -> crate::types::Observation {
+        app.tool_executor.execute(crate::types::ToolCall {
+            name: "run_command".to_string(),
+            args: json!({"command": ["sh", "-c", format!("printf {text}")]})
+                .as_object()
+                .unwrap()
+                .clone(),
+        })
+    }
+
+    #[test]
+    fn bridge_capabilities_report_stdio_local_security_posture() -> anyhow::Result<()> {
+        let (_tmp, app) = test_app()?;
+        let capabilities = bridge_capabilities(&app);
+
+        assert_eq!(
+            capabilities["security_posture"]["transport"]["mode"],
+            "stdio"
+        );
+        assert_eq!(
+            capabilities["security_posture"]["transport"]["network_listener"],
+            false
+        );
+        assert_eq!(
+            capabilities["security_posture"]["transport"]["local_only"],
+            true
+        );
+        assert_eq!(
+            capabilities["security_posture"]["approval_control"]["external_response_grants_permission_directly"],
+            false
+        );
+        assert_eq!(
+            capabilities["security_posture"]["registry_remote_safe_filtering"]["status"],
+            "metadata_reported_not_enforced"
+        );
+        assert!(
+            capabilities["native_methods"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|method| method == "control.respond")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn bridge_control_response_without_pending_approval_cannot_bypass_policy() -> anyhow::Result<()>
+    {
+        let (_tmp, mut app) = test_app()?;
+        app.execute_command("/tools allow-risky")?;
+        let mut state = BridgeState {
+            initialized: true,
+            ..BridgeState::default()
+        };
+        let mut output = Vec::new();
+
+        let request = BridgeRequest {
+            id: Some(BridgeRequestId::String("ctrl".to_string())),
+            method: "control.respond".to_string(),
+            params: json!({
+                "response": {
+                    "request_id": "ctrl_apr_missing",
+                    "decision_source": "bridge-test",
+                    "payload": { "decision": "allow_for_session" }
+                }
+            }),
+        };
+        handle_request(&mut app, &mut state, request, None, false, &mut output)?;
+
+        let events = String::from_utf8(output)?
+            .lines()
+            .map(serde_json::from_str::<Value>)
+            .collect::<Result<Vec<_>, _>>()?;
+        let responded = events
+            .iter()
+            .find(|event| event["type"] == "control.responded")
+            .expect("control.responded event");
+        assert_eq!(responded["payload"]["ok"], false);
+        assert_eq!(responded["payload"]["audit"]["applied"], false);
+        assert!(
+            events
+                .iter()
+                .any(|event| event["type"] == "control.respond.audit")
+        );
+
+        let blocked = execute_sh(&mut app, "blocked");
+        assert!(!blocked.ok, "{blocked:?}");
+        assert!(blocked.content.contains("approval_id="));
+        assert!(
+            !app.tool_executor
+                .guardrails
+                .policy
+                .allowed_commands
+                .contains("sh")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn bridge_control_response_applies_only_existing_ledger_approval() -> anyhow::Result<()> {
+        let (_tmp, mut app) = test_app()?;
+        app.execute_command("/tools allow-risky")?;
+
+        let blocked = execute_sh(&mut app, "approved");
+        assert!(!blocked.ok, "{blocked:?}");
+        let approval_id = app
+            .tool_executor
+            .guardrails
+            .approvals
+            .pending_ids()
+            .first()
+            .cloned()
+            .expect("pending command approval");
+
+        let mut state = BridgeState {
+            initialized: true,
+            ..BridgeState::default()
+        };
+        let mut output = Vec::new();
+        let request = BridgeRequest {
+            id: Some(BridgeRequestId::String("ctrl".to_string())),
+            method: "control.respond".to_string(),
+            params: json!({
+                "response": {
+                    "request_id": format!("ctrl_{approval_id}"),
+                    "decision_source": "bridge-test",
+                    "payload": { "decision": "allow_once" }
+                }
+            }),
+        };
+        handle_request(&mut app, &mut state, request, None, false, &mut output)?;
+
+        let events = String::from_utf8(output)?
+            .lines()
+            .map(serde_json::from_str::<Value>)
+            .collect::<Result<Vec<_>, _>>()?;
+        let responded = events
+            .iter()
+            .find(|event| event["type"] == "control.responded")
+            .expect("control.responded event");
+        assert_eq!(responded["payload"]["ok"], true);
+        assert_eq!(
+            responded["payload"]["audit"]["policy_authority"],
+            "ApprovalLedger + GuardrailEngine"
+        );
+
+        let approved = execute_sh(&mut app, "approved");
+        assert!(approved.ok, "{}", approved.content);
+        assert_eq!(approved.content, "approved");
+        assert!(
+            !app.tool_executor
+                .guardrails
+                .policy
+                .allowed_commands
+                .contains("sh")
+        );
+        Ok(())
     }
 }
