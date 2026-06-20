@@ -2206,20 +2206,24 @@ fn subagent_child_env(launch: &SubagentChildLaunch) -> Vec<(String, String)> {
 fn subagent_child_argv(launch: SubagentChildLaunch) -> Vec<String> {
     let mut argv = Vec::<String>::new();
     argv.push("--json".to_string());
+    argv.push("--isolated-session".to_string());
     if launch.bypass_sandbox {
         argv.push("--dangerously-bypass-approvals-and-sandbox".to_string());
     }
-    argv.push("--provider".to_string());
-    argv.push(launch.provider);
-    argv.push("--model".to_string());
-    argv.push(launch.model);
+    let agent = launch.agent;
+    if agent.is_none() {
+        argv.push("--provider".to_string());
+        argv.push(launch.provider);
+        argv.push("--model".to_string());
+        argv.push(launch.model);
+    }
     argv.push("run".to_string());
     argv.push(launch.goal);
     argv.push("--workspace".to_string());
     argv.push(launch.workspace.display().to_string());
     argv.push("--max-steps".to_string());
     argv.push(launch.max_steps);
-    if let Some(agent) = launch.agent {
+    if let Some(agent) = agent {
         argv.push("--agent".to_string());
         argv.push(agent);
     }
@@ -3166,6 +3170,8 @@ mod skiller_tool_tests {
                 .iter()
                 .any(|arg| arg == "--dangerously-bypass-approvals-and-sandbox")
         );
+        assert_eq!(normal[0], "--json");
+        assert_eq!(normal[1], "--isolated-session");
 
         let yolo = subagent_child_argv(SubagentChildLaunch {
             goal: "inspect only".to_string(),
@@ -3182,7 +3188,39 @@ mod skiller_tool_tests {
                 .any(|arg| arg == "--dangerously-bypass-approvals-and-sandbox")
         );
         assert_eq!(yolo[0], "--json");
-        assert_eq!(yolo[1], "--dangerously-bypass-approvals-and-sandbox");
+        assert_eq!(yolo[1], "--isolated-session");
+        assert_eq!(yolo[2], "--dangerously-bypass-approvals-and-sandbox");
+    }
+
+    #[test]
+    fn subagent_child_argv_uses_agent_profile_without_provider_model_overrides() {
+        let argv = subagent_child_argv(SubagentChildLaunch {
+            goal: "inspect with registered profile".to_string(),
+            workspace: PathBuf::from("/tmp/workspace"),
+            max_steps: "3".to_string(),
+            provider: "parent-provider".to_string(),
+            model: "parent-model".to_string(),
+            agent: Some("researcher".to_string()),
+            bypass_sandbox: true,
+            work_budget: SubAgentWorkBudget::default(),
+        });
+
+        assert!(argv.contains(&"--isolated-session".to_string()));
+        assert!(
+            argv.windows(2)
+                .any(|pair| pair == ["--agent", "researcher"])
+        );
+        assert!(
+            !argv
+                .iter()
+                .any(|arg| arg == "--provider" || arg == "--model"),
+            "registered Agent-Admin profile launches must not receive separate provider/model overrides: {argv:?}"
+        );
+        assert!(
+            !argv
+                .iter()
+                .any(|arg| arg == "parent-provider" || arg == "parent-model")
+        );
     }
 
     #[test]

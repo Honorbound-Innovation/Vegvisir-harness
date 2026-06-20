@@ -110,6 +110,7 @@ pub struct TuiApplication {
     pub active_subagent_limit: usize,
     pub subagent_provider_defaults: SubagentProviderDefaults,
     pub subagent_spawn_defaults: SubagentSpawnDefaults,
+    pub isolated_session: bool,
     pub mcp_servers: Vec<crate::core::McpServerConfig>,
     pub hbse_services: Vec<HbseServiceRef>,
     pub pending_send: Option<JoinHandle<anyhow::Result<SessionState>>>,
@@ -719,10 +720,25 @@ impl TuiApplication {
     ) -> anyhow::Result<Self> {
         let cwd = cwd.as_ref().to_path_buf();
         let data_root = default_vegvisir_data_root();
-        Self::with_data_root_and_dangerous_bypass(
+        Self::with_data_root_dangerous_bypass_and_session_isolation(
             cwd,
             data_root,
             dangerously_bypass_approvals_and_sandbox,
+            false,
+        )
+    }
+
+    pub fn new_isolated_with_dangerous_bypass(
+        cwd: impl AsRef<Path>,
+        dangerously_bypass_approvals_and_sandbox: bool,
+    ) -> anyhow::Result<Self> {
+        let cwd = cwd.as_ref().to_path_buf();
+        let data_root = default_vegvisir_data_root();
+        Self::with_data_root_dangerous_bypass_and_session_isolation(
+            cwd,
+            data_root,
+            dangerously_bypass_approvals_and_sandbox,
+            true,
         )
     }
 
@@ -737,6 +753,20 @@ impl TuiApplication {
         cwd: impl AsRef<Path>,
         data_root: impl AsRef<Path>,
         dangerously_bypass_approvals_and_sandbox: bool,
+    ) -> anyhow::Result<Self> {
+        Self::with_data_root_dangerous_bypass_and_session_isolation(
+            cwd,
+            data_root,
+            dangerously_bypass_approvals_and_sandbox,
+            false,
+        )
+    }
+
+    pub fn with_data_root_dangerous_bypass_and_session_isolation(
+        cwd: impl AsRef<Path>,
+        data_root: impl AsRef<Path>,
+        dangerously_bypass_approvals_and_sandbox: bool,
+        isolated_session: bool,
     ) -> anyhow::Result<Self> {
         let cwd = cwd.as_ref().to_path_buf();
         let data_root = data_root.as_ref().to_path_buf();
@@ -924,6 +954,7 @@ impl TuiApplication {
             active_subagent_limit,
             subagent_provider_defaults,
             subagent_spawn_defaults,
+            isolated_session,
             mcp_servers,
             hbse_services,
             pending_send: None,
@@ -974,7 +1005,9 @@ impl TuiApplication {
             observed_subagent_transcript_signatures: BTreeMap::new(),
             last_subagent_board_poll: None,
         };
-        app.autoload_workspace_session()?;
+        if !app.isolated_session {
+            app.autoload_workspace_session()?;
+        }
         app.seed_observed_subagent_transcript_signatures();
         app.rebuild_tooling_for_cms()?;
         let provider = app.session.current_provider.clone();
@@ -1166,6 +1199,9 @@ impl TuiApplication {
     }
 
     pub(crate) fn autosave_session(&self) {
+        if self.isolated_session {
+            return;
+        }
         let _ = self.sessions.save(&self.session);
         self.remember_workspace_session(&self.cwd, &self.session.session_id);
     }
@@ -3218,6 +3254,41 @@ mod tests {
 
         app.handle_key_event(KeyEvent::new(KeyCode::F(12), KeyModifiers::NONE));
         assert!(app.mouse_capture_enabled);
+        Ok(())
+    }
+
+    #[test]
+    fn isolated_session_does_not_autoload_or_autosave_workspace_session() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace)?;
+        let data_root = tmp.path().join("home");
+
+        let mut parent = TuiApplication::with_data_root(&workspace, &data_root)?;
+        parent.session.title = "parent main thread".to_string();
+        parent.session.current_provider = "demo".to_string();
+        parent.session.current_model = "demo-local".to_string();
+        let parent_session_id = parent.session.session_id.clone();
+        parent.autosave_session();
+
+        let normal = TuiApplication::with_data_root(&workspace, &data_root)?;
+        assert_eq!(normal.session.session_id, parent_session_id);
+        assert_eq!(normal.session.current_provider, "demo");
+        assert_eq!(normal.session.current_model, "demo-local");
+
+        let mut isolated = TuiApplication::with_data_root_dangerous_bypass_and_session_isolation(
+            &workspace, &data_root, true, true,
+        )?;
+        assert!(isolated.isolated_session);
+        assert_ne!(isolated.session.session_id, parent_session_id);
+        isolated.session.current_provider = "anthropic-hbse".to_string();
+        isolated.session.current_model = "claude-sonnet-4.5".to_string();
+        isolated.autosave_session();
+
+        let reloaded = TuiApplication::with_data_root(&workspace, &data_root)?;
+        assert_eq!(reloaded.session.session_id, parent_session_id);
+        assert_eq!(reloaded.session.current_provider, "demo");
+        assert_eq!(reloaded.session.current_model, "demo-local");
         Ok(())
     }
 

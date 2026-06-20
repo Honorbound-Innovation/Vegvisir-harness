@@ -40,6 +40,9 @@ struct Cli {
     artifact_dir: Option<PathBuf>,
     #[arg(long, global = true)]
     dangerously_bypass_approvals_and_sandbox: bool,
+    /// Internal harness mode for child/subagent runs: do not autoload or autosave workspace sessions.
+    #[arg(long, global = true, hide = true)]
+    isolated_session: bool,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -173,6 +176,7 @@ fn main() -> anyhow::Result<()> {
             cli.artifacts,
             cli.artifact_dir,
             cli.dangerously_bypass_approvals_and_sandbox,
+            cli.isolated_session,
         )
     } else {
         match cli.command {
@@ -192,6 +196,7 @@ fn main() -> anyhow::Result<()> {
                 cli.artifacts,
                 cli.artifact_dir,
                 cli.dangerously_bypass_approvals_and_sandbox,
+                cli.isolated_session,
             ),
             Some(Command::Remember {
                 title,
@@ -814,6 +819,7 @@ fn run_headless(
     artifacts: bool,
     artifact_dir: Option<PathBuf>,
     dangerously_bypass_approvals_and_sandbox: bool,
+    isolated_session: bool,
 ) -> anyhow::Result<()> {
     if !scripted {
         return run_headless_provider(
@@ -826,6 +832,7 @@ fn run_headless(
             artifacts,
             artifact_dir,
             dangerously_bypass_approvals_and_sandbox,
+            isolated_session,
         );
     }
     let model = ScriptedModel::default();
@@ -928,11 +935,19 @@ fn run_headless_provider(
     artifacts: bool,
     artifact_dir: Option<PathBuf>,
     dangerously_bypass_approvals_and_sandbox: bool,
+    isolated_session: bool,
 ) -> anyhow::Result<()> {
-    let mut app = TuiApplication::new_with_dangerous_bypass(
-        &workspace,
-        dangerously_bypass_approvals_and_sandbox,
-    )?;
+    let mut app = if isolated_session {
+        TuiApplication::new_isolated_with_dangerous_bypass(
+            &workspace,
+            dangerously_bypass_approvals_and_sandbox,
+        )?
+    } else {
+        TuiApplication::new_with_dangerous_bypass(
+            &workspace,
+            dangerously_bypass_approvals_and_sandbox,
+        )?
+    };
 
     let selection_result = (|| -> anyhow::Result<()> {
         if let Some(provider) = provider {
