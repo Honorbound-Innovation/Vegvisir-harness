@@ -3,9 +3,12 @@ use std::{collections::BTreeSet, path::Path};
 use anyhow::bail;
 use serde_json::Value;
 
-use crate::core::{
-    AgentProfile, McpConfigStore, ModelRegistry, ProviderRegistry, default_tool_definitions,
-    load_skill_definitions, normalize_agent_id,
+use crate::{
+    core::{
+        AgentProfile, McpConfigStore, ModelInfo, ModelRegistry, ProviderConfig, ProviderRegistry,
+        default_tool_definitions, load_skill_definitions, normalize_agent_id,
+    },
+    model_discovery::discover_provider_models,
 };
 
 use super::{ValidationReport, issue, secret_like};
@@ -16,7 +19,7 @@ pub fn validate_profile(
     data_root: &Path,
 ) -> anyhow::Result<ValidationReport> {
     let providers = ProviderRegistry::default_catalog()?;
-    let models = ModelRegistry::default_catalog()?;
+    let mut models = ModelRegistry::default_catalog()?;
     let tools = default_tool_definitions()?;
     let skills = load_skill_definitions(workspace, data_root)?;
     let mcp_servers = McpConfigStore::new(data_root.join("mcp.json"))
@@ -97,32 +100,13 @@ pub fn validate_profile(
             format!("unknown provider: {provider}"),
         ));
     }
-    if let Some(model) = &profile.current_model {
-        match models.get(model) {
-            Some(model_info) => {
-                if let Some(provider) = &profile.current_provider {
-                    if !models.is_model_allowed_for_provider(model_info, provider) {
-                        errors.push(issue(
-                            "error",
-                            "current_model",
-                            format!("model {model} is not allowed for provider {provider}"),
-                        ));
-                    }
-                } else {
-                    warnings.push(issue(
-                        "warning",
-                        "current_model",
-                        "model is set but provider is inherited at runtime",
-                    ));
-                }
-            }
-            None => errors.push(issue(
-                "error",
-                "current_model",
-                format!("unknown model: {model}"),
-            )),
-        }
-    }
+    validate_model_assignment(
+        &mut warnings,
+        &providers,
+        &mut models,
+        profile.current_provider.as_deref(),
+        profile.current_model.as_deref(),
+    );
     for tool in &profile.enabled_tools {
         if tool != "*" && !tool_names.contains(tool) {
             warnings.push(issue(
@@ -176,6 +160,118 @@ pub fn validate_profile(
         warnings,
         recommendations,
     })
+}
+
+fn validate_model_assignment(
+    warnings: &mut Vec<super::ValidationIssue>,
+    providers: &ProviderRegistry,
+    models: &mut ModelRegistry,
+    provider_name: Option<&str>,
+    model_name: Option<&str>,
+) {
+    let Some(model_name) = model_name else {
+        return;
+    };
+
+    let Some(provider_name) = provider_name else {
+        if models.get(model_name).is_none() {
+            warnings.push(issue(
+                "warning",
+                "current_model",
+                format!(
+                    "model {model_name} is not in the static model catalog; accepting explicit user-supplied model id because provider is inherited at runtime"
+                ),
+            ));
+        } else {
+            warnings.push(issue(
+                "warning",
+                "current_model",
+                "model is set but provider is inherited at runtime",
+            ));
+        }
+        return;
+    };
+
+    let Some(provider) = providers.get(provider_name) else {
+        warnings.push(issue(
+            "warning",
+            "current_model",
+            format!(
+                "model {model_name} could not be checked because provider {provider_name} is unknown"
+            ),
+        ));
+        return;
+    };
+
+    let discovery_error = refresh_provider_models_if_needed(models, provider, model_name);
+    match models.get(model_name) {
+        Some(model_info) if models.is_model_allowed_for_provider(model_info, provider_name) => {}
+        Some(model_info) => warnings.push(issue(
+            "warning",
+            "current_model",
+            format!(
+                "model {model_name} is cataloged for provider {} rather than {provider_name}; accepting explicit agent-admin assignment without blocking",
+                model_info.provider
+            ),
+        )),
+        None => warnings.push(issue(
+            "warning",
+            "current_model",
+            model_discovery_fallback_message(provider_name, model_name, discovery_error),
+        )),
+    }
+}
+
+pub fn refresh_provider_models_if_needed(
+    models: &mut ModelRegistry,
+    provider: &ProviderConfig,
+    model_name: &str,
+) -> Option<String> {
+    let known_allowed = models
+        .get(model_name)
+        .is_some_and(|model| models.is_model_allowed_for_provider(model, &provider.name));
+    if known_allowed {
+        return None;
+    }
+    match discover_provider_models(provider) {
+        Ok(discovered) => {
+            models.register_many(discovered);
+            None
+        }
+        Err(error) => Some(error.to_string()),
+    }
+}
+
+pub fn model_discovery_fallback_message(
+    provider_name: &str,
+    model_name: &str,
+    discovery_error: Option<String>,
+) -> String {
+    match discovery_error {
+        Some(error) => format!(
+            "model {model_name} is not in the static model catalog and live discovery for provider {provider_name} failed ({error}); accepting explicit user-supplied model id without blocking"
+        ),
+        None => format!(
+            "model {model_name} was not returned by live/static model discovery for provider {provider_name}; accepting explicit user-supplied model id without blocking"
+        ),
+    }
+}
+
+pub fn user_supplied_model_info(provider_name: &str, model_name: &str) -> ModelInfo {
+    ModelInfo {
+        name: model_name.to_string(),
+        provider: provider_name.to_string(),
+        display_name: Some(model_name.to_string()),
+        context_window: None,
+        supports_streaming: true,
+        enabled: true,
+        metadata: [(
+            "source".to_string(),
+            Value::String("agent-admin-user-supplied".to_string()),
+        )]
+        .into_iter()
+        .collect(),
+    }
 }
 
 pub fn validate_tool_allow_list(tools: &[String]) -> anyhow::Result<()> {

@@ -10,7 +10,10 @@ use super::cli::{
     BudgetArgs, CreateArgs, CreateTemplateArgs, DesignArgs, ListArgs, PromptArgs, RegisterArgs,
     ScopeArgs, SetArgs,
 };
-use super::*;
+use super::{
+    model_discovery_fallback_message, refresh_provider_models_if_needed, user_supplied_model_info,
+    *,
+};
 use crate::core::{
     AgentProfile, AgentProfileStore, ModelRegistry, ProviderRegistry, load_skill_definitions,
     normalize_agent_id,
@@ -2985,7 +2988,10 @@ fn tui_set_provider(
                 bail!("unknown provider: {provider}");
             }
             if let Some(model) = &profile.current_model {
-                let models = ModelRegistry::default_catalog()?;
+                let mut models = ModelRegistry::default_catalog()?;
+                if let Some(provider_config) = providers.get(&provider) {
+                    let _ = refresh_provider_models_if_needed(&mut models, provider_config, model);
+                }
                 if let Some(model_info) = models.get(model)
                     && !models.is_model_allowed_for_provider(model_info, &provider)
                 {
@@ -3012,18 +3018,56 @@ fn tui_set_model(
 ) -> anyhow::Result<()> {
     let mut profile = admin.store.load(id)?;
     if let Some(model) = model {
-        let models = ModelRegistry::default_catalog()?;
-        let model_info = models
-            .get(&model)
-            .with_context(|| format!("unknown model: {model}"))?;
-        if let Some(provider) = &profile.current_provider
-            && !models.is_model_allowed_for_provider(model_info, provider)
-        {
-            bail!("model {model} is not allowed for provider {provider}");
+        let mut models = ModelRegistry::default_catalog()?;
+        let warning = if let Some(provider_name) = &profile.current_provider {
+            let providers = ProviderRegistry::default_catalog()?;
+            match providers.get(provider_name) {
+                Some(provider) => {
+                    let discovery_error =
+                        refresh_provider_models_if_needed(&mut models, provider, &model);
+                    match models.get(&model) {
+                        Some(model_info)
+                            if models.is_model_allowed_for_provider(model_info, provider_name) =>
+                        {
+                            None
+                        }
+                        Some(model_info) => Some(format!(
+                            "model {model} is cataloged for provider {} rather than {provider_name}; accepted explicit user-supplied model id without blocking",
+                            model_info.provider
+                        )),
+                        None => {
+                            models.register(user_supplied_model_info(provider_name, &model));
+                            Some(model_discovery_fallback_message(
+                                provider_name,
+                                &model,
+                                discovery_error,
+                            ))
+                        }
+                    }
+                }
+                None => Some(format!(
+                    "model {model} could not be checked because provider {provider_name} is unknown; accepted explicit user-supplied model id without blocking"
+                )),
+            }
+        } else if models.get(&model).is_none() {
+            Some(format!(
+                "model {model} is not in the static model catalog; accepted explicit user-supplied model id because provider is inherited at runtime"
+            ))
+        } else {
+            None
+        };
+        if let Some(warning) = warning {
+            profile.metadata.insert(
+                "agent_admin_model_warning".to_string(),
+                Value::String(warning),
+            );
+        } else {
+            profile.metadata.remove("agent_admin_model_warning");
         }
         profile.current_model = Some(model);
     } else {
         profile.current_model = None;
+        profile.metadata.remove("agent_admin_model_warning");
     }
     admin.save_touched_quiet(profile, "tui-model")?;
     Ok(())
@@ -3869,6 +3913,81 @@ mod tests {
             profile
                 .enabled_tools
                 .contains(&"spawn_subagent".to_string())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn validation_accepts_user_supplied_live_provider_model_ids_without_blocking()
+    -> anyhow::Result<()> {
+        let tmp = tempdir()?;
+        let admin = AgentRegistryAdmin::new(tmp.path().join("data"), tmp.path().join("workspace"))?;
+        let mut profile = AgentProfile::new(
+            "xai-agent",
+            "xAI Agent",
+            "Use the configured provider and model for normal development tasks.",
+        )?;
+        profile.description = "Unknown live-provider model fixture".to_string();
+        profile.current_provider = Some("xai-hbse".to_string());
+        profile.current_model = Some("grok-user-typed-future-model".to_string());
+        profile.enabled_tools = vec!["read_file".to_string()];
+
+        let report = admin.validate_profile(&profile)?;
+        assert!(
+            report.errors.is_empty(),
+            "user-supplied xai-hbse model ids should not block validation: {}",
+            serde_json::to_string(&report.errors)?
+        );
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|issue| issue.field == "current_model"
+                    && issue
+                        .message
+                        .contains("accepting explicit user-supplied model id")),
+            "expected non-blocking current_model warning, got {}",
+            serde_json::to_string(&report.warnings)?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tui_model_setter_accepts_user_supplied_hbse_model_ids_without_blocking() -> anyhow::Result<()>
+    {
+        let tmp = tempdir()?;
+        let admin = AgentRegistryAdmin::new(tmp.path().join("data"), tmp.path().join("workspace"))?;
+        admin.create_template(
+            CreateTemplateArgs {
+                mode: "tester".to_string(),
+                id: "router-agent".to_string(),
+                name: Some("Router Agent".to_string()),
+                description: None,
+                force: false,
+            },
+            true,
+        )?;
+        tui_set_provider(&admin, "router-agent", Some("openrouter-hbse".to_string()))?;
+        tui_set_model(
+            &admin,
+            "router-agent",
+            Some("anthropic/claude-user-typed-future-model".to_string()),
+        )?;
+
+        let profile = admin.store.load("router-agent")?;
+        assert_eq!(profile.current_provider.as_deref(), Some("openrouter-hbse"));
+        assert_eq!(
+            profile.current_model.as_deref(),
+            Some("anthropic/claude-user-typed-future-model")
+        );
+        assert!(
+            profile
+                .metadata
+                .get("agent_admin_model_warning")
+                .and_then(Value::as_str)
+                .is_some_and(|warning| warning.contains("explicit user-supplied model id")),
+            "expected persisted non-blocking warning metadata, got {:?}",
+            profile.metadata.get("agent_admin_model_warning")
         );
         Ok(())
     }

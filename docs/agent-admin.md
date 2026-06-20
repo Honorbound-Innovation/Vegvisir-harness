@@ -138,7 +138,7 @@ vegvisir-agent-admin cms-scope <id> --user <cms-user-id> --project <cms-project-
 vegvisir-agent-admin reset-cms-scope <id>
 ```
 
-Provider/model validation is still performed by the main runtime when the profile is activated. The standalone admin edits persisted profiles and intentionally does not require provider auth.
+Provider/model validation is still performed by the main runtime when the profile is activated. The standalone admin opportunistically refreshes live provider model lists when credentials/HBSE access are available, but it does not require provider auth: if a provider cannot be refreshed or does not list a newly released model yet, the explicitly entered model id is accepted with a warning instead of blocking the profile edit.
 
 ## Permission list editing
 
