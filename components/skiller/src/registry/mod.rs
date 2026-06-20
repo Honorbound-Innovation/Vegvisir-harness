@@ -4,9 +4,9 @@ use crate::source_meta;
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use uuid::Uuid;
 
 pub fn write_bundle(bundle: &SkillBundle, out: &Path) -> Result<()> {
     let parent = out
@@ -1117,7 +1117,10 @@ fn write_manifest(root: &Path) -> Result<()> {
         .filter(|e| e.file_type().is_file())
     {
         let path = entry.path();
-        if matches!(path.file_name().and_then(|s| s.to_str()), Some("MANIFEST.sha256") | Some("PROVENANCE.json")) {
+        if matches!(
+            path.file_name().and_then(|s| s.to_str()),
+            Some("MANIFEST.sha256") | Some("PROVENANCE.json")
+        ) {
             continue;
         }
         let rel = path.strip_prefix(root).unwrap();
@@ -1151,10 +1154,19 @@ mod tests {
     fn publish_bundle_marks_package_published() {
         let dir = sample_dir_with_doc("doc.md", SAMPLE_MD);
         let bundle = crate::compiler::compile_path(dir.path(), "sample", None).unwrap();
-        assert!(!bundle.skills.is_empty(), "sample bundle should contain skills");
+        assert!(
+            !bundle.skills.is_empty(),
+            "sample bundle should contain skills"
+        );
         let registry = tempdir().unwrap();
         publish_bundle(&bundle, registry.path(), true).unwrap();
-        let published = read_bundle(&registry.path().join(&bundle.package.bundle_id).join(&bundle.package.version)).unwrap();
+        let published = read_bundle(
+            &registry
+                .path()
+                .join(&bundle.package.bundle_id)
+                .join(&bundle.package.version),
+        )
+        .unwrap();
         assert_eq!(published.package.publish_status, PublishStatus::Published);
         assert_eq!(published.package.review_status, SkillStatus::Published);
     }
@@ -1179,14 +1191,20 @@ mod tests {
     fn write_bundle_removes_stale_files() {
         let dir = sample_dir_with_doc("doc.md", SAMPLE_MD);
         let bundle_a = crate::compiler::compile_path(dir.path(), "sample", None).unwrap();
-        assert!(!bundle_a.skills.is_empty(), "sample bundle should contain skills");
+        assert!(
+            !bundle_a.skills.is_empty(),
+            "sample bundle should contain skills"
+        );
         let out = tempdir().unwrap();
         write_bundle(&bundle_a, out.path()).unwrap();
         // Inject a stale skill file from a previous version.
         std::fs::write(out.path().join("skills").join("stale.yaml"), "id: stale\n").unwrap();
         let dir_b = sample_dir_with_doc("doc.md", OTHER_MD);
         let bundle_b = crate::compiler::compile_path(dir_b.path(), "sample", None).unwrap();
-        assert!(!bundle_b.skills.is_empty(), "sample bundle should contain skills");
+        assert!(
+            !bundle_b.skills.is_empty(),
+            "sample bundle should contain skills"
+        );
         write_bundle(&bundle_b, out.path()).unwrap();
         let entries: Vec<_> = std::fs::read_dir(out.path().join("skills"))
             .unwrap()

@@ -1,6 +1,6 @@
+use sha2::{Digest, Sha256};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use sha2::{Digest, Sha256};
 use std::process::Command;
 use tempfile::tempdir;
 
@@ -3278,8 +3278,15 @@ fn registry_publish_writes_rich_provenance_and_index_lifecycle_metadata() {
 
     let manifest_bytes = std::fs::read(entry.join("MANIFEST.sha256")).unwrap();
     let manifest_hash = format!("{:x}", Sha256::digest(&manifest_bytes));
-    assert_eq!(provenance["content_manifest_hash"].as_str(), Some(manifest_hash.as_str()));
-    assert!(!std::fs::read_to_string(entry.join("MANIFEST.sha256")).unwrap().contains("PROVENANCE.json"));
+    assert_eq!(
+        provenance["content_manifest_hash"].as_str(),
+        Some(manifest_hash.as_str())
+    );
+    assert!(
+        !std::fs::read_to_string(entry.join("MANIFEST.sha256"))
+            .unwrap()
+            .contains("PROVENANCE.json")
+    );
 
     let deprecate = Command::new(env!("CARGO_BIN_EXE_skiller"))
         .args([
