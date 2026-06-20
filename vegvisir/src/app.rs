@@ -125,6 +125,7 @@ pub struct TuiApplication {
     pending_steering: Option<Sender<String>>,
     pending_turn_started_at: Option<Instant>,
     pending_turn_last_activity_at: Option<Instant>,
+    pending_assistant_paragraph_break: bool,
     pub pending_editor_action: Option<PendingEditorAction>,
     pub command_palette_open: bool,
     pub help_overlay_open: bool,
@@ -977,6 +978,7 @@ impl TuiApplication {
             pending_steering: None,
             pending_turn_started_at: None,
             pending_turn_last_activity_at: None,
+            pending_assistant_paragraph_break: false,
             pending_editor_action: None,
             command_palette_open: false,
             help_overlay_open: false,
@@ -2264,6 +2266,88 @@ mod tests {
         assert!(transcript.contains("Running tool: write_file"));
         assert!(transcript.contains("Tool finished: write_file"));
         assert!(app.redraw_requested);
+        Ok(())
+    }
+
+    #[test]
+    fn assistant_deltas_after_tool_events_start_new_paragraph() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: String::new(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        let (tx, rx) = mpsc::channel();
+        app.pending_stream = Some(rx);
+
+        tx.send(StreamEvent::Delta("I’ll inspect the repo.".to_string()))?;
+        tx.send(StreamEvent::ToolStart {
+            name: "run_command".to_string(),
+            args: r#"{"command":["git","status"]}"#.to_string(),
+        })?;
+        tx.send(StreamEvent::ToolEnd {
+            name: "run_command".to_string(),
+            ok: true,
+            summary: "ok: clean".to_string(),
+            detail: None,
+        })?;
+        tx.send(StreamEvent::Delta("Now I’ll run tests.".to_string()))?;
+        app.poll_stream_events();
+
+        let assistant = app
+            .session
+            .messages
+            .iter()
+            .find(|message| message.role == "assistant")
+            .expect("assistant message");
+        assert_eq!(
+            assistant.content,
+            "I’ll inspect the repo.\n\nNow I’ll run tests."
+        );
+        assert!(!assistant.content.contains("repo.Now"));
+        Ok(())
+    }
+
+    #[test]
+    fn completed_turn_keeps_live_paragraph_formatting_when_only_whitespace_differs()
+    -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "please do release work".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        app.session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: "I’ll inspect the repo.\n\nNow I’ll run tests.".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        let mut completed = app.session.clone();
+        completed.messages.pop();
+        completed.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: "I’ll inspect the repo.Now I’ll run tests.".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+
+        app.merge_live_reasoning_trace(&mut completed);
+
+        let assistant = completed
+            .messages
+            .iter()
+            .find(|message| message.role == "assistant")
+            .expect("assistant message");
+        assert_eq!(
+            assistant.content,
+            "I’ll inspect the repo.\n\nNow I’ll run tests."
+        );
+        assert!(!assistant.content.contains("repo.Now"));
         Ok(())
     }
 

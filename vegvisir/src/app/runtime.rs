@@ -650,6 +650,7 @@ Steering: {display_content}{attachment_note}"
         self.pending_steering = None;
         self.pending_turn_started_at = None;
         self.pending_turn_last_activity_at = None;
+        self.pending_assistant_paragraph_break = false;
     }
 
     pub(crate) fn start_tui_turn_artifact(&mut self, prompt: &str) {
@@ -1516,6 +1517,13 @@ Steering: {display_content}{attachment_note}"
                             });
                             self.session.messages.len() - 1
                         });
+                    if self.pending_assistant_paragraph_break && !delta.trim().is_empty() {
+                        ensure_assistant_delta_separator(
+                            &mut self.session.messages[assistant_index].content,
+                            &delta,
+                        );
+                        self.pending_assistant_paragraph_break = false;
+                    }
                     self.session.messages[assistant_index]
                         .content
                         .push_str(&delta);
@@ -1540,6 +1548,7 @@ Steering: {display_content}{attachment_note}"
                         activity.clone(),
                     ));
                     self.session.activity = activity;
+                    self.pending_assistant_paragraph_break = true;
                 }
                 StreamEvent::ApprovalRequired { request } => {
                     self.register_approval_control_request(request);
@@ -1551,6 +1560,7 @@ Steering: {display_content}{attachment_note}"
                     });
                     self.register_task_for_tool_start(&name, &args);
                     self.session.activity = format!("using tool {name}");
+                    self.pending_assistant_paragraph_break = true;
                     self.push_live_tool_message(format!("Running tool: {name} {args}"));
                 }
                 StreamEvent::ToolEnd {
@@ -1566,6 +1576,7 @@ Steering: {display_content}{attachment_note}"
                         detail: detail.clone(),
                     });
                     self.session.activity = format!("finished tool {name}");
+                    self.pending_assistant_paragraph_break = true;
                     let status = if ok { "finished" } else { "failed" };
                     let mut content = format!("Tool {status}: {name} - {summary}");
                     let detail = detail.as_deref().filter(|detail| !detail.trim().is_empty());
@@ -1806,10 +1817,16 @@ Next step: retry or continue from the last successful step instead of leaving th
                     completed_message.content =
                         format!("{}\n\n{}", artifacts, completed_content.trim_start());
                 }
-            } else if live_trimmed.is_empty()
-                || completed_trimmed == live_trimmed
-                || completed_content.len() > live_content.len()
-            {
+            } else if live_trimmed.is_empty() || completed_trimmed == live_trimmed {
+                // Keep the completed worker response. This is the only copy that
+                // is guaranteed to include the provider's final tail.
+            } else if whitespace_insensitive_eq(&live_content, &completed_content) {
+                // The live TUI stream may insert presentation separators around
+                // tool/activity boundaries so progress narration does not render
+                // as `work.Now` wall text. If the completed worker response only
+                // differs by whitespace, preserve the polished live transcript.
+                completed_message.content = live_content;
+            } else if completed_content.len() > live_content.len() {
                 // Keep the completed worker response. This is the only copy that
                 // is guaranteed to include the provider's final tail.
             } else if live_content.contains(completed_trimmed) {
@@ -1932,6 +1949,26 @@ fn approval_id_from_control_request_id(request_id: &str) -> Option<String> {
         .strip_prefix("ctrl_")
         .map(str::to_string)
         .filter(|id| !id.is_empty())
+}
+
+fn whitespace_insensitive_eq(left: &str, right: &str) -> bool {
+    left.chars()
+        .filter(|ch| !ch.is_whitespace())
+        .eq(right.chars().filter(|ch| !ch.is_whitespace()))
+}
+
+fn ensure_assistant_delta_separator(content: &mut String, next_delta: &str) {
+    if content.trim().is_empty() || next_delta.starts_with(char::is_whitespace) {
+        return;
+    }
+    if content.ends_with("\n\n") {
+        return;
+    }
+    if content.ends_with('\n') {
+        content.push('\n');
+    } else {
+        content.push_str("\n\n");
+    }
 }
 
 fn is_chat_visible_tool_artifact(detail: &str) -> bool {
