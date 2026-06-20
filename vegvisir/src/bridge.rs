@@ -3382,7 +3382,47 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe {
+                std::env::remove_var(key);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.previous {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
+
     fn test_app() -> anyhow::Result<(tempfile::TempDir, TuiApplication)> {
+        let _sandbox_mode = EnvVarGuard::set(crate::command_sandbox::COMMAND_SANDBOX_ENV, "path");
+        let _writable =
+            EnvVarGuard::remove(crate::command_sandbox::COMMAND_SANDBOX_WRITABLE_PATHS_ENV);
+        let _readonly =
+            EnvVarGuard::remove(crate::command_sandbox::COMMAND_SANDBOX_READONLY_PATHS_ENV);
+        let _hidden = EnvVarGuard::remove(crate::command_sandbox::COMMAND_SANDBOX_HIDDEN_PATHS_ENV);
         let tmp = tempdir()?;
         let app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
         Ok((tmp, app))

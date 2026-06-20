@@ -9697,11 +9697,15 @@ fn application_exposes_subagent_task_board_commands() -> anyhow::Result<()> {
     let listed = app.execute_command("/subagents list")?.unwrap();
     assert!(listed.contains("task-1"));
     assert!(listed.contains("name=planner"));
-    let shown = app.execute_command("/subagents show planner")?.unwrap();
+    let shown = app
+        .execute_command("/subagents show planner --json")?
+        .unwrap();
     assert!(shown.contains("\"goal\": \"Plan the release\""));
     let cancelled = app.execute_command("/subagents cancel planner")?.unwrap();
     assert!(cancelled.contains("Cancelled subagent task task-1"));
-    let shown = app.execute_command("/subagents show task-1")?.unwrap();
+    let shown = app
+        .execute_command("/subagents show task-1 --json")?
+        .unwrap();
     assert!(shown.contains("\"status\": \"cancelled\""));
     let second_cancel = app.execute_command("/subagents cancel task-1")?.unwrap();
     assert!(second_cancel.contains("already Cancelled"));

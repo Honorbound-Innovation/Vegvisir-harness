@@ -1804,7 +1804,8 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
         "List subagent task board records visible to the current Vegvisir session.",
         Arc::new(move |args| {
             let status_filter = optional_nonempty_string(args.get("status"))
-                .map(|value| value.to_ascii_lowercase());
+                .map(|value| value.to_ascii_lowercase())
+                .filter(|value| !matches!(value.as_str(), "all" | "any" | "*"));
             let limit = args
                 .get("limit")
                 .and_then(Value::as_u64)
@@ -3288,6 +3289,15 @@ mod skiller_tool_tests {
         assert!(listed.content.contains("task-1"));
         assert!(listed.content.contains("status=running"));
         assert_eq!(listed.data.get("total_records"), Some(&json!(1)));
+
+        let listed_all = executor.execute(ToolCall {
+            name: "subagents_list".to_string(),
+            args: serde_json::from_value(json!({"status": "all"}))?,
+        });
+        assert!(listed_all.ok, "{}", listed_all.content);
+        assert!(listed_all.content.contains("task-1"));
+        assert!(listed_all.content.contains("status=running"));
+        assert_eq!(listed_all.data.get("total_records"), Some(&json!(1)));
 
         let shown = executor.execute(ToolCall {
             name: "subagents_show".to_string(),
