@@ -779,7 +779,10 @@ pub mod layout {
         fn dashboard_panel(&self, session: &SessionState, width: usize) -> Vec<String> {
             [
                 self.theme.paint("dashboard", "heading"),
-                self.theme.paint("Vegvisir Console 0.1.0", "title"),
+                self.theme.paint(
+                    &format!("Vegvisir Console {}", env!("CARGO_PKG_VERSION")),
+                    "title",
+                ),
                 format!(
                     "tools  {} enabled: {}",
                     self.theme

@@ -56,7 +56,7 @@ interface ToolDefinition {
 }
 
 const SERVER_NAME = "solarium";
-const SERVER_VERSION = "0.1.0";
+const SERVER_VERSION = "0.2.5";
 const DEFAULT_PROTOCOL_VERSION = "2024-11-05";
 const SERVER_INSTRUCTIONS =
   "Solarium provides scoped browser automation tools for authorized browsing, inspection, sessions, crawling, audits, evidence manifests, and validation. Prefer explicit scope policies for browser-affecting tools; never pass plaintext secrets in tool arguments.";

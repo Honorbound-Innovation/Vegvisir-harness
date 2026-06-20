@@ -3129,7 +3129,7 @@ Usage: hbse release evidence [OPTIONS]
 Options:
       --output-dir <OUTPUT_DIR>      [default: release]
       --project-root <PROJECT_ROOT>  [default: .]
-      --version <VERSION>            [default: 0.1.0]
+      --version <VERSION>            [default: 0.2.5]
   -h, --help                         Print help
 ```
 
@@ -3202,7 +3202,7 @@ Options:
       --private-key <PRIVATE_KEY>
       --public-key-out <PUBLIC_KEY_OUT>
       --artifact <ARTIFACT>
-      --version <VERSION>                        [default: 0.1.0]
+      --version <VERSION>                        [default: 0.2.5]
       --key-passphrase-env <KEY_PASSPHRASE_ENV>  [default: HBSE_RELEASE_KEY_PASSPHRASE]
   -h, --help                                     Print help
 ```

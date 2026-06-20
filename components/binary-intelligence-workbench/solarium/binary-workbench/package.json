@@ -1,6 +1,6 @@
 {
   "name": "biw-solarium-workbench",
-  "version": "0.1.0",
+  "version": "0.2.5",
   "private": true,
   "description": "Static Solarium-facing Binary Intelligence Workbench UI scaffold",
   "scripts": {

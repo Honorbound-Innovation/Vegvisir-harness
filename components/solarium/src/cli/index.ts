@@ -32,7 +32,7 @@ const program = new Command();
 program
   .name("solarium")
   .description("Agent-controlled browser runtime for automation, research, and authorized security testing")
-  .version("0.1.0");
+  .version("0.2.5");
 
 program
   .command("browse")

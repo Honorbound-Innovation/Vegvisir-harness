@@ -1,6 +1,6 @@
 [package]
 name = "vegvisir-desktop"
-version = "0.1.0"
+version = "0.2.5"
 description = "Desktop shell for the Vegvisir agentic development harness"
 edition = "2021"
 license = "MIT"

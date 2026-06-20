@@ -683,7 +683,7 @@ mod tests {
             &private_key,
             Some(&public_key),
             None,
-            "0.1.0",
+            "0.2.5",
         )
         .unwrap();
         let verified = verify_release_evidence(&release, Some(&public_key));

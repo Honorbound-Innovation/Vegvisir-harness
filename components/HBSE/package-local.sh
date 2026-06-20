@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-version="${1:-0.1.0}"
+version="${1:-0.2.5}"
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 rust_dir="$root/rust"
 bundle_dir="$rust_dir/target/hbse-${version}-native-linux"

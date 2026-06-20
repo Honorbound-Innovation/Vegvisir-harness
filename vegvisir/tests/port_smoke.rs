@@ -3167,7 +3167,7 @@ fn startup_dashboard_renders_inventory() -> anyhow::Result<()> {
     let mut app = TuiApplication::new(tmp.path())?;
     let output = app.render();
 
-    assert!(output.contains("Vegvisir Console 0.1.0"));
+    assert!(output.contains("Vegvisir Console 0.2.5"));
     assert!(output.contains("status"));
     assert!(output.contains("dashboard"));
     assert!(!output.contains("┌ status"));

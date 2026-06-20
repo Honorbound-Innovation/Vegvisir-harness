@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "binary-intelligence-workbench"
-version = "0.1.0"
+version = "0.2.5"
 description = "Vegvisir-native binary triage workbench MVP"
 requires-python = ">=3.10"
 

@@ -1,6 +1,6 @@
 {
   "name": "solarium",
-  "version": "0.1.0",
+  "version": "0.2.5",
   "description": "Headless, agent-controlled browser runtime for legitimate automation, research, and authorized web security testing.",
   "type": "module",
   "bin": {

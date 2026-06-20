@@ -696,7 +696,7 @@ enum ReleaseCommand {
         output_dir: PathBuf,
         #[arg(long, default_value = ".")]
         project_root: PathBuf,
-        #[arg(long, default_value = "0.1.0")]
+        #[arg(long, default_value = "0.2.5")]
         version: String,
     },
     Keygen {
@@ -718,7 +718,7 @@ enum ReleaseCommand {
         public_key_out: Option<PathBuf>,
         #[arg(long)]
         artifact: Vec<PathBuf>,
-        #[arg(long, default_value = "0.1.0")]
+        #[arg(long, default_value = "0.2.5")]
         version: String,
         #[arg(long, default_value = "HBSE_RELEASE_KEY_PASSPHRASE")]
         key_passphrase_env: String,
