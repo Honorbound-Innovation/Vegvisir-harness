@@ -3100,7 +3100,7 @@ mod tests {
     }
 
     #[test]
-    fn subagent_board_updates_are_appended_to_transcript() -> anyhow::Result<()> {
+    fn subagent_board_updates_are_not_appended_to_transcript() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let workspace = tmp.path().join("workspace");
         std::fs::create_dir_all(&workspace)?;
@@ -3163,27 +3163,27 @@ mod tests {
         )?;
 
         assert!(app.poll_background_jobs());
-        let transcript = app
-            .session
-            .messages
-            .iter()
-            .map(|message| message.content.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(transcript.contains("## Subagent trace: reviewer"));
-        assert!(transcript.contains("subagent-1"));
-        assert!(transcript.contains("inspect transcript logging"));
-        assert!(transcript.contains("child trace and final answer"));
-        assert!(transcript.contains("<details>"));
-        assert!(transcript.contains("<summary>launch details</summary>"));
-        assert!(transcript.contains("VEGVISIR_MAX_TOOL_ROUNDS"));
-        assert!(transcript.contains("<summary>observed events (1)</summary>"));
-        assert!(transcript.contains("write_file"));
-        assert!(transcript.contains("<summary>file changes (1)</summary>"));
-        assert!(transcript.contains("Modified: `src/lib.rs`"));
-        assert!(transcript.contains("```diff"));
-        assert!(transcript.contains("+new"));
-        assert!(transcript.contains("snapshot ok"));
+        assert!(
+            app.observed_subagent_transcript_signatures
+                .contains_key("subagent-1")
+        );
+        assert!(app.session.messages.is_empty());
+
+        let response = app.execute_command("/subagents show subagent-1")?.unwrap();
+        assert!(response.contains("## Subagent trace: reviewer"));
+        assert!(response.contains("subagent-1"));
+        assert!(response.contains("inspect transcript logging"));
+        assert!(response.contains("child trace and final answer"));
+        assert!(response.contains("<details>"));
+        assert!(response.contains("<summary>launch details</summary>"));
+        assert!(response.contains("VEGVISIR_MAX_TOOL_ROUNDS"));
+        assert!(response.contains("<summary>observed events (1)</summary>"));
+        assert!(response.contains("write_file"));
+        assert!(response.contains("<summary>file changes (1)</summary>"));
+        assert!(response.contains("Modified: `src/lib.rs`"));
+        assert!(response.contains("```diff"));
+        assert!(response.contains("+new"));
+        assert!(response.contains("snapshot ok"));
         Ok(())
     }
 

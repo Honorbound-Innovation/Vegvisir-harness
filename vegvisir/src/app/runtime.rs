@@ -438,7 +438,6 @@ impl TuiApplication {
             }
             self.observed_subagent_transcript_signatures
                 .insert(record.id.clone(), signature);
-            self.push_system_message(format_subagent_transcript_update(&record));
             changed = true;
         }
         changed
@@ -1926,10 +1925,6 @@ fn subagent_transcript_signature(record: &SubAgentTaskRecord) -> String {
         record.error.as_deref().unwrap_or(""),
         serde_json::to_string(&record.observability).unwrap_or_default()
     )
-}
-
-fn format_subagent_transcript_update(record: &SubAgentTaskRecord) -> String {
-    format_subagent_record_markdown(record)
 }
 
 fn approval_id_from_control_request_id(request_id: &str) -> Option<String> {
