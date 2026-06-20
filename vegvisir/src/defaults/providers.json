@@ -259,7 +259,8 @@
         "hbse_secret_ref": "secret://vegvisir/providers/xai/default",
         "hbse_consumer": "vegvisir.provider.xai-hbse",
         "hbse_purpose": "model.chat",
-        "hbse_model_discovery_purpose": "model.discovery"
+        "hbse_model_discovery_purpose": "model.discovery",
+        "hbse_image_generation_purpose": "model.image_generation"
       }
     },
     {

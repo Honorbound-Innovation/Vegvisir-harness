@@ -570,6 +570,12 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
             &["/user"],
         ),
         cmd(
+            "/imagine",
+            "generate an image from a prompt without chat/system prompt wrapping",
+            "/imagine <image prompt>",
+            &[],
+        ),
+        cmd(
             "/speech",
             "transcribe audio into the input buffer using OpenAI/HBSE speech-to-text",
             "/speech status|transcribe <audio-file>|ptt|ptt-key <key>|ptt-seconds <n>",
@@ -790,6 +796,7 @@ fn supports_noninteractive(name: &str) -> bool {
             | "/memory"
             | "/context"
             | "/model-request"
+            | "/imagine"
             | "/skills"
             | "/subagents"
             | "/mcp"
@@ -819,7 +826,7 @@ fn infer_command_category(name: &str) -> CommandCategory {
         "/status" | "/verify" | "/eval" | "/trace" | "/runs" | "/recover" | "/turn-repair" => {
             CommandCategory::Diagnostics
         }
-        "/speech" | "/tts" => CommandCategory::Media,
+        "/speech" | "/tts" | "/imagine" => CommandCategory::Media,
         "/system" | "/system-prompt" | "/profile" | "/ka" | "/config" => {
             CommandCategory::Configuration
         }
@@ -1105,6 +1112,28 @@ mod tests {
         );
         let tts = registry.get("/tts").expect("tts command exists");
         assert!(tts.aliases.contains(&"/speak".to_string()));
+    }
+
+    #[test]
+    fn imagine_command_is_registered_as_media_command() {
+        let registry = CommandRegistry::with_defaults();
+        let (command, args) = registry
+            .parse_with_aliases("/imagine a highly detailed Vegvisir")
+            .expect("imagine command should parse");
+        assert_eq!(command, "/imagine");
+        assert_eq!(
+            args,
+            vec![
+                "a".to_string(),
+                "highly".to_string(),
+                "detailed".to_string(),
+                "Vegvisir".to_string()
+            ]
+        );
+        let imagine = registry.get("/imagine").expect("imagine command exists");
+        let spec = CommandSpec::from_definition(imagine);
+        assert_eq!(spec.category, CommandCategory::Media);
+        assert!(spec.supports_noninteractive);
     }
 
     #[test]

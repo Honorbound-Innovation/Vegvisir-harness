@@ -201,7 +201,7 @@ onboard_provider() {
   "secret_refs": ["$secret_ref"],
   "allowed_consumers": ["$consumer"],
   "denied_consumers": [],
-  "allowed_purposes": ["model.chat", "model.discovery"],
+  "allowed_purposes": ["model.chat", "model.discovery", "model.image_generation"],
   "denied_purposes": [],
   "allowed_delivery_modes": ["brokered_http"],
   "allowed_http_hosts": ["$host"],
@@ -236,6 +236,18 @@ JSON
     --http-method GET \
     --http-path "$path_prefix" \
     --http-request-body-bytes 0 >/dev/null
+
+  if [[ "$provider" == "xai" || "$provider" == "openai" ]]; then
+    "$hbse_bin" "${hbse_args[@]}" policy test \
+      --secret-ref "$secret_ref" \
+      --consumer "$consumer" \
+      --purpose model.image_generation \
+      --http-scheme https \
+      --http-host "$host" \
+      --http-method POST \
+      --http-path "${path_prefix}images/generations" \
+      --http-request-body-bytes 1024 >/dev/null
+  fi
 
   echo "  status:     onboarded"
 }

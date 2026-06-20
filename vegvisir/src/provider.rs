@@ -2,7 +2,7 @@ use std::{
     fs,
     io::{BufRead, BufReader, Read, Write},
     os::unix::net::UnixStream,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -15,10 +15,11 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use cms_v2::prompt_cache::CachedPromptEnvelope;
 use serde_json::{Map, Value, json};
+use uuid::Uuid;
 
 use crate::{
     control_requests::{ApprovalControlPayload, ControlRequest},
-    core::{ChatMessage, ModelInfo, ProviderConfig, ProviderRegistry, SessionState},
+    core::{Attachment, ChatMessage, ModelInfo, ProviderConfig, ProviderRegistry, SessionState},
     environment::get_env,
     guardrails::ApprovalResolution,
     openai_sso::{codex_base_url, load_fresh_tokens_for_metadata},
@@ -121,10 +122,30 @@ impl TokenUsage {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProviderGeneratedArtifact {
+    pub kind: String,
+    pub mime_type: String,
+    pub bytes: Vec<u8>,
+    pub suggested_filename: Option<String>,
+}
+
+impl ProviderGeneratedArtifact {
+    fn new(kind: impl Into<String>, mime_type: impl Into<String>, bytes: Vec<u8>) -> Self {
+        Self {
+            kind: kind.into(),
+            mime_type: mime_type.into(),
+            bytes,
+            suggested_filename: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProviderResponse {
     pub content: String,
     pub usage: Option<TokenUsage>,
+    pub artifacts: Vec<ProviderGeneratedArtifact>,
 }
 
 impl ProviderResponse {
@@ -132,6 +153,7 @@ impl ProviderResponse {
         Self {
             content,
             usage: None,
+            artifacts: Vec::new(),
         }
     }
 }
@@ -153,6 +175,20 @@ pub trait ProviderAdapter {
     ) -> anyhow::Result<ProviderResponse> {
         self.complete(messages, model, selected_provider)
             .map(ProviderResponse::new)
+    }
+
+    fn complete_with_usage_streaming(
+        &self,
+        messages: &[ChatMessage],
+        model: &ModelInfo,
+        selected_provider: &str,
+        on_delta: &mut dyn FnMut(&str),
+    ) -> anyhow::Result<ProviderResponse> {
+        let response = self.complete_with_usage(messages, model, selected_provider)?;
+        if !response.content.is_empty() {
+            on_delta(&response.content);
+        }
+        Ok(response)
     }
 
     fn complete_envelope(
@@ -380,6 +416,10 @@ impl ProviderAdapter for OpenAICompatibleProviderAdapter {
         model: &ModelInfo,
         _selected_provider: &str,
     ) -> anyhow::Result<String> {
+        if model_uses_images_generations_api(model) {
+            let response = self.post_image_generation(messages, model)?;
+            return Ok(response.content);
+        }
         if openai_compatible_uses_responses_api(&self.config) {
             return self.post_response_streaming(messages, model, &mut |_| {});
         }
@@ -392,12 +432,38 @@ impl ProviderAdapter for OpenAICompatibleProviderAdapter {
         model: &ModelInfo,
         _selected_provider: &str,
     ) -> anyhow::Result<ProviderResponse> {
+        if model_uses_images_generations_api(model) {
+            return self.post_image_generation(messages, model);
+        }
         if openai_compatible_uses_responses_api(&self.config) {
-            return self
-                .post_response_streaming(messages, model, &mut |_| {})
-                .map(ProviderResponse::new);
+            let response =
+                self.post_response_stream_json(responses_payload(messages, model), &mut |_| {})?;
+            return Ok(responses_provider_response(&response));
         }
         self.post_chat_completion_with_usage(model, openai_messages(messages), None)
+    }
+
+    fn complete_with_usage_streaming(
+        &self,
+        messages: &[ChatMessage],
+        model: &ModelInfo,
+        selected_provider: &str,
+        on_delta: &mut dyn FnMut(&str),
+    ) -> anyhow::Result<ProviderResponse> {
+        if openai_compatible_uses_responses_api(&self.config) {
+            let response =
+                self.post_response_stream_json(responses_payload(messages, model), on_delta)?;
+            return Ok(responses_provider_response(&response));
+        }
+        if model_outputs_media(model) {
+            let response = self.complete_with_usage(messages, model, selected_provider)?;
+            if !response.content.is_empty() {
+                on_delta(&response.content);
+            }
+            return Ok(response);
+        }
+        self.post_chat_completion_streaming(model, openai_messages(messages), None, on_delta)
+            .map(ProviderResponse::new)
     }
 
     fn complete_envelope(
@@ -519,6 +585,37 @@ impl ProviderAdapter for OpenAICompatibleProviderAdapter {
 }
 
 impl OpenAICompatibleProviderAdapter {
+    fn post_image_generation(
+        &self,
+        messages: &[ChatMessage],
+        model: &ModelInfo,
+    ) -> anyhow::Result<ProviderResponse> {
+        let api_key = optional_provider_env(&self.config)?;
+        let base_url = self
+            .config
+            .base_url
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("Provider {} has no base_url", self.config.name))?;
+        let url = format!("{}/images/generations", base_url.trim_end_matches('/'));
+        let payload = image_generation_payload(messages, model, &self.config)?;
+        let mut request = ureq::post(&url)
+            .set("Content-Type", "application/json")
+            .set("Accept", "application/json");
+        if let Some(api_key) = api_key {
+            request = request.set("Authorization", &format!("Bearer {api_key}"));
+        }
+        let response: Value =
+            send_provider_json(request, payload, &self.config.name)?.into_json()?;
+        let provider_response = image_generation_provider_response(&response);
+        if provider_response.artifacts.is_empty() {
+            anyhow::bail!(
+                "Provider {} image generation response did not include media artifacts",
+                self.config.name
+            );
+        }
+        Ok(provider_response)
+    }
+
     fn post_response_streaming(
         &self,
         messages: &[ChatMessage],
@@ -687,16 +784,14 @@ impl OpenAICompatibleProviderAdapter {
         }
         let response: Value =
             send_provider_json(request, payload, &self.config.name)?.into_json()?;
-        let content = extract_openai_compatible_text(&response).ok_or_else(|| {
-            anyhow::anyhow!(
-                "Provider {} response did not include assistant text",
+        let provider_response = openai_compatible_provider_response(&response);
+        if provider_response.content.is_empty() && provider_response.artifacts.is_empty() {
+            anyhow::bail!(
+                "Provider {} response did not include assistant text or media artifacts",
                 self.config.name
-            )
-        })?;
-        Ok(ProviderResponse {
-            content,
-            usage: extract_provider_usage(&response),
-        })
+            );
+        }
+        Ok(provider_response)
     }
 }
 
@@ -711,6 +806,10 @@ impl ProviderAdapter for HBSEOpenAICompatibleProviderAdapter {
         model: &ModelInfo,
         _selected_provider: &str,
     ) -> anyhow::Result<String> {
+        if model_uses_images_generations_api(model) {
+            let response = self.post_image_generation(messages, model)?;
+            return Ok(response.content);
+        }
         if openai_compatible_uses_responses_api(&self.config) {
             return self.post_response_streaming(messages, model, &mut |_| {});
         }
@@ -723,12 +822,38 @@ impl ProviderAdapter for HBSEOpenAICompatibleProviderAdapter {
         model: &ModelInfo,
         _selected_provider: &str,
     ) -> anyhow::Result<ProviderResponse> {
+        if model_uses_images_generations_api(model) {
+            return self.post_image_generation(messages, model);
+        }
         if openai_compatible_uses_responses_api(&self.config) {
-            return self
-                .post_response_streaming(messages, model, &mut |_| {})
-                .map(ProviderResponse::new);
+            let response =
+                self.post_response_stream_json(responses_payload(messages, model), &mut |_| {})?;
+            return Ok(responses_provider_response(&response));
         }
         self.post_chat_completion_with_usage(model, openai_messages(messages), None)
+    }
+
+    fn complete_with_usage_streaming(
+        &self,
+        messages: &[ChatMessage],
+        model: &ModelInfo,
+        selected_provider: &str,
+        on_delta: &mut dyn FnMut(&str),
+    ) -> anyhow::Result<ProviderResponse> {
+        if openai_compatible_uses_responses_api(&self.config) {
+            let response =
+                self.post_response_stream_json(responses_payload(messages, model), on_delta)?;
+            return Ok(responses_provider_response(&response));
+        }
+        if model_outputs_media(model) {
+            let response = self.complete_with_usage(messages, model, selected_provider)?;
+            if !response.content.is_empty() {
+                on_delta(&response.content);
+            }
+            return Ok(response);
+        }
+        self.post_chat_completion_streaming(model, openai_messages(messages), None, on_delta)
+            .map(ProviderResponse::new)
     }
 
     fn complete_envelope(
@@ -859,6 +984,39 @@ impl ProviderAdapter for HBSEOpenAICompatibleProviderAdapter {
 }
 
 impl HBSEOpenAICompatibleProviderAdapter {
+    fn post_image_generation(
+        &self,
+        messages: &[ChatMessage],
+        model: &ModelInfo,
+    ) -> anyhow::Result<ProviderResponse> {
+        let base_url = self
+            .config
+            .base_url
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("Provider {} has no base_url", self.config.name))?;
+        let payload = image_generation_payload(messages, model, &self.config)?;
+        let response = hbse_provider_http_with_url_and_purpose(
+            &self.config,
+            &format!("{}/images/generations", base_url.trim_end_matches('/')),
+            "application/json",
+            serde_json::to_string(&payload)?,
+            self.config
+                .metadata
+                .get("hbse_image_generation_purpose")
+                .and_then(Value::as_str)
+                .or(Some("model.image_generation")),
+        )?;
+        let value = provider_http_json_body(&self.config.name, response)?;
+        let provider_response = image_generation_provider_response(&value);
+        if provider_response.artifacts.is_empty() {
+            anyhow::bail!(
+                "Provider {} image generation response did not include media artifacts",
+                self.config.name
+            );
+        }
+        Ok(provider_response)
+    }
+
     fn post_response_streaming(
         &self,
         messages: &[ChatMessage],
@@ -1080,16 +1238,14 @@ impl HBSEOpenAICompatibleProviderAdapter {
             );
         }
         let value: Value = serde_json::from_str(&body)?;
-        let content = extract_openai_compatible_text(&value).ok_or_else(|| {
-            anyhow::anyhow!(
-                "Provider {} response did not include assistant text",
+        let provider_response = openai_compatible_provider_response(&value);
+        if provider_response.content.is_empty() && provider_response.artifacts.is_empty() {
+            anyhow::bail!(
+                "Provider {} response did not include assistant text or media artifacts",
                 self.config.name
-            )
-        })?;
-        Ok(ProviderResponse {
-            content,
-            usage: extract_provider_usage(&value),
-        })
+            );
+        }
+        Ok(provider_response)
     }
 }
 
@@ -2444,6 +2600,306 @@ fn image_attachment_base64(path: &str) -> anyhow::Result<String> {
     Ok(STANDARD.encode(fs::read(path)?))
 }
 
+fn model_uses_images_generations_api(model: &ModelInfo) -> bool {
+    if model
+        .metadata
+        .get("images_generations_api")
+        .or_else(|| model.metadata.get("image_generation_api"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    for key in ["api_endpoint", "endpoint", "output_endpoint"] {
+        if model
+            .metadata
+            .get(key)
+            .and_then(Value::as_str)
+            .is_some_and(|value| value.contains("images/generations"))
+        {
+            return true;
+        }
+    }
+    let name = model.name.to_ascii_lowercase();
+    name.contains("gpt-image")
+        || name.contains("dall-e")
+        || name.contains("grok-imagine")
+        || name.contains("imagen")
+        || name.contains("image-generation")
+}
+
+fn image_generation_prompt(messages: &[ChatMessage]) -> anyhow::Result<String> {
+    messages
+        .iter()
+        .rev()
+        .find(|message| message.role == "user" && !message.content.trim().is_empty())
+        .or_else(|| {
+            messages
+                .iter()
+                .rev()
+                .find(|message| !message.content.trim().is_empty())
+        })
+        .map(text_with_attachment_refs)
+        .map(|prompt| prompt.trim().to_string())
+        .filter(|prompt| !prompt.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("Image generation requires a non-empty prompt."))
+}
+
+fn image_generation_payload(
+    messages: &[ChatMessage],
+    model: &ModelInfo,
+    config: &ProviderConfig,
+) -> anyhow::Result<Value> {
+    let mut payload = json!({
+        "model": model.name,
+        "prompt": image_generation_prompt(messages)?,
+    });
+    if let Some(size) = model
+        .metadata
+        .get("image_size")
+        .or_else(|| config.metadata.get("image_size"))
+        .and_then(Value::as_str)
+    {
+        payload["size"] = Value::String(size.to_string());
+    }
+    if let Some(quality) = model
+        .metadata
+        .get("image_quality")
+        .or_else(|| config.metadata.get("image_quality"))
+        .and_then(Value::as_str)
+    {
+        payload["quality"] = Value::String(quality.to_string());
+    }
+    if let Some(style) = model
+        .metadata
+        .get("image_style")
+        .or_else(|| config.metadata.get("image_style"))
+        .and_then(Value::as_str)
+    {
+        payload["style"] = Value::String(style.to_string());
+    }
+    if let Some(n) = model
+        .metadata
+        .get("image_count")
+        .or_else(|| config.metadata.get("image_count"))
+        .and_then(Value::as_u64)
+    {
+        payload["n"] = Value::Number(n.into());
+    }
+    let response_format = model
+        .metadata
+        .get("image_response_format")
+        .or_else(|| config.metadata.get("image_response_format"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            (config.name == "xai" || config.name == "xai-hbse" || model.provider == "xai")
+                .then_some("b64_json")
+        });
+    if let Some(response_format) = response_format {
+        payload["response_format"] = Value::String(response_format.to_string());
+    }
+    Ok(payload)
+}
+
+fn image_generation_provider_response(response: &Value) -> ProviderResponse {
+    let mut provider_response = ProviderResponse {
+        content: response
+            .get("created")
+            .and_then(Value::as_i64)
+            .map(|_| "Image generation completed.".to_string())
+            .unwrap_or_default(),
+        usage: extract_provider_usage(response),
+        artifacts: extract_generated_artifacts(response),
+    };
+    if let Some(revised_prompt) = response
+        .get("data")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("revised_prompt").and_then(Value::as_str))
+        .next()
+    {
+        provider_response.content =
+            format!("Image generation completed. Revised prompt: {revised_prompt}");
+    }
+    provider_response
+}
+
+fn model_outputs_media(model: &ModelInfo) -> bool {
+    if model
+        .metadata
+        .get("output_media")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    let media_value = |value: &Value| -> bool {
+        value
+            .as_str()
+            .map(|text| {
+                let text = text.to_ascii_lowercase();
+                text.contains("image") || text.contains("video") || text.contains("audio")
+            })
+            .unwrap_or(false)
+    };
+    for key in [
+        "output_modality",
+        "output_modalities",
+        "modalities",
+        "modality",
+        "model_type",
+        "type",
+    ] {
+        if let Some(value) = model.metadata.get(key) {
+            if media_value(value) {
+                return true;
+            }
+            if value
+                .as_array()
+                .map(|items| items.iter().any(media_value))
+                .unwrap_or(false)
+            {
+                return true;
+            }
+        }
+    }
+    let name = model.name.to_ascii_lowercase();
+    name.contains("gpt-image")
+        || name.contains("dall-e")
+        || name.contains("imagen")
+        || name.contains("image")
+        || name.contains("imagine")
+        || name.contains("sora")
+        || name.contains("video")
+}
+
+fn save_generated_artifacts(
+    session: &SessionState,
+    artifacts: &[ProviderGeneratedArtifact],
+) -> anyhow::Result<Vec<Attachment>> {
+    if artifacts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let output_dir = Path::new(&session.cwd).join(".vegvisir").join("generated");
+    fs::create_dir_all(&output_dir)?;
+    let timestamp = chrono::Utc::now()
+        .format("%Y%m%dT%H%M%S%.3fZ")
+        .to_string()
+        .replace(':', "");
+    artifacts
+        .iter()
+        .enumerate()
+        .map(|(index, artifact)| {
+            let fallback = format!(
+                "generated-{}-{:02}.{}",
+                timestamp,
+                index + 1,
+                extension_for_mime(&artifact.mime_type)
+            );
+            let filename = artifact
+                .suggested_filename
+                .as_deref()
+                .map(sanitize_generated_filename)
+                .filter(|name| !name.is_empty())
+                .unwrap_or(fallback);
+            let path = unique_child_path(&output_dir, &filename);
+            fs::write(&path, &artifact.bytes)?;
+            Ok(Attachment {
+                path: path.display().to_string(),
+                kind: artifact.kind.clone(),
+                mime_type: Some(artifact.mime_type.clone()),
+                name: path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string()),
+                size_bytes: Some(artifact.bytes.len() as u64),
+            })
+        })
+        .collect()
+}
+
+fn response_with_generated_artifact_notice(content: String, attachments: &[Attachment]) -> String {
+    if attachments.is_empty() {
+        return content;
+    }
+    let mut lines = Vec::new();
+    if !content.trim().is_empty() {
+        lines.push(content.trim_end().to_string());
+    }
+    lines.push("Generated media saved by Vegvisir:".to_string());
+    lines.extend(attachments.iter().map(|attachment| {
+        format!(
+            "- {} ({}, {} bytes)",
+            attachment.path,
+            attachment
+                .mime_type
+                .as_deref()
+                .unwrap_or("application/octet-stream"),
+            attachment.size_bytes.unwrap_or(0)
+        )
+    }));
+    lines.join("\n")
+}
+
+fn extension_for_mime(mime_type: &str) -> &'static str {
+    match mime_type.split(';').next().unwrap_or(mime_type).trim() {
+        "image/png" => "png",
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/webp" => "webp",
+        "image/gif" => "gif",
+        "image/svg+xml" => "svg",
+        "video/mp4" => "mp4",
+        "video/webm" => "webm",
+        "video/quicktime" => "mov",
+        "audio/mpeg" => "mp3",
+        "audio/wav" | "audio/wave" => "wav",
+        "audio/ogg" => "ogg",
+        _ => "bin",
+    }
+}
+
+fn sanitize_generated_filename(name: &str) -> String {
+    let sanitized = name
+        .chars()
+        .map(|ch| match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '-' | '_' => ch,
+            _ => '-',
+        })
+        .collect::<String>()
+        .trim_matches(['.', '-'])
+        .to_string();
+    if sanitized.is_empty() || sanitized == "." || sanitized == ".." {
+        String::new()
+    } else {
+        sanitized
+    }
+}
+
+fn unique_child_path(dir: &Path, filename: &str) -> PathBuf {
+    let path = dir.join(filename);
+    if !path.exists() {
+        return path;
+    }
+    let stem = Path::new(filename)
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().to_string())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or_else(|| "generated".to_string());
+    let extension = Path::new(filename)
+        .extension()
+        .map(|extension| extension.to_string_lossy().to_string());
+    for counter in 2..10_000 {
+        let candidate = match &extension {
+            Some(extension) => dir.join(format!("{stem}-{counter}.{extension}")),
+            None => dir.join(format!("{stem}-{counter}")),
+        };
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    dir.join(format!("{stem}-{}", Uuid::new_v4().simple()))
+}
+
 fn hbse_provider_http(
     config: &ProviderConfig,
     accept: &str,
@@ -2467,7 +2923,17 @@ fn hbse_provider_http_with_url(
     accept: &str,
     body: String,
 ) -> anyhow::Result<Value> {
-    hbse_provider_http_with_url_and_headers(
+    hbse_provider_http_with_url_and_purpose(config, url, accept, body, None)
+}
+
+fn hbse_provider_http_with_url_and_purpose(
+    config: &ProviderConfig,
+    url: &str,
+    accept: &str,
+    body: String,
+    purpose_override: Option<&str>,
+) -> anyhow::Result<Value> {
+    hbse_provider_http_with_url_and_headers_and_purpose(
         config,
         url,
         accept,
@@ -2476,15 +2942,27 @@ fn hbse_provider_http_with_url(
             "Content-Type": "application/json",
             "Accept": accept,
         }),
+        purpose_override,
     )
 }
 
 fn hbse_provider_http_with_url_and_headers(
     config: &ProviderConfig,
     url: &str,
+    accept: &str,
+    body: String,
+    headers: Value,
+) -> anyhow::Result<Value> {
+    hbse_provider_http_with_url_and_headers_and_purpose(config, url, accept, body, headers, None)
+}
+
+fn hbse_provider_http_with_url_and_headers_and_purpose(
+    config: &ProviderConfig,
+    url: &str,
     _accept: &str,
     body: String,
     headers: Value,
+    purpose_override: Option<&str>,
 ) -> anyhow::Result<Value> {
     let socket_path = hbse_socket_path(config);
     let secret_ref = hbse_secret_ref(config)?;
@@ -2494,11 +2972,13 @@ fn hbse_provider_http_with_url_and_headers(
         .and_then(Value::as_str)
         .map(str::to_string)
         .unwrap_or_else(|| format!("vegvisir.provider.{}", config.name));
-    let purpose = config
-        .metadata
-        .get("hbse_purpose")
-        .and_then(Value::as_str)
-        .unwrap_or("model.chat");
+    let purpose = purpose_override.unwrap_or_else(|| {
+        config
+            .metadata
+            .get("hbse_purpose")
+            .and_then(Value::as_str)
+            .unwrap_or("model.chat")
+    });
     let payload = json!({
         "command": "provider_http",
         "secret_ref": secret_ref,
@@ -2669,12 +3149,225 @@ fn extract_provider_usage(response: &Value) -> Option<TokenUsage> {
 }
 
 fn extract_openai_compatible_text(response: &Value) -> Option<String> {
-    response
+    openai_compatible_text_parts(response)
+        .map(|parts| parts.join(""))
+        .filter(|text| !text.is_empty())
+}
+
+fn openai_compatible_provider_response(response: &Value) -> ProviderResponse {
+    ProviderResponse {
+        content: openai_compatible_text_parts(response)
+            .map(|parts| parts.join(""))
+            .unwrap_or_default(),
+        usage: extract_provider_usage(response),
+        artifacts: extract_generated_artifacts(response),
+    }
+}
+
+fn responses_provider_response(response: &Value) -> ProviderResponse {
+    ProviderResponse {
+        content: extract_response_text(response).unwrap_or_default(),
+        usage: extract_provider_usage(response),
+        artifacts: extract_generated_artifacts(response),
+    }
+}
+
+fn openai_compatible_text_parts(response: &Value) -> Option<Vec<String>> {
+    if let Some(text) = response
         .pointer("/choices/0/message/content")
         .and_then(Value::as_str)
         .or_else(|| response.get("output_text").and_then(Value::as_str))
         .or_else(|| response.pointer("/choices/0/text").and_then(Value::as_str))
+    {
+        return Some(vec![text.to_string()]);
+    }
+    let parts = response
+        .pointer("/choices/0/message/content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(text_from_content_part)
+        .collect::<Vec<_>>();
+    (!parts.is_empty()).then_some(parts)
+}
+
+fn text_from_content_part(part: &Value) -> Option<String> {
+    part.get("text")
+        .and_then(Value::as_str)
+        .or_else(|| part.get("output_text").and_then(Value::as_str))
+        .or_else(|| part.as_str())
         .map(str::to_string)
+}
+
+fn extract_generated_artifacts(value: &Value) -> Vec<ProviderGeneratedArtifact> {
+    let mut artifacts = Vec::new();
+    collect_generated_artifacts(value, &mut artifacts);
+    artifacts
+}
+
+fn collect_generated_artifacts(value: &Value, artifacts: &mut Vec<ProviderGeneratedArtifact>) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                collect_generated_artifacts(item, artifacts);
+            }
+        }
+        Value::Object(object) => {
+            if let Some(artifact) = generated_artifact_from_object(object) {
+                artifacts.push(artifact);
+                return;
+            }
+            for child in object.values() {
+                collect_generated_artifacts(child, artifacts);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn generated_artifact_from_object(
+    object: &Map<String, Value>,
+) -> Option<ProviderGeneratedArtifact> {
+    let (bytes, declared_mime) = if let Some(encoded) = encoded_media_from_object(object) {
+        let (declared_mime, encoded) = split_optional_data_url(encoded);
+        (STANDARD.decode(encoded).ok()?, declared_mime)
+    } else {
+        (bytes_from_media_url_object(object)?, None)
+    };
+    let mime_type = declared_mime
+        .or_else(|| object_mime_type(object))
+        .or_else(|| infer_mime_type_from_bytes(&bytes).map(str::to_string))
+        .or_else(|| default_mime_type_for_generated_object(object))?;
+    if !is_generated_media_mime(&mime_type) {
+        return None;
+    }
+    let kind = media_kind_from_mime(&mime_type).to_string();
+    let mut artifact = ProviderGeneratedArtifact::new(kind, mime_type, bytes);
+    artifact.suggested_filename = object
+        .get("filename")
+        .or_else(|| object.get("file_name"))
+        .or_else(|| object.get("name"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    Some(artifact)
+}
+
+fn bytes_from_media_url_object(object: &Map<String, Value>) -> Option<Vec<u8>> {
+    let url = object.get("url")?.as_str()?;
+    if let Some((_, encoded)) = url
+        .strip_prefix("data:")
+        .and_then(|rest| rest.split_once(','))
+    {
+        return STANDARD.decode(encoded).ok();
+    }
+    if !url.starts_with("https://") {
+        return None;
+    }
+    let response = ureq::get(url)
+        .set("Accept", "image/*,video/*,audio/*")
+        .call()
+        .ok()?;
+    if response.status() >= 400 {
+        return None;
+    }
+    let mut reader = response.into_reader().take(64 * 1024 * 1024);
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes).ok()?;
+    (!bytes.is_empty()).then_some(bytes)
+}
+
+fn encoded_media_from_object(object: &Map<String, Value>) -> Option<&str> {
+    object
+        .get("b64_json")
+        .or_else(|| object.get("base64"))
+        .or_else(|| object.get("bytes_base64"))
+        .or_else(|| object.get("body_base64"))
+        .or_else(|| object.get("data"))
+        .or_else(|| {
+            matches!(
+                object.get("type").and_then(Value::as_str),
+                Some("image_generation_call") | Some("video_generation_call")
+            )
+            .then(|| object.get("result"))
+            .flatten()
+        })
+        .and_then(Value::as_str)
+}
+
+fn split_optional_data_url(encoded: &str) -> (Option<String>, &str) {
+    let Some(rest) = encoded.strip_prefix("data:") else {
+        return (None, encoded);
+    };
+    let Some((metadata, body)) = rest.split_once(',') else {
+        return (None, encoded);
+    };
+    let mime = metadata
+        .split(';')
+        .next()
+        .filter(|mime| mime.contains('/'))
+        .map(str::to_string);
+    (mime, body)
+}
+
+fn infer_mime_type_from_bytes(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(b"\xff\xd8\xff") {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        Some("image/webp")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.get(4..8) == Some(b"ftyp") {
+        Some("video/mp4")
+    } else {
+        None
+    }
+}
+
+fn default_mime_type_for_generated_object(object: &Map<String, Value>) -> Option<String> {
+    match object.get("type").and_then(Value::as_str) {
+        Some("image_generation_call") => Some("image/png".to_string()),
+        Some("video_generation_call") => Some("video/mp4".to_string()),
+        _ if object.contains_key("b64_json") => Some("image/png".to_string()),
+        _ => None,
+    }
+}
+
+fn object_mime_type(object: &Map<String, Value>) -> Option<String> {
+    object
+        .get("mime_type")
+        .or_else(|| object.get("mimeType"))
+        .or_else(|| object.get("content_type"))
+        .or_else(|| object.get("contentType"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            object
+                .get("type")
+                .and_then(Value::as_str)
+                .filter(|value| value.contains('/'))
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            object
+                .get("media_type")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+}
+
+fn is_generated_media_mime(mime_type: &str) -> bool {
+    matches!(media_kind_from_mime(mime_type), "image" | "video" | "audio")
+}
+
+fn media_kind_from_mime(mime_type: &str) -> &'static str {
+    match mime_type.split('/').next().unwrap_or_default() {
+        "image" => "image",
+        "video" => "video",
+        "audio" => "audio",
+        _ => "file",
+    }
 }
 
 fn provider_error_message(value: &Value) -> Option<String> {
@@ -2792,6 +3485,7 @@ fn parse_anthropic_sse_response(text: &str) -> anyhow::Result<ProviderResponse> 
     Ok(ProviderResponse {
         content: output,
         usage: (usage.total() > 0).then_some(usage),
+        artifacts: Vec::new(),
     })
 }
 
@@ -4549,6 +5243,77 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
         self.send_with_context(session, content, None)
     }
 
+    pub fn imagine(&mut self, session: &mut SessionState, prompt: &str) -> anyhow::Result<String> {
+        let prompt = prompt.trim();
+        if prompt.is_empty() {
+            anyhow::bail!("Usage: /imagine <image prompt>");
+        }
+        session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: format!("/imagine {prompt}"),
+            attachments: std::mem::take(&mut session.pending_attachments),
+            created_at: chrono::Utc::now(),
+        });
+        session.status = "streaming".to_string();
+        session.activity = "generating image".to_string();
+        let catalog_model = self
+            .models
+            .get(&session.current_model)
+            .ok_or_else(|| anyhow::anyhow!("Unknown model: {}", session.current_model))?;
+        if !self
+            .models
+            .is_model_allowed_for_provider(catalog_model, &session.current_provider)
+        {
+            session.current_provider = catalog_model.provider.clone();
+        }
+        if let Some(limit) = catalog_model.context_window {
+            session.context_limit = limit;
+        }
+        let mut model = model_with_session_reasoning(catalog_model, session);
+        model
+            .metadata
+            .insert("output_media".to_string(), json!(true));
+        model
+            .metadata
+            .insert("images_generations_api".to_string(), json!(true));
+        let provider_messages = vec![ChatMessage {
+            role: "user".to_string(),
+            content: prompt.to_string(),
+            attachments: session
+                .messages
+                .last()
+                .map(|message| message.attachments.clone())
+                .unwrap_or_default(),
+            created_at: chrono::Utc::now(),
+        }];
+        let started = Instant::now();
+        let provider_response = self.provider.complete_with_usage(
+            &provider_messages,
+            &model,
+            &session.current_provider,
+        )?;
+        let saved_artifacts = save_generated_artifacts(session, &provider_response.artifacts)?;
+        let response =
+            response_with_generated_artifact_notice(provider_response.content, &saved_artifacts);
+        update_session_token_usage(
+            session,
+            model.name.as_str(),
+            prompt,
+            &response,
+            provider_response.usage,
+        );
+        session.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: response.clone(),
+            attachments: saved_artifacts,
+            created_at: chrono::Utc::now(),
+        });
+        session.last_latency_ms = started.elapsed().as_millis() as u64;
+        session.status = "ready".to_string();
+        session.activity.clear();
+        Ok(response)
+    }
+
     pub fn send_with_context(
         &mut self,
         session: &mut SessionState,
@@ -4612,6 +5377,7 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
             .provider
             .supports_tool_calls(model, &session.current_provider)
             && self.tools.is_some()
+            && !model_outputs_media(model)
             && let Some(executor) = self.tool_executor.as_mut()
         {
             session.activity = "thinking through tool use".to_string();
@@ -4701,7 +5467,9 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
             )?
         };
         let _ = drain_steering_messages(&self.steering_rx, session);
-        let response = provider_response.content;
+        let saved_artifacts = save_generated_artifacts(session, &provider_response.artifacts)?;
+        let response =
+            response_with_generated_artifact_notice(provider_response.content, &saved_artifacts);
         update_session_token_usage(
             session,
             model.name.as_str(),
@@ -4712,7 +5480,7 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
         session.messages.push(ChatMessage {
             role: "assistant".to_string(),
             content: response.clone(),
-            attachments: Vec::new(),
+            attachments: saved_artifacts,
             created_at: chrono::Utc::now(),
         });
         session.last_latency_ms = started.elapsed().as_millis() as u64;
@@ -4776,10 +5544,11 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
             },
         );
         let started = Instant::now();
-        let response = if self
+        let provider_response = if self
             .provider
             .supports_tool_calls(model, &session.current_provider)
             && self.tools.is_some()
+            && !model_outputs_media(model)
             && let Some(executor) = self.tool_executor.as_mut()
         {
             session.activity = "thinking through tool use".to_string();
@@ -4893,26 +5662,36 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
                 anyhow::bail!("{message}");
             }
             let _ = drain_steering_messages(&steering_rx, session);
-            response
+            ProviderResponse::new(response)
         } else {
-            let response =
-                self.provider
-                    .complete(&provider_messages, model, &session.current_provider)?;
-            on_delta(&response);
-            response
+            self.provider.complete_with_usage_streaming(
+                &provider_messages,
+                model,
+                &session.current_provider,
+                on_delta,
+            )?
         };
         let _ = drain_steering_messages(&self.steering_rx, session);
+        let saved_artifacts = save_generated_artifacts(session, &provider_response.artifacts)?;
+        let response =
+            response_with_generated_artifact_notice(provider_response.content, &saved_artifacts);
         session.last_prompt_cache_key = Some(envelope.manifest.prompt_cache_key.clone());
         session.last_prompt_manifest_id = Some(envelope.manifest.manifest_id.clone());
         session.messages.push(ChatMessage {
             role: "assistant".to_string(),
             content: response.clone(),
-            attachments: Vec::new(),
+            attachments: saved_artifacts,
             created_at: chrono::Utc::now(),
         });
         session.last_latency_ms = started.elapsed().as_millis() as u64;
         let input_text = format!("{}\n{}", envelope.model_request.prompt, content);
-        update_session_token_usage(session, model.name.as_str(), &input_text, &response, None);
+        update_session_token_usage(
+            session,
+            model.name.as_str(),
+            &input_text,
+            &response,
+            provider_response.usage,
+        );
         session.status = "ready".to_string();
         session.activity.clear();
         Ok(response)
@@ -5162,7 +5941,11 @@ mod tests {
         ));
         assert!(!approval_required_tool_output("normal tool output"));
         assert!(!approval_required_tool_output(
-            "ok: read file\n\n```typescript\nconst message = \"approval_id=apr_123\";\n```"
+            r#"ok: read file
+
+```typescript
+const message = "approval_id=apr_123";
+```"#
         ));
     }
 
@@ -5191,9 +5974,15 @@ mod tests {
     #[test]
     fn responses_stream_hides_reasoning_summary_and_streams_answer() -> anyhow::Result<()> {
         let body = concat!(
-            "data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"Checking context.\"}\n\n",
-            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Final answer.\"}\n\n",
-            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"output_text\":\"Final answer.\",\"output\":[]}}\n\n",
+            r#"data: {"type":"response.reasoning_summary_text.delta","delta":"Checking context."}
+
+"#,
+            r#"data: {"type":"response.output_text.delta","delta":"Final answer."}
+
+"#,
+            r#"data: {"type":"response.completed","response":{"id":"resp_1","output_text":"Final answer.","output":[]}}
+
+"#,
             "data: [DONE]\n\n"
         );
         let mut visible = String::new();
@@ -5206,6 +5995,151 @@ mod tests {
         assert_eq!(visible, "Final answer.");
         assert!(!visible.contains("Thinking trace"));
         assert!(!visible.contains("Checking context."));
+        Ok(())
+    }
+
+    #[test]
+    fn openai_compatible_provider_response_extracts_base64_media_artifact() {
+        let response = json!({
+            "choices": [{
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "Here is the image."},
+                        {
+                            "type": "image/png",
+                            "data": STANDARD.encode(b"fake png bytes"),
+                            "filename": "render.png"
+                        }
+                    ]
+                }
+            }],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2}
+        });
+
+        let parsed = openai_compatible_provider_response(&response);
+
+        assert_eq!(parsed.content, "Here is the image.");
+        assert_eq!(parsed.artifacts.len(), 1);
+        assert_eq!(parsed.artifacts[0].kind, "image");
+        assert_eq!(parsed.artifacts[0].mime_type, "image/png");
+        assert_eq!(parsed.artifacts[0].bytes, b"fake png bytes");
+        assert_eq!(
+            parsed.artifacts[0].suggested_filename.as_deref(),
+            Some("render.png")
+        );
+        assert_eq!(
+            parsed.usage,
+            Some(TokenUsage {
+                input_tokens: 1,
+                output_tokens: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn responses_provider_response_extracts_image_generation_result_without_mime() {
+        let png = b"\x89PNG\r\n\x1a\nrest";
+        let response = json!({
+            "output": [{
+                "type": "image_generation_call",
+                "result": STANDARD.encode(png)
+            }]
+        });
+
+        let parsed = responses_provider_response(&response);
+
+        assert_eq!(parsed.artifacts.len(), 1);
+        assert_eq!(parsed.artifacts[0].kind, "image");
+        assert_eq!(parsed.artifacts[0].mime_type, "image/png");
+        assert_eq!(parsed.artifacts[0].bytes, png);
+    }
+
+    #[test]
+    fn grok_imagine_uses_images_generations_payload_without_system_prompt() -> anyhow::Result<()> {
+        let model = ModelInfo {
+            name: "grok-imagine".to_string(),
+            provider: "xai".to_string(),
+            display_name: None,
+            context_window: None,
+            supports_streaming: false,
+            enabled: true,
+            metadata: Default::default(),
+        };
+        let config = ProviderConfig {
+            name: "xai-hbse".to_string(),
+            display_name: None,
+            kind: "hbse_openai_compatible".to_string(),
+            api_key_env: None,
+            base_url: Some("https://api.x.ai/v1".to_string()),
+            auth_type: "hbse".to_string(),
+            enabled: true,
+            metadata: Default::default(),
+        };
+        let messages = vec![
+            ChatMessage {
+                role: "system".to_string(),
+                content: "do not include me".to_string(),
+                attachments: Vec::new(),
+                created_at: chrono::Utc::now(),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: "create a highly detailed Vegvisir".to_string(),
+                attachments: Vec::new(),
+                created_at: chrono::Utc::now(),
+            },
+        ];
+
+        assert!(model_uses_images_generations_api(&model));
+        let payload = image_generation_payload(&messages, &model, &config)?;
+
+        assert_eq!(payload["model"], "grok-imagine");
+        assert_eq!(payload["prompt"], "create a highly detailed Vegvisir");
+        assert_eq!(payload["response_format"], "b64_json");
+        assert!(!payload.to_string().contains("do not include me"));
+        Ok(())
+    }
+
+    #[test]
+    fn image_generation_provider_response_extracts_data_url_artifact() {
+        let png = b"\x89PNG\r\n\x1a\nrest";
+        let response = json!({
+            "created": 123,
+            "data": [{
+                "url": format!("data:image/png;base64,{}", STANDARD.encode(png)),
+                "revised_prompt": "ornate Vegvisir"
+            }]
+        });
+
+        let parsed = image_generation_provider_response(&response);
+
+        assert!(parsed.content.contains("ornate Vegvisir"));
+        assert_eq!(parsed.artifacts.len(), 1);
+        assert_eq!(parsed.artifacts[0].kind, "image");
+        assert_eq!(parsed.artifacts[0].mime_type, "image/png");
+        assert_eq!(parsed.artifacts[0].bytes, png);
+    }
+
+    #[test]
+    fn generated_artifacts_are_saved_under_workspace_generated_dir() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let session = SessionState::new(temp.path(), Vec::new(), Vec::new());
+        let artifacts = vec![ProviderGeneratedArtifact {
+            kind: "video".to_string(),
+            mime_type: "video/mp4".to_string(),
+            bytes: b"video bytes".to_vec(),
+            suggested_filename: Some("../clip.mp4".to_string()),
+        }];
+
+        let attachments = save_generated_artifacts(&session, &artifacts)?;
+
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].kind, "video");
+        assert_eq!(attachments[0].mime_type.as_deref(), Some("video/mp4"));
+        assert_eq!(attachments[0].size_bytes, Some(11));
+        let saved_path = PathBuf::from(&attachments[0].path);
+        assert!(saved_path.starts_with(temp.path().join(".vegvisir/generated")));
+        assert_eq!(fs::read(saved_path)?, b"video bytes");
         Ok(())
     }
 

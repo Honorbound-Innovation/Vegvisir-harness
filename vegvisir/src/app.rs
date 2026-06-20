@@ -1047,6 +1047,29 @@ impl TuiApplication {
         Ok(response)
     }
 
+    pub fn send_imagine(&mut self, prompt: &str) -> anyhow::Result<String> {
+        let mut runner = ConversationRunner {
+            provider: ProviderRouter::from_registry(&self.provider_registry)
+                .get(&self.session.current_provider)
+                .cloned()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Unknown provider: {}", self.session.current_provider)
+                })?,
+            models: self.models.clone(),
+            tools: None,
+            tool_executor: None,
+            event_sink: None,
+            cancel_token: None,
+            steering_rx: None,
+        };
+        let response = runner.imagine(&mut self.session, prompt)?;
+        let _ = self
+            .cms
+            .complete_turn(&format!("/imagine {}", prompt.trim()), &response);
+        self.autosave_session();
+        Ok(response)
+    }
+
     pub fn send_headless(&mut self, content: &str) -> anyhow::Result<String> {
         self.send_headless_streaming(content, &mut |_| {})
     }

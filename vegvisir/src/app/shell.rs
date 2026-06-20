@@ -475,6 +475,13 @@ impl TuiApplication {
             "/remember" => self.remember_command(&args)?,
             "/context" => self.context_command(&args)?,
             "/model-request" => self.model_request_command(&args)?,
+            "/imagine" => {
+                if args.is_empty() {
+                    "Usage: /imagine <image prompt>".to_string()
+                } else {
+                    self.send_imagine(&args.join(" "))?
+                }
+            }
             "/models" => self.models_command(&args)?,
             "/model" => self.select_model(&args)?,
             "/effort" => self.effort_command(&args)?,
