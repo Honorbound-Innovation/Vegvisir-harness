@@ -8,8 +8,8 @@ use sha2::{Digest, Sha256};
 use crate::core::AgentProfile;
 
 use super::{
-    AgentComparison, AgentTemplate, MetricsReport, ValidationReport, compact_json, dash_if_empty,
-    list_or_dash, percent_or_dash,
+    AgentComparison, AgentTemplate, MetricsReport, ValidationIssue, ValidationReport, compact_json,
+    dash_if_empty, list_or_dash, percent_or_dash,
 };
 
 pub fn print_saved(profile: &AgentProfile, path: &Path, json_output: bool) -> anyhow::Result<()> {
@@ -277,13 +277,20 @@ pub fn print_validation_report(report: &ValidationReport) {
         return;
     }
     for issue in &report.errors {
-        println!("  ERROR {}: {}", issue.field, issue.message);
+        print_validation_issue("ERROR", issue);
     }
     for issue in &report.warnings {
-        println!("  WARN  {}: {}", issue.field, issue.message);
+        print_validation_issue("WARN ", issue);
     }
     for issue in &report.recommendations {
-        println!("  REC   {}: {}", issue.field, issue.message);
+        print_validation_issue("REC  ", issue);
+    }
+}
+
+fn print_validation_issue(label: &str, issue: &ValidationIssue) {
+    println!("  {label} {}: {}", issue.field, issue.message);
+    for detail in &issue.details {
+        println!("        - {detail}");
     }
 }
 

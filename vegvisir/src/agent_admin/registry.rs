@@ -3996,7 +3996,7 @@ fn validation_report_text(report: &ValidationReport) -> String {
         let _ = writeln!(&mut out, "");
         let _ = writeln!(&mut out, "Errors:");
         for issue in &report.errors {
-            let _ = writeln!(&mut out, "- [{}] {}", issue.field, issue.message);
+            write_validation_issue_text(&mut out, issue);
         }
     }
 
@@ -4004,7 +4004,7 @@ fn validation_report_text(report: &ValidationReport) -> String {
         let _ = writeln!(&mut out, "");
         let _ = writeln!(&mut out, "Warnings:");
         for issue in &report.warnings {
-            let _ = writeln!(&mut out, "- [{}] {}", issue.field, issue.message);
+            write_validation_issue_text(&mut out, issue);
         }
     }
 
@@ -4012,7 +4012,7 @@ fn validation_report_text(report: &ValidationReport) -> String {
         let _ = writeln!(&mut out, "");
         let _ = writeln!(&mut out, "Recommendations:");
         for issue in &report.recommendations {
-            let _ = writeln!(&mut out, "- [{}] {}", issue.field, issue.message);
+            write_validation_issue_text(&mut out, issue);
         }
     }
 
@@ -4020,6 +4020,15 @@ fn validation_report_text(report: &ValidationReport) -> String {
     let _ = writeln!(&mut out, "Esc / Enter / F1 closes this overlay.");
     let _ = writeln!(&mut out, "Use Up/Down/PageUp/PageDown to scroll.");
     out
+}
+
+fn write_validation_issue_text(out: &mut String, issue: &ValidationIssue) {
+    use std::fmt::Write as _;
+
+    let _ = writeln!(out, "- [{}] {}", issue.field, issue.message);
+    for detail in &issue.details {
+        let _ = writeln!(out, "    - {detail}");
+    }
 }
 
 fn render_text_input(
@@ -4799,16 +4808,22 @@ mod tests {
                 severity: "error".to_string(),
                 field: "display_name".to_string(),
                 message: "display name is empty".to_string(),
+                details: vec!["trigger: display_name is blank".to_string()],
             }],
             warnings: vec![ValidationIssue {
                 severity: "warning".to_string(),
                 field: "current_model".to_string(),
                 message: "model was not returned by discovery".to_string(),
+                details: vec![
+                    "current_model: \"gpt-x\"".to_string(),
+                    "live discovery result: model not returned".to_string(),
+                ],
             }],
             recommendations: vec![ValidationIssue {
                 severity: "recommendation".to_string(),
                 field: "description".to_string(),
                 message: "add a concise description".to_string(),
+                details: vec!["trigger: description is blank".to_string()],
             }],
         };
 
@@ -4817,10 +4832,13 @@ mod tests {
         assert!(text.contains("Status: blocked"));
         assert!(text.contains("Errors:"));
         assert!(text.contains("- [display_name] display name is empty"));
+        assert!(text.contains("    - trigger: display_name is blank"));
         assert!(text.contains("Warnings:"));
         assert!(text.contains("- [current_model] model was not returned by discovery"));
+        assert!(text.contains("    - current_model: \"gpt-x\""));
         assert!(text.contains("Recommendations:"));
         assert!(text.contains("- [description] add a concise description"));
+        assert!(text.contains("    - trigger: description is blank"));
     }
 
     #[test]

@@ -28,6 +28,8 @@ pub struct ValidationIssue {
     pub severity: String,
     pub field: String,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub details: Vec<String>,
 }
 
 #[derive(Clone, Serialize)]

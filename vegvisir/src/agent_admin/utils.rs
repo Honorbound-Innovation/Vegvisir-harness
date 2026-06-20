@@ -133,16 +133,41 @@ pub fn compact_json(value: &Value) -> String {
 }
 
 pub fn issue(severity: &str, field: &str, message: impl Into<String>) -> ValidationIssue {
+    issue_with_details(severity, field, message, std::iter::empty::<String>())
+}
+
+pub fn issue_with_details<I, S>(
+    severity: &str,
+    field: &str,
+    message: impl Into<String>,
+    details: I,
+) -> ValidationIssue
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
     ValidationIssue {
         severity: severity.to_string(),
         field: field.to_string(),
         message: message.into(),
+        details: details.into_iter().map(Into::into).collect(),
     }
 }
 
 pub fn secret_like(value: &str) -> bool {
+    secret_like_pattern(value).is_some()
+}
+
+pub fn secret_like_pattern(value: &str) -> Option<&'static str> {
     let lower = value.to_ascii_lowercase();
-    let patterns = [
+    secret_like_patterns()
+        .iter()
+        .copied()
+        .find(|pattern| lower.contains(pattern))
+}
+
+pub fn secret_like_patterns() -> [&'static str; 9] {
+    [
         "api_key",
         "apikey",
         "secret_key",
@@ -152,8 +177,7 @@ pub fn secret_like(value: &str) -> bool {
         "-----begin",
         "password=",
         "authorization: bearer",
-    ];
-    patterns.iter().any(|pattern| lower.contains(pattern))
+    ]
 }
 
 pub fn find_skiller_agent_artifacts(
