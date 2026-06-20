@@ -868,6 +868,10 @@ impl TuiApplication {
         if provider_registry.get(&session.current_provider).is_none() {
             session.current_provider = "demo".to_string();
         }
+        session.current_model = crate::core::repair_model_for_provider(
+            &session.current_provider,
+            &session.current_model,
+        );
         if model_known_invalid_or_missing(
             &models,
             &session.current_provider,
@@ -1917,6 +1921,31 @@ mod tests {
     }
 
     #[test]
+    fn startup_repairs_retired_openai_sso_codex_mini_model() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let data_root = tmp.path().join("home");
+        std::fs::create_dir_all(&data_root)?;
+        std::fs::write(
+            data_root.join("config.json"),
+            serde_json::json!({
+                "current_provider": "openai-sso",
+                "current_model": "gpt-5.1-codex-mini",
+                "subagent_provider": "openai-sso",
+                "subagent_model": "gpt-5.1-codex-mini"
+            })
+            .to_string(),
+        )?;
+
+        let app = TuiApplication::with_data_root(tmp.path(), &data_root)?;
+
+        assert_eq!(app.session.current_provider, "openai-sso");
+        assert_eq!(app.session.current_model, "gpt-5.4-mini");
+        assert_eq!(app.subagent_provider_defaults.provider, "openai-sso");
+        assert_eq!(app.subagent_provider_defaults.model, "gpt-5.4-mini");
+        Ok(())
+    }
+
+    #[test]
     fn startup_preserves_gpt_5_4_mini_saved_model() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let data_root = tmp.path().join("home");
@@ -1959,6 +1988,33 @@ mod tests {
     }
 
     #[test]
+    fn workspace_provider_override_repairs_retired_openai_sso_codex_mini_model()
+    -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        let data_root = tmp.path().join("home");
+        std::fs::create_dir_all(&workspace)?;
+        let mut app = TuiApplication::with_data_root(&workspace, &data_root)?;
+        let mut index = app.load_workspace_index();
+        index.provider_overrides.insert(
+            workspace.display().to_string(),
+            super::workspace_state::ProviderSelection {
+                provider: "openai-sso".to_string(),
+                model: "gpt-5.1-codex-mini".to_string(),
+                reasoning_level: None,
+                fast_mode: false,
+            },
+        );
+        app.save_workspace_index(&index)?;
+
+        app.apply_provider_selection_for_workspace();
+
+        assert_eq!(app.session.current_provider, "openai-sso");
+        assert_eq!(app.session.current_model, "gpt-5.4-mini");
+        Ok(())
+    }
+
+    #[test]
     fn workspace_provider_override_preserves_gpt_5_4_mini_model() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let workspace = tmp.path().join("workspace");
@@ -1981,6 +2037,19 @@ mod tests {
 
         assert_eq!(app.session.current_provider, "openai-sso");
         assert_eq!(app.session.current_model, "gpt-5.4-mini");
+        Ok(())
+    }
+
+    #[test]
+    fn model_command_repairs_retired_openai_sso_codex_mini_model() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.session.current_provider = "openai-sso".to_string();
+
+        let response = app.select_model(&["gpt-5.1-codex-mini".to_string()])?;
+
+        assert_eq!(app.session.current_model, "gpt-5.4-mini");
+        assert!(response.contains("Selected model gpt-5.4-mini"));
         Ok(())
     }
 
@@ -3648,7 +3717,7 @@ mod tests {
 
         assert_eq!(app.subagent_provider_defaults, defaults);
         assert_eq!(app.subagent_provider_defaults.provider, "openai-sso");
-        assert_eq!(app.subagent_provider_defaults.model, "gpt-5.5");
+        assert_eq!(app.subagent_provider_defaults.model, "gpt-5.4-mini");
         assert_eq!(
             app.active_subagent_limit,
             super::default_subagent_active_limit()

@@ -9,7 +9,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::{
-    core::{ConfigStore, ProviderRegistry},
+    core::{ConfigStore, ProviderRegistry, repair_model_for_provider},
     memory::default_vegvisir_data_root,
     provider::hbse_default_or_configured_socket,
 };
@@ -137,12 +137,24 @@ fn apply_setup(options: SetupOptions, choice: ProviderChoice) -> anyhow::Result<
             .filter(|model| !model.trim().is_empty())
             .or_else(|| (!choice.default_model.trim().is_empty()).then_some(choice.default_model))
         {
+            let provider = config
+                .get("current_provider")
+                .and_then(Value::as_str)
+                .unwrap_or(choice.hbse_provider);
             config.insert(
                 "current_model".to_string(),
-                Value::String(model.trim().to_string()),
+                Value::String(repair_model_for_provider(provider, model)),
             );
         } else {
             config.remove("current_model");
+        }
+    } else if let (Some(provider), Some(model)) = (
+        config.get("current_provider").and_then(Value::as_str),
+        config.get("current_model").and_then(Value::as_str),
+    ) {
+        let repaired = repair_model_for_provider(provider, model);
+        if repaired != model {
+            config.insert("current_model".to_string(), Value::String(repaired));
         }
     }
     config

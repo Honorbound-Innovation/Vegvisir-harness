@@ -1,5 +1,5 @@
 use super::super::*;
-use crate::core::ModelInfo;
+use crate::core::{ModelInfo, repair_model_for_provider};
 
 impl TuiApplication {
     pub(crate) fn model_request_command(&mut self, args: &[String]) -> anyhow::Result<String> {
@@ -127,6 +127,7 @@ impl TuiApplication {
             .cloned()
             .collect::<Vec<_>>()
             .join(" ");
+        let name = repair_model_for_provider(&self.session.current_provider, &name);
         if self.models.get(&name).is_none() {
             let _ = self.refresh_provider_models(&self.session.current_provider.clone());
         }

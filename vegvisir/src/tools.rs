@@ -22,6 +22,7 @@ use walkdir::WalkDir;
 
 use crate::{
     command_sandbox::{CommandSandboxConfig, build_sandboxed_command},
+    core::repair_model_for_provider,
     environment::get_env,
     guardrails::GuardrailEngine,
     memory::{ContextPrepareOptions, VegvisirCms, VegvisirCmsConfig},
@@ -527,10 +528,10 @@ impl SubagentProviderDefaults {
         let provider = provider.into();
         let model = model.into();
         let provider = provider.trim();
-        let model = model.trim();
+        let model = repair_model_for_provider(provider, &model);
         Self {
             provider: provider.to_string(),
-            model: model.to_string(),
+            model,
         }
     }
 }
@@ -1663,6 +1664,7 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
                 .unwrap_or_else(|| spawn_subagent_provider_defaults.provider.clone());
             let model = optional_nonempty_string(args.get("model"))
                 .unwrap_or_else(|| spawn_subagent_provider_defaults.model.clone());
+            let model = repair_model_for_provider(&provider, &model);
             let agent = optional_nonempty_string(args.get("agent"));
             let work_budget = parse_subagent_work_budget(
                 args.get("work_budget"),
@@ -3490,6 +3492,109 @@ echo '{"events":[]}'; exit 0
         assert_eq!(record.work_budget.max_output_bytes, Some(33_333));
         assert!(record.work_budget.allowed_tools.contains(&"rg".to_string()));
         assert_eq!(record.work_budget.notes, "custom defaults for deep review");
+        Ok(())
+    }
+
+    #[test]
+    fn spawn_subagent_repairs_retired_openai_sso_codex_mini_model() -> anyhow::Result<()> {
+        let _env_lock = env_var_test_lock();
+        let workspace = TempDir::new()?;
+        let fake_bin = workspace.path().join("fake-vegvisir");
+        std::fs::write(
+            &fake_bin,
+            r#"#!/bin/sh
+echo '{"events":[]}'; exit 0
+"#,
+        )?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&fake_bin)?.permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&fake_bin, permissions)?;
+        }
+        let _bin_guard = EnvVarGuard::set("VEGVISIR_BIN", &fake_bin);
+        let mut cms_config = VegvisirCmsConfig::for_workspace(workspace.path());
+        cms_config.db_path = workspace.path().join(".vegvisir/cms-v2.sqlite3");
+        let board_path = cms_config
+            .db_path
+            .parent()
+            .expect("cms db parent")
+            .join("subagents.json");
+        let registry = build_builtin_registry_with_cms_mode_subagent_limit_and_provider_defaults(
+            workspace.path(),
+            cms_config,
+            true,
+            3,
+            SubagentProviderDefaults::new("openai-sso", "gpt-5.1-codex-mini"),
+        )?;
+        let mut executor = ToolExecutor {
+            registry,
+            guardrails: GuardrailEngine {
+                policy: crate::guardrails::PermissionPolicy {
+                    allow_risky_tools: true,
+                    require_human_approval: false,
+                    bypass_approvals_and_sandbox: true,
+                    ..crate::guardrails::PermissionPolicy::default()
+                },
+                approvals: crate::guardrails::ApprovalLedger::default(),
+            },
+            runtime_policy: RuntimePolicy::default(),
+            logger: EventLogger::new(None),
+        };
+
+        let observation = executor.execute(ToolCall {
+            name: "spawn_subagent".to_string(),
+            args: serde_json::from_value(json!({
+                "goal": "inspect repaired model",
+                "name": "repaired-model-check",
+                "provider": "openai-sso",
+                "model": "gpt-5.1-codex-mini",
+                "file_scope": ["."]
+            }))?,
+        });
+
+        assert!(observation.ok, "{}", observation.content);
+        assert_eq!(observation.data.get("provider"), Some(&json!("openai-sso")));
+        assert_eq!(observation.data.get("model"), Some(&json!("gpt-5.4-mini")));
+        let mut records = load_subagent_board_records(&board_path)?;
+        for _ in 0..20 {
+            let finished = records.iter().any(|record| {
+                record.name == "repaired-model-check"
+                    && !matches!(
+                        record.status,
+                        SubAgentStatus::Queued | SubAgentStatus::Running
+                    )
+            });
+            if finished {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+            records = load_subagent_board_records(&board_path)?;
+        }
+        let record = records
+            .iter()
+            .find(|record| record.name == "repaired-model-check")
+            .expect("spawned repaired-model-check record");
+        assert_eq!(record.provider.as_deref(), Some("openai-sso"));
+        assert_eq!(record.model.as_deref(), Some("gpt-5.4-mini"));
+        assert!(
+            record
+                .observability
+                .launch_argv
+                .windows(2)
+                .any(|pair| pair == ["--model", "gpt-5.4-mini"]),
+            "expected repaired launch argv, got {:?}",
+            record.observability.launch_argv
+        );
+        assert!(
+            !record
+                .observability
+                .launch_argv
+                .iter()
+                .any(|arg| arg == "gpt-5.1-codex-mini"),
+            "retired model should not be passed to child argv"
+        );
         Ok(())
     }
 

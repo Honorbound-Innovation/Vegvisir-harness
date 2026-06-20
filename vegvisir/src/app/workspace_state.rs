@@ -57,20 +57,24 @@ impl TuiApplication {
     pub(crate) fn provider_selection_for_workspace(&self, workspace: &Path) -> ProviderSelection {
         let key = workspace.display().to_string();
         if let Some(selection) = self.load_workspace_index().provider_overrides.get(&key) {
-            return selection.clone();
+            let mut selection = selection.clone();
+            selection.model =
+                crate::core::repair_model_for_provider(&selection.provider, &selection.model);
+            return selection;
         }
         let defaults = self.config.load().unwrap_or_default();
+        let provider = defaults
+            .get("current_provider")
+            .and_then(Value::as_str)
+            .unwrap_or("demo")
+            .to_string();
+        let model = defaults
+            .get("current_model")
+            .and_then(Value::as_str)
+            .unwrap_or("demo-local");
         ProviderSelection {
-            provider: defaults
-                .get("current_provider")
-                .and_then(Value::as_str)
-                .unwrap_or("demo")
-                .to_string(),
-            model: defaults
-                .get("current_model")
-                .and_then(Value::as_str)
-                .unwrap_or("demo-local")
-                .to_string(),
+            model: crate::core::repair_model_for_provider(&provider, model),
+            provider,
             reasoning_level: defaults
                 .get("current_reasoning_level")
                 .and_then(Value::as_str)

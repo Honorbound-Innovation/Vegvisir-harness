@@ -843,6 +843,19 @@ pub struct ModelRegistry {
     models: BTreeMap<String, ModelInfo>,
 }
 
+pub const RETIRED_OPENAI_SSO_CODEX_MINI_MODEL: &str = "gpt-5.1-codex-mini";
+pub const OPENAI_SSO_FALLBACK_MODEL: &str = "gpt-5.4-mini";
+
+pub fn repair_model_for_provider(provider: &str, model: &str) -> String {
+    let provider = provider.trim();
+    let model = model.trim();
+    if provider == "openai-sso" && model == RETIRED_OPENAI_SSO_CODEX_MINI_MODEL {
+        OPENAI_SSO_FALLBACK_MODEL.to_string()
+    } else {
+        model.to_string()
+    }
+}
+
 impl ModelRegistry {
     pub fn register(&mut self, model: ModelInfo) {
         if !self.models.contains_key(&model.name) {
