@@ -166,14 +166,13 @@ pub fn secret_like_pattern(value: &str) -> Option<&'static str> {
         .find(|pattern| lower.contains(pattern))
 }
 
-pub fn secret_like_patterns() -> [&'static str; 9] {
+pub fn secret_like_patterns() -> [&'static str; 8] {
     [
         "api_key",
         "apikey",
         "secret_key",
         "access_token",
         "refresh_token",
-        "private key",
         "-----begin",
         "password=",
         "authorization: bearer",

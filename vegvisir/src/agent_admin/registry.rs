@@ -4316,6 +4316,27 @@ mod tests {
     }
 
     #[test]
+    fn validation_allows_private_key_phrase_in_prompt_material() -> anyhow::Result<()> {
+        let tmp = tempdir()?;
+        let admin = AgentRegistryAdmin::new(tmp.path().join("data"), tmp.path().join("workspace"))?;
+        let mut profile = AgentProfile::new(
+            "private-key-review",
+            "Private Key Review",
+            "Explain how private key handling should be documented without storing credentials.",
+        )?;
+        profile.description = "Prompt validation fixture".to_string();
+        let report = admin.validate_profile(&profile)?;
+        assert!(
+            !report.errors.iter().any(
+                |issue| issue.field == "system_prompt" && issue.message.contains("secret-like")
+            ),
+            "plain private key terminology should be allowed in prompts, got {}",
+            serde_json::to_string(&report.errors)?
+        );
+        Ok(())
+    }
+
+    #[test]
     fn validation_blocks_secret_like_prompt_material() -> anyhow::Result<()> {
         let tmp = tempdir()?;
         let admin = AgentRegistryAdmin::new(tmp.path().join("data"), tmp.path().join("workspace"))?;
@@ -4331,6 +4352,27 @@ mod tests {
                 |issue| issue.field == "system_prompt" && issue.message.contains("secret-like")
             ),
             "expected secret-like system_prompt error, got {}",
+            serde_json::to_string(&report.errors)?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn validation_blocks_private_key_pem_marker_in_prompt_material() -> anyhow::Result<()> {
+        let tmp = tempdir()?;
+        let admin = AgentRegistryAdmin::new(tmp.path().join("data"), tmp.path().join("workspace"))?;
+        let mut profile = AgentProfile::new(
+            "pem-review",
+            "PEM Review",
+            "Do not paste material beginning with -----BEGIN OPENSSH PRIVATE KEY----- into prompts.",
+        )?;
+        profile.description = "Prompt validation fixture".to_string();
+        let report = admin.validate_profile(&profile)?;
+        assert!(
+            report.errors.iter().any(
+                |issue| issue.field == "system_prompt" && issue.message.contains("secret-like")
+            ),
+            "expected PEM marker to remain blocked, got {}",
             serde_json::to_string(&report.errors)?
         );
         Ok(())
