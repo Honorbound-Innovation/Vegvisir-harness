@@ -18,6 +18,7 @@ use crate::core::{
     AgentProfile, AgentProfileStore, ModelRegistry, ProviderRegistry, load_skill_definitions,
     normalize_agent_id,
 };
+use crate::ui::input::InputState;
 use anyhow::{Context, bail};
 use crossterm::{
     cursor,
@@ -1315,6 +1316,10 @@ struct AdminTuiState {
     selected: usize,
     mode: AdminTuiMode,
     show_help: bool,
+    show_validation_overlay: bool,
+    validation_overlay_scroll: u16,
+    validation_report: Option<ValidationReport>,
+    prompt_editor: InputState,
     filter: String,
     input: String,
     action_selected: usize,
@@ -1342,6 +1347,7 @@ enum AdminTuiMode {
     BudgetNotesInput,
     ProviderInput,
     ModelInput,
+    PromptInput,
     ToolsInput,
     SkillsInput,
     McpInput,
@@ -1362,6 +1368,7 @@ enum TuiAction {
     ClearProvider,
     EditModel,
     ClearModel,
+    EditPrompt,
     EditTools,
     ClearTools,
     EditSkills,
@@ -1402,6 +1409,7 @@ impl TuiAction {
             Self::ClearProvider => "Clear provider and model",
             Self::EditModel => "Edit model",
             Self::ClearModel => "Clear model",
+            Self::EditPrompt => "Edit system prompt",
             Self::EditTools => "Edit tool allow-list",
             Self::ClearTools => "Clear tool allow-list",
             Self::EditSkills => "Edit enabled skills",
@@ -1446,6 +1454,7 @@ impl TuiAction {
             }
             Self::EditModel => "Open a model editor; model/provider compatibility is checked.",
             Self::ClearModel => "Clear the explicit model while preserving the provider.",
+            Self::EditPrompt => "Open a multiline system prompt editor for the selected agent.",
             Self::EditTools => {
                 "Replace the comma-separated tool allow-list after catalog validation."
             }
@@ -1508,6 +1517,7 @@ const TUI_ACTIONS: &[TuiAction] = &[
     TuiAction::ClearProvider,
     TuiAction::EditModel,
     TuiAction::ClearModel,
+    TuiAction::EditPrompt,
     TuiAction::EditTools,
     TuiAction::ClearTools,
     TuiAction::EditSkills,
@@ -1554,7 +1564,7 @@ fn run_admin_tui_inner(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
 ) -> anyhow::Result<()> {
     let mut state = AdminTuiState {
-        message: "N new agent, F/Ctrl+F search, F2/A actions, E scope, Y memory, B budget, P provider, O model, U tools, S skills, D MCP, L USRL, T tags, F1/? help"
+        message: "N new agent, F/Ctrl+F search, F2/A actions, E scope, Y memory, B budget, P provider, O model, I prompt, U tools, S skills, D MCP, L USRL, T tags, F1/? help"
             .to_string(),
         ..Default::default()
     };
@@ -1611,6 +1621,37 @@ fn handle_admin_tui_key(
     profiles: &[AgentProfile],
     key: KeyEvent,
 ) -> anyhow::Result<bool> {
+    if state.show_validation_overlay {
+        match key.code {
+            KeyCode::Esc
+            | KeyCode::Enter
+            | KeyCode::F(1)
+            | KeyCode::Char('v')
+            | KeyCode::Char('V') => {
+                state.show_validation_overlay = false;
+                state.message = "validation report closed".to_string();
+            }
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                return Ok(true);
+            }
+            KeyCode::Up => {
+                state.validation_overlay_scroll = state.validation_overlay_scroll.saturating_sub(1)
+            }
+            KeyCode::Down => {
+                state.validation_overlay_scroll = state.validation_overlay_scroll.saturating_add(1)
+            }
+            KeyCode::PageUp => {
+                state.validation_overlay_scroll = state.validation_overlay_scroll.saturating_sub(8)
+            }
+            KeyCode::PageDown => {
+                state.validation_overlay_scroll = state.validation_overlay_scroll.saturating_add(8)
+            }
+            KeyCode::Home => state.validation_overlay_scroll = 0,
+            _ => {}
+        }
+        return Ok(false);
+    }
+
     if state.show_help {
         match key.code {
             KeyCode::Esc | KeyCode::F(1) | KeyCode::Char('?') => {
@@ -1709,6 +1750,9 @@ fn handle_admin_tui_key(
         AdminTuiMode::ModelInput => {
             return handle_admin_tui_model_key(admin, state, profiles, key);
         }
+        AdminTuiMode::PromptInput => {
+            return handle_admin_tui_prompt_key(admin, state, profiles, key);
+        }
         AdminTuiMode::ToolsInput => {
             return handle_admin_tui_tools_key(admin, state, profiles, key);
         }
@@ -1748,6 +1792,7 @@ fn handle_admin_tui_key(
         KeyCode::Char('b') | KeyCode::Char('B') => begin_budget_max_steps_input(state, profiles),
         KeyCode::Char('p') | KeyCode::Char('P') => begin_provider_input(state, profiles),
         KeyCode::Char('o') | KeyCode::Char('O') => begin_model_input(state, profiles),
+        KeyCode::Char('i') | KeyCode::Char('I') => begin_prompt_input(state, profiles),
         KeyCode::Char('u') | KeyCode::Char('U') => begin_tools_input(state, profiles),
         KeyCode::Char('s') | KeyCode::Char('S') => begin_skills_input(state, profiles),
         KeyCode::Char('d') | KeyCode::Char('D') => begin_mcp_input(state, profiles),
@@ -2279,6 +2324,51 @@ fn handle_admin_tui_model_key(
     Ok(false)
 }
 
+fn handle_admin_tui_prompt_key(
+    admin: &AgentRegistryAdmin,
+    state: &mut AdminTuiState,
+    profiles: &[AgentProfile],
+    key: KeyEvent,
+) -> anyhow::Result<bool> {
+    match key.code {
+        KeyCode::Esc => {
+            state.mode = AdminTuiMode::Browse;
+            state.message = "system prompt edit cancelled".to_string();
+        }
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
+        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if let Some(profile) = profiles.get(state.selected) {
+                tui_set_system_prompt(admin, &profile.id, state.prompt_editor.buffer.clone())?;
+                state.mode = AdminTuiMode::Browse;
+                state.message = format!("system prompt saved for {}", profile.id);
+            } else {
+                state.message = "no selected agent to edit".to_string();
+            }
+        }
+        KeyCode::Enter => {
+            state.prompt_editor.append_text("\n", false);
+        }
+        KeyCode::Backspace => state.prompt_editor.backspace(),
+        KeyCode::Left => state.prompt_editor.move_cursor(-1),
+        KeyCode::Right => state.prompt_editor.move_cursor(1),
+        KeyCode::Up => {
+            let width = 72usize;
+            state.prompt_editor.move_cursor_vertical(-1, width);
+        }
+        KeyCode::Down => {
+            let width = 72usize;
+            state.prompt_editor.move_cursor_vertical(1, width);
+        }
+        KeyCode::Home => state.prompt_editor.move_cursor_home(),
+        KeyCode::End => state.prompt_editor.move_cursor_end(),
+        KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            state.prompt_editor.append_text(&c.to_string(), false);
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
 fn handle_admin_tui_tools_key(
     admin: &AgentRegistryAdmin,
     state: &mut AdminTuiState,
@@ -2596,6 +2686,21 @@ fn begin_model_input(state: &mut AdminTuiState, profiles: &[AgentProfile]) {
     }
 }
 
+fn begin_prompt_input(state: &mut AdminTuiState, profiles: &[AgentProfile]) {
+    if let Some(profile) = profiles.get(state.selected) {
+        state
+            .prompt_editor
+            .set_buffer(profile.system_prompt.clone());
+        state.mode = AdminTuiMode::PromptInput;
+        state.message = format!(
+            "editing system prompt for {} (Ctrl+S saves, Enter inserts newline)",
+            profile.id
+        );
+    } else {
+        state.message = "no selected agent to edit".to_string();
+    }
+}
+
 fn begin_tools_input(state: &mut AdminTuiState, profiles: &[AgentProfile]) {
     if let Some(profile) = profiles.get(state.selected) {
         state.input = profile.enabled_tools.join(", ");
@@ -2655,11 +2760,15 @@ fn apply_tui_action(
         TuiAction::Validate => {
             let report = admin.validate_profile(profile)?;
             state.message = format!(
-                "validation {}: {} errors, {} warnings",
+                "validation {}: {} errors, {} warnings, {} recommendations",
                 report.id,
                 report.errors.len(),
-                report.warnings.len()
+                report.warnings.len(),
+                report.recommendations.len()
             );
+            state.validation_overlay_scroll = 0;
+            state.show_validation_overlay = true;
+            state.validation_report = Some(report);
         }
         TuiAction::Metrics => {
             let report = load_metrics_report(&admin.data_root, &profile.id)?;
@@ -2704,6 +2813,7 @@ fn apply_tui_action(
             tui_set_model(admin, &profile.id, None)?;
             state.message = format!("model cleared for {}", profile.id);
         }
+        TuiAction::EditPrompt => begin_prompt_input(state, profiles),
         TuiAction::EditTools => begin_tools_input(state, profiles),
         TuiAction::ClearTools => {
             tui_set_tools(admin, &profile.id, Vec::new())?;
@@ -3073,6 +3183,20 @@ fn tui_set_model(
     Ok(())
 }
 
+fn tui_set_system_prompt(
+    admin: &AgentRegistryAdmin,
+    id: &str,
+    prompt: String,
+) -> anyhow::Result<()> {
+    let mut profile = admin.store.load(id)?;
+    if prompt.trim().is_empty() {
+        anyhow::bail!("system prompt must not be empty");
+    }
+    profile.system_prompt = prompt;
+    admin.save_touched_quiet(profile, "tui-prompt")?;
+    Ok(())
+}
+
 fn tui_set_tools(admin: &AgentRegistryAdmin, id: &str, tools: Vec<String>) -> anyhow::Result<()> {
     validate_tool_allow_list(&tools)?;
     let mut profile = admin.store.load(id)?;
@@ -3407,6 +3531,12 @@ fn draw_admin_tui(
     };
     frame.render_widget(detail, body[1]);
 
+    if state.show_validation_overlay {
+        if let Some(report) = state.validation_report.as_ref() {
+            render_validation_report_overlay(frame, area, report, state.validation_overlay_scroll);
+        }
+    }
+
     if state.show_help {
         let help_area = centered_rect(82, 70, area);
         frame.render_widget(Clear, help_area);
@@ -3575,6 +3705,7 @@ fn draw_admin_tui(
             "model",
             "Model id, '-' or 'clear' to inherit. Compatibility is validated on save.",
         ),
+        AdminTuiMode::PromptInput => render_prompt_editor_overlay(frame, area, state, selected_id),
         AdminTuiMode::ToolsInput => render_text_input(
             frame,
             area,
@@ -3706,6 +3837,189 @@ fn render_action_menu(frame: &mut ratatui::Frame<'_>, area: Rect, state: &AdminT
         .wrap(Wrap { trim: false }),
         chunks[1],
     );
+}
+
+fn render_prompt_editor_overlay(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    state: &AdminTuiState,
+    selected_id: Option<&str>,
+) {
+    let overlay_area = centered_rect(90, 84, area);
+    frame.render_widget(Clear, overlay_area);
+    frame.render_widget(
+        Block::default()
+            .title(Line::from(Span::styled(
+                " Edit system prompt ",
+                Style::default()
+                    .fg(TUI_FG)
+                    .bg(TUI_PANEL)
+                    .add_modifier(Modifier::BOLD),
+            )))
+            .borders(Borders::ALL)
+            .style(Style::default().fg(TUI_FG).bg(TUI_PANEL))
+            .border_style(Style::default().fg(TUI_CYAN).bg(TUI_PANEL)),
+        overlay_area,
+    );
+    let inner = Rect {
+        x: overlay_area.x + 1,
+        y: overlay_area.y + 1,
+        width: overlay_area.width.saturating_sub(2),
+        height: overlay_area.height.saturating_sub(2),
+    };
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Min(6),
+            Constraint::Length(3),
+        ])
+        .split(inner);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(vec![
+                Span::styled("agent: ", Style::default().fg(TUI_DIM).bg(TUI_PANEL)),
+                Span::styled(
+                    selected_id.unwrap_or("-"),
+                    Style::default().fg(TUI_GREEN).bg(TUI_PANEL),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("Ctrl+S save", Style::default().fg(TUI_CYAN).bg(TUI_PANEL)),
+                Span::styled(
+                    "   Enter newline   ",
+                    Style::default().fg(TUI_DIM).bg(TUI_PANEL),
+                ),
+                Span::styled("Esc cancel", Style::default().fg(TUI_CYAN).bg(TUI_PANEL)),
+            ]),
+        ])
+        .style(Style::default().fg(TUI_FG).bg(TUI_PANEL)),
+        chunks[0],
+    );
+    let prompt_width = chunks[1].width.saturating_sub(2) as usize;
+    let total_rows = state.prompt_editor.visual_line_count(prompt_width);
+    let (cursor_row, cursor_col) = state.prompt_editor.visual_cursor_position(prompt_width);
+    let max_rows = chunks[1].height.saturating_sub(2) as usize;
+    let scroll_row = cursor_row.saturating_sub(max_rows.saturating_sub(1));
+    let visible_row = cursor_row.saturating_sub(scroll_row);
+    frame.render_widget(
+        Paragraph::new(state.prompt_editor.buffer.clone())
+            .style(Style::default().fg(TUI_FG).bg(TUI_PANEL))
+            .wrap(Wrap { trim: false })
+            .scroll((scroll_row as u16, 0))
+            .block(admin_tui_block("System prompt", TUI_BORDER)),
+        chunks[1],
+    );
+    frame.set_cursor_position(ratatui::layout::Position::new(
+        chunks[1].x + 1 + cursor_col as u16,
+        chunks[1].y + 1 + visible_row as u16,
+    ));
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("lines: ", Style::default().fg(TUI_DIM).bg(TUI_PANEL)),
+            Span::styled(
+                total_rows.to_string(),
+                Style::default().fg(TUI_AMBER).bg(TUI_PANEL),
+            ),
+            Span::styled("  cursor: ", Style::default().fg(TUI_DIM).bg(TUI_PANEL)),
+            Span::styled(
+                format!("{},{}", cursor_row + 1, cursor_col + 1),
+                Style::default().fg(TUI_AMBER).bg(TUI_PANEL),
+            ),
+        ]))
+        .style(Style::default().fg(TUI_FG).bg(TUI_PANEL))
+        .block(admin_tui_block("Prompt status", TUI_BORDER)),
+        chunks[2],
+    );
+}
+
+fn render_validation_report_overlay(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    report: &ValidationReport,
+    scroll: u16,
+) {
+    let overlay_area = centered_rect(86, 78, area);
+    frame.render_widget(Clear, overlay_area);
+    frame.render_widget(
+        Block::default()
+            .title(Line::from(Span::styled(
+                " Validation report ",
+                Style::default()
+                    .fg(TUI_FG)
+                    .bg(TUI_PANEL)
+                    .add_modifier(Modifier::BOLD),
+            )))
+            .borders(Borders::ALL)
+            .style(Style::default().fg(TUI_FG).bg(TUI_PANEL))
+            .border_style(Style::default().fg(TUI_RED).bg(TUI_PANEL)),
+        overlay_area,
+    );
+    let inner = Rect {
+        x: overlay_area.x + 1,
+        y: overlay_area.y + 1,
+        width: overlay_area.width.saturating_sub(2),
+        height: overlay_area.height.saturating_sub(2),
+    };
+    let text = validation_report_text(report);
+    frame.render_widget(
+        Paragraph::new(text)
+            .style(Style::default().fg(TUI_FG).bg(TUI_PANEL))
+            .wrap(Wrap { trim: false })
+            .scroll((scroll, 0)),
+        inner,
+    );
+}
+
+fn validation_report_text(report: &ValidationReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::new();
+    let _ = writeln!(&mut out, "Agent: {}", report.id);
+    let _ = writeln!(&mut out, "Status: {}", report.status);
+    let _ = writeln!(
+        &mut out,
+        "Summary: {} error(s), {} warning(s), {} recommendation(s)",
+        report.errors.len(),
+        report.warnings.len(),
+        report.recommendations.len()
+    );
+
+    if report.errors.is_empty() && report.warnings.is_empty() && report.recommendations.is_empty() {
+        let _ = writeln!(&mut out, "");
+        let _ = writeln!(&mut out, "No validation issues found.");
+        let _ = writeln!(&mut out, "Press Esc or Enter to close this overlay.");
+        return out;
+    }
+
+    if !report.errors.is_empty() {
+        let _ = writeln!(&mut out, "");
+        let _ = writeln!(&mut out, "Errors:");
+        for issue in &report.errors {
+            let _ = writeln!(&mut out, "- [{}] {}", issue.field, issue.message);
+        }
+    }
+
+    if !report.warnings.is_empty() {
+        let _ = writeln!(&mut out, "");
+        let _ = writeln!(&mut out, "Warnings:");
+        for issue in &report.warnings {
+            let _ = writeln!(&mut out, "- [{}] {}", issue.field, issue.message);
+        }
+    }
+
+    if !report.recommendations.is_empty() {
+        let _ = writeln!(&mut out, "");
+        let _ = writeln!(&mut out, "Recommendations:");
+        for issue in &report.recommendations {
+            let _ = writeln!(&mut out, "- [{}] {}", issue.field, issue.message);
+        }
+    }
+
+    let _ = writeln!(&mut out, "");
+    let _ = writeln!(&mut out, "Esc / Enter / F1 closes this overlay.");
+    let _ = writeln!(&mut out, "Use Up/Down/PageUp/PageDown to scroll.");
+    out
 }
 
 fn render_text_input(
@@ -4067,7 +4381,7 @@ mod tests {
         assert!(!help.contains("Vim"));
         assert!(!help.contains("q           quit"));
         assert!(help.contains("F / Ctrl+F"));
-        assert!(help.contains("There is no ':' command"));
+        assert!(help.contains("The TUI includes direct prompt editing"));
     }
 
     #[test]
@@ -4155,9 +4469,16 @@ mod tests {
         assert!(help.contains("D           edit comma-separated allowed MCP servers"));
         assert!(help.contains("L           edit comma-separated bound USRL contracts"));
         assert!(help.contains("Action menu:"));
-        assert!(help.contains("Scope/memory/budget/provider/model/permission/tag edit modes:"));
+        assert!(
+            help.contains("Scope/memory/budget/provider/model/permission/tag/prompt edit modes:")
+                || help.contains(
+                    "Scope/memory/budget/provider/model/prompt/permission/tag edit modes:"
+                )
+        );
+        assert!(help.contains("System prompt editor:"));
+        assert!(help.contains("I           edit system prompt"));
         assert!(!help.contains("Vim"));
-        assert!(help.contains("There is no ':' command"));
+        assert!(help.contains("The TUI includes direct prompt editing"));
     }
 
     #[test]
@@ -4356,6 +4677,59 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn tui_i_key_opens_and_saves_system_prompt_editor() -> anyhow::Result<()> {
+        let tmp = tempdir()?;
+        let admin = AgentRegistryAdmin::new(tmp.path().join("data"), tmp.path().join("workspace"))?;
+        admin.create_template(
+            CreateTemplateArgs {
+                mode: "tester".to_string(),
+                id: "qa".to_string(),
+                name: Some("QA".to_string()),
+                description: None,
+                force: false,
+            },
+            true,
+        )?;
+        let profiles = admin.store.list()?;
+        let original_prompt = profiles[0].system_prompt.clone();
+        let mut state = AdminTuiState::default();
+
+        let should_quit = handle_admin_tui_key_safely(
+            &admin,
+            &mut state,
+            &profiles,
+            KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT),
+        )?;
+
+        assert!(!should_quit);
+        assert_eq!(state.mode, AdminTuiMode::PromptInput);
+        assert_eq!(state.prompt_editor.buffer, original_prompt);
+        assert!(state.message.contains("editing system prompt for qa"));
+
+        state
+            .prompt_editor
+            .set_buffer("You are QA.\nReview changes thoroughly.".to_string());
+        let should_quit = handle_admin_tui_key_safely(
+            &admin,
+            &mut state,
+            &profiles,
+            KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
+        )?;
+
+        assert!(!should_quit);
+        assert_eq!(state.mode, AdminTuiMode::Browse);
+        assert_eq!(state.message, "system prompt saved for qa");
+        let profile = admin.store.load("qa")?;
+        assert_eq!(
+            profile.system_prompt,
+            "You are QA.\nReview changes thoroughly."
+        );
+        let history = admin.load_history()?;
+        assert!(history.iter().any(|event| event.action == "tui-prompt"));
+        Ok(())
+    }
+
+    #[test]
     fn tui_create_agent_key_creates_draft_agents_and_handles_duplicates() -> anyhow::Result<()> {
         let tmp = tempdir()?;
         let admin = AgentRegistryAdmin::new(tmp.path().join("data"), tmp.path().join("workspace"))?;
@@ -4413,6 +4787,79 @@ mod tests {
         let profile = admin.store.load("custom-helper")?;
         assert_eq!(profile.mode, "custom");
         assert!(profile.system_prompt.contains("custom-helper"));
+        Ok(())
+    }
+
+    #[test]
+    fn validation_overlay_formats_reports_for_easy_viewing() {
+        let report = ValidationReport {
+            id: "qa".to_string(),
+            status: "blocked".to_string(),
+            errors: vec![ValidationIssue {
+                severity: "error".to_string(),
+                field: "display_name".to_string(),
+                message: "display name is empty".to_string(),
+            }],
+            warnings: vec![ValidationIssue {
+                severity: "warning".to_string(),
+                field: "current_model".to_string(),
+                message: "model was not returned by discovery".to_string(),
+            }],
+            recommendations: vec![ValidationIssue {
+                severity: "recommendation".to_string(),
+                field: "description".to_string(),
+                message: "add a concise description".to_string(),
+            }],
+        };
+
+        let text = validation_report_text(&report);
+        assert!(text.contains("Agent: qa"));
+        assert!(text.contains("Status: blocked"));
+        assert!(text.contains("Errors:"));
+        assert!(text.contains("- [display_name] display name is empty"));
+        assert!(text.contains("Warnings:"));
+        assert!(text.contains("- [current_model] model was not returned by discovery"));
+        assert!(text.contains("Recommendations:"));
+        assert!(text.contains("- [description] add a concise description"));
+    }
+
+    #[test]
+    fn validation_action_opens_and_closes_overlay() -> anyhow::Result<()> {
+        let tmp = tempdir()?;
+        let admin = AgentRegistryAdmin::new(tmp.path().join("data"), tmp.path().join("workspace"))?;
+        admin.create_template(
+            CreateTemplateArgs {
+                mode: "tester".to_string(),
+                id: "qa".to_string(),
+                name: Some("QA".to_string()),
+                description: None,
+                force: false,
+            },
+            true,
+        )?;
+        let profiles = admin.store.list()?;
+        let mut state = AdminTuiState::default();
+
+        let should_quit = handle_admin_tui_key_safely(
+            &admin,
+            &mut state,
+            &profiles,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )?;
+        assert!(!should_quit);
+        assert!(state.show_validation_overlay);
+        assert!(state.validation_report.is_some());
+        assert!(state.message.contains("validation qa:"));
+
+        let should_quit = handle_admin_tui_key_safely(
+            &admin,
+            &mut state,
+            &profiles,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        )?;
+        assert!(!should_quit);
+        assert!(!state.show_validation_overlay);
+        assert_eq!(state.message, "validation report closed");
         Ok(())
     }
 

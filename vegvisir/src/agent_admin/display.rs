@@ -47,6 +47,7 @@ pub fn tui_help_text() -> &'static str {
   B           edit budget max steps for selected agent
   P           edit provider for selected agent ('-' or 'clear' inherits)
   O           edit model for selected agent ('-' or 'clear' inherits)
+  I           edit system prompt for selected agent
   U           edit comma-separated tool allow-list for selected agent
   S           edit comma-separated enabled skills for selected agent
   D           edit comma-separated allowed MCP servers for selected agent
@@ -76,9 +77,15 @@ Create mode:
   Enter       create a draft agent; duplicate/invalid ids stay in the TUI and show an error
   Esc         cancel
 
-Scope/memory/budget/provider/model/permission/tag edit modes:
+Scope/memory/budget/provider/model/permission/tag/prompt edit modes:
   type text   edit the selected field
   Enter       save the field; invalid entries stay in the TUI and show an error
+  Esc         cancel
+
+System prompt editor:
+  type text   edit multiline prompt text directly in the overlay
+  Enter       insert a newline
+  Ctrl+S      save the prompt
   Esc         cancel
 
 Search mode:
@@ -88,8 +95,8 @@ Search mode:
 
 Clone, delete, import, export, prompt replacement, bulk set operations,
 and registry-wide operations still use explicit vegvisir-agent-admin CLI
-subcommands outside the TUI. There is no ':' command
-entry in this TUI."
+subcommands outside the TUI. The TUI includes direct prompt editing, but there
+is no ':' command entry in this TUI."
 }
 
 pub fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
