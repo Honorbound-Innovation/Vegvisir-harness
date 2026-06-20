@@ -5,7 +5,12 @@ use std::{
 
 use serde_json::{Value, json};
 
-use crate::core::{ChatMessage, ModelRegistry, ProviderRegistry};
+use crate::{
+    core::{ChatMessage, ModelRegistry, ProviderRegistry},
+    subagents::{
+        SubAgentFileChange, SubAgentObservedEvent, SubAgentObservedEventKind, SubAgentTaskRecord,
+    },
+};
 
 use super::workspace_state::user_storage_slug;
 
@@ -383,6 +388,244 @@ fn short_stable_hash(value: &str) -> String {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     format!("{hash:016x}")
+}
+
+pub(crate) fn format_subagent_record_markdown(record: &SubAgentTaskRecord) -> String {
+    let scope = if record.file_scope.is_empty() {
+        "<unspecified>".to_string()
+    } else {
+        record
+            .file_scope
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut out = format!(
+        "## Subagent trace: {name}\n\n- id: `{id}`\n- status: `{status:?}`\n- workspace: `{workspace}`\n- file_scope: {scope}\n- created: {created}\n- started: {started}\n- finished: {finished}\n- provider/model: {provider}/{model}\n\n**Goal**\n\n{goal}",
+        name = record.name,
+        id = record.id,
+        status = record.status,
+        workspace = record.workspace.display(),
+        created = record.created_at.to_rfc3339(),
+        started = record
+            .started_at
+            .map(|ts| ts.to_rfc3339())
+            .unwrap_or_else(|| "none".to_string()),
+        finished = record
+            .finished_at
+            .map(|ts| ts.to_rfc3339())
+            .unwrap_or_else(|| "none".to_string()),
+        provider = record.provider.as_deref().unwrap_or("-"),
+        model = record.model.as_deref().unwrap_or("-"),
+        goal = record.goal.trim(),
+    );
+
+    if !record.work_budget.is_empty() {
+        out.push_str(&markdown_details(
+            "work budget",
+            &format!(
+                "```json\n{}\n```",
+                serde_json::to_string_pretty(&record.work_budget).unwrap_or_default()
+            ),
+        ));
+    }
+    if !record.observability.launch_argv.is_empty()
+        || !record.observability.launch_env_keys.is_empty()
+    {
+        let mut body = String::new();
+        if !record.observability.launch_argv.is_empty() {
+            body.push_str("Launch argv:\n\n```text\n");
+            body.push_str(&record.observability.launch_argv.join(" "));
+            body.push_str("\n```\n");
+        }
+        if !record.observability.launch_env_keys.is_empty() {
+            body.push_str("\nLaunch env keys:\n\n");
+            body.push_str(&record.observability.launch_env_keys.join(", "));
+            body.push('\n');
+        }
+        out.push_str(&markdown_details("launch details", &body));
+    }
+    if !record.observability.events.is_empty() {
+        out.push_str(&markdown_details(
+            &format!("observed events ({})", record.observability.events.len()),
+            &format_subagent_events_body(&record.observability.events),
+        ));
+    }
+    if !record.observability.file_changes.is_empty() {
+        out.push_str(&markdown_details(
+            &format!("file changes ({})", record.observability.file_changes.len()),
+            &format_subagent_file_changes_body(&record.observability.file_changes),
+        ));
+    }
+    if !record.observability.notes.is_empty() {
+        out.push_str(&markdown_details(
+            &format!("observability notes ({})", record.observability.notes.len()),
+            &record
+                .observability
+                .notes
+                .iter()
+                .map(|note| format!("- {}", note.trim()))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ));
+    }
+    if let Some(error) = record
+        .error
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        out.push_str(&markdown_details(
+            "error",
+            &format!("```text\n{}\n```", error.trim()),
+        ));
+    }
+    if let Some(final_answer) = record
+        .final_answer
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        out.push_str(&markdown_details(
+            "captured output / final report",
+            &format!("```text\n{}\n```", final_answer.trim()),
+        ));
+    }
+    out
+}
+
+pub(crate) fn format_subagent_events_markdown(record: &SubAgentTaskRecord) -> String {
+    if record.observability.events.is_empty() {
+        return format!("No observed events captured for subagent {}.", record.id);
+    }
+    format!(
+        "## Subagent events: {}\n{}",
+        record.name,
+        markdown_details(
+            &format!("observed events ({})", record.observability.events.len()),
+            &format_subagent_events_body(&record.observability.events),
+        )
+    )
+}
+
+pub(crate) fn format_subagent_diffs_markdown(record: &SubAgentTaskRecord) -> String {
+    let changes = &record.observability.file_changes;
+    if changes.is_empty() {
+        return format!("No file-change diffs captured for subagent {}.", record.id);
+    }
+    format!(
+        "## Subagent diffs: {}\n{}",
+        record.name,
+        markdown_details(
+            &format!("file changes ({})", changes.len()),
+            &format_subagent_file_changes_body(changes),
+        )
+    )
+}
+
+fn format_subagent_events_body(events: &[SubAgentObservedEvent]) -> String {
+    events
+        .iter()
+        .enumerate()
+        .map(|(index, event)| {
+            let mut line = format!(
+                "{}. **{}**",
+                index + 1,
+                subagent_event_kind_label(&event.kind)
+            );
+            if let Some(name) = event.name.as_deref().filter(|value| !value.is_empty()) {
+                line.push_str(&format!(" `{name}`"));
+            }
+            if let Some(ok) = event.ok {
+                line.push_str(&format!(" — ok={ok}"));
+            }
+            if let Some(summary) = event
+                .summary
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+            {
+                line.push_str(&format!(" — {}", summary.trim()));
+            }
+            if let Some(args) = event
+                .args
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+            {
+                line.push_str("\n\n   Args:\n\n   ```json\n");
+                line.push_str(&indent_lines(args.trim(), "   "));
+                line.push_str("\n   ```");
+            }
+            if let Some(detail) = event
+                .detail
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+            {
+                line.push_str("\n\n   Detail:\n\n   ```text\n");
+                line.push_str(&indent_lines(detail.trim(), "   "));
+                line.push_str("\n   ```");
+            }
+            line
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn format_subagent_file_changes_body(changes: &[SubAgentFileChange]) -> String {
+    changes
+        .iter()
+        .map(|change| {
+            let mut item = format!(
+                "### {:?}: `{}`\n\n- before_bytes: {:?}\n- after_bytes: {:?}",
+                change.change,
+                change.path.display(),
+                change.before_bytes,
+                change.after_bytes
+            );
+            if let Some(diff) = change
+                .diff
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+            {
+                item.push_str("\n\n```diff\n");
+                item.push_str(diff.trim());
+                item.push_str("\n```");
+            } else {
+                item.push_str("\n\n_No diff text captured._");
+            }
+            item
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn markdown_details(summary: &str, body: &str) -> String {
+    format!(
+        "\n\n<details>\n<summary>{}</summary>\n\n{}\n\n</details>",
+        escape_html_text(summary),
+        body.trim()
+    )
+}
+
+fn escape_html_text(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn subagent_event_kind_label(kind: &SubAgentObservedEventKind) -> &'static str {
+    match kind {
+        SubAgentObservedEventKind::Activity => "activity",
+        SubAgentObservedEventKind::ToolStart => "tool start",
+        SubAgentObservedEventKind::ToolEnd => "tool end",
+    }
+}
+
+fn indent_lines(value: &str, prefix: &str) -> String {
+    value
+        .lines()
+        .map(|line| format!("{prefix}{line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub(crate) fn estimated_message_line_count(message: &ChatMessage) -> usize {

@@ -1402,6 +1402,7 @@ enum ChatContentSegmentKind {
     Markdown,
     Code,
     Diff,
+    Details,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1429,6 +1430,9 @@ fn render_chat_content(text: &str, width: usize, base_style: Style) -> Vec<Line<
             ChatContentSegmentKind::Code | ChatContentSegmentKind::Diff => {
                 render_code_block(&mut out, &segment.language, &segment.content, width);
             }
+            ChatContentSegmentKind::Details => {
+                out.push(render_collapsed_details_line(&segment.content, width));
+            }
         }
     }
     while out.last().is_some_and(is_blank_line) {
@@ -1438,6 +1442,28 @@ fn render_chat_content(text: &str, width: usize, base_style: Style) -> Vec<Line<
         out.push(Line::from(""));
     }
     out
+}
+
+fn render_collapsed_details_line(summary: &str, width: usize) -> Line<'static> {
+    let label = html_unescape_basic(summary.trim()).trim().to_string();
+    let text = if label.is_empty() {
+        "▸ details".to_string()
+    } else {
+        format!("▸ {label}")
+    };
+    Line::from(Span::styled(
+        truncate(&text, width.max(10)),
+        Style::default().fg(DIM).add_modifier(Modifier::ITALIC),
+    ))
+}
+
+fn html_unescape_basic(value: &str) -> String {
+    value
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
 }
 
 fn is_blank_line(line: &Line<'static>) -> bool {
@@ -1456,6 +1482,8 @@ fn segment_chat_content(text: &str) -> Vec<ChatContentSegment> {
     let mut code_language = String::from("text");
     let mut in_fence = false;
     let mut raw_diff_mode = false;
+    let mut in_details = false;
+    let mut details_summary = String::new();
 
     let flush_markdown = |segments: &mut Vec<ChatContentSegment>, markdown: &mut Vec<String>| {
         if markdown.iter().any(|line| !line.trim().is_empty()) {
@@ -1503,6 +1531,61 @@ fn segment_chat_content(text: &str) -> Vec<ChatContentSegment> {
     };
 
     for line in text.lines() {
+        let trimmed = line.trim_start();
+        if in_details {
+            if details_summary.is_empty()
+                && let Some(summary) = extract_html_summary_text(line)
+            {
+                details_summary = summary;
+            }
+            if trimmed.eq_ignore_ascii_case("</details>")
+                || trimmed.to_ascii_lowercase().contains("</details>")
+            {
+                segments.push(ChatContentSegment {
+                    kind: ChatContentSegmentKind::Details,
+                    language: String::new(),
+                    content: if details_summary.trim().is_empty() {
+                        "details".to_string()
+                    } else {
+                        details_summary.trim().to_string()
+                    },
+                });
+                in_details = false;
+                details_summary.clear();
+            }
+            continue;
+        }
+        if is_details_start(trimmed) {
+            if !pending_code.is_empty() {
+                if pending_code_should_render_as_code(&pending_code) {
+                    flush_pending_code_as_code(
+                        &mut segments,
+                        &mut markdown,
+                        &mut pending_code,
+                        &pending_language,
+                    );
+                } else {
+                    flush_pending_code_as_markdown(&mut markdown, &mut pending_code);
+                }
+            }
+            flush_markdown(&mut segments, &mut markdown);
+            details_summary = extract_html_summary_text(line).unwrap_or_default();
+            if trimmed.to_ascii_lowercase().contains("</details>") {
+                segments.push(ChatContentSegment {
+                    kind: ChatContentSegmentKind::Details,
+                    language: String::new(),
+                    content: if details_summary.trim().is_empty() {
+                        "details".to_string()
+                    } else {
+                        details_summary.trim().to_string()
+                    },
+                });
+                details_summary.clear();
+            } else {
+                in_details = true;
+            }
+            continue;
+        }
         let trimmed = line.trim_start();
         if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
             // Existing fenced blocks are valid Markdown. Keep them in the
@@ -1587,6 +1670,17 @@ fn segment_chat_content(text: &str) -> Vec<ChatContentSegment> {
         markdown.push(line.to_string());
     }
 
+    if in_details {
+        segments.push(ChatContentSegment {
+            kind: ChatContentSegmentKind::Details,
+            language: String::new(),
+            content: if details_summary.trim().is_empty() {
+                "details".to_string()
+            } else {
+                details_summary.trim().to_string()
+            },
+        });
+    }
     if raw_diff_mode {
         flush_code(&mut segments, &mut code, code_kind, &code_language);
     }
@@ -1604,6 +1698,18 @@ fn segment_chat_content(text: &str) -> Vec<ChatContentSegment> {
     }
     flush_markdown(&mut segments, &mut markdown);
     segments
+}
+
+fn is_details_start(trimmed: &str) -> bool {
+    trimmed.to_ascii_lowercase().starts_with("<details")
+}
+
+fn extract_html_summary_text(line: &str) -> Option<String> {
+    let lower = line.to_ascii_lowercase();
+    let start_tag_start = lower.find("<summary")?;
+    let after_start_tag = lower[start_tag_start..].find('>')? + start_tag_start + 1;
+    let end_tag_start = lower[after_start_tag..].find("</summary>")? + after_start_tag;
+    Some(line[after_start_tag..end_tag_start].trim().to_string())
 }
 
 fn trim_blank_edge_lines(lines: &[String]) -> Vec<String> {
@@ -3662,6 +3768,37 @@ mod tests {
 
         assert_eq!(fn_span.style.fg, Some(CYAN));
         assert_eq!(string_span.style.fg, Some(GREEN));
+    }
+
+    #[test]
+    fn ratatui_markdown_renderer_collapses_details_blocks() {
+        let markdown = [
+            "Visible intro",
+            "",
+            "<details>",
+            "<summary>observed events (2)</summary>",
+            "",
+            "```text",
+            "very noisy hidden trace body",
+            "```",
+            "",
+            "</details>",
+            "",
+            "Visible outro",
+        ]
+        .join("\n");
+
+        let lines = render_markdown(&markdown, 100, Style::default().fg(FG));
+        let rendered = lines
+            .iter()
+            .map(line_to_plain_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("Visible intro"));
+        assert!(rendered.contains("▸ observed events (2)"));
+        assert!(rendered.contains("Visible outro"));
+        assert!(!rendered.contains("very noisy hidden trace body"));
     }
 
     #[test]

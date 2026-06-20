@@ -682,12 +682,16 @@ impl TuiApplication {
             }
             Some("show") => {
                 let Some(id_or_name) = args.get(1) else {
-                    return Ok("Usage: /subagents show <id-or-name>".to_string());
+                    return Ok("Usage: /subagents show <id-or-name> [--json]".to_string());
                 };
                 let Some(record) = self.find_subagent_record(id_or_name)? else {
                     return Ok(format!("Unknown subagent task: {id_or_name}"));
                 };
-                Ok(serde_json::to_string_pretty(&record)?)
+                if wants_json(args) {
+                    Ok(serde_json::to_string_pretty(&record)?)
+                } else {
+                    Ok(format_subagent_record_markdown(&record))
+                }
             }
             Some("timeline") => self.subagents_timeline(),
             Some("diff") => {
@@ -697,7 +701,7 @@ impl TuiApplication {
                 let Some(record) = self.find_subagent_record(id_or_name)? else {
                     return Ok(format!("Unknown subagent task: {id_or_name}"));
                 };
-                Ok(format_subagent_diffs(&record))
+                Ok(format_subagent_diffs_markdown(&record))
             }
             Some("events") => {
                 let Some(id_or_name) = args.get(1) else {
@@ -706,7 +710,7 @@ impl TuiApplication {
                 let Some(record) = self.find_subagent_record(id_or_name)? else {
                     return Ok(format!("Unknown subagent task: {id_or_name}"));
                 };
-                Ok(format_subagent_events(&record))
+                Ok(format_subagent_events_markdown(&record))
             }
             Some("artifacts") => {
                 let Some(id_or_name) = args.get(1) else {
@@ -1408,55 +1412,6 @@ fn format_duration(seconds: i64) -> String {
     } else {
         format!("{secs}s")
     }
-}
-
-fn format_subagent_diffs(record: &SubAgentTaskRecord) -> String {
-    let changes = &record.observability.file_changes;
-    if changes.is_empty() {
-        return format!("No file-change diffs captured for subagent {}.", record.id);
-    }
-    let mut out = format!("Subagent diffs for {} ({})\n", record.id, record.name);
-    for change in changes {
-        out.push_str(&format!(
-            "\n# {:?}: {} before_bytes={:?} after_bytes={:?}\n",
-            change.change,
-            change.path.display(),
-            change.before_bytes,
-            change.after_bytes
-        ));
-        if let Some(diff) = &change.diff {
-            out.push_str(diff.trim());
-            out.push('\n');
-        } else {
-            out.push_str("<no diff text captured>\n");
-        }
-    }
-    out
-}
-
-fn format_subagent_events(record: &SubAgentTaskRecord) -> String {
-    if record.observability.events.is_empty() {
-        return format!("No observed events captured for subagent {}.", record.id);
-    }
-    record
-        .observability
-        .events
-        .iter()
-        .map(|event| {
-            format!(
-                "{:?} name={} ok={} summary={} args={}",
-                event.kind,
-                event.name.as_deref().unwrap_or("-"),
-                event
-                    .ok
-                    .map(|ok| ok.to_string())
-                    .unwrap_or_else(|| "-".to_string()),
-                event.summary.as_deref().unwrap_or("-"),
-                event.args.as_deref().unwrap_or("-")
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 #[cfg(test)]

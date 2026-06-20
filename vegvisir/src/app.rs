@@ -3170,16 +3170,17 @@ mod tests {
             .map(|message| message.content.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(transcript.contains("Subagent transcript update: Completed"));
+        assert!(transcript.contains("## Subagent trace: reviewer"));
         assert!(transcript.contains("subagent-1"));
         assert!(transcript.contains("inspect transcript logging"));
         assert!(transcript.contains("child trace and final answer"));
-        assert!(transcript.contains("Subagent launch argv:"));
+        assert!(transcript.contains("<details>"));
+        assert!(transcript.contains("<summary>launch details</summary>"));
         assert!(transcript.contains("VEGVISIR_MAX_TOOL_ROUNDS"));
-        assert!(transcript.contains("Subagent observed actions:"));
+        assert!(transcript.contains("<summary>observed events (1)</summary>"));
         assert!(transcript.contains("write_file"));
-        assert!(transcript.contains("Subagent file changes:"));
-        assert!(transcript.contains("Modified: src/lib.rs"));
+        assert!(transcript.contains("<summary>file changes (1)</summary>"));
+        assert!(transcript.contains("Modified: `src/lib.rs`"));
         assert!(transcript.contains("```diff"));
         assert!(transcript.contains("+new"));
         assert!(transcript.contains("snapshot ok"));
@@ -3927,6 +3928,76 @@ mod tests {
         assert!(response.contains("Active subagent limit set to 5"));
         let policy = app.execute_command("/subagents policy")?.unwrap();
         assert!(policy.contains("current active subagent limit is 5"));
+        Ok(())
+    }
+
+    #[test]
+    fn subagents_show_formats_trace_as_collapsible_markdown_by_default() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace)?;
+        let mut app = TuiApplication::with_data_root(&workspace, tmp.path().join("home"))?;
+        let now = chrono::Utc::now();
+        let record = crate::subagents::SubAgentTaskRecord {
+            id: "sub-1".to_string(),
+            name: "trace-check".to_string(),
+            workspace: workspace.clone(),
+            goal: "Inspect trace rendering".to_string(),
+            parent_run_id: None,
+            child_run_id: None,
+            artifact_dir: None,
+            ownership: None,
+            provider: Some("demo".to_string()),
+            model: Some("demo-local".to_string()),
+            file_scope: vec![workspace.join("src")],
+            work_budget: crate::subagents::SubAgentWorkBudget {
+                max_steps: Some(3),
+                max_tool_calls: Some(4),
+                max_read_bytes: Some(1024),
+                max_output_bytes: Some(2048),
+                allowed_tools: vec!["read_file".to_string()],
+                notes: "bounded".to_string(),
+            },
+            status: crate::subagents::SubAgentStatus::Completed,
+            created_at: now,
+            started_at: Some(now),
+            finished_at: Some(now),
+            checkpoint: None,
+            final_answer: Some("Task understood\nFindings: ok".to_string()),
+            error: None,
+            observability: crate::subagents::SubAgentObservability {
+                launch_argv: vec!["vegvisir".to_string(), "--isolated-session".to_string()],
+                launch_env_keys: vec!["VEGVISIR_SUBAGENT_ALLOWED_TOOLS".to_string()],
+                events: vec![crate::subagents::SubAgentObservedEvent {
+                    kind: crate::subagents::SubAgentObservedEventKind::ToolStart,
+                    name: Some("read_file".to_string()),
+                    args: Some(r#"{"path":"src/lib.rs"}"#.to_string()),
+                    ok: None,
+                    summary: None,
+                    detail: None,
+                }],
+                file_changes: Vec::new(),
+                notes: Vec::new(),
+            },
+        };
+        std::fs::write(
+            app.subagent_board_path(),
+            serde_json::to_string_pretty(&vec![record])?,
+        )?;
+
+        let response = app.execute_command("/subagents show sub-1")?.unwrap();
+
+        assert!(response.contains("## Subagent trace: trace-check"));
+        assert!(response.contains("<details>"));
+        assert!(response.contains("<summary>observed events (1)</summary>"));
+        assert!(response.contains("<summary>captured output / final report</summary>"));
+        assert!(!response.trim_start().starts_with('{'));
+
+        let json_response = app
+            .execute_command("/subagents show sub-1 --json")?
+            .unwrap();
+        assert!(json_response.trim_start().starts_with('{'));
+        assert!(json_response.contains("\"trace-check\""));
         Ok(())
     }
 
