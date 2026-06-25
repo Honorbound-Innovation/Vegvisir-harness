@@ -1,0 +1,230 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "msp://schemas/skill-pack.schema.json",
+  "title": "MSP Skill Pack Manifest",
+  "description": "Manifest for a versioned bundle of related MSP skills.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "msp_version",
+    "manifest_version",
+    "kind",
+    "id",
+    "name",
+    "version",
+    "category",
+    "summary",
+    "skills",
+    "trust"
+  ],
+  "properties": {
+    "msp_version": {
+      "$ref": "#/$defs/semver"
+    },
+    "manifest_version": {
+      "$ref": "#/$defs/semver"
+    },
+    "kind": {
+      "const": "SkillPackManifest"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^pack(\\.[a-z0-9][a-z0-9_-]*)+\\.v[0-9]+$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "version": {
+      "$ref": "#/$defs/semver"
+    },
+    "category": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]*(/[a-z0-9][a-z0-9_-]*)*$"
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 10000
+    },
+    "skills": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "version", "manifest_uri", "required"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^skill(\\.[a-z0-9][a-z0-9_-]*)+\\.v[0-9]+$"
+          },
+          "version": {
+            "$ref": "#/$defs/semver"
+          },
+          "manifest_uri": {
+            "type": "string",
+            "description": "Registry-root-relative path to the member skill.manifest.json. Runtimes reject absolute paths, URI schemes, file: URIs, and .. escapes.",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "role": {
+            "type": "string",
+            "maxLength": 200
+          }
+        }
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "description": "Pack-level dependencies. The v0.1 reference resolves skill and skill_pack dependencies from the local registry and treats skill_pack requirement as an exact pack version.",
+      "items": {
+        "$ref": "dependency.schema.json"
+      },
+      "default": []
+    },
+    "activation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "task_patterns": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "default": []
+        },
+        "domains": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"
+          },
+          "uniqueItems": true,
+          "default": []
+        }
+      }
+    },
+    "trust": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hash", "signed", "issuer", "risk_level"],
+      "properties": {
+        "hash": {
+          "type": "string",
+          "pattern": "^(sha256|sha384|sha512):[A-Fa-f0-9]+$"
+        },
+        "signed": {
+          "type": "boolean"
+        },
+        "signature": {
+          "type": "string",
+          "description": "Detached artifact signature encoded as ed25519:<base64-public-key>:<base64-signature>.",
+          "pattern": "^ed25519:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+$",
+          "maxLength": 512
+        },
+        "issuer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "license": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "risk_level": {
+          "type": "string",
+          "enum": ["low", "medium", "high", "critical"]
+        },
+        "review_status": {
+          "type": "string",
+          "enum": ["unreviewed", "self_reviewed", "peer_reviewed", "security_reviewed", "deprecated", "revoked"],
+          "default": "unreviewed"
+        },
+        "forbidden_behaviors": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "default": []
+        },
+        "sandbox_profile": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "author": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "generator": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "source_documents": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "default": []
+        },
+        "published_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "deprecation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deprecated"],
+      "properties": {
+        "deprecated": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "replacement": {
+          "type": "string",
+          "pattern": "^pack(\\.[a-z0-9][a-z0-9_-]*)+\\.v[0-9]+$"
+        },
+        "sunset_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "extensions": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    }
+  },
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+    }
+  }
+}

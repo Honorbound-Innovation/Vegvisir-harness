@@ -11,6 +11,7 @@ use std::{
 };
 
 use chrono::Utc;
+use msp_client::{LoadMode as MspLoadMode, MspClient, SearchRequest as MspSearchRequest};
 use serde_json::{Map, Value, json};
 use skiller::{
     compiler, forge as skiller_forge,
@@ -128,6 +129,61 @@ fn compact_excerpt(text: &str, max_chars: usize) -> String {
         excerpt.push('…');
         excerpt
     }
+}
+
+fn default_msp_registry_path(workspace_root: &Path) -> PathBuf {
+    get_env("VEGVISIR_MSP_REGISTRY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace_root.join("components/msp/examples/registry"))
+}
+
+fn msp_registry_path(args: &Map<String, Value>, workspace_root: &Path) -> PathBuf {
+    args.get("registry")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| default_msp_registry_path(workspace_root))
+}
+
+fn msp_json_observation(value: impl serde::Serialize) -> Observation {
+    match serde_json::to_value(value) {
+        Ok(Value::Object(data)) => {
+            let content = serde_json::to_string_pretty(&data).unwrap_or_default();
+            Observation {
+                ok: true,
+                content,
+                data,
+                error: None,
+            }
+        }
+        Ok(value) => {
+            let content = serde_json::to_string_pretty(&value).unwrap_or_default();
+            let mut data = Map::new();
+            data.insert("value".to_string(), value);
+            Observation {
+                ok: true,
+                content,
+                data,
+                error: None,
+            }
+        }
+        Err(error) => Observation::err(error.to_string(), "MspSerializationError"),
+    }
+}
+
+fn json_string_array(args: &Map<String, Value>, key: &str) -> Vec<String> {
+    args.get(key)
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 pub type ToolHandler = Arc<dyn Fn(Map<String, Value>) -> Observation + Send + Sync>;
@@ -822,6 +878,195 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
         }),
         json!({"required": ["path", "content"], "properties": {"path": "string", "content": "string"}}),
         true,
+    ))?;
+
+    let msp_client_info_sandbox = sandbox.clone();
+    registry.register(Tool::new(
+        "msp_client_info",
+        "Inspect the native MSP client component and local registry summary.",
+        Arc::new(move |args| {
+            let registry_path = msp_registry_path(&args, &msp_client_info_sandbox.root);
+            let registry_path = match msp_client_info_sandbox.resolve(&registry_path) {
+                Ok(path) => path,
+                Err(error) => return Observation::err(error.to_string(), "SandboxViolation"),
+            };
+            match MspClient::open(&registry_path) {
+                Ok(client) => msp_json_observation(json!({
+                    "info": client.info(),
+                    "registry": client.summary(),
+                })),
+                Err(error) => Observation::err(error.to_string(), "MspClientError"),
+            }
+        }),
+        json!({"properties": {"registry": "string"}}),
+        false,
+    ))?;
+
+    let msp_client_search_sandbox = sandbox.clone();
+    registry.register(Tool::new(
+        "msp_client_search",
+        "Search skills in a local MSP registry through Vegvisir's native MSP client component.",
+        Arc::new(move |args| {
+            let registry_path = msp_registry_path(&args, &msp_client_search_sandbox.root);
+            let registry_path = match msp_client_search_sandbox.resolve(&registry_path) {
+                Ok(path) => path,
+                Err(error) => return Observation::err(error.to_string(), "SandboxViolation"),
+            };
+            let max_risk = match args.get("max_risk").and_then(Value::as_str) {
+                Some(value) => match msp_client::parse_risk_level(value) {
+                    Ok(risk) => Some(risk),
+                    Err(error) => return Observation::err(error.to_string(), "ValueError"),
+                },
+                None => None,
+            };
+            let request = MspSearchRequest {
+                task: args.get("task").and_then(Value::as_str).map(str::to_string),
+                category: args.get("category").and_then(Value::as_str).map(str::to_string),
+                domain: args.get("domain").and_then(Value::as_str).map(str::to_string),
+                language: args.get("language").and_then(Value::as_str).map(str::to_string),
+                available_tools: json_string_array(&args, "available_tools"),
+                max_risk,
+                limit: args.get("limit").and_then(Value::as_u64).map(|value| value as usize),
+            };
+            match MspClient::open(&registry_path) {
+                Ok(client) => msp_json_observation(client.search(request)),
+                Err(error) => Observation::err(error.to_string(), "MspClientError"),
+            }
+        }),
+        json!({"properties": {"registry": "string", "task": "string", "category": "string", "domain": "string", "language": "string", "available_tools": "array", "max_risk": "string", "limit": "integer"}}),
+        false,
+    ))?;
+
+    let msp_client_load_sandbox = sandbox.clone();
+    registry.register(Tool::new(
+        "msp_client_load",
+        "Load MSP skill context from a local registry using mode card, body, extended, or raw.",
+        Arc::new(move |args| {
+            let Some(id) = args.get("id").and_then(Value::as_str) else {
+                return Observation::err("Missing id", "ValueError");
+            };
+            let mode = match args
+                .get("mode")
+                .and_then(Value::as_str)
+                .unwrap_or("body")
+                .parse::<MspLoadMode>()
+            {
+                Ok(mode) => mode,
+                Err(error) => return Observation::err(error.to_string(), "ValueError"),
+            };
+            let registry_path = msp_registry_path(&args, &msp_client_load_sandbox.root);
+            let registry_path = match msp_client_load_sandbox.resolve(&registry_path) {
+                Ok(path) => path,
+                Err(error) => return Observation::err(error.to_string(), "SandboxViolation"),
+            };
+            match MspClient::open(&registry_path).and_then(|client| client.load_skill(id, mode)) {
+                Ok(loaded) => {
+                    let mut data = Map::new();
+                    data.insert("id".to_string(), json!(loaded.id));
+                    data.insert("mode".to_string(), json!(loaded.mode));
+                    data.insert("manifest".to_string(), serde_json::to_value(&loaded.raw.manifest).unwrap_or(Value::Null));
+                    data.insert("body_hash_valid".to_string(), json!(loaded.raw.body_hash_valid));
+                    data.insert("dependency_ids".to_string(), json!(loaded.raw.dependency_ids));
+                    Observation {
+                        ok: true,
+                        content: loaded.content,
+                        data,
+                        error: None,
+                    }
+                }
+                Err(error) => Observation::err(error.to_string(), "MspLoadError"),
+            }
+        }),
+        json!({"required": ["id"], "properties": {"registry": "string", "id": "string", "mode": "string"}}),
+        false,
+    ))?;
+
+    let msp_client_manifest_sandbox = sandbox.clone();
+    registry.register(Tool::new(
+        "msp_client_manifest",
+        "Get an MSP skill manifest from a local registry.",
+        Arc::new(move |args| {
+            let Some(id) = args.get("id").and_then(Value::as_str) else {
+                return Observation::err("Missing id", "ValueError");
+            };
+            let registry_path = msp_registry_path(&args, &msp_client_manifest_sandbox.root);
+            let registry_path = match msp_client_manifest_sandbox.resolve(&registry_path) {
+                Ok(path) => path,
+                Err(error) => return Observation::err(error.to_string(), "SandboxViolation"),
+            };
+            match MspClient::open(&registry_path).and_then(|client| client.get_manifest(id)) {
+                Ok(manifest) => msp_json_observation(manifest),
+                Err(error) => Observation::err(error.to_string(), "MspManifestError"),
+            }
+        }),
+        json!({"required": ["id"], "properties": {"registry": "string", "id": "string"}}),
+        false,
+    ))?;
+
+    let msp_verify_sandbox = sandbox.clone();
+    registry.register(Tool::new(
+        "msp_client_verify_trust",
+        "Verify the MSP trust hash/signature envelope for a skill body artifact.",
+        Arc::new(move |args| {
+            let Some(id) = args.get("id").and_then(Value::as_str) else {
+                return Observation::err("Missing id", "ValueError");
+            };
+            let registry_path = msp_registry_path(&args, &msp_verify_sandbox.root);
+            let registry_path = match msp_verify_sandbox.resolve(&registry_path) {
+                Ok(path) => path,
+                Err(error) => return Observation::err(error.to_string(), "SandboxViolation"),
+            };
+            match MspClient::open(&registry_path).and_then(|client| client.verify_trust(id)) {
+                Ok(result) => msp_json_observation(result),
+                Err(error) => Observation::err(error.to_string(), "MspTrustError"),
+            }
+        }),
+        json!({"required": ["id"], "properties": {"registry": "string", "id": "string"}}),
+        false,
+    ))?;
+
+    let msp_compat_sandbox = sandbox.clone();
+    registry.register(Tool::new(
+        "msp_client_check_compatibility",
+        "Check whether an MSP skill is compatible with a Vegvisir runtime/tool/model capability envelope.",
+        Arc::new(move |args| {
+            let Some(id) = args.get("id").and_then(Value::as_str) else {
+                return Observation::err("Missing id", "ValueError");
+            };
+            let registry_path = msp_registry_path(&args, &msp_compat_sandbox.root);
+            let registry_path = match msp_compat_sandbox.resolve(&registry_path) {
+                Ok(path) => path,
+                Err(error) => return Observation::err(error.to_string(), "SandboxViolation"),
+            };
+            let query = msp_client::msp_core::RuntimeCompatibilityQuery {
+                msp_version: args.get("msp_version").and_then(Value::as_str).map(str::to_string),
+                supported_manifest_versions: json_string_array(&args, "supported_manifest_versions"),
+                runtime_name: args
+                    .get("runtime_name")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or_else(|| Some("vegvisir".to_string())),
+                runtime_version: args.get("runtime_version").and_then(Value::as_str).map(str::to_string),
+                supported_formats: json_string_array(&args, "supported_formats"),
+                runtime_capabilities: json_string_array(&args, "runtime_capabilities"),
+                model_capabilities: json_string_array(&args, "model_capabilities"),
+                available_tools: json_string_array(&args, "available_tools"),
+                tool_versions: BTreeMap::new(),
+                permissions: json_string_array(&args, "permissions"),
+                context_window: args.get("context_window").and_then(Value::as_u64),
+                platform: args.get("platform").and_then(Value::as_str).map(str::to_string),
+            };
+            let request = msp_client::CompatibilityRequest {
+                skill_id: id.to_string(),
+                query,
+            };
+            match MspClient::open(&registry_path).and_then(|client| client.check_compatibility(request)) {
+                Ok(result) => msp_json_observation(result),
+                Err(error) => Observation::err(error.to_string(), "MspCompatibilityError"),
+            }
+        }),
+        json!({"required": ["id"], "properties": {"registry": "string", "id": "string", "msp_version": "string", "supported_manifest_versions": "array", "runtime_name": "string", "runtime_version": "string", "supported_formats": "array", "runtime_capabilities": "array", "model_capabilities": "array", "available_tools": "array", "permissions": "array", "context_window": "integer", "platform": "string"}}),
+        false,
     ))?;
 
     let command_sandbox_config =

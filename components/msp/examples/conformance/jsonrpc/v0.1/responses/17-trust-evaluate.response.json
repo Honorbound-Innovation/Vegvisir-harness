@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","result":{"action":"require_review","allowed":false,"matched_rules":["review-write-capable-skills"],"reasons":["Workspace-writing skills require review before automatic use."],"skill_id":"skill.rust.refactor.module.v1","warnings":[]},"id":17}

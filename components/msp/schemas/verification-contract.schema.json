@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "msp://schemas/verification-contract.schema.json",
+  "title": "MSP Skill Verification Contract",
+  "description": "Contract describing how successful application of a skill is evaluated.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "msp_version",
+    "contract_version",
+    "kind",
+    "id",
+    "skill_id",
+    "checks",
+    "success_criteria"
+  ],
+  "properties": {
+    "msp_version": {
+      "$ref": "#/$defs/semver"
+    },
+    "contract_version": {
+      "$ref": "#/$defs/semver"
+    },
+    "kind": {
+      "const": "SkillVerificationContract"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^verify(\\.[a-z0-9][a-z0-9_-]*)+\\.v[0-9]+$"
+    },
+    "skill_id": {
+      "type": "string",
+      "pattern": "^skill(\\.[a-z0-9][a-z0-9_-]*)+\\.v[0-9]+$"
+    },
+    "skill_version": {
+      "$ref": "#/$defs/semver"
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/check"
+      }
+    },
+    "success_criteria": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required_checks_pass"],
+      "properties": {
+        "required_checks_pass": {
+          "type": "boolean",
+          "const": true
+        },
+        "minimum_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "minimum_confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "allowed_warnings": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "evidence_requirements": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/evidence_requirement"
+      },
+      "default": []
+    },
+    "failure_taxonomy": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "description"],
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["info", "warning", "error", "fatal"],
+            "default": "error"
+          }
+        }
+      },
+      "default": []
+    },
+    "notes": {
+      "type": "string",
+      "maxLength": 5000
+    }
+  },
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "required", "description"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["command_result", "file_state", "artifact_exists", "schema_validation", "manual_review", "runtime_assertion", "policy_check", "custom"]
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "expected": {
+          "description": "Structured expected result. Shape depends on check type."
+        },
+        "evidence_keys": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"
+          },
+          "uniqueItems": true,
+          "default": []
+        },
+        "weight": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 1
+        }
+      }
+    },
+    "evidence_requirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "type", "required"],
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["file_list", "command_log", "test_result", "diff", "artifact", "runtime_note", "policy_decision", "custom"]
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":3,"method":"skills.discover","params":{"task":"refactor rust module","available_tools":["read_file","write_file"]}}

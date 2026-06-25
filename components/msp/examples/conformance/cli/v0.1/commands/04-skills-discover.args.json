@@ -1,0 +1,14 @@
+[
+  "--registry",
+  "examples/registry",
+  "skills",
+  "discover",
+  "--task",
+  "refactor Rust module",
+  "--tool",
+  "read_file",
+  "--tool",
+  "write_file",
+  "--max-risk",
+  "medium"
+]

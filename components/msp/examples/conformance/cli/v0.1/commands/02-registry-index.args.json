@@ -1,0 +1,6 @@
+[
+  "--registry",
+  "examples/registry",
+  "registry",
+  "index"
+]

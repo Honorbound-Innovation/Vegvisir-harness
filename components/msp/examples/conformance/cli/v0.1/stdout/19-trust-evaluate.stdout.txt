@@ -1,0 +1,12 @@
+{
+  "skill_id": "skill.rust.refactor.module.v1",
+  "action": "require_review",
+  "allowed": false,
+  "reasons": [
+    "Workspace-writing skills require review before automatic use."
+  ],
+  "warnings": [],
+  "matched_rules": [
+    "review-write-capable-skills"
+  ]
+}

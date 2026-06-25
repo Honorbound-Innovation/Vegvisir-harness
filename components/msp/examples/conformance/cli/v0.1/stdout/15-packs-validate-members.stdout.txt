@@ -1,0 +1,43 @@
+{
+  "pack_id": "pack.rust.engineering.v1",
+  "valid": false,
+  "members": [
+    {
+      "id": "skill.rust.refactor.module.v1",
+      "expected_version": "0.1.0",
+      "manifest_uri": "software_engineering/rust/refactor_module/skill.manifest.json",
+      "required": true,
+      "role": "module_refactoring",
+      "resolved_path": "examples/registry/software_engineering/rust/refactor_module/skill.manifest.json",
+      "exists": true,
+      "indexed": true,
+      "id_matches": true,
+      "version_matches": true,
+      "trust_evaluation": {
+        "skill_id": "skill.rust.refactor.module.v1",
+        "action": "require_review",
+        "allowed": false,
+        "reasons": [
+          "Workspace-writing skills require review before automatic use."
+        ],
+        "warnings": [],
+        "matched_rules": [
+          "review-write-capable-skills"
+        ]
+      },
+      "valid": false,
+      "reasons": [
+        "pack member skill.rust.refactor.module.v1 is not allowed by policy: RequireReview",
+        "Workspace-writing skills require review before automatic use."
+      ],
+      "warnings": []
+    }
+  ],
+  "missing": [],
+  "duplicate_ids": [],
+  "reasons": [
+    "pack member skill.rust.refactor.module.v1 is not allowed by policy: RequireReview",
+    "Workspace-writing skills require review before automatic use."
+  ],
+  "warnings": []
+}

@@ -1,0 +1,8 @@
+{
+  "skill_id": "pack.rust.engineering.v1",
+  "action": "allow",
+  "allowed": true,
+  "reasons": [],
+  "warnings": [],
+  "matched_rules": []
+}

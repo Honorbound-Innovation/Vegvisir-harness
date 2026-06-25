@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":"err-missing-skill","method":"skills.load","params":{"id":"skill.missing.example.v1"}}

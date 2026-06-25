@@ -1,0 +1,9 @@
+[
+  "--registry",
+  "examples/registry",
+  "trust",
+  "evaluate-dependencies",
+  "skill.rust.refactor.module.v1",
+  "--policy",
+  "examples/policies/local-reference.trust-policy.json"
+]

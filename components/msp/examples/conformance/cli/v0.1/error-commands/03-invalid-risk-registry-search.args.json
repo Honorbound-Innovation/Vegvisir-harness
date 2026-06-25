@@ -1,0 +1,8 @@
+[
+  "--registry",
+  "examples/registry",
+  "registry",
+  "search",
+  "--max-risk",
+  "severe"
+]

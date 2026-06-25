@@ -1,0 +1,7 @@
+[
+  "--registry",
+  "examples/registry",
+  "skills",
+  "verify-result",
+  "examples/reports/rust-refactor.report.json"
+]

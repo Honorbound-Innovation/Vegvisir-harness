@@ -1,0 +1,15 @@
+[
+  {
+    "id": "skill.rust.refactor.module.v1",
+    "name": "Rust Module Refactor",
+    "version": "0.1.0",
+    "category": "software_engineering/rust/refactoring",
+    "summary": "Guides safe refactoring of Rust modules using small edits and verification loops.",
+    "risk_level": "medium",
+    "score": 69,
+    "required_tools": [
+      "read_file",
+      "write_file"
+    ]
+  }
+]

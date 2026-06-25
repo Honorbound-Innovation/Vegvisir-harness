@@ -1,0 +1,5 @@
+Error: failed to load execution report examples/reports/missing.report.json
+
+Caused by:
+    0: I/O error: No such file or directory (os error 2)
+    1: No such file or directory (os error 2)

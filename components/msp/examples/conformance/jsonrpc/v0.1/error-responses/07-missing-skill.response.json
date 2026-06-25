@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","error":{"code":-32000,"message":"skill not found: skill.missing.example.v1"},"id":"err-missing-skill"}

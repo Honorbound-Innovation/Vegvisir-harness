@@ -1,0 +1,18 @@
+[package]
+name = "msp-publisher"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+msp-core = { path = "../msp-core" }
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+walkdir.workspace = true
+
+[dev-dependencies]
+msp-registry = { path = "../msp-registry" }

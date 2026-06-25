@@ -53,3 +53,29 @@ source_snapshot = "/mnt/storage/Vegvisir-Projects/binary-intelligence-workbench"
 runtime_root = "~/.vegvisir/tools/src/binary-intelligence-workbench"
 wrappers = ["biw"]
 excluded = [".git", "__pycache__", "*.pyc", ".pytest_cache", ".vegvisir"]
+
+[components.msp]
+name = "Model Skill Protocol"
+ownership = "first-party"
+license = "MIT (MSP)"
+kind = "rust"
+path = "components/msp"
+source_snapshot = "/mnt/storage/Projects/MSP"
+runtime_root = "~/.vegvisir/tools/src/MSP"
+wrappers = ["msp-cli", "msp-server"]
+integration = "vendored local-first protocol/reference crates used by components/msp-client"
+excluded = [".git", "target", "Cargo.lock", ".vegvisir"]
+
+[components.msp_client]
+name = "Vegvisir MSP Client"
+ownership = "first-party"
+license = "MIT (Vegvisir)"
+kind = "rust"
+path = "components/msp-client"
+source_snapshot = "native Vegvisir component"
+runtime_root = "~/.vegvisir/tools/src/msp-client"
+wrappers = ["vegvisir msp", "msp-client"]
+depends_on = ["components.msp"]
+provides_tools = ["msp_client_info", "msp_client_search", "msp_client_load", "msp_client_manifest", "msp_client_verify_trust", "msp_client_check_compatibility"]
+integration = "native Vegvisir component client for local MSP registries; no MCP transport required"
+excluded = ["target", ".vegvisir"]

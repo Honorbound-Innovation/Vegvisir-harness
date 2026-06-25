@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","result":{"actual_hash":"sha256:59bb1fb64de5efe0ab73e3c12fb5fa095e4502c0e8974407d1ef624020e42d25","artifact":"examples/registry/software_engineering/rust/pack.manifest.json","expected_hash":"sha256:59bb1fb64de5efe0ab73e3c12fb5fa095e4502c0e8974407d1ef624020e42d25","hash_passed":true,"passed":true},"id":12}

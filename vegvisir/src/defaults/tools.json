@@ -13,6 +13,12 @@
     {"name": "cms_remember", "category": "memory", "description": "Store non-secret CMS memory for future recall."},
     {"name": "cms_prepare_context", "category": "context", "description": "Prepare CMS-v2 ECM context using recall and budgeting."},
     {"name": "cms_prepare_model_request", "category": "context", "description": "Prepare a provider-cacheable CMS-v2 model request envelope."},
-    {"name": "spawn_subagent", "category": "delegation", "description": "Delegate a bounded task to a child agent."}
+    {"name": "spawn_subagent", "category": "delegation", "description": "Delegate a bounded task to a child agent."},
+    {"name": "msp_client_info", "category": "skills", "description": "Inspect the native MSP client component and local registry summary."},
+    {"name": "msp_client_search", "category": "skills", "description": "Search skills in a local MSP registry through the native MSP client."},
+    {"name": "msp_client_load", "category": "skills", "description": "Load MSP skill context from a local registry."},
+    {"name": "msp_client_manifest", "category": "skills", "description": "Get an MSP skill manifest from a local registry."},
+    {"name": "msp_client_verify_trust", "category": "skills", "description": "Verify MSP skill artifact trust hash/signature metadata."},
+    {"name": "msp_client_check_compatibility", "category": "skills", "description": "Check MSP skill runtime compatibility for Vegvisir."}
   ]
 }

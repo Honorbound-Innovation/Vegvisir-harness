@@ -1,0 +1,53 @@
+{
+  "msp_version": "0.1.0",
+  "contract_version": "0.1.0",
+  "kind": "SkillVerificationContract",
+  "id": "verify.rust.refactor.module.v1",
+  "skill_id": "skill.rust.refactor.module.v1",
+  "skill_version": "0.1.0",
+  "checks": [
+    {
+      "id": "fmt_passed",
+      "type": "command_result",
+      "required": true,
+      "description": "Rust formatting check passed.",
+      "evidence_keys": ["commands"],
+      "weight": 0.34
+    },
+    {
+      "id": "tests_passed",
+      "type": "command_result",
+      "required": true,
+      "description": "Relevant tests passed.",
+      "evidence_keys": ["commands"],
+      "weight": 0.33
+    },
+    {
+      "id": "changes_reported",
+      "type": "file_state",
+      "required": true,
+      "description": "Changed files were reported.",
+      "evidence_keys": ["files_changed"],
+      "weight": 0.33
+    }
+  ],
+  "success_criteria": {
+    "required_checks_pass": true,
+    "minimum_score": 1.0,
+    "allowed_warnings": 0
+  },
+  "evidence_requirements": [
+    {
+      "key": "commands",
+      "type": "command_log",
+      "required": true,
+      "description": "Commands used to verify the refactor."
+    },
+    {
+      "key": "files_changed",
+      "type": "file_list",
+      "required": true,
+      "description": "Files changed by the refactor."
+    }
+  ]
+}

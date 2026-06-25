@@ -1,0 +1,9 @@
+[
+  "--registry",
+  "examples/registry",
+  "skills",
+  "check-compatibility",
+  "skill.rust.refactor.module.v1",
+  "--tool-version",
+  "read_file"
+]

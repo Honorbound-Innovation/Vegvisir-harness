@@ -1,0 +1,9 @@
+[
+  "--registry",
+  "examples/registry",
+  "packs",
+  "validate-members",
+  "pack.rust.engineering.v1",
+  "--policy",
+  "examples/policies/local-reference.trust-policy.json"
+]

@@ -1,0 +1,31 @@
+[workspace]
+members = [
+  "crates/msp-core",
+  "crates/msp-registry",
+  "crates/msp-server",
+  "crates/msp-cli",
+  "crates/msp-publisher",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "MIT"
+repository = "https://github.com/Honorbound-Innovation/MSP"
+
+[workspace.dependencies]
+anyhow = "1.0"
+base64 = "0.22"
+clap = { version = "4.5", features = ["derive"] }
+ed25519-dalek = { version = "2.2", default-features = false, features = ["alloc", "rand_core"] }
+hex = "0.4"
+jsonschema = { version = "0.46", default-features = false }
+once_cell = "1.21"
+rand = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+sha2 = "0.10"
+thiserror = "2.0"
+walkdir = "2.5"

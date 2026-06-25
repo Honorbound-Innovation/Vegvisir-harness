@@ -1,0 +1,437 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "msp://schemas/protocol-results.schema.json",
+  "title": "MSP Protocol Result Objects",
+  "description": "Canonical JSON result object contracts returned by MSP v0.1 protocol methods.",
+  "anyOf": [
+    { "$ref": "#/$defs/registry_search_result_array" },
+    { "$ref": "#/$defs/pack_search_result_array" },
+    { "$ref": "#/$defs/skill_load_result" },
+    { "$ref": "#/$defs/skill_compatibility_result" },
+    { "$ref": "#/$defs/skill_verification_result" },
+    { "$ref": "#/$defs/trust_verify_result" },
+    { "$ref": "#/$defs/dependency_resolution_result" },
+    { "$ref": "#/$defs/dependency_trust_evaluation_result" },
+    { "$ref": "#/$defs/pack_member_validation_result" },
+    { "$ref": "#/$defs/trust_policy_evaluation" }
+  ],
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+    },
+    "skill_id": {
+      "type": "string",
+      "pattern": "^skill(\\.[a-z0-9][a-z0-9_-]*)+\\.v[0-9]+$"
+    },
+    "pack_id": {
+      "type": "string",
+      "pattern": "^pack(\\.[a-z0-9][a-z0-9_-]*)+\\.v[0-9]+$"
+    },
+    "category": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]*(/[a-z0-9][a-z0-9_-]*)*$"
+    },
+    "risk_level": {
+      "type": "string",
+      "enum": ["low", "medium", "high", "critical"]
+    },
+    "trust_action": {
+      "type": "string",
+      "enum": ["allow", "deny", "require_review", "require_approval"]
+    },
+    "dependency_type": {
+      "type": "string",
+      "enum": ["skill", "skill_pack", "schema", "verification_contract", "trust_anchor", "format_adapter", "runtime_capability"]
+    },
+    "registry_search_result_array": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/registry_search_result" }
+    },
+    "registry_search_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "version", "category", "summary", "risk_level", "score", "required_tools"],
+      "properties": {
+        "id": { "$ref": "#/$defs/skill_id" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "version": { "$ref": "#/$defs/semver" },
+        "category": { "$ref": "#/$defs/category" },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "risk_level": { "$ref": "#/$defs/risk_level" },
+        "score": { "type": "integer", "minimum": 0 },
+        "required_tools": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+        }
+      }
+    },
+    "pack_search_result_array": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/pack_search_result" }
+    },
+    "pack_search_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "version", "category", "summary", "risk_level", "score", "skill_count", "required_skill_count", "issuer"],
+      "properties": {
+        "id": { "$ref": "#/$defs/pack_id" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "version": { "$ref": "#/$defs/semver" },
+        "category": { "$ref": "#/$defs/category" },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "risk_level": { "$ref": "#/$defs/risk_level" },
+        "score": { "type": "integer", "minimum": 0 },
+        "skill_count": { "type": "integer", "minimum": 0 },
+        "required_skill_count": { "type": "integer", "minimum": 0 },
+        "issuer": { "type": "string", "minLength": 1, "maxLength": 300 }
+      }
+    },
+    "skill_load_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manifest", "body", "body_hash_valid", "verification_contract", "dependency_ids"],
+      "properties": {
+        "manifest": { "$ref": "manifest.schema.json" },
+        "body": { "type": "string" },
+        "body_hash_valid": { "type": "boolean" },
+        "verification_contract": {
+          "anyOf": [
+            { "$ref": "#/$defs/serialized_verification_contract" },
+            { "type": "null" }
+          ]
+        },
+        "dependency_ids": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 300 }
+        }
+      }
+    },
+    "serialized_verification_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["msp_version", "contract_version", "kind", "id", "skill_id", "checks", "success_criteria"],
+      "properties": {
+        "msp_version": { "$ref": "#/$defs/semver" },
+        "contract_version": { "$ref": "#/$defs/semver" },
+        "kind": { "const": "SkillVerificationContract" },
+        "id": { "type": "string", "pattern": "^verify(\\.[a-z0-9][a-z0-9_-]*)+\\.v[0-9]+$" },
+        "skill_id": { "$ref": "#/$defs/skill_id" },
+        "skill_version": { "anyOf": [{ "$ref": "#/$defs/semver" }, { "type": "null" }] },
+        "checks": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/serialized_verification_check" } },
+        "success_criteria": { "$ref": "#/$defs/serialized_success_criteria" },
+        "evidence_requirements": { "type": "array", "items": { "$ref": "#/$defs/serialized_evidence_requirement" } },
+        "failure_taxonomy": { "type": "array", "items": { "$ref": "#/$defs/serialized_failure_taxonomy_entry" } },
+        "notes": { "anyOf": [{ "type": "string", "maxLength": 5000 }, { "type": "null" }] }
+      }
+    },
+    "serialized_verification_check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "required", "description"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "type": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "required": { "type": "boolean" },
+        "description": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "expected": true,
+        "evidence_keys": { "type": "array", "items": { "type": "string" } },
+        "weight": { "type": "number", "minimum": 0 }
+      }
+    },
+    "serialized_success_criteria": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required_checks_pass"],
+      "properties": {
+        "required_checks_pass": { "type": "boolean" },
+        "minimum_score": { "anyOf": [{ "type": "number", "minimum": 0 }, { "type": "null" }] },
+        "minimum_confidence": { "anyOf": [{ "type": "number", "minimum": 0, "maximum": 1 }, { "type": "null" }] },
+        "allowed_warnings": { "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] }
+      }
+    },
+    "serialized_evidence_requirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "type", "required"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "type": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "required": { "type": "boolean" },
+        "description": { "anyOf": [{ "type": "string", "maxLength": 1000 }, { "type": "null" }] }
+      }
+    },
+    "serialized_failure_taxonomy_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "description"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "description": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "severity": { "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 128 }, { "type": "null" }] }
+      }
+    },
+    "skill_compatibility_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "skill_id",
+        "compatible",
+        "score",
+        "msp_version_compatible",
+        "manifest_version_compatible",
+        "format_compatible",
+        "runtime_capabilities_compatible",
+        "model_capabilities_compatible",
+        "tools_compatible",
+        "permissions_compatible",
+        "context_window_compatible",
+        "platform_compatible",
+        "known_runtime",
+        "issues",
+        "warnings"
+      ],
+      "properties": {
+        "skill_id": { "$ref": "#/$defs/skill_id" },
+        "compatible": { "type": "boolean" },
+        "score": { "type": "number", "minimum": 0, "maximum": 1 },
+        "msp_version_compatible": { "type": "boolean" },
+        "manifest_version_compatible": { "type": "boolean" },
+        "format_compatible": { "type": "boolean" },
+        "runtime_capabilities_compatible": { "type": "boolean" },
+        "model_capabilities_compatible": { "type": "boolean" },
+        "tools_compatible": { "type": "boolean" },
+        "permissions_compatible": { "type": "boolean" },
+        "context_window_compatible": { "type": "boolean" },
+        "platform_compatible": { "type": "boolean" },
+        "known_runtime": { "type": "boolean" },
+        "issues": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/compatibility_issue" }
+        },
+        "warnings": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "compatibility_issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "dimension", "severity", "required", "message"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "dimension": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "severity": { "type": "string", "enum": ["warning", "error"] },
+        "required": { "type": "boolean" },
+        "message": { "type": "string", "minLength": 1, "maxLength": 1000 }
+      }
+    },
+    "skill_verification_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["skill_id", "passed", "score", "confidence", "failed_checks", "warnings", "check_results", "evidence_results", "criteria", "failures"],
+      "properties": {
+        "skill_id": { "$ref": "#/$defs/skill_id" },
+        "passed": { "type": "boolean" },
+        "score": { "type": "number", "minimum": 0 },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "failed_checks": { "type": "array", "items": { "type": "string" } },
+        "warnings": { "type": "array", "items": { "type": "string" } },
+        "check_results": { "type": "array", "items": { "$ref": "#/$defs/verification_check_result" } },
+        "evidence_results": { "type": "array", "items": { "$ref": "#/$defs/verification_evidence_result" } },
+        "criteria": { "$ref": "#/$defs/verification_criteria_result" },
+        "failures": { "type": "array", "items": { "$ref": "#/$defs/verification_failure" } }
+      }
+    },
+    "verification_check_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "required", "status", "passed", "score_earned", "score_possible", "evidence_keys", "missing_evidence", "reasons", "warnings"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "type": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "required": { "type": "boolean" },
+        "status": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "passed": { "type": "boolean" },
+        "score_earned": { "type": "number", "minimum": 0 },
+        "score_possible": { "type": "number", "minimum": 0 },
+        "evidence_keys": { "type": "array", "items": { "type": "string" } },
+        "missing_evidence": { "type": "array", "items": { "type": "string" } },
+        "reasons": { "type": "array", "items": { "type": "string" } },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "verification_evidence_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "type", "required", "present", "reasons", "warnings"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "type": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "required": { "type": "boolean" },
+        "present": { "type": "boolean" },
+        "reasons": { "type": "array", "items": { "type": "string" } },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "verification_criteria_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required_checks_passed", "minimum_score", "score_passed", "confidence", "confidence_passed", "warning_count", "warnings_passed"],
+      "properties": {
+        "required_checks_passed": { "type": "boolean" },
+        "minimum_score": { "type": "number", "minimum": 0 },
+        "score_passed": { "type": "boolean" },
+        "minimum_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "confidence_passed": { "type": "boolean" },
+        "allowed_warnings": { "type": "integer", "minimum": 0 },
+        "warning_count": { "type": "integer", "minimum": 0 },
+        "warnings_passed": { "type": "boolean" }
+      }
+    },
+    "verification_failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "message": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "severity": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "check_id": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "trust_verify_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact", "expected_hash", "actual_hash", "hash_passed", "passed"],
+      "properties": {
+        "artifact": { "type": "string", "minLength": 1 },
+        "expected_hash": { "type": "string", "pattern": "^(sha256|sha384|sha512):[A-Fa-f0-9]+$" },
+        "actual_hash": { "type": "string", "pattern": "^(sha256|sha384|sha512):[A-Fa-f0-9]+$" },
+        "hash_passed": { "type": "boolean" },
+        "signature": { "$ref": "#/$defs/signature_verify_result" },
+        "passed": { "type": "boolean" }
+      }
+    },
+    "signature_verify_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact", "signed", "passed", "reasons"],
+      "properties": {
+        "artifact": { "type": "string", "minLength": 1 },
+        "signed": { "type": "boolean" },
+        "algorithm": { "type": "string", "enum": ["ed25519"] },
+        "public_key_ref": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "public_key_sha256": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "passed": { "type": "boolean" },
+        "reasons": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "dependency_node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "requirement", "required", "resolved"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "requirement": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "required": { "type": "boolean" },
+        "resolved": { "type": "boolean" }
+      }
+    },
+    "dependency_resolution_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "nodes", "missing", "cycles"],
+      "properties": {
+        "root": { "$ref": "#/$defs/skill_id" },
+        "nodes": { "type": "array", "items": { "$ref": "#/$defs/dependency_node" } },
+        "missing": { "type": "array", "items": { "type": "string" } },
+        "cycles": { "type": "array", "items": { "type": "array", "items": { "type": "string" } } }
+      }
+    },
+    "dependency_trust_evaluation_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "allowed", "root_evaluation", "dependencies", "missing", "cycles", "reasons", "warnings"],
+      "properties": {
+        "root": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "allowed": { "type": "boolean" },
+        "root_evaluation": { "$ref": "#/$defs/trust_policy_evaluation" },
+        "dependencies": { "type": "array", "items": { "$ref": "#/$defs/dependency_trust_evaluation_node" } },
+        "missing": { "type": "array", "items": { "type": "string" } },
+        "cycles": { "type": "array", "items": { "type": "array", "items": { "type": "string" } } },
+        "reasons": { "type": "array", "items": { "type": "string" } },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "dependency_trust_evaluation_node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["parent", "depth", "id", "dependency_type", "requirement", "required", "resolved", "allowed", "reasons", "warnings", "matched_rules"],
+      "properties": {
+        "parent": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "depth": { "type": "integer", "minimum": 0 },
+        "id": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "dependency_type": { "$ref": "#/$defs/dependency_type" },
+        "requirement": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "required": { "type": "boolean" },
+        "resolved": { "type": "boolean" },
+        "action": { "$ref": "#/$defs/trust_action" },
+        "allowed": { "type": "boolean" },
+        "reasons": { "type": "array", "items": { "type": "string" } },
+        "warnings": { "type": "array", "items": { "type": "string" } },
+        "matched_rules": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "pack_member_validation_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pack_id", "valid", "members", "missing", "duplicate_ids", "reasons", "warnings"],
+      "properties": {
+        "pack_id": { "$ref": "#/$defs/pack_id" },
+        "valid": { "type": "boolean" },
+        "members": { "type": "array", "items": { "$ref": "#/$defs/pack_member_validation_node" } },
+        "missing": { "type": "array", "items": { "type": "string" } },
+        "duplicate_ids": { "type": "array", "items": { "type": "string" } },
+        "reasons": { "type": "array", "items": { "type": "string" } },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "pack_member_validation_node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "expected_version", "manifest_uri", "required", "exists", "indexed", "id_matches", "version_matches", "valid", "reasons", "warnings"],
+      "properties": {
+        "id": { "$ref": "#/$defs/skill_id" },
+        "expected_version": { "$ref": "#/$defs/semver" },
+        "manifest_uri": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "required": { "type": "boolean" },
+        "role": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "resolved_path": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "exists": { "type": "boolean" },
+        "indexed": { "type": "boolean" },
+        "id_matches": { "type": "boolean" },
+        "version_matches": { "type": "boolean" },
+        "trust_evaluation": { "$ref": "#/$defs/trust_policy_evaluation" },
+        "valid": { "type": "boolean" },
+        "reasons": { "type": "array", "items": { "type": "string" } },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "trust_policy_evaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["skill_id", "allowed", "action", "reasons", "warnings", "matched_rules"],
+      "properties": {
+        "skill_id": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "allowed": { "type": "boolean" },
+        "action": { "$ref": "#/$defs/trust_action" },
+        "reasons": { "type": "array", "items": { "type": "string" } },
+        "warnings": { "type": "array", "items": { "type": "string" } },
+        "matched_rules": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

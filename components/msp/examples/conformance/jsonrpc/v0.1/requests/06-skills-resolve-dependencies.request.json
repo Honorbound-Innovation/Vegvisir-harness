@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":6,"method":"skills.resolve_dependencies","params":{"id":"skill.rust.refactor.module.v1"}}

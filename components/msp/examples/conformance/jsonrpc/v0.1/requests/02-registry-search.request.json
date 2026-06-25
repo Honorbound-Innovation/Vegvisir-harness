@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":2,"method":"registry.search","params":{"task":"refactor rust module","available_tools":["read_file","write_file"]}}

@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":"err-invalid-search-risk","method":"registry.search","params":{"max_risk":"extreme"}}

@@ -1,0 +1,17 @@
+[package]
+name = "msp-client"
+version = "0.1.0"
+edition = "2024"
+description = "Native Vegvisir client component for the Model Skill Protocol (MSP)."
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+msp-core = { path = "../msp/crates/msp-core" }
+msp-registry = { path = "../msp/crates/msp-registry" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
