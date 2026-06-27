@@ -60,6 +60,7 @@ const FALLBACK_SPINNER_VERBS: &[&str] = &[
 ];
 
 pub fn draw(f: &mut Frame<'_>, app: &mut TuiApplication) {
+    app.expire_ephemeral_notice();
     let area = f.area();
     f.render_widget(Clear, area);
     let pending_approvals = pending_approvals(app);
@@ -122,6 +123,7 @@ pub fn draw(f: &mut Frame<'_>, app: &mut TuiApplication) {
 
 fn activity_strip_height(app: &TuiApplication, pending: Option<&ApprovalRequest>) -> u16 {
     let has_activity = pending.is_some()
+        || app.ephemeral_notice.is_some()
         || app.session.status == "streaming"
         || app
             .task_manager
@@ -650,6 +652,19 @@ fn activity_line(
                 approval.risk_label, approval.tool_name
             ),
             AMBER,
+        )
+    } else if let Some(notice) = app.ephemeral_notice.as_ref() {
+        (
+            "● ".to_string(),
+            match notice.kind {
+                crate::app::EphemeralNoticeKind::Approval => "approval".to_string(),
+                crate::app::EphemeralNoticeKind::Info => "notice".to_string(),
+            },
+            notice.text.clone(),
+            match notice.kind {
+                crate::app::EphemeralNoticeKind::Approval => AMBER,
+                crate::app::EphemeralNoticeKind::Info => CYAN,
+            },
         )
     } else if app.session.status == "streaming" {
         (
@@ -4448,6 +4463,35 @@ four",
             risk_label: "write".to_string(),
         };
         assert_eq!(activity_strip_height(&app, Some(&approval)), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn ratatui_activity_strip_surfaces_latest_ephemeral_approval_notice() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app =
+            crate::app::TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+
+        app.show_approval_notice("Approved once: run_command. In-flight model run will resume.");
+        app.show_approval_notice("Denied approval apr_b.");
+
+        assert_eq!(activity_strip_height(&app, None), 3);
+        let line = activity_line(&app, None, 120).expect("ephemeral approval line");
+        let text = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(text.contains("approval"));
+        assert!(text.contains("Denied approval apr_b."));
+        assert!(!text.contains("Approved once"));
+
+        if let Some(notice) = app.ephemeral_notice.as_mut() {
+            notice.expires_at = std::time::Instant::now() - std::time::Duration::from_millis(1);
+        }
+        app.expire_ephemeral_notice();
+        assert!(app.ephemeral_notice.is_none());
+        assert_eq!(activity_strip_height(&app, None), 0);
         Ok(())
     }
 

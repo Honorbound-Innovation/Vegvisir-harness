@@ -580,7 +580,7 @@ impl TuiApplication {
             .approval_selected_index
             .min(pending_ids.len().saturating_sub(1));
         let id = pending_ids[self.approval_selected_index].clone();
-        let message = match key.code {
+        let transcript_message = match key.code {
             KeyCode::Up => {
                 self.approval_selected_index = self.approval_selected_index.saturating_sub(1);
                 return true;
@@ -601,12 +601,15 @@ impl TuiApplication {
                     crate::control_requests::ApprovalControlDecisionKind::AllowOnce,
                 );
                 match applied.approval {
-                    Some(request) if self.pending_send.is_some() => format!(
-                        "Approved once: {}. In-flight model run will resume.",
-                        request.tool_name
-                    ),
-                    Some(request) => self.execute_approved_request("Approved once", request),
-                    None => format!("Unknown pending approval: {id}"),
+                    Some(request) if self.pending_send.is_some() => {
+                        self.show_approval_notice(format!(
+                            "Approved once: {}. In-flight model run will resume.",
+                            request.tool_name
+                        ));
+                        None
+                    }
+                    Some(request) => Some(self.execute_approved_request("Approved once", request)),
+                    None => Some(format!("Unknown pending approval: {id}")),
                 }
             }
             KeyCode::Char('2') | KeyCode::Char('s') | KeyCode::Char('S') => {
@@ -616,12 +619,15 @@ impl TuiApplication {
                     crate::control_requests::ApprovalControlDecisionKind::AllowForSession,
                 );
                 match applied.approval {
-                    Some(request) if self.pending_send.is_some() => format!(
-                        "{}: {}. In-flight model run will resume.",
-                        applied.message, request.tool_name
-                    ),
-                    Some(request) => self.execute_approved_request(&applied.message, request),
-                    None => format!("Unknown pending approval: {id}"),
+                    Some(request) if self.pending_send.is_some() => {
+                        self.show_approval_notice(format!(
+                            "{}: {}. In-flight model run will resume.",
+                            applied.message, request.tool_name
+                        ));
+                        None
+                    }
+                    Some(request) => Some(self.execute_approved_request(&applied.message, request)),
+                    None => Some(format!("Unknown pending approval: {id}")),
                 }
             }
             KeyCode::Char('3') | KeyCode::Char('d') | KeyCode::Char('D') => {
@@ -631,9 +637,10 @@ impl TuiApplication {
                     crate::control_requests::ApprovalControlDecisionKind::Deny,
                 );
                 if applied.applied {
-                    format!("Denied approval {id}.")
+                    self.show_approval_notice(format!("Denied approval {id}."));
+                    None
                 } else {
-                    format!("Unknown pending approval: {id}")
+                    Some(format!("Unknown pending approval: {id}"))
                 }
             }
             _ => return false,
@@ -646,9 +653,11 @@ impl TuiApplication {
         }
         self.session.status = "ready".to_string();
         self.session.activity.clear();
-        self.push_system_message(message);
-        self.autosave_session();
-        self.chat_scroll_offset = 0;
+        if let Some(message) = transcript_message {
+            self.push_system_message(message);
+            self.autosave_session();
+            self.chat_scroll_offset = 0;
+        }
         true
     }
 

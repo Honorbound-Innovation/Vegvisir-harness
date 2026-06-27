@@ -55,6 +55,7 @@ impl TuiApplication {
             self.poll_stream_events();
             self.poll_pending_send();
             self.turn_repair(false);
+            self.expire_ephemeral_notice();
             self.poll_autonomy_controller();
             self.poll_background_jobs();
             self.poll_task_runner();

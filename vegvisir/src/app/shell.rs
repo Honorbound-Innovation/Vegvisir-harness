@@ -12,6 +12,7 @@ fn agent_selection_prefix(raw: &str) -> Option<&str> {
 
 impl TuiApplication {
     pub fn render(&mut self) -> String {
+        self.expire_ephemeral_notice();
         let suggestions = self.build_suggestions();
         self.input.update_suggestions(suggestions);
         let pending_approvals = self.pending_approval_requests();
@@ -23,6 +24,9 @@ impl TuiApplication {
             self.input.selected_suggestion,
             self.chat_scroll_offset,
             &pending_approvals,
+            self.ephemeral_notice
+                .as_ref()
+                .map(|notice| notice.text.as_str()),
         )
     }
 

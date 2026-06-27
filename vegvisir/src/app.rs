@@ -136,6 +136,7 @@ pub struct TuiApplication {
     pub sessions_overlay: Option<SessionsOverlay>,
     pub profile_overlay: Option<ProfileOverlay>,
     pub approval_selected_index: usize,
+    pub ephemeral_notice: Option<EphemeralNotice>,
     pub search_open: bool,
     pub search_query: String,
     pub search_match_index: usize,
@@ -162,6 +163,33 @@ pub struct HeadlessObservedRun {
     pub prompt_envelope: CachedPromptEnvelope,
     pub memory_write_results: Vec<CommitResult>,
     pub memory_write_error: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct EphemeralNotice {
+    pub text: String,
+    pub kind: EphemeralNoticeKind,
+    pub expires_at: Instant,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EphemeralNoticeKind {
+    Approval,
+    Info,
+}
+
+impl EphemeralNotice {
+    pub fn new(text: impl Into<String>, kind: EphemeralNoticeKind, ttl: Duration) -> Self {
+        Self {
+            text: text.into(),
+            kind,
+            expires_at: Instant::now() + ttl,
+        }
+    }
+
+    pub fn is_expired(&self) -> bool {
+        Instant::now() >= self.expires_at
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -989,6 +1017,7 @@ impl TuiApplication {
             sessions_overlay: None,
             profile_overlay: None,
             approval_selected_index: 0,
+            ephemeral_notice: None,
             search_open: false,
             search_query: String::new(),
             search_match_index: 0,

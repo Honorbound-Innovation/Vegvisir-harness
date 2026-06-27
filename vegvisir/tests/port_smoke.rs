@@ -1093,7 +1093,13 @@ fn command_allow_list_can_be_managed_and_approved_from_tui() -> anyhow::Result<(
         .execute_command(&format!("/approvals session {approval_id}"))?
         .unwrap();
     assert!(
-        approved.contains("allowed shell command `sh`"),
+        app.ephemeral_notice
+            .as_ref()
+            .is_some_and(|notice| notice.text.contains("allowed shell command `sh`")),
+        "{approved}"
+    );
+    assert!(
+        !approved.contains("allowed shell command `sh`"),
         "{approved}"
     );
     assert!(approved.contains("approved-command"), "{approved}");
@@ -3471,10 +3477,15 @@ fn tui_approval_queue_selects_and_resolves_chosen_request() -> anyhow::Result<()
     assert_eq!(pending, vec!["apr_a".to_string()]);
     assert_eq!(app.approval_selected_index, 0);
     assert!(
+        app.ephemeral_notice
+            .as_ref()
+            .is_some_and(|notice| notice.text.contains("Denied approval apr_b"))
+    );
+    assert!(
         app.session
             .messages
-            .last()
-            .is_some_and(|message| message.content.contains("Denied approval apr_b"))
+            .iter()
+            .all(|message| !message.content.contains("Denied approval apr_b"))
     );
     Ok(())
 }

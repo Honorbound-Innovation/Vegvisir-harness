@@ -13,6 +13,31 @@ use serde_json::json;
 use super::*;
 
 impl TuiApplication {
+    pub(crate) fn show_ephemeral_notice(
+        &mut self,
+        text: impl Into<String>,
+        kind: EphemeralNoticeKind,
+        ttl: Duration,
+    ) {
+        self.ephemeral_notice = Some(EphemeralNotice::new(text, kind, ttl));
+        self.redraw_requested = true;
+    }
+
+    pub(crate) fn show_approval_notice(&mut self, text: impl Into<String>) {
+        self.show_ephemeral_notice(text, EphemeralNoticeKind::Approval, Duration::from_secs(5));
+    }
+
+    pub(crate) fn expire_ephemeral_notice(&mut self) {
+        if self
+            .ephemeral_notice
+            .as_ref()
+            .is_some_and(EphemeralNotice::is_expired)
+        {
+            self.ephemeral_notice = None;
+            self.redraw_requested = true;
+        }
+    }
+
     pub(crate) fn start_background_send(
         &mut self,
         content: String,

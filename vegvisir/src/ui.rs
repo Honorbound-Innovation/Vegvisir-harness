@@ -613,6 +613,7 @@ pub mod layout {
             selected_suggestion: usize,
             chat_scroll_offset: usize,
             pending_approvals: &[ApprovalRequest],
+            ephemeral_notice: Option<&str>,
         ) -> String {
             let (mut width, height) = self
                 .viewport
@@ -647,6 +648,7 @@ pub mod layout {
             }
             rows.extend(self.pending_attachments(session, width));
             rows.extend(self.pending_approvals(pending_approvals, width));
+            rows.extend(self.ephemeral_notice(ephemeral_notice, width));
             let autocomplete_height = if input.buffer.starts_with('/') && !suggestions.is_empty() {
                 suggestions.len().min(8) + 2
             } else {
@@ -984,6 +986,16 @@ pub mod layout {
                 ));
             }
             lines
+        }
+
+        fn ephemeral_notice(&self, notice: Option<&str>, width: usize) -> Vec<String> {
+            let Some(notice) = notice.filter(|notice| !notice.trim().is_empty()) else {
+                return Vec::new();
+            };
+            vec![
+                self.theme
+                    .paint(truncate(&format!("? approval {notice}"), width), "warning"),
+            ]
         }
 
         fn status_bar(&self, session: &SessionState, width: usize) -> String {
@@ -2069,6 +2081,7 @@ mod tests {
             0,
             app.chat_scroll_offset,
             &[],
+            None,
         );
 
         assert!(
@@ -2103,6 +2116,7 @@ mod tests {
             0,
             app.chat_scroll_offset,
             &[approval],
+            None,
         );
 
         assert!(output.contains("approval required"));
