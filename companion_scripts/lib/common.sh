@@ -46,13 +46,29 @@ vs_is_uint() {
 
 vs_redact_memory_stream() {
   sed -E \
-    -e 's/(content:|body:|text:|value:).*/\1 <redacted>/Ig' \
-    -e 's/("content"[[:space:]]*:[[:space:]]*)"([^"]|\\")*"/\1"<redacted>"/Ig' \
-    -e 's/("body"[[:space:]]*:[[:space:]]*)"([^"]|\\")*"/\1"<redacted>"/Ig' \
-    -e 's/("text"[[:space:]]*:[[:space:]]*)"([^"]|\\")*"/\1"<redacted>"/Ig' \
-    -e 's/("value"[[:space:]]*:[[:space:]]*)"([^"]|\\")*"/\1"<redacted>"/Ig'
+    -e 's/(content:|body:|text:|value:|prompt:|message:|query:).*/\1 <redacted>/Ig' \
+    -e 's/("(content|body|text|value|prompt|message|query|goal)"[[:space:]]*:[[:space:]]*)"([^"]|\\")*"/\1"<redacted>"/Ig'
 }
 
 vs_print_kv() {
   printf '%s=%s\n' "$1" "$2"
+}
+
+vs_redact_secret_stream() {
+  sed -E \
+    -e 's#(https?://[^:/[:space:]]+):([^@/[:space:]]+)@#\1:<redacted>@#g' \
+    -e 's/(Authorization:[[:space:]]*Bearer[[:space:]]+)[A-Za-z0-9._~+\/-]+=*/\1<redacted>/Ig' \
+    -e 's/((api[_-]?key|token|password|secret|credential)[[:space:]]*[:=][[:space:]]*)[^[:space:]"'"'"']+/\1<redacted>/Ig' \
+    -e 's/(AKIA[0-9A-Z]{4})[0-9A-Z]{12}/\1<redacted>/g'
+}
+
+vs_human_bytes() {
+  awk -v bytes="${1:-0}" 'BEGIN {
+    split("B KiB MiB GiB TiB", units, " ");
+    value = bytes + 0;
+    idx = 1;
+    while (value >= 1024 && idx < 5) { value /= 1024; idx++; }
+    if (idx == 1) printf "%d %s\n", value, units[idx];
+    else printf "%.1f %s\n", value, units[idx];
+  }'
 }

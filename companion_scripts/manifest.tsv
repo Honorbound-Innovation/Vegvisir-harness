@@ -100,3 +100,8 @@ vworkspace-meta.sh	workspace	read-only	no	bash,git,find	Concise workspace metada
 vworkspace-health.sh	workspace	read-only	no	bash,git,find	Workspace hygiene summary.
 vworkspace-hotspots.sh	workspace	read-only	no	bash,find,sort,head	Find run/memory/approval hotspots.
 vartifact-sizes.sh	workspace	read-only	no	bash,find,stat,sort	Size summary of Vegvisir artifacts.
+vcontext-budget.sh	workspace	read-only	no	bash,git,find,wc,awk	Estimate context size and rough token budget for files or changes.
+vprecommit.sh	maintenance	runs-tests	yes	bash,git	Run Vegvisir-oriented pre-commit checks and optional tests.
+vrepro.sh	runs	writes-generated-artifacts	yes	bash,git,find,date	Create a bounded redacted reproduction evidence bundle.
+vsecret-scan.sh	hbse	redacted-output	no	bash,git,grep	Scan files for likely plaintext secrets without printing values.
+vtrace.sh	runs	redacted-output	no	bash,find,stat,sed,rg|grep	Summarize a Vegvisir run trace with bounded redacted excerpts.

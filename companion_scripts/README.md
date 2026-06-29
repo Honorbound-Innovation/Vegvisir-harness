@@ -24,6 +24,11 @@ Examples:
 ./companion_scripts/v.sh repo-query dispatcher
 ./companion_scripts/v.sh repo-symbol run_once
 ./companion_scripts/v.sh run-latest
+./companion_scripts/v.sh precommit
+./companion_scripts/v.sh secret-scan --changed
+./companion_scripts/v.sh context-budget --changed
+./companion_scripts/v.sh trace latest
+./companion_scripts/v.sh repro --last-run
 ./companion_scripts/v.sh skill-route <bundle> <query>
 ./companion_scripts/v.sh hbse-search hbse
 ```
@@ -33,6 +38,7 @@ Examples:
 - `v.sh` — dispatcher for all `v*.sh` scripts
 - `vdoctor.sh` — self-check script inventory, executable bits, README references, manifest coverage, syntax, core dependencies, and obvious safety markers
 - `vmanifest.sh` — print/filter the machine-readable `manifest.tsv` command index
+- `vprecommit.sh` — run Vegvisir-oriented pre-commit quality checks
 
 Dispatcher utility commands:
 
@@ -78,6 +84,7 @@ Risk labels used by the manifest:
 - `vrecent-commits.sh` — recent commits with decoration
 - `vsnapshot.sh` — quick workspace snapshot
 - `vcontext-pack.sh` — gather files related to a pattern
+- `vcontext-budget.sh` — estimate file/context size and rough token budget
 - `vgrep.sh` — search with context
 - `vnotes.sh` — find TODO/FIXME/BUG/HACK notes
 - `ventrypoints.sh` — locate likely build/entry files
@@ -107,6 +114,8 @@ Risk labels used by the manifest:
 - `vrun-verification.sh` — inspect verification output
 - `vrun-search.sh` — search across run artifacts
 - `vrun-failure-cluster.sh` — cluster run failures by error signature
+- `vtrace.sh` — summarize a Vegvisir run trace with bounded redacted excerpts
+- `vrepro.sh` — create a bounded redacted reproduction evidence bundle
 
 ### 3) Subagents, memory, and workspace operations
 
@@ -148,6 +157,7 @@ Risk labels used by the manifest:
 - `vhbse-ref-count.sh` — count HBSE/secret-ref mentions
 - `vhbse-search.sh` — search for HBSE references in the workspace
 - `vhbse-secret-scan.sh` — detect likely secret-bearing files by name/pattern
+- `vsecret-scan.sh` — scan files for likely plaintext secrets without printing values
 - `vhbse-status-files.sh` — show git-status files likely related to HBSE/secrets
 - `vhbse-workspace-meta.sh` — workspace metadata plus HBSE marker count
 - `vhbse-changed.sh` — changed files that mention HBSE/approval keywords
@@ -205,5 +215,16 @@ When adding or renaming a script, update both:
 
 - `README.md` for humans
 - `manifest.tsv` for dispatcher discovery and automated checks
+
+For a broader pre-commit gate, run:
+
+```bash
+./companion_scripts/v.sh precommit
+./companion_scripts/v.sh precommit --full
+```
+
+`precommit --full` runs project tests through `vtest.sh`. For Rust repositories
+with env-mutating tests, use `precommit --full --serial-rust-tests` to run with
+`RUST_TEST_THREADS=1`; this is more deterministic but can be much slower.
 
 If you want a functional pass, run the most relevant scripts for the area you changed.
