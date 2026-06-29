@@ -8,4 +8,5 @@ bundle="${1:-}"
 query="${2:-}"
 [[ -n "$bundle" && -n "$query" ]] || { echo "Usage: $0 <bundle> <query>" >&2; exit 1; }
 
+command -v skiller_route >/dev/null 2>&1 || { echo "skiller_route command not available in this environment." >&2; exit 1; }
 skiller_route --bundle "$bundle" --query "$query" --limit 10

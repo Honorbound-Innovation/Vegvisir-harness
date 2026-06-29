@@ -7,15 +7,15 @@ set -euo pipefail
 #   ./v.sh help
 #
 # Command resolution:
-#   - `git-status`   -> `scripts/vgit-status.sh`
-#   - `vgit-status`  -> `scripts/vgit-status.sh`
-#   - `run-latest`   -> `scripts/vrun-latest.sh`
-#   - `vrun-latest`  -> `scripts/vrun-latest.sh`
-#   - `repo-map`     -> `scripts/vrepo-map.sh`
-#   - `repo-query`   -> `scripts/vrepo-map.sh --query ...`
-#   - `repo-symbol`  -> `scripts/vrepo-map.sh --symbol ...`
-#   - `rq`           -> `scripts/vrepo-map.sh --query ...`
-#   - `rs`           -> `scripts/vrepo-map.sh --symbol ...`
+#   - `git-status`   -> `companion_scripts/vgit-status.sh`
+#   - `vgit-status`  -> `companion_scripts/vgit-status.sh`
+#   - `run-latest`   -> `companion_scripts/vrun-latest.sh`
+#   - `vrun-latest`  -> `companion_scripts/vrun-latest.sh`
+#   - `repo-map`     -> `companion_scripts/vrepo-map.sh`
+#   - `repo-query`   -> `companion_scripts/vrepo-map.sh --query ...`
+#   - `repo-symbol`  -> `companion_scripts/vrepo-map.sh --symbol ...`
+#   - `rq`           -> `companion_scripts/vrepo-map.sh --query ...`
+#   - `rs`           -> `companion_scripts/vrepo-map.sh --symbol ...`
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPTS_DIR="$DIR"
@@ -42,7 +42,7 @@ Examples:
 Resolution rules:
   - If the command already starts with `v`, use it directly.
   - Otherwise, prepend `v`.
-  - The dispatcher then looks for `scripts/<name>.sh`.
+  - The dispatcher then looks for `companion_scripts/<name>.sh`.
 EOF
 }
 

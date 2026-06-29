@@ -7,7 +7,6 @@ set -euo pipefail
 root=".vegvisir/runs"
 [[ -d "$root" ]] || { echo "No .vegvisir/runs directory found." >&2; exit 1; }
 
-find "$root" -mindepth 1 -maxdepth 1 -type d -print0 \
-  | xargs -0 stat -c '%Y %n' \
-  | sort -nr \
-  | awk 'NR==1 {print $2}'
+latest="$(find "$root" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null | sort -nr | awk 'NR==1 {print $2}')"
+[[ -n "$latest" ]] || { echo "No Vegvisir run directories found." >&2; exit 1; }
+printf '%s\n' "$latest"

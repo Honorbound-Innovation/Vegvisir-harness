@@ -16,8 +16,13 @@ elif [[ -f Cargo.toml ]]; then
 elif [[ -f pyproject.toml || -f requirements.txt || -d tests ]]; then
   if command -v pytest >/dev/null 2>&1; then
     pytest -q
-  else
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -m pytest -q
+  elif command -v python >/dev/null 2>&1; then
     python -m pytest -q
+  else
+    echo "pytest/python not available" >&2
+    exit 1
   fi
 else
   echo "No recognized test entrypoint found." >&2

@@ -7,7 +7,7 @@ set -euo pipefail
 path="${1:-.vegvisir/runs}"
 
 if command -v rg >/dev/null 2>&1; then
-  rg -n -i --hidden 'error|exception|traceback|failed|fatal' "$path"
+  rg -n -i --hidden -- 'error|exception|traceback|failed|fatal' "$path"
 else
-  grep -RIn -i 'error\|exception\|traceback\|failed\|fatal' "$path"
+  grep -RIn -i -- 'error\|exception\|traceback\|failed\|fatal' "$path"
 fi

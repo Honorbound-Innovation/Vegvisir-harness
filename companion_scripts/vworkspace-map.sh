@@ -7,8 +7,8 @@ set -euo pipefail
 printf 'Workspace: %s\n' "$(pwd)"
 echo
 
-echo '== scripts =='
-find scripts -maxdepth 1 -type f | sed 's#^./##' | sort
+echo '== companion scripts =='
+find companion_scripts -maxdepth 1 -type f -name 'v*.sh' 2>/dev/null | sed 's#^./##' | sort
 
 echo
 echo '== vegvisir runs =='

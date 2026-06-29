@@ -1,4 +1,4 @@
-# Vegvisir scripts
+# Vegvisir companion scripts
 
 This directory contains a growing set of small shell utilities for working with Vegvisir, the workspace, git, CMS-style memory artifacts, HBSE-safe secret boundaries, approvals, runs, and skill bundles.
 
@@ -14,13 +14,13 @@ This directory contains a growing set of small shell utilities for working with 
 Examples:
 
 ```bash
-./scripts/v.sh git-status
-./scripts/v.sh repo-map
-./scripts/v.sh repo-query dispatcher
-./scripts/v.sh repo-symbol vsh
-./scripts/v.sh run-latest
-./scripts/v.sh skill-route <bundle> <query>
-./scripts/v.sh hbse-search hbse
+./companion_scripts/v.sh git-status
+./companion_scripts/v.sh repo-map
+./companion_scripts/v.sh repo-query dispatcher
+./companion_scripts/v.sh repo-symbol vsh
+./companion_scripts/v.sh run-latest
+./companion_scripts/v.sh skill-route <bundle> <query>
+./companion_scripts/v.sh hbse-search hbse
 ```
 
 ## Dispatcher
@@ -134,6 +134,7 @@ Examples:
 - `vapprovals-stale.sh` — show approval artifacts by age
 - `vapprovals-linked-runs.sh` — link runs to approvals files
 - `vsecurity-files.sh` — locate approval/auth/credential workflow files
+- `vworkflow-files.sh` — locate workflow/automation-related files
 
 ### 7) Skills, bundles, routing, and compatibility
 
@@ -164,7 +165,7 @@ Examples:
 If you want a quick smoke check after editing scripts:
 
 ```bash
-bash -n scripts/*.sh
+bash -n companion_scripts/*.sh
 ```
 
 If you want a functional pass, run the most relevant scripts for the area you changed.

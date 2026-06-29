@@ -13,7 +13,7 @@ if [[ -z "$pattern" ]]; then
 fi
 
 if command -v rg >/dev/null 2>&1; then
-  rg --hidden --glob '!.git' --glob '!.vegvisir' -l "$pattern" "$root"
+  rg --hidden --glob '!.git' --glob '!.vegvisir' -l -- "$pattern" "$root"
 else
-  grep -RIl --exclude-dir=.git --exclude-dir=.vegvisir "$pattern" "$root"
+  grep -RIl --exclude-dir=.git --exclude-dir=.vegvisir -- "$pattern" "$root"
 fi

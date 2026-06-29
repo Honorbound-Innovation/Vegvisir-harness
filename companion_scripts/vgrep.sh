@@ -14,7 +14,7 @@ if [[ -z "$pattern" ]]; then
 fi
 
 if command -v rg >/dev/null 2>&1; then
-  rg --hidden --glob '!.git' --glob '!.vegvisir' -n -C "$context" "$pattern" "$path"
+  rg --hidden --glob '!.git' --glob '!.vegvisir' -n -C "$context" -- "$pattern" "$path"
 else
-  grep -RIn -C "$context" --exclude-dir=.git --exclude-dir=.vegvisir "$pattern" "$path"
+  grep -RIn -C "$context" --exclude-dir=.git --exclude-dir=.vegvisir -- "$pattern" "$path"
 fi

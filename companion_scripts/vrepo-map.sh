@@ -4,8 +4,8 @@ set -euo pipefail
 # Build a compact repo map and per-file symbol index for low-token navigation.
 #
 # Usage:
-#   ./scripts/vrepo-map.sh [--full|--update] [--diff <snapshot-dir>] [--query <term>] [--symbol <name>] [--watch[=<sec>]] [--interval <sec>] [--snippet-lines <n>] [--snippet-radius <n>] [--export jsonl] [path] [out-dir]
-#   ./scripts/vrepo-map.sh --help
+#   ./companion_scripts/vrepo-map.sh [--full|--update] [--diff <snapshot-dir>] [--query <term>] [--symbol <name>] [--watch[=<sec>]] [--interval <sec>] [--snippet-lines <n>] [--snippet-radius <n>] [--export jsonl] [path] [out-dir]
+#   ./companion_scripts/vrepo-map.sh --help
 #
 # Outputs in out-dir:
 #   - repo-map.md        : concise human-readable overview

@@ -8,7 +8,7 @@ query="${1:-}"
 [[ -n "$query" ]] || { echo "Usage: $0 <query>" >&2; exit 1; }
 
 if command -v rg >/dev/null 2>&1; then
-  rg -n --hidden --glob '!.git' "$query" .vegvisir/runs
+  rg -n --hidden --glob '!.git' -- "$query" .vegvisir/runs
 else
-  grep -RIn "$query" .vegvisir/runs
+  grep -RIn -- "$query" .vegvisir/runs
 fi
