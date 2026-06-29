@@ -1,0 +1,102 @@
+command	category	risk	mutates	dependencies	description
+v.sh	dispatcher	read-only	no	bash,find,sort,sed	Dispatcher for all companion v*.sh scripts.
+vdoctor.sh	maintenance	read-only	no	bash,git,find,sort,awk,sed	Self-check companion script inventory, permissions, docs, syntax, and safety markers.
+vmanifest.sh	maintenance	read-only	no	bash,awk,column	Print the companion script manifest.
+vrepo-root.sh	workspace	read-only	no	bash,git	Print the git repo root.
+vgit-status.sh	workspace	read-only	no	bash,git	Git status plus diff summary.
+vchanged-files.sh	workspace	read-only	no	bash,git	Show changed files.
+vtracked-files.sh	workspace	read-only	no	bash,git	List tracked files.
+vuntracked-files.sh	workspace	read-only	no	bash,git	List untracked files.
+vignored-files.sh	workspace	read-only	no	bash,git	List ignored files.
+vbranch-info.sh	workspace	read-only	no	bash,git	Current branch and upstream.
+vbranch-drift.sh	workspace	read-only	no	bash,git	Ahead/behind counts.
+vbranches-recent.sh	workspace	read-only	no	bash,git,head	Branches sorted by recent commit time.
+vremotes.sh	workspace	read-only	no	bash,git	Show git remotes.
+vmerges.sh	workspace	read-only	no	bash,git	Recent merge commits.
+vrepo-stats.sh	workspace	read-only	no	bash,git,wc	Quick repo stats.
+vcommit-info.sh	workspace	read-only	no	bash,git	Latest commit details.
+vdiff-summary.sh	workspace	read-only	no	bash,git	Concise diff summary for a path.
+vtop-files.sh	workspace	read-only	no	bash,find,sort,head	Largest files in the workspace.
+vfilesize.sh	workspace	read-only	no	bash,find,sort,head	Readable size summary of files.
+vtree.sh	workspace	read-only	no	bash,find,sed,head	Compact tree view of the workspace.
+vrecent.sh	workspace	read-only	no	bash,git	Compact recent commit summary.
+vrecent-commits.sh	workspace	read-only	no	bash,git	Recent commits with decoration.
+vsnapshot.sh	workspace	read-only	no	bash,git,find	Quick workspace snapshot.
+vcontext-pack.sh	workspace	read-only	no	bash,rg|grep	Gather files related to a pattern.
+vgrep.sh	workspace	read-only	no	bash,rg|grep	Search with context.
+vnotes.sh	workspace	read-only	no	bash,rg|grep	Find TODO/FIXME/BUG/HACK notes.
+ventrypoints.sh	workspace	read-only	no	bash,find	Locate likely build/entry files.
+vmarkdown-files.sh	workspace	read-only	no	bash,find	List markdown files.
+vsource-files.sh	workspace	read-only	no	bash,find	List source files by common extensions.
+vshell-files.sh	workspace	read-only	no	bash,find	List shell scripts.
+vtest.sh	workspace	runs-tests	yes	bash,npm|cargo|pytest|python	Run a sensible test command for the repo type.
+venv-snapshot.sh	workspace	redacted-output	no	bash	Print non-secret environment essentials.
+vrepo-map.sh	workspace	writes-generated-artifacts	yes	bash,python3	Build a compact repo map and per-file symbol index.
+vruns.sh	runs	read-only	no	bash,find,sort	List .vegvisir/runs newest first.
+vrun-latest.sh	runs	read-only	no	bash,find,sort,awk	Newest run directory.
+vrun-list-head.sh	runs	read-only	no	bash,find,sort,head,awk	Top N newest run dirs.
+vrun-latest-summary.sh	runs	read-only	no	bash,find	One-line artifact presence summary for newest run.
+vrun-summary.sh	runs	read-only	no	bash,find	Summarize one run directory.
+vrun-inspect.sh	runs	read-only	no	bash,find,sed	Show key run artifacts together.
+vrun-artifacts.sh	runs	read-only	no	bash,find,sort	List artifact files per run.
+vrun-files.sh	runs	read-only	no	bash,find,sort,head	List run artifact files.
+vrun-kinds.sh	runs	read-only	no	bash,find,sort	Show artifact types present in each run.
+vrun-errors.sh	runs	read-only	no	bash,rg|grep	Grep errors/failures in run artifacts.
+vrun-timeline.sh	runs	read-only	no	bash,find,sort	Timeline from a run's file timestamps.
+vrun-provenance.sh	runs	read-only	no	bash,find,sort	Provenance hints from run filenames/timestamps.
+vrun-memory.sh	runs	read-only	no	bash,find,sed	Inspect run memory artifacts.
+vrun-subagents.sh	runs	read-only	no	bash,find,sed	Inspect run subagent metadata.
+vrun-verification.sh	runs	read-only	no	bash,find,sed	Inspect verification output.
+vrun-search.sh	runs	read-only	no	bash,rg|grep	Search across run artifacts.
+vrun-failure-cluster.sh	runs	read-only	no	bash,rg|grep,sort,uniq	Cluster run failures by error signature.
+vsubagents.sh	subagents	read-only	no	bash,subagents_list	List subagent tasks.
+vsubagents-summary.sh	subagents	read-only	no	bash,subagents_list	Summarize subagent state.
+vsubagent-show.sh	subagents	read-only	no	bash,subagents_show	Show one subagent task.
+vsubagent-logs.sh	subagents	read-only	no	bash,find,sort,head	List local subagent-related logs.
+vshell-logs.sh	runs	read-only	no	bash,find,sort,head	List shell task logs.
+vshell-tail.sh	runs	read-only	no	bash,find,sort,tail	Tail latest shell task log.
+vshell-log-view.sh	runs	read-only	no	bash,sed	View one shell task log.
+vmemories.sh	cms	redacted-output	no	bash,cms_recent	Recent CMS memories with redaction.
+vmemory-search.sh	cms	redacted-output	no	bash,cms_recall	Search CMS memories with redaction.
+vcms-artifacts.sh	cms	read-only	no	bash,find	Locate CMS-style artifacts.
+vcms-context-size.sh	cms	read-only	no	bash,find,stat,sort	Estimate CMS artifact footprint.
+vcms-query-summary.sh	cms	read-only	no	bash,rg|grep	Condensed view of CMS-related queries.
+vcms-recent.sh	cms	redacted-output	no	bash,cms_recent,sed	Recent CMS items with redaction.
+vcms-run.sh	cms	read-only	no	bash,find,sed	Inspect CMS artifacts in a run dir.
+vcms-search.sh	cms	redacted-output	no	bash,cms_recall,sed	Search CMS memories with redaction.
+vcms-source-audit.sh	cms	read-only	no	bash,find,sort	Audit CMS source artifact age/staleness.
+vcms-thread-map.sh	cms	read-only	no	bash,find,sort	Timestamp-only map of CMS memory threads.
+vhbse-secret-refs.sh	hbse	read-only	no	bash,rg|grep	Find secret-ref mentions without expanding values.
+vhbse-env.sh	hbse	redacted-output	no	bash,printenv,awk	List sensitive env var names only, redacted.
+vhbse-env-groups.sh	hbse	redacted-output	no	bash,printenv,awk	Grouped sensitive env var names only.
+vhbse-files.sh	hbse	read-only	no	bash,find	List HBSE/secret-related files by name.
+vhbse-manifest-files.sh	hbse	read-only	no	bash,find	List likely HBSE manifest/ref files.
+vhbse-path-allowlist.sh	hbse	read-only	no	bash,find	Show likely HBSE-safe path areas.
+vhbse-redaction-check.sh	hbse	read-only	no	bash,rg|grep	Find redaction-sensitive terms for logs/docs.
+vhbse-ref-count.sh	hbse	read-only	no	bash,rg|grep,wc	Count HBSE/secret-ref mentions.
+vhbse-search.sh	hbse	read-only	no	bash,rg|grep	Search for HBSE references in the workspace.
+vhbse-secret-scan.sh	hbse	read-only	no	bash,find	Detect likely secret-bearing files by name/pattern.
+vhbse-status-files.sh	hbse	read-only	no	bash,git,awk	Show git-status files likely related to HBSE/secrets.
+vhbse-workspace-meta.sh	hbse	read-only	no	bash,git,rg|grep	Workspace metadata plus HBSE marker count.
+vhbse-changed.sh	hbse	read-only	no	bash,git,awk	Changed files that mention HBSE/approval keywords.
+vapprovals.sh	approvals	read-only	no	bash,find,sed	Inspect run approvals.
+vapprovals-files.sh	approvals	read-only	no	bash,find	List approval-related files.
+vapprovals-pending.sh	approvals	read-only	no	bash,rg|grep	Find pending approval markers.
+vapprovals-stale.sh	approvals	read-only	no	bash,find,sort	Show approval artifacts by age.
+vapprovals-linked-runs.sh	approvals	read-only	no	bash,find,sort	Link runs to approvals files.
+vsecurity-files.sh	approvals	read-only	no	bash,find	Locate approval/auth/credential workflow files.
+vworkflow-files.sh	approvals	read-only	no	bash,find	Locate workflow/automation-related files.
+vskill-artifacts.sh	skills	read-only	no	bash,find	List skill-related artifacts.
+vskill-bundles.sh	skills	read-only	no	bash,find	Show local skill bundles.
+vskill-change-impact.sh	skills	read-only	no	bash,find	List potentially affected skill artifacts.
+vskill-compat.sh	skills	read-only	no	bash,find	Check bundle/path compatibility basics.
+vskill-deps.sh	skills	read-only	no	bash,rg|grep	Show dependency/requires hints in skills.
+vskill-index.sh	skills	read-only	no	bash,find	List compiled skill/index artifacts.
+vskill-list.sh	skills	read-only	no	bash,skiller_load	Surface skills in a bundle.
+vskill-meta.sh	skills	read-only	no	bash,find,sed	Show skill/bundle metadata safely.
+vskill-route.sh	skills	read-only	no	bash,skiller_route	Route a query against a bundle.
+vworkspace-map.sh	workspace	read-only	no	bash,find,git	Workspace plus scripts plus run overview.
+vworkspace-meta.sh	workspace	read-only	no	bash,git,find	Concise workspace metadata block.
+vworkspace-health.sh	workspace	read-only	no	bash,git,find	Workspace hygiene summary.
+vworkspace-hotspots.sh	workspace	read-only	no	bash,find,sort,head	Find run/memory/approval hotspots.
+vartifact-sizes.sh	workspace	read-only	no	bash,find,stat,sort	Size summary of Vegvisir artifacts.

@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Show memory titles and types only; do not print full sensitive content.
+# Show memory titles and types only; redact full sensitive content/body fields.
 # Usage: ./vcms-recent.sh [limit]
 
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/common.sh
+source "$DIR/lib/common.sh"
+
 limit="${1:-10}"
-command -v cms_recent >/dev/null 2>&1 || { echo "cms_recent command not available in this environment." >&2; exit 1; }
-cms_recent --limit "$limit" | sed -E 's/(content:|body:).*/\1 <redacted>/g'
+vs_is_uint "$limit" || { echo "Invalid limit: $limit" >&2; exit 1; }
+vs_require_command cms_recent "cms_recent is available inside Vegvisir harness environments."
+cms_recent --limit "$limit" | vs_redact_memory_stream

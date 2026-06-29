@@ -14,23 +14,49 @@ This directory contains a growing set of small shell utilities for working with 
 Examples:
 
 ```bash
+./companion_scripts/v.sh help
+./companion_scripts/v.sh doctor
+./companion_scripts/v.sh list runs
+./companion_scripts/v.sh search memory
+./companion_scripts/v.sh manifest --category hbse
 ./companion_scripts/v.sh git-status
 ./companion_scripts/v.sh repo-map
 ./companion_scripts/v.sh repo-query dispatcher
-./companion_scripts/v.sh repo-symbol vsh
+./companion_scripts/v.sh repo-symbol run_once
 ./companion_scripts/v.sh run-latest
 ./companion_scripts/v.sh skill-route <bundle> <query>
 ./companion_scripts/v.sh hbse-search hbse
 ```
 
-## Dispatcher
+## Dispatcher and self-checks
 
 - `v.sh` — dispatcher for all `v*.sh` scripts
+- `vdoctor.sh` — self-check script inventory, executable bits, README references, manifest coverage, syntax, core dependencies, and obvious safety markers
+- `vmanifest.sh` — print/filter the machine-readable `manifest.tsv` command index
+
+Dispatcher utility commands:
+
+```bash
+./companion_scripts/v.sh list              # all commands with category/risk/description
+./companion_scripts/v.sh list hbse         # one category
+./companion_scripts/v.sh categories        # category names
+./companion_scripts/v.sh risks             # risk label counts
+./companion_scripts/v.sh search approval   # manifest search
+```
+
+Risk labels used by the manifest:
+
+- `read-only` — reads local state only
+- `redacted-output` — may inspect sensitive-adjacent data but should redact values/content
+- `runs-tests` — runs project test tooling and may create normal test/build artifacts
+- `writes-generated-artifacts` — writes generated Vegvisir/helper artifacts, not source files by default
 
 ## Categories
 
 ### 1) General repo and workspace navigation
 
+- `vdoctor.sh` — validate companion script health and inventory consistency
+- `vmanifest.sh` — print/filter the companion command manifest
 - `vrepo-root.sh` — print the git repo root
 - `vgit-status.sh` — git status plus diff summary
 - `vchanged-files.sh` — show changed files
@@ -166,6 +192,18 @@ If you want a quick smoke check after editing scripts:
 
 ```bash
 bash -n companion_scripts/*.sh
+./companion_scripts/v.sh doctor
 ```
+
+If you want a stricter maintenance gate that treats warnings as failures:
+
+```bash
+./companion_scripts/v.sh doctor --strict
+```
+
+When adding or renaming a script, update both:
+
+- `README.md` for humans
+- `manifest.tsv` for dispatcher discovery and automated checks
 
 If you want a functional pass, run the most relevant scripts for the area you changed.
