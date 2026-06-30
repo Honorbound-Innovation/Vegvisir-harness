@@ -239,6 +239,7 @@ pub fn validate_bundle(bundle: &SkillBundle) -> ValidationReport {
         ) {
             errors.push(err.to_string());
         }
+        crate::forge::collect_skill_script_validation_errors(skill, &section_ids, &mut errors);
         for role in &skill.role_suitability {
             if let Err(err) = crate::forge::validate_probability(
                 &format!("{} role_suitability {}", skill.id, role.role),
@@ -617,6 +618,23 @@ pub fn readiness_report(bundle: &SkillBundle) -> ReadinessReport {
         if s.runtime_policy.modify_files && !s.runtime_policy.requires_backup_or_rollback {
             blockers.push(format!(
                 "{} can modify files without backup or rollback requirement",
+                s.id
+            ));
+        }
+
+        if (high_risk_runtime || high_risk_tool || s.runtime_policy.modify_files)
+            && s.scripts.is_empty()
+        {
+            blockers.push(format!(
+                "{} is operational/high-risk but lacks embedded Skill.scripts for deterministic preflight, planning, validation, or safety gating",
+                s.id
+            ));
+        }
+        if s.scripts.iter().any(|script| script.requires_approval)
+            && !s.runtime_policy.requires_user_approval
+        {
+            blockers.push(format!(
+                "{} has approval-gated scripts but runtime_policy does not require user approval",
                 s.id
             ));
         }

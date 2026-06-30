@@ -65,6 +65,8 @@ pub struct Skill {
     #[serde(default)]
     pub evals: Vec<EvalCase>,
     #[serde(default)]
+    pub scripts: Vec<SkillScript>,
+    #[serde(default)]
     pub citations: Vec<Citation>,
     #[serde(default)]
     pub confidence: ConfidenceBreakdown,
@@ -152,6 +154,50 @@ pub struct EvalCase {
     pub expected_behavior: String,
     pub eval_type: EvalType,
     pub safety_notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillScript {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub script_type: SkillScriptType,
+    pub language: SkillScriptLanguage,
+    pub entrypoint: String,
+    pub content: String,
+    pub inputs: Vec<String>,
+    pub outputs: Vec<String>,
+    pub deterministic: bool,
+    pub idempotent: bool,
+    pub requires_approval: bool,
+    pub permission_level: PermissionLevel,
+    pub when_to_use: Vec<String>,
+    pub guardrails: Vec<String>,
+    pub generated_by: String,
+    pub source_section_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SkillScriptType {
+    InputNormalizer,
+    CommandPlanner,
+    PreflightCheck,
+    DryRunWrapper,
+    OutputValidator,
+    EvidenceChecker,
+    SafetyGate,
+    RollbackPlanner,
+    TestHarness,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SkillScriptLanguage {
+    Python,
+    Bash,
+    JavaScript,
+    TypeScript,
+    Rust,
+    Pseudocode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -402,6 +448,10 @@ pub struct ForgeRequestEnvelope {
     #[serde(default)]
     pub prior_forge_summary: Vec<String>,
     pub graph_concepts: Vec<ConceptNode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_objective: Option<String>,
     pub task_instruction: String,
     pub output_schema: String,
     pub token_budget: usize,
@@ -724,4 +774,5 @@ pub enum ForgePassType {
     RegistryReadiness,
     Critique,
     VerifierReview,
+    ScriptGeneration,
 }

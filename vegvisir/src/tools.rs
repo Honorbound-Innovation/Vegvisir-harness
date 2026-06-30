@@ -1176,12 +1176,13 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
                     domain,
                     skill_count.clamp(1, 100),
                 );
+                let forge_system_prompt = skiller_forge::skiller_specialized_vegvisir_system_prompt().to_string();
                 let forge_prompt = skiller_forge::vegvisir_prompt_markdown(&forge_request);
                 let response_template = skiller_forge::response_template_for(&forge_request);
                 skiller_registry::write_bundle(&bundle, &out_path)?;
-                Ok((bundle_id, skill_count, source_count, forge_request, forge_prompt, response_template))
+                Ok((bundle_id, skill_count, source_count, forge_request, forge_system_prompt, forge_prompt, response_template))
             }) {
-                Ok((bundle_id, skill_count, source_count, forge_request, forge_prompt, response_template)) => {
+                Ok((bundle_id, skill_count, source_count, forge_request, forge_system_prompt, forge_prompt, response_template)) => {
                     let request_id = forge_request.request_id.clone();
                     let mut data = Map::new();
                     data.insert("bundle_id".to_string(), json!(bundle_id));
@@ -1192,6 +1193,8 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
                     data.insert("forge_required_by_default".to_string(), json!(true));
                     data.insert("default_forge_pass".to_string(), json!("SkillExpansion"));
                     data.insert("forge_request_id".to_string(), json!(request_id));
+                    data.insert("forge_default_objective".to_string(), json!(skiller_forge::skiller_default_forge_objective()));
+                    data.insert("forge_system_prompt".to_string(), json!(forge_system_prompt));
                     data.insert("forge_request".to_string(), serde_json::to_value(&forge_request).unwrap_or(Value::Null));
                     data.insert("forge_response_template".to_string(), serde_json::to_value(&response_template).unwrap_or(Value::Null));
                     data.insert("forge_prompt".to_string(), json!(forge_prompt));
@@ -1226,12 +1229,13 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
                     domain,
                     skill_count.clamp(1, 100),
                 );
+                let forge_system_prompt = skiller_forge::skiller_specialized_vegvisir_system_prompt().to_string();
                 let forge_prompt = skiller_forge::vegvisir_prompt_markdown(&forge_request);
                 let response_template = skiller_forge::response_template_for(&forge_request);
                 skiller_registry::write_bundle(&bundle, &out_path)?;
-                Ok((bundle_id, skill_count, source_count, forge_request, forge_prompt, response_template))
+                Ok((bundle_id, skill_count, source_count, forge_request, forge_system_prompt, forge_prompt, response_template))
             }) {
-                Ok((bundle_id, skill_count, source_count, forge_request, forge_prompt, response_template)) => {
+                Ok((bundle_id, skill_count, source_count, forge_request, forge_system_prompt, forge_prompt, response_template)) => {
                     let request_id = forge_request.request_id.clone();
                     let mut data = Map::new();
                     data.insert("bundle_id".to_string(), json!(bundle_id));
@@ -1242,6 +1246,8 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
                     data.insert("forge_required_by_default".to_string(), json!(true));
                     data.insert("default_forge_pass".to_string(), json!("SkillExpansion"));
                     data.insert("forge_request_id".to_string(), json!(request_id));
+                    data.insert("forge_default_objective".to_string(), json!(skiller_forge::skiller_default_forge_objective()));
+                    data.insert("forge_system_prompt".to_string(), json!(forge_system_prompt));
                     data.insert("forge_request".to_string(), serde_json::to_value(&forge_request).unwrap_or(Value::Null));
                     data.insert("forge_response_template".to_string(), serde_json::to_value(&response_template).unwrap_or(Value::Null));
                     data.insert("forge_prompt".to_string(), json!(forge_prompt));
@@ -1512,6 +1518,7 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
             let bundle_path = match skiller_forge_request_sandbox.resolve(bundle) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
             match skiller_registry::read_bundle(&bundle_path).map(|bundle_data| skiller_forge::build_vegvisir_handoff(&bundle_data, pass, domain_profile, max_skills)) {
                 Ok(request) => {
+                    let system_prompt = skiller_forge::skiller_specialized_vegvisir_system_prompt().to_string();
                     let prompt = skiller_forge::vegvisir_prompt_markdown(&request);
                     let template = skiller_forge::response_template_for(&request);
                     let mut data = Map::new();
@@ -1519,6 +1526,8 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
                     data.insert("provider".to_string(), json!(request.provider));
                     data.insert("pass_type".to_string(), json!(format!("{:?}", request.pass_type)));
                     data.insert("selected_skill_count".to_string(), json!(request.candidate_skills.len()));
+                    data.insert("default_objective".to_string(), json!(skiller_forge::skiller_default_forge_objective()));
+                    data.insert("system_prompt".to_string(), json!(system_prompt));
                     data.insert("request".to_string(), serde_json::to_value(&request).unwrap_or(Value::Null));
                     data.insert("response_template".to_string(), serde_json::to_value(&template).unwrap_or(Value::Null));
                     data.insert("prompt".to_string(), json!(prompt));
@@ -3217,7 +3226,35 @@ mod skiller_tool_tests {
             compile.data.get("recommended_apply_tool"),
             Some(&json!("skiller_forge_apply"))
         );
+        assert_eq!(
+            compile.data.get("forge_default_objective"),
+            Some(&json!(skiller_forge::skiller_default_forge_objective()))
+        );
+        assert!(
+            compile
+                .data
+                .get("forge_system_prompt")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("Skiller Skill Forge mode")
+        );
         assert!(compile.data.get("forge_request").is_some());
+        assert_eq!(
+            compile
+                .data
+                .get("forge_request")
+                .and_then(|request| request.get("default_objective")),
+            Some(&json!(skiller_forge::skiller_default_forge_objective()))
+        );
+        assert!(
+            compile
+                .data
+                .get("forge_request")
+                .and_then(|request| request.get("system_prompt"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("Skiller Skill Forge mode")
+        );
         assert!(compile.data.get("forge_response_template").is_some());
         assert!(
             compile
@@ -3225,7 +3262,7 @@ mod skiller_tool_tests {
                 .get("forge_prompt")
                 .and_then(Value::as_str)
                 .unwrap_or_default()
-                .contains("Vegvisir Skiller Forge Request")
+                .contains("enhancement, expansion, cleanup, validation, and verification")
         );
         assert!(workspace.path().join("bundle/package.yaml").exists());
 
@@ -4095,7 +4132,35 @@ TRAILING_GARBAGE",
             compile.data.get("forge_required_by_default"),
             Some(&json!(true))
         );
+        assert_eq!(
+            compile.data.get("forge_default_objective"),
+            Some(&json!(skiller_forge::skiller_default_forge_objective()))
+        );
+        assert!(
+            compile
+                .data
+                .get("forge_system_prompt")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("Skiller Skill Forge mode")
+        );
         assert!(compile.data.get("forge_request").is_some());
+        assert_eq!(
+            compile
+                .data
+                .get("forge_request")
+                .and_then(|request| request.get("default_objective")),
+            Some(&json!(skiller_forge::skiller_default_forge_objective()))
+        );
+        assert!(
+            compile
+                .data
+                .get("forge_request")
+                .and_then(|request| request.get("system_prompt"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("Skiller Skill Forge mode")
+        );
         assert!(compile.data.get("forge_response_template").is_some());
 
         let request_obs = executor.execute(ToolCall {
@@ -4108,7 +4173,40 @@ TRAILING_GARBAGE",
         });
         assert!(request_obs.ok, "{}", request_obs.content);
         assert!(request_obs.content.contains("ForgeResponseEnvelope"));
+        assert!(
+            request_obs
+                .content
+                .contains("Skiller-specialized Vegvisir system prompt")
+        );
         assert_eq!(request_obs.data.get("provider"), Some(&json!("vegvisir")));
+        assert_eq!(
+            request_obs.data.get("default_objective"),
+            Some(&json!(skiller_forge::skiller_default_forge_objective()))
+        );
+        assert!(
+            request_obs
+                .data
+                .get("system_prompt")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("Skiller Skill Forge mode")
+        );
+        assert_eq!(
+            request_obs
+                .data
+                .get("request")
+                .and_then(|request| request.get("default_objective")),
+            Some(&json!(skiller_forge::skiller_default_forge_objective()))
+        );
+        assert!(
+            request_obs
+                .data
+                .get("request")
+                .and_then(|request| request.get("system_prompt"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("Skiller Skill Forge mode")
+        );
         let request = request_obs
             .data
             .get("request")

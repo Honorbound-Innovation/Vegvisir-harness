@@ -386,6 +386,7 @@ fn all_forge_passes() -> Vec<ForgePassType> {
         ForgePassType::DeduplicationAndScope,
         ForgePassType::SafetyAndGovernance,
         ForgePassType::EvalGeneration,
+        ForgePassType::ScriptGeneration,
         ForgePassType::Critique,
         ForgePassType::VerifierReview,
         ForgePassType::AgentRoleMapping,
@@ -614,6 +615,13 @@ impl ForgeProvider for MockForgeProvider {
                     confidence_updates.insert(improved.id.clone(), improved.confidence.clone());
                     modified_items.push(improved);
                 }
+                ForgePassType::ScriptGeneration => {
+                    let mut improved = skill.clone();
+                    apply_script_generation(&mut improved, self.name());
+                    confidence_updates.insert(improved.id.clone(), improved.confidence.clone());
+                    evidence_records.extend(improved.inference_records.clone());
+                    modified_items.push(improved);
+                }
                 ForgePassType::AgentRoleMapping => {
                     let mut improved = skill.clone();
                     apply_role_mapping(&mut improved, request.domain_profile.as_ref());
@@ -686,6 +694,9 @@ impl ForgeProvider for VegvisirForgeProvider {
         {
             for record in &mut skill.inference_records {
                 record.generated_by_agent = "vegvisir".into();
+            }
+            for script in &mut skill.scripts {
+                script.generated_by = "vegvisir".into();
             }
             skill.metadata.insert(
                 "forge_provider".into(),
@@ -910,6 +921,8 @@ fn minimal_adapter_self_test_bundle_and_request() -> (SkillBundle, ForgeRequestE
         response_schema_guide: response_schema_guide_for(&ForgePassType::Interpretation),
         prior_forge_summary: vec![],
         graph_concepts: vec![],
+        system_prompt: Some(skiller_specialized_vegvisir_system_prompt().to_string()),
+        default_objective: Some(skiller_default_forge_objective().to_string()),
         task_instruction: "Self-test the configured Vegvisir Forge adapter by returning a valid empty ForgeResponseEnvelope with matching request_id and pass_type. Do not generate or modify skills.".into(),
         output_schema: "ForgeResponseEnvelope YAML".into(),
         token_budget: 1024,
@@ -1036,6 +1049,7 @@ pub fn forge_bundle(
         ForgePassType::SkillInference,
         ForgePassType::SafetyAndGovernance,
         ForgePassType::EvalGeneration,
+        ForgePassType::ScriptGeneration,
         ForgePassType::Critique,
         ForgePassType::VerifierReview,
         ForgePassType::AgentRoleMapping,
@@ -1247,6 +1261,10 @@ pub fn build_request(
         response_schema_guide,
         prior_forge_summary,
         graph_concepts: bundle.graph.concepts.clone(),
+        system_prompt: (provider == "vegvisir")
+            .then(|| skiller_specialized_vegvisir_system_prompt().to_string()),
+        default_objective: (provider == "vegvisir")
+            .then(|| skiller_default_forge_objective().to_string()),
         task_instruction: instruction_for(&pass_type),
         output_schema: "ForgeResponseEnvelope: generated_items, modified_items, review_findings, confidence_updates, evidence_records, required_human_review, audit_notes".into(),
         token_budget: 24_000,
@@ -1462,6 +1480,7 @@ fn response_schema_guide_for(pass_type: &ForgePassType) -> ForgeResponseSchemaGu
         "Do not set skills to Approved or Published; Forge output is staged for review.".into(),
         "Generated operational or inferred skills should use NeedsReview and Level2ForgeEnhanced at most.".into(),
         "Runtime permissions must be least-privilege and must require user approval for mutation.".into(),
+        "Use Skill.scripts for deterministic helper/enforcement code when it improves robustness; scripts must be short, auditable, cited, secret-safe, deterministic, and least-privilege.".into(),
     ];
     if matches!(pass_type, ForgePassType::RegistryReadiness) {
         skill_output_rules.push(
@@ -1492,6 +1511,7 @@ fn response_schema_guide_for(pass_type: &ForgePassType) -> ForgeResponseSchemaGu
             ForgeResponseFieldGuide { field: "evidence_records".into(), required: true, expected_type: "list<InferenceRecord>".into(), guidance: "Evidence records for generated skills or new inferred claims; source_refs_used must refer to request sections.".into() },
             ForgeResponseFieldGuide { field: "required_human_review".into(), required: true, expected_type: "bool".into(), guidance: "Set true for inferred, speculative, mutating, high-risk, or governance-impacting outputs.".into() },
             ForgeResponseFieldGuide { field: "audit_notes".into(), required: true, expected_type: "list<string>".into(), guidance: "Short non-secret notes about pass decisions; do not include chain-of-thought or raw private source text.".into() },
+            ForgeResponseFieldGuide { field: "Skill.scripts".into(), required: false, expected_type: "list<SkillScript>".into(), guidance: "Embedded deterministic scripts that help, guide, test, or enforce the skill. Include id, type, language, entrypoint, content, inputs, outputs, permission_level, source_section_ids, and guardrails.".into() },
         ],
         skill_output_rules,
         evidence_record_rules: vec![
@@ -1511,6 +1531,7 @@ fn response_schema_guide_for(pass_type: &ForgePassType) -> ForgeResponseSchemaGu
             "Direct publication/approval status changes.".into(),
             "Large raw source excerpts beyond citation policy.".into(),
             "Mutation permissions without explicit approval and rollback/backup policy.".into(),
+            "Scripts that fetch arbitrary network content, embed secrets, hide side effects, bypass approval, or perform destructive actions without a safety gate.".into(),
         ],
         minimal_valid_response: minimal,
     }
@@ -1525,6 +1546,8 @@ fn validation_constraints_for(pass_type: &ForgePassType) -> Vec<String> {
         "Do not invent API endpoints, CLI flags, tools, versions, or source claims without cited evidence.".to_string(),
         "External mutation permissions require explicit user approval, rollback guidance, and human review.".to_string(),
         "Confidence and evidence scores must be finite values in 0.0..=1.0.".to_string(),
+        "Post-deterministic Forge output must either enhance/clean up supported skills or explain why no safe model enhancement is justified.".to_string(),
+        "Review findings and audit notes must summarize validation/verification decisions without chain-of-thought.".to_string(),
     ];
     match pass_type {
         ForgePassType::SkillInference => constraints.push(
@@ -1535,6 +1558,9 @@ fn validation_constraints_for(pass_type: &ForgePassType) -> Vec<String> {
         ),
         ForgePassType::EvalGeneration => constraints.push(
             "Generated evals should cover routing, source grounding, safety, and tool-use planning for operational or high-risk skills.".to_string(),
+        ),
+        ForgePassType::ScriptGeneration => constraints.push(
+            "Generated scripts must be embedded in Skill.scripts, deterministic, secret-safe, least-privilege, cited to existing source sections, and must not execute hidden network/destructive side effects.".to_string(),
         ),
         ForgePassType::RegistryReadiness => constraints.push(
             "Report blockers for unsafe, deprecated, archived, unreviewed, speculative, or source-rights-restricted skills.".to_string(),
@@ -1547,11 +1573,12 @@ fn validation_constraints_for(pass_type: &ForgePassType) -> Vec<String> {
 fn instruction_for(pass_type: &ForgePassType) -> String {
     match pass_type {
         ForgePassType::Interpretation => "Interpret deterministic candidates and identify likely operational intent without adding unsupported claims.",
-        ForgePassType::SkillExpansion => "Expand thin candidate skills with procedures, guardrails, examples, and caveats grounded in citations.",
+        ForgePassType::SkillExpansion => "Enhance, expand, clean up, validate, and verify deterministic candidate skills with procedures, guardrails, examples, caveats, metadata, eval coverage, and review findings grounded in citations.",
         ForgePassType::SkillInference => "Infer cross-source skills only when evidence records identify supporting candidates and sections.",
         ForgePassType::DeduplicationAndScope => "Recommend merge/split/scope changes for duplicate, broad, or overly narrow skills.",
         ForgePassType::SafetyAndGovernance => "Classify tool-use risk, add approval and rollback guardrails, and preserve secret boundaries.",
         ForgePassType::EvalGeneration => "Generate positive, negative, routing, safety, and source-grounding eval scenarios.",
+        ForgePassType::ScriptGeneration => "Create embedded deterministic helper/enforcement scripts that make skills robust: normalize inputs, plan commands, preflight safety, validate outputs/evidence, and gate risky actions where source evidence supports them.",
         ForgePassType::AgentRoleMapping => "Map skills to specialist agent roles and required tools.",
         ForgePassType::RegistryReadiness => "Report publication blockers, warnings, and next review steps.",
         ForgePassType::Critique => "Critique skill quality, citations, scope, guardrails, and eval coverage.",
@@ -1669,6 +1696,7 @@ fn collect_response_validation_errors(
                 &skill.evidence_breakdown,
             ),
         );
+        collect_skill_script_validation_errors(skill, &section_ids, errors);
         for citation in &skill.citations {
             if !source_ids.contains(citation.source_id.as_str()) {
                 errors.push(format!(
@@ -1746,6 +1774,348 @@ fn collect_response_validation_errors(
             }
         }
     }
+}
+
+pub(crate) fn collect_skill_script_validation_errors(
+    skill: &Skill,
+    section_ids: &BTreeSet<&str>,
+    errors: &mut Vec<String>,
+) {
+    let mut seen_script_ids = BTreeSet::new();
+    for script in &skill.scripts {
+        if script.id.trim().is_empty() {
+            errors.push(format!("{} contains script with empty id", skill.id));
+        }
+        if !seen_script_ids.insert(script.id.as_str()) {
+            errors.push(format!(
+                "{} contains duplicate script id {}",
+                skill.id, script.id
+            ));
+        }
+        if script.title.trim().is_empty() {
+            errors.push(format!("{} script {} has empty title", skill.id, script.id));
+        }
+        if script.description.trim().is_empty() {
+            errors.push(format!(
+                "{} script {} has empty description",
+                skill.id, script.id
+            ));
+        }
+        if script.entrypoint.trim().is_empty() {
+            errors.push(format!(
+                "{} script {} has empty entrypoint",
+                skill.id, script.id
+            ));
+        }
+        if script.content.trim().is_empty() {
+            errors.push(format!(
+                "{} script {} has empty content",
+                skill.id, script.id
+            ));
+        }
+        if crate::security::contains_secret_like_content(&script.content) {
+            errors.push(format!(
+                "{} script {} contains secret-like content",
+                skill.id, script.id
+            ));
+        }
+        if !script.deterministic {
+            errors.push(format!(
+                "{} script {} must be deterministic",
+                skill.id, script.id
+            ));
+        }
+        if script.source_section_ids.is_empty() {
+            errors.push(format!(
+                "{} script {} must cite at least one source section",
+                skill.id, script.id
+            ));
+        }
+        for sid in &script.source_section_ids {
+            if !section_ids.contains(sid.as_str()) {
+                errors.push(format!(
+                    "{} script {} references missing section {}",
+                    skill.id, script.id, sid
+                ));
+            }
+            if !skill
+                .source_section_ids
+                .iter()
+                .any(|skill_sid| skill_sid == sid)
+            {
+                errors.push(format!(
+                    "{} script {} cites section {} outside the skill source_section_ids",
+                    skill.id, script.id, sid
+                ));
+            }
+        }
+        if matches!(
+            script.permission_level,
+            PermissionLevel::FileMutation
+                | PermissionLevel::ExternalMutation
+                | PermissionLevel::Dangerous
+        ) && !script.requires_approval
+        {
+            errors.push(format!(
+                "{} script {} has mutating/dangerous permission without approval",
+                skill.id, script.id
+            ));
+        }
+        if script.permission_level == PermissionLevel::Dangerous {
+            errors.push(format!(
+                "{} script {} uses Dangerous permission; embedded scripts must remain helper/enforcement artifacts",
+                skill.id, script.id
+            ));
+        }
+        let lowered = script.content.to_ascii_lowercase();
+        let forbidden_tokens = [
+            "curl ",
+            "wget ",
+            "invoke-webrequest",
+            "rm -rf",
+            "format c:",
+            "mkfs",
+            ":(){",
+            "dd if=",
+            "chmod 777",
+            "nc -",
+            "netcat",
+            "eval(",
+            "exec(",
+        ];
+        for token in forbidden_tokens {
+            if lowered.contains(token) {
+                errors.push(format!(
+                    "{} script {} contains forbidden high-risk token `{}`",
+                    skill.id, script.id, token
+                ));
+            }
+        }
+    }
+}
+
+fn skill_needs_script(skill: &Skill) -> bool {
+    !skill.tool_requirements.is_empty()
+        || skill.runtime_policy.run_read_only_commands
+        || skill.runtime_policy.modify_files
+        || skill.runtime_policy.modify_external_systems
+        || matches!(
+            skill.skill_type,
+            SkillType::CliOperation
+                | SkillType::ApiOperation
+                | SkillType::ToolUse
+                | SkillType::Diagnostic
+        )
+}
+
+fn script_id(skill: &Skill, kind: &str) -> String {
+    stable_id(
+        "script",
+        &format!("{}:{kind}:{}", skill.id, skill.source_section_ids.join(",")),
+    )
+}
+
+fn push_unique_script(skill: &mut Skill, script: SkillScript) {
+    if skill
+        .scripts
+        .iter()
+        .all(|existing| existing.id != script.id)
+    {
+        skill.scripts.push(script);
+    }
+}
+
+fn apply_script_generation(skill: &mut Skill, provider: &str) {
+    if !skill_needs_script(skill) {
+        return;
+    }
+
+    skill.maturity = SkillMaturity::Level2ForgeEnhanced;
+    skill.status = SkillStatus::NeedsReview;
+    skill.confidence.runtime = (skill.confidence.runtime + 0.25).min(0.75);
+    skill.confidence.guardrail = (skill.confidence.guardrail + 0.08).min(0.9);
+    let source_section_ids = skill.source_section_ids.clone();
+    let primary_tool = skill
+        .tool_requirements
+        .first()
+        .map(|tool| tool.name.clone())
+        .or_else(|| skill.metadata.get("tool_name").cloned())
+        .unwrap_or_else(|| "documented-tool".to_string());
+    let target = skill
+        .metadata
+        .get("target_command")
+        .or_else(|| skill.metadata.get("target_operation"))
+        .or_else(|| skill.metadata.get("target_task"))
+        .cloned()
+        .unwrap_or_else(|| skill.title.clone());
+    let mutating = skill.runtime_policy.modify_external_systems
+        || skill.runtime_policy.modify_files
+        || skill.tool_requirements.iter().any(|tool| {
+            matches!(
+                tool.permission_level,
+                PermissionLevel::FileMutation
+                    | PermissionLevel::ExternalMutation
+                    | PermissionLevel::Dangerous
+            ) || matches!(
+                tool.requirement_type,
+                ToolRequirementType::Mutating | ToolRequirementType::Dangerous
+            )
+        });
+
+    let sections_literal =
+        serde_json::to_string(&source_section_ids).unwrap_or_else(|_| "[]".into());
+    let target_literal = serde_json::to_string(&target).unwrap_or_else(|_| "\"unknown\"".into());
+    let tool_literal =
+        serde_json::to_string(&primary_tool).unwrap_or_else(|_| "\"documented-tool\"".into());
+    let mutating_literal = if mutating { "True" } else { "False" };
+
+    let preflight = SkillScript {
+        id: script_id(skill, "preflight"),
+        title: format!("Preflight gate for {}", skill.title),
+        description: "Deterministically checks that required context, citation grounding, approval, and rollback expectations are present before using the skill.".into(),
+        script_type: SkillScriptType::PreflightCheck,
+        language: SkillScriptLanguage::Python,
+        entrypoint: "python preflight.py --context context.json".into(),
+        content: format!(r#"#!/usr/bin/env python3
+import json
+import sys
+from pathlib import Path
+
+REQUIRED_SECTIONS = {sections}
+TARGET = {target}
+MUTATING = {mutating}
+
+
+def fail(message):
+    print(json.dumps({{"ok": False, "error": message}}, sort_keys=True))
+    sys.exit(1)
+
+
+def main():
+    if len(sys.argv) != 3 or sys.argv[1] != "--context":
+        fail("usage: python preflight.py --context context.json")
+    data = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+    if not data.get("user_goal"):
+        fail("missing user_goal")
+    cited = set(data.get("source_section_ids", []))
+    missing = [section for section in REQUIRED_SECTIONS if section not in cited]
+    if missing:
+        fail("missing required source grounding: " + ",".join(missing))
+    if MUTATING and not data.get("approval_ref"):
+        fail("mutating workflow requires approval_ref")
+    if MUTATING and not data.get("rollback_plan"):
+        fail("mutating workflow requires rollback_plan")
+    print(json.dumps({{"ok": True, "target": TARGET, "mutating": MUTATING}}, sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()
+"#, sections=sections_literal, target=target_literal, mutating=mutating_literal),
+        inputs: vec!["context.json with user_goal, source_section_ids, approval_ref when mutating, rollback_plan when mutating".into()],
+        outputs: vec!["JSON preflight result with ok=true or an actionable error".into()],
+        deterministic: true,
+        idempotent: true,
+        requires_approval: mutating,
+        permission_level: PermissionLevel::ReadOnly,
+        when_to_use: vec!["Before recommending, executing, or applying the skill to an operational task.".into()],
+        guardrails: vec![
+            "This script validates readiness only; it must not perform the operational action.".into(),
+            "Do not place plaintext credentials in context.json; use non-secret references only.".into(),
+        ],
+        generated_by: provider.into(),
+        source_section_ids: source_section_ids.clone(),
+    };
+    push_unique_script(skill, preflight);
+
+    if matches!(
+        skill.skill_type,
+        SkillType::CliOperation
+            | SkillType::ApiOperation
+            | SkillType::ToolUse
+            | SkillType::Diagnostic
+    ) {
+        let planner_type = if matches!(skill.skill_type, SkillType::CliOperation) {
+            SkillScriptType::CommandPlanner
+        } else {
+            SkillScriptType::EvidenceChecker
+        };
+        let planner = SkillScript {
+            id: script_id(skill, "planner"),
+            title: format!("Deterministic planner for {}", skill.title),
+            description: "Builds a reviewable, non-executing plan from documented target metadata so the agent does not invent unsupported commands, operations, or flags.".into(),
+            script_type: planner_type,
+            language: SkillScriptLanguage::Python,
+            entrypoint: "python planner.py --goal goal.txt".into(),
+            content: format!(r#"#!/usr/bin/env python3
+import json
+import sys
+from pathlib import Path
+
+TOOL = {tool}
+TARGET = {target}
+SECTIONS = {sections}
+MUTATING = {mutating}
+
+
+def main():
+    if len(sys.argv) != 3 or sys.argv[1] != "--goal":
+        print("usage: python planner.py --goal goal.txt", file=sys.stderr)
+        sys.exit(1)
+    goal = Path(sys.argv[2]).read_text(encoding="utf-8").strip()
+    plan = {{
+        "goal": goal,
+        "tool": TOOL,
+        "documented_target": TARGET,
+        "source_section_ids": SECTIONS,
+        "execute": False,
+        "requires_approval": MUTATING,
+        "next_steps": [
+            "verify goal matches documented target",
+            "cite source sections before action",
+            "collect approval and rollback plan before mutation" if MUTATING else "prefer read-only verification first",
+        ],
+    }}
+    print(json.dumps(plan, sort_keys=True, indent=2))
+
+
+if __name__ == "__main__":
+    main()
+"#, tool=tool_literal, target=target_literal, sections=sections_literal, mutating=mutating_literal),
+            inputs: vec!["goal.txt containing the user's operational goal".into()],
+            outputs: vec!["JSON execution-disabled plan grounded to documented target and source sections".into()],
+            deterministic: true,
+            idempotent: true,
+            requires_approval: false,
+            permission_level: PermissionLevel::ReadOnly,
+            when_to_use: vec!["When converting a routed skill into a concrete plan before any tool execution.".into()],
+            guardrails: vec![
+                "The generated plan is non-executing and must be reviewed before action.".into(),
+                "Do not add flags, parameters, endpoints, or tools not already present in the skill/source evidence.".into(),
+            ],
+            generated_by: provider.into(),
+            source_section_ids,
+        };
+        push_unique_script(skill, planner);
+    }
+
+    skill.inference_records.push(InferenceRecord {
+        inference_id: stable_inference_id(&skill.id, "script-generation", &skill.source_section_ids),
+        candidate_ids_used: vec![skill.id.clone()],
+        source_refs_used: skill.source_section_ids.clone(),
+        reasoning_summary: "Forge script-generation pass added deterministic helper/enforcement scripts to make the skill more robust, repeatable, auditable, and safety-gated.".into(),
+        inference_type: InferenceType::Expansion,
+        evidence_type: EvidenceClass::OperationalSynthesis,
+        confidence: 0.6,
+        unsupported_assumptions: vec!["Script integration point must be selected by the consuming runtime or agent.".into()],
+        required_review: true,
+        risk_flags: vec!["embedded-script-review-required".into()],
+        generated_by_agent: provider.into(),
+        created_at: Utc::now(),
+    });
+    push_unique(
+        &mut skill.guardrails,
+        "Use embedded Skill.scripts as deterministic helpers/gates; scripts must not bypass approval, source grounding, or secret boundaries.",
+    );
 }
 
 fn collect_result_error(errors: &mut Vec<String>, result: Result<()>) {
@@ -2216,14 +2586,56 @@ pub fn response_template_for(request: &ForgeRequestEnvelope) -> ForgeResponseEnv
     }
 }
 
+pub fn skiller_default_forge_objective() -> &'static str {
+    "enhance_expand_cleanup_validate_verify_script_harden"
+}
+
+pub fn skiller_specialized_vegvisir_system_prompt() -> &'static str {
+    r#"You are Vegvisir operating in Skiller Skill Forge mode. Vegvisir is an agentic software-development harness; in this mode your sole job is to turn deterministic Skiller draft bundles into higher-quality, governed, agent-ready skill artifacts through strict Forge envelopes.
+
+Core mission:
+- Treat deterministic Skiller generation as the draft extraction stage, not the final skill.
+- Enhance and expand candidate skills where the source evidence supports it.
+- Clean up weak wording, vague procedures, duplicate scope, missing guardrails, missing eval coverage, missing robustness scripts, and incomplete metadata.
+- Create embedded deterministic helper/enforcement scripts when they materially improve skill robustness, determinism, safety, validation, or repeatability.
+- Validate and verify every proposed skill change and every embedded script against the supplied source sections, citations, bundle context, risk policy, and response schema guide.
+- Return only a valid ForgeResponseEnvelope YAML document for Skiller to validate and apply.
+
+Operating rules:
+1. Preserve user authority, source grounding, and Skiller's strict schema.
+2. Do not invent endpoints, CLI flags, file paths, tool permissions, citations, source sections, or provenance.
+3. Separate direct extraction from supporting inference, operational synthesis, and speculative content in evidence records.
+4. Require human review for generated, inferred, mutating, external-system, security-sensitive, or governance-impacting skills.
+5. Keep secrets behind the secret boundary: never include plaintext credentials, tokens, private keys, or secret-bearing URLs.
+6. Add practical guardrails, rollback/backup expectations, approval requirements, anti-patterns, evals, and Skill.scripts when supported by the request.
+7. Embedded scripts must be deterministic, auditable, secret-safe, least-privilege, cited to source_section_ids, and must guide/enforce the skill rather than bypass user approval.
+8. Prefer precise, minimal, auditable improvements over broad rewrites.
+9. If evidence is insufficient, leave skills unchanged and report concrete review findings instead of hallucinating.
+10. Output must be machine-parseable YAML matching the request_id, pass_type, response schema guide, and validation constraints.
+11. Do not include chain-of-thought or prose outside the YAML envelope."#
+}
+
 pub fn vegvisir_prompt_markdown(request: &ForgeRequestEnvelope) -> String {
     let mut out = String::new();
     out.push_str("# Vegvisir Skiller Forge Request\n\n");
-    out.push_str("You are Vegvisir acting as Skiller's AI-assisted Skill Forge provider. Return ONLY a valid `ForgeResponseEnvelope` YAML document. Do not include prose outside the YAML.\n\n");
+    out.push_str("The deterministic Skiller compile has produced a draft bundle. By default, this draft must be handed to a model for enhancement, expansion, cleanup, validation, and verification before it is treated as agent-ready.\n\n");
+    out.push_str("Return ONLY a valid `ForgeResponseEnvelope` YAML document. Do not include prose outside the YAML.\n\n");
+    out.push_str("## Skiller-specialized Vegvisir system prompt\n\n");
+    out.push_str(skiller_specialized_vegvisir_system_prompt());
+    out.push_str("\n\n");
+    out.push_str("## Default post-deterministic Forge objective\n\n");
+    out.push_str("- Enhance and expand thin deterministic skills using only supplied evidence.\n");
+    out.push_str("- Clean up titles, summaries, procedures, inputs, outputs, guardrails, anti-patterns, evals, metadata, role suitability, and runtime policy where justified.\n");
+    out.push_str("- Validate schema fit, source grounding, citation integrity, risk classification, approval/rollback requirements, and secret-boundary behavior.\n");
+    out.push_str("- Create or refine embedded Skill.scripts when deterministic helpers, preflights, planners, validators, safety gates, or test harnesses would make the skill more robust.\n");
+    out.push_str("- Verify that each modified or generated skill remains auditable and reviewable by Skiller before publication.\n\n");
     out.push_str("## Context fields to use\n\n");
     out.push_str("- `bundle_context` summarizes review/publish status, compatibility, prior Forge history counts, and selected skill counts.\n");
     out.push_str("- `source_context` summarizes source trust, version, rights, scan status, and selected sections without exposing full raw documents.\n");
     out.push_str("- `validation_constraints` are hard requirements enforced by Skiller before any response can be applied.\n");
+    out.push_str(
+        "- `response_schema_guide` is the authoritative field guide for the YAML response.\n",
+    );
     out.push_str("- `prior_forge_summary` summarizes prior Forge passes; avoid duplicating prior recommendations unless still unresolved.\n\n");
     out.push_str("## Safety and grounding rules\n\n");
     out.push_str("- Preserve source grounding and citation IDs.\n");

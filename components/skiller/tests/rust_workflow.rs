@@ -357,6 +357,144 @@ time.sleep(5)
 }
 
 #[test]
+fn forge_script_generation_embeds_deterministic_helper_scripts() {
+    let temp = tempdir().unwrap();
+    let docs = temp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(
+        docs.join("cli.md"),
+        "# Demo CLI\n\nUse the documented command below before writing output.\n\n```\nmalice-demo --dry-run --strict input.txt\nmalice-demo --format json -o out.json input.txt\n```\n\nWarning: writing output requires approval and rollback planning.\n",
+    )
+    .unwrap();
+    let bundle = temp.path().join("bundle");
+    let forged = temp.path().join("forged");
+    let request = temp.path().join("script-request.yaml");
+
+    let compile = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "compile-cli-help",
+            docs.join("cli.md").to_str().unwrap(),
+            "--out",
+            bundle.to_str().unwrap(),
+            "--name",
+            "script-demo",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        compile.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let request_out = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "forge-request",
+            bundle.to_str().unwrap(),
+            "--out",
+            request.to_str().unwrap(),
+            "--pass",
+            "script-generation",
+            "--max-skills",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        request_out.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&request_out.stdout),
+        String::from_utf8_lossy(&request_out.stderr)
+    );
+    let request_text = std::fs::read_to_string(&request).unwrap();
+    assert!(
+        request_text.contains("pass_type: ScriptGeneration"),
+        "{request_text}"
+    );
+    assert!(request_text.contains("Skill.scripts"), "{request_text}");
+    assert!(
+        request_text.contains("deterministic helper/enforcement"),
+        "{request_text}"
+    );
+
+    let forge = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "forge",
+            bundle.to_str().unwrap(),
+            "--out",
+            forged.to_str().unwrap(),
+            "--provider",
+            "vegvisir",
+            "--max-skills",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        forge.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&forge.stdout),
+        String::from_utf8_lossy(&forge.stderr)
+    );
+
+    let skill_text = std::fs::read_dir(forged.join("skills"))
+        .unwrap()
+        .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n---\n");
+    assert!(skill_text.contains("scripts:"), "{skill_text}");
+    assert!(
+        skill_text.contains("script_type: PreflightCheck"),
+        "{skill_text}"
+    );
+    assert!(
+        skill_text.contains("script_type: CommandPlanner"),
+        "{skill_text}"
+    );
+    assert!(skill_text.contains("deterministic: true"), "{skill_text}");
+    assert!(skill_text.contains("\"execute\": False"), "{skill_text}");
+    assert!(
+        skill_text.contains("Skill.scripts as deterministic helpers/gates"),
+        "{skill_text}"
+    );
+
+    let validate = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["validate", forged.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        validate.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&validate.stdout),
+        String::from_utf8_lossy(&validate.stderr)
+    );
+
+    let scripted_skill = std::fs::read_dir(forged.join("skills"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            std::fs::read_to_string(path)
+                .unwrap()
+                .contains("script_type:")
+        })
+        .expect("expected a skill file containing embedded scripts");
+    let mut unsafe_skill = std::fs::read_to_string(&scripted_skill).unwrap();
+    unsafe_skill = unsafe_skill.replacen("deterministic: true", "deterministic: false", 1);
+    std::fs::write(&scripted_skill, unsafe_skill).unwrap();
+    let invalid = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["validate", forged.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!invalid.status.success());
+    let invalid_stdout = String::from_utf8_lossy(&invalid.stdout);
+    assert!(
+        invalid_stdout.contains("must be deterministic"),
+        "{invalid_stdout}"
+    );
+}
+
+#[test]
 fn compile_forge_review_and_agent_pack_workflow() {
     let temp = tempdir().unwrap();
     let docs = temp.path().join("docs");
@@ -432,6 +570,7 @@ fn compile_forge_review_and_agent_pack_workflow() {
         "SkillInference",
         "SafetyAndGovernance",
         "EvalGeneration",
+        "ScriptGeneration",
         "Critique",
         "VerifierReview",
         "AgentRoleMapping",
@@ -464,7 +603,7 @@ fn compile_forge_review_and_agent_pack_workflow() {
     assert!(forge_summary_text.contains("adapter_mode: deterministic fallback"));
     assert!(forge_summary_text.contains("deterministic: true"));
     assert!(forge_summary_text.contains("live_reasoning: false"));
-    assert!(forge_summary_text.contains("pass_count: 9"));
+    assert!(forge_summary_text.contains("pass_count: 10"));
     assert!(forge_summary_text.contains("pass_type: RegistryReadiness"));
     assert!(forge_summary_text.contains("required_human_review: true"));
     assert!(forge_summary_text.contains("review_finding_count:"));
@@ -3218,11 +3357,11 @@ fn registry_publish_writes_rich_provenance_and_index_lifecycle_metadata() {
     );
     assert_eq!(
         provenance["forge_provider_summary"]["vegvisir"].as_u64(),
-        Some(9)
+        Some(10)
     );
     assert_eq!(
         provenance["forge_adapter_mode_summary"]["deterministic fallback"].as_u64(),
-        Some(9)
+        Some(10)
     );
 
     let verify = Command::new(env!("CARGO_BIN_EXE_skiller"))
@@ -4033,7 +4172,10 @@ fn runtime_and_domain_introspection_commands_smoke() {
         .unwrap();
     assert!(list.status.success());
     let list_text = String::from_utf8_lossy(&list.stdout);
-    assert!(list_text.contains("Diagnose Service State"), "{list_text}");
+    assert!(
+        list_text.contains("Run `servicectl status demo`"),
+        "expected operation-specific skill title, got: {list_text}"
+    );
     let skill_id = list_text
         .lines()
         .next()
@@ -4244,6 +4386,142 @@ fn specialized_compile_entrypoints_produce_valid_interface_and_repo_bundles() {
             "{command}: {skills_text}"
         );
     }
+}
+
+#[test]
+fn deterministic_compile_rejects_prose_as_fake_cli_command() {
+    let temp = tempdir().unwrap();
+    let doc = temp.path().join("release.md");
+    std::fs::write(
+        &doc,
+        "# Release checklist\n\nBefore release, run the focused tests, inspect git status, and verify no unrelated changes are included.\n\nPublishing requires explicit user approval. If a release artifact is produced, record the output path and rollback plan.\n\nDo not claim tests passed without command evidence.\n",
+    )
+    .unwrap();
+    let out = temp.path().join("bundle");
+    let output = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "compile",
+            doc.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--name",
+            "release-specificity",
+            "--domain",
+            "release-management",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let skill_files: Vec<_> = std::fs::read_dir(out.join("skills"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(skill_files.len(), 1, "expected one procedure skill");
+    let skill = std::fs::read_to_string(&skill_files[0]).unwrap();
+    assert!(skill.contains("skill_type: Procedure"), "{skill}");
+    assert!(skill.contains("Release checklist"), "{skill}");
+    assert!(
+        !skill.contains("name: Do\n"),
+        "prose became a fake CLI tool: {skill}"
+    );
+    assert!(
+        !skill.contains("interface_kind: cli"),
+        "prose was misclassified as CLI: {skill}"
+    );
+    assert!(
+        skill.contains("Do not treat ordinary prose sentences as CLI commands."),
+        "{skill}"
+    );
+
+    let eval = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["eval", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        eval.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&eval.stdout),
+        String::from_utf8_lossy(&eval.stderr)
+    );
+}
+
+#[test]
+fn cli_help_compile_creates_operation_specific_skills_with_eval_coverage() {
+    let temp = tempdir().unwrap();
+    let help = temp.path().join("malice-demo-help.txt");
+    std::fs::write(
+        &help,
+        "usage: malice-demo [OPTIONS] <INPUT>\n\nOptions:\n  -o, --output <PATH>        Write processed output to PATH\n  -f, --format <FORMAT>     Output format: json, yaml, text\n      --dry-run             Show planned actions without writing\n      --strict              Fail on warnings\n\nExamples:\n  malice-demo --format json -o out.json input.txt\n  malice-demo --dry-run --strict input.txt\n",
+    )
+    .unwrap();
+    let out = temp.path().join("bundle");
+    let output = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "compile-cli-help",
+            help.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--name",
+            "malice-demo-cli",
+            "--domain",
+            "cli",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let skills_text = std::fs::read_dir(out.join("skills"))
+        .unwrap()
+        .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n---\n");
+    assert!(
+        skills_text.contains("Run `malice-demo --format json -o out.json input.txt`"),
+        "{skills_text}"
+    );
+    assert!(
+        skills_text.contains("Run `malice-demo --dry-run --strict input.txt`"),
+        "{skills_text}"
+    );
+    assert!(
+        !skills_text.contains("Use CLI workflow from Overview"),
+        "{skills_text}"
+    );
+    assert!(
+        skills_text.contains("eval_type: SourceGrounding"),
+        "{skills_text}"
+    );
+    assert!(
+        skills_text.contains("eval_type: ToolUsePlanning"),
+        "{skills_text}"
+    );
+    assert!(skills_text.contains("eval_type: Safety"), "{skills_text}");
+    assert!(
+        skills_text.contains("specificity: operation-level"),
+        "{skills_text}"
+    );
+
+    let eval = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["eval", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        eval.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&eval.stdout),
+        String::from_utf8_lossy(&eval.stderr)
+    );
 }
 
 #[test]

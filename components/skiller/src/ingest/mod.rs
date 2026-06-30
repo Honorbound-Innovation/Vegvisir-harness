@@ -645,12 +645,114 @@ fn detect_links(text: &str) -> Vec<String> {
         .collect()
 }
 fn detect_commands(text: &str) -> Vec<String> {
-    Regex::new(r"(?m)^\s*(?:\$\s*)?([a-zA-Z][\w.-]+(?:\s+[-\w./:=]+){1,8})\s*$")
-        .unwrap()
-        .captures_iter(text)
-        .map(|c| c[1].to_string())
+    text.lines()
+        .filter_map(detect_command_line)
         .take(20)
         .collect()
+}
+
+fn detect_command_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let had_prompt = trimmed.starts_with('$');
+    let candidate = trimmed.strip_prefix('$').map(str::trim).unwrap_or(trimmed);
+    if candidate.is_empty()
+        || candidate.starts_with('-')
+        || candidate.starts_with('#')
+        || candidate.starts_with("//")
+        || candidate.to_ascii_lowercase().starts_with("usage:")
+        || candidate.to_ascii_lowercase().starts_with("options:")
+        || candidate.to_ascii_lowercase().starts_with("commands:")
+        || candidate.to_ascii_lowercase().starts_with("examples:")
+    {
+        return None;
+    }
+
+    let command_re = Regex::new(
+        r#"^([./]?[a-z0-9][A-Za-z0-9_.-]*)(?:\s+(?:"[^"]+"|'[^']+'|[-+\w./:=@{},<>\[\]]+)){1,12}\s*$"#,
+    )
+    .unwrap();
+    let caps = command_re.captures(candidate)?;
+    let tool = caps.get(1)?.as_str();
+    if !had_prompt && !is_likely_cli_tool_name(tool) {
+        return None;
+    }
+    if !had_prompt && looks_like_prose_sentence(candidate, tool) {
+        return None;
+    }
+    Some(candidate.to_string())
+}
+
+fn is_likely_cli_tool_name(tool: &str) -> bool {
+    if tool.starts_with("./") || tool.starts_with('/') {
+        return true;
+    }
+    let lower = tool.to_ascii_lowercase();
+    if lower != tool {
+        return false;
+    }
+    let rejected = [
+        "a",
+        "after",
+        "always",
+        "an",
+        "and",
+        "before",
+        "caution",
+        "do",
+        "does",
+        "don",
+        "for",
+        "from",
+        "if",
+        "in",
+        "must",
+        "never",
+        "note",
+        "output",
+        "publishing",
+        "required",
+        "should",
+        "the",
+        "this",
+        "to",
+        "use",
+        "using",
+        "warning",
+        "when",
+        "with",
+    ];
+    !rejected.contains(&lower.as_str())
+}
+
+fn looks_like_prose_sentence(candidate: &str, tool: &str) -> bool {
+    if candidate.ends_with('.') || candidate.ends_with('!') || candidate.ends_with('?') {
+        return true;
+    }
+    let lower = candidate.to_ascii_lowercase();
+    let prose_fragments = [
+        " do not ",
+        " must ",
+        " should ",
+        " before ",
+        " after ",
+        " requires ",
+        " without ",
+        " with evidence",
+        " user approval",
+        " rollback plan",
+    ];
+    prose_fragments
+        .iter()
+        .any(|fragment| lower.contains(fragment))
+        && !candidate.contains(" --")
+        && !candidate.contains(" -")
+        && !matches!(
+            tool,
+            "curl" | "git" | "kubectl" | "docker" | "cargo" | "npm" | "python" | "python3"
+        )
 }
 fn detect_api_ops(text: &str) -> Vec<String> {
     Regex::new(r"(?i)\b(GET|POST|PUT|PATCH|DELETE)\s+(/[A-Za-z0-9_./{}-]+)")
@@ -679,9 +781,13 @@ fn detect_examples(text: &str) -> Vec<String> {
 fn detect_normative(text: &str) -> Vec<String> {
     text.lines()
         .filter(|l| {
-            ["must", "should", "required", "never", "always"]
-                .iter()
-                .any(|w| l.to_lowercase().contains(w))
+            let lower = l.to_lowercase();
+            [
+                "must", "should", "required", "never", "always", "before ", "requires", "require ",
+                "approval", "rollback", "verify", "inspect", "record ", "do not",
+            ]
+            .iter()
+            .any(|w| lower.contains(w))
         })
         .map(|l| truncate(l.trim(), 240))
         .collect()

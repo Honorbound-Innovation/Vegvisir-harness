@@ -360,6 +360,7 @@ enum ForgePassArg {
     RegistryReadiness,
     Critique,
     VerifierReview,
+    ScriptGeneration,
 }
 
 impl From<ForgePassArg> for models::ForgePassType {
@@ -375,6 +376,7 @@ impl From<ForgePassArg> for models::ForgePassType {
             ForgePassArg::RegistryReadiness => models::ForgePassType::RegistryReadiness,
             ForgePassArg::Critique => models::ForgePassType::Critique,
             ForgePassArg::VerifierReview => models::ForgePassType::VerifierReview,
+            ForgePassArg::ScriptGeneration => models::ForgePassType::ScriptGeneration,
         }
     }
 }
@@ -599,6 +601,10 @@ where
             std::fs::write(
                 out.join("forge-response-template.yaml"),
                 serde_yaml::to_string(&response_template)?,
+            )?;
+            std::fs::write(
+                out.join("skiller-vegvisir-system-prompt.md"),
+                forge::skiller_specialized_vegvisir_system_prompt(),
             )?;
             std::fs::write(
                 out.join("vegvisir-prompt.md"),

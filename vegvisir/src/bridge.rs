@@ -3419,6 +3419,8 @@ mod tests {
     fn test_app() -> anyhow::Result<(tempfile::TempDir, TuiApplication)> {
         let tmp = tempdir()?;
         for attempt in 0..20 {
+            let _command_sandbox_env_guard =
+                crate::command_sandbox::command_sandbox_test_env_lock();
             let _sandbox_mode =
                 EnvVarGuard::set(crate::command_sandbox::COMMAND_SANDBOX_ENV, "path");
             let _writable =

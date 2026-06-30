@@ -341,6 +341,8 @@ skiller forge-provider-status --provider vegvisir
 
 The current `vegvisir` Forge provider is a structured-envelope adapter. When no live adapter is configured, it uses deterministic strict-envelope fallback behavior.
 
+After deterministic generation, Skiller's default Vegvisir handoff treats the generated bundle as a draft only: the model prompt now embeds a Skiller-specialized Vegvisir system prompt and asks the model to enhance, expand, clean up, validate, and verify skills before the bundle is considered agent-ready. Tooling exposes this as the default `SkillExpansion` Forge pass plus explicit `forge_system_prompt` / `system_prompt` metadata for provider adapters.
+
 To configure a Vegvisir-managed live adapter:
 
 ```bash
