@@ -1,4 +1,5 @@
 use crate::models::*;
+use crate::semantic;
 use anyhow::{Result, bail};
 
 #[derive(Debug)]
@@ -26,6 +27,23 @@ pub fn route(bundle: &SkillBundle, query: &str, limit: usize) -> Vec<RouteHit> {
             );
             if s.title.to_lowercase().contains(&q) {
                 score += 1.0;
+            }
+            if matches!(s.skill_type, SkillType::CliOperation)
+                && s.metadata
+                    .get("target_command")
+                    .and_then(|command| semantic::suspicious_cli_command_reason(command))
+                    .is_some()
+            {
+                score *= 0.1;
+            }
+            if matches!(
+                s.status,
+                SkillStatus::Draft | SkillStatus::Candidate | SkillStatus::NeedsReview
+            ) {
+                score *= 0.85;
+            }
+            if semantic::looks_like_weak_title(&s.title) {
+                score *= 0.8;
             }
             RouteHit {
                 skill_id: s.id.clone(),

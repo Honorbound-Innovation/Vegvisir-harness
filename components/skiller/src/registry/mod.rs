@@ -199,6 +199,28 @@ pub fn validate_bundle(bundle: &SkillBundle) -> ValidationReport {
         ) {
             errors.push(format!("{} contains secret-like content", skill.id));
         }
+        if matches!(skill.skill_type, SkillType::CliOperation) {
+            match skill.metadata.get("target_command") {
+                Some(command) => {
+                    if let Some(reason) = crate::semantic::suspicious_cli_command_reason(command) {
+                        errors.push(format!(
+                            "{} has suspicious CliOperation target_command `{}`: {}",
+                            skill.id, command, reason
+                        ));
+                    }
+                }
+                None => errors.push(format!(
+                    "{} is CliOperation but has no target_command metadata",
+                    skill.id
+                )),
+            }
+        }
+        if crate::semantic::looks_like_weak_title(&skill.title) {
+            warnings.push(format!(
+                "{} has weak or source-fragment-like title `{}`",
+                skill.id, skill.title
+            ));
+        }
         for sid in &skill.source_section_ids {
             if !section_ids.contains(sid.as_str()) {
                 errors.push(format!("{} references missing section {}", skill.id, sid));
@@ -579,6 +601,17 @@ pub fn readiness_report(bundle: &SkillBundle) -> ReadinessReport {
                 source.source_id
             ));
         }
+    }
+    if bundle.forge_requests.iter().any(|request| {
+        request
+            .provider_provenance
+            .as_ref()
+            .map(|provenance| !provenance.live_reasoning)
+            .unwrap_or_else(|| request.provider.eq_ignore_ascii_case("vegvisir"))
+    }) {
+        blockers.push(
+            "provider semantic review not performed; Forge history used deterministic fallback or lacks live provider provenance".into(),
+        );
     }
     for s in &bundle.skills {
         match s.status {

@@ -107,6 +107,11 @@
       "name": "msp_client_check_compatibility",
       "category": "skills",
       "description": "Check MSP skill runtime compatibility for Vegvisir."
+    },
+    {
+      "name": "skiller_suspicious_commands",
+      "category": "skills",
+      "description": "Summarize suspicious Skiller CLI operations and fallback-only Forge state without dumping full bundle YAML."
     }
   ]
 }

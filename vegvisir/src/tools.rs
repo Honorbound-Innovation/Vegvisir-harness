@@ -19,7 +19,7 @@ use serde_json::{Map, Value, json};
 use skiller::{
     compiler, forge as skiller_forge,
     models::{ForgePassType, ForgeRequestEnvelope, ForgeResponseEnvelope},
-    registry as skiller_registry, runtime as skiller_runtime,
+    registry as skiller_registry, runtime as skiller_runtime, semantic as skiller_semantic,
 };
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -1498,6 +1498,95 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
             }
         }),
         json!({"required": ["bundle", "skill_id"], "properties": {"bundle": "string", "skill_id": "string", "mode": "string"}}),
+        false,
+    ))?;
+
+    let skiller_suspicious_sandbox = sandbox.clone();
+    registry.register(Tool::new(
+        "skiller_suspicious_commands",
+        "Summarize suspicious Skiller CliOperation targets, weak titles, and fallback-only Forge state without dumping full bundle YAML.",
+        Arc::new(move |args| {
+            let Some(bundle) = args.get("bundle").and_then(Value::as_str) else {
+                return Observation::err("Missing bundle", "ValueError");
+            };
+            let bundle_path = match skiller_suspicious_sandbox.resolve(bundle) {
+                Ok(path) => path,
+                Err(error) => return Observation::err(error.to_string(), "SandboxViolation"),
+            };
+            match skiller_registry::read_bundle(&bundle_path) {
+                Ok(bundle_data) => {
+                    let mut findings = Vec::new();
+                    let mut suspicious_cli_operation_count = 0usize;
+                    let mut weak_title_count = 0usize;
+                    for skill in &bundle_data.skills {
+                        if matches!(skill.skill_type, skiller::models::SkillType::CliOperation) {
+                            match skill.metadata.get("target_command") {
+                                Some(command) => {
+                                    if let Some(reason) = skiller_semantic::suspicious_cli_command_reason(command) {
+                                        suspicious_cli_operation_count += 1;
+                                        findings.push(json!({
+                                            "kind": "suspicious_cli_operation",
+                                            "skill_id": skill.id,
+                                            "title": skill.title,
+                                            "target_command": command,
+                                            "reason": reason,
+                                        }));
+                                    }
+                                }
+                                None => {
+                                    suspicious_cli_operation_count += 1;
+                                    findings.push(json!({
+                                        "kind": "suspicious_cli_operation",
+                                        "skill_id": skill.id,
+                                        "title": skill.title,
+                                        "reason": "CliOperation has no target_command metadata",
+                                    }));
+                                }
+                            }
+                        }
+                        if skiller_semantic::looks_like_weak_title(&skill.title) {
+                            weak_title_count += 1;
+                            findings.push(json!({
+                                "kind": "weak_title",
+                                "skill_id": skill.id,
+                                "title": skill.title,
+                                "target_command": skill.metadata.get("target_command"),
+                                "reason": "title looks like a markdown/list/table/source fragment",
+                            }));
+                        }
+                    }
+                    let fallback_only_forge = bundle_data.forge_requests.iter().any(|request| {
+                        request
+                            .provider_provenance
+                            .as_ref()
+                            .map(|provenance| !provenance.live_reasoning)
+                            .unwrap_or_else(|| request.provider.eq_ignore_ascii_case("vegvisir"))
+                    });
+                    if fallback_only_forge {
+                        findings.push(json!({
+                            "kind": "forge_provider_review",
+                            "reason": "provider semantic review was not performed; Forge history used deterministic fallback or lacks live provider provenance",
+                        }));
+                    }
+                    let report = json!({
+                        "suspicious_cli_operation_count": suspicious_cli_operation_count,
+                        "weak_title_count": weak_title_count,
+                        "fallback_only_forge": fallback_only_forge,
+                        "provider_reviewed": !fallback_only_forge,
+                        "findings": findings,
+                    });
+                    let content = serde_json::to_string_pretty(&report).unwrap_or_else(|_| report.to_string());
+                    let mut data = Map::new();
+                    data.insert("report".into(), report.clone());
+                    data.insert("suspicious_cli_operation_count".into(), json!(suspicious_cli_operation_count));
+                    data.insert("weak_title_count".into(), json!(weak_title_count));
+                    data.insert("fallback_only_forge".into(), json!(fallback_only_forge));
+                    Observation { ok: true, content, data, error: None }
+                }
+                Err(error) => Observation::err(error.to_string(), "SkillerSuspiciousCommandsError"),
+            }
+        }),
+        json!({"required": ["bundle"], "properties": {"bundle": "string"}}),
         false,
     ))?;
 
@@ -4490,6 +4579,72 @@ TRAILING_GARBAGE",
         assert!(apply.ok, "{}", apply.content);
         assert!(workspace.path().join("forged-bundle/package.yaml").exists());
         assert!(apply.data.get("apply_report").is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn skiller_suspicious_commands_tool_reports_compact_diagnostics() -> anyhow::Result<()> {
+        let workspace = TempDir::new()?;
+        std::fs::write(
+            workspace.path().join("tool-help.txt"),
+            "Usage: tool <command>\n\ntool status --json\n",
+        )?;
+        let registry = build_builtin_registry_with_cms_and_mode(
+            workspace.path(),
+            VegvisirCmsConfig::for_workspace(workspace.path()),
+            true,
+        )?;
+        let mut executor = ToolExecutor {
+            registry,
+            guardrails: GuardrailEngine {
+                policy: crate::guardrails::PermissionPolicy {
+                    allow_risky_tools: true,
+                    require_human_approval: false,
+                    ..crate::guardrails::PermissionPolicy::default()
+                },
+                approvals: crate::guardrails::ApprovalLedger::default(),
+            },
+            runtime_policy: RuntimePolicy::default(),
+            logger: EventLogger::new(None),
+        };
+
+        let compile = executor.execute(ToolCall {
+            name: "skiller_compile_cli_help".to_string(),
+            args: serde_json::from_value(json!({
+                "input": "tool-help.txt",
+                "out": "bundle",
+                "name": "tool-cli"
+            }))?,
+        });
+        assert!(compile.ok, "{}", compile.content);
+
+        let skill_path = std::fs::read_dir(workspace.path().join("bundle/skills"))?
+            .next()
+            .expect("skill file")?
+            .path();
+        let skill_yaml = std::fs::read_to_string(&skill_path)?
+            .replace("Run `tool status --json`", "Run `try {`")
+            .replace(
+                "target_command: tool status --json",
+                "target_command: try {",
+            )
+            .replace("tool_name: tool", "tool_name: try");
+        std::fs::write(&skill_path, skill_yaml)?;
+
+        let report = executor.execute(ToolCall {
+            name: "skiller_suspicious_commands".to_string(),
+            args: serde_json::from_value(json!({"bundle": "bundle"}))?,
+        });
+        assert!(report.ok, "{}", report.content);
+        assert_eq!(
+            report.data.get("suspicious_cli_operation_count"),
+            Some(&json!(1))
+        );
+        assert!(
+            report.content.contains("programming_syntax"),
+            "{}",
+            report.content
+        );
         Ok(())
     }
 }

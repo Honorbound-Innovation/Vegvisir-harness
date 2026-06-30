@@ -2,6 +2,7 @@ use crate::compiler;
 use crate::domain;
 use crate::ingest::stable_id;
 use crate::models::*;
+use crate::semantic;
 use crate::source_meta;
 use anyhow::{Result, anyhow, bail};
 use chrono::Utc;
@@ -595,7 +596,21 @@ impl ForgeProvider for MockForgeProvider {
             match request.pass_type {
                 ForgePassType::Interpretation | ForgePassType::SkillExpansion => {
                     let mut improved = skill.clone();
-                    apply_expansion(&mut improved, self.name(), request.domain_profile.as_ref());
+                    if suspicious_cli_skill_reason(&improved).is_some() {
+                        mark_suspicious_cli_for_review(&mut improved, self.name());
+                        if let Some(reason) = suspicious_cli_skill_reason(&improved) {
+                            review_findings.push(format!(
+                                "semantic plausibility blocked CLI enhancement for {}: {}",
+                                improved.id, reason
+                            ));
+                        }
+                    } else {
+                        apply_expansion(
+                            &mut improved,
+                            self.name(),
+                            request.domain_profile.as_ref(),
+                        );
+                    }
                     confidence_updates.insert(improved.id.clone(), improved.confidence.clone());
                     evidence_records.extend(improved.inference_records.clone());
                     modified_items.push(improved);
@@ -703,8 +718,21 @@ impl ForgeProvider for VegvisirForgeProvider {
                 "vegvisir-adapter-structured-envelope".into(),
             );
         }
+        for skill in response
+            .modified_items
+            .iter_mut()
+            .chain(response.generated_items.iter_mut())
+        {
+            skill
+                .metadata
+                .insert("provider_reviewed".into(), "false".into());
+            skill.metadata.insert(
+                "semantic_review".into(),
+                "deterministic_fallback_only".into(),
+            );
+        }
         response.audit_notes.push(
-            "Vegvisir adapter used structured request/response envelope with deterministic fallback; configure SKILLER_VEGVISIR_FORGE_ADAPTER for live external reasoning.".into(),
+            "Vegvisir adapter used structured request/response envelope with deterministic fallback; provider_reviewed=false and semantic_review=deterministic_fallback_only. Configure SKILLER_VEGVISIR_FORGE_ADAPTER for live external reasoning.".into(),
         );
         Ok(response)
     }
@@ -2219,6 +2247,68 @@ pub fn apply_response(bundle: &mut SkillBundle, response: &ForgeResponseEnvelope
         response.required_human_review.to_string(),
     );
     bundle.audit_events.push(event);
+}
+
+fn suspicious_cli_skill_reason(skill: &Skill) -> Option<String> {
+    if !matches!(skill.skill_type, SkillType::CliOperation) {
+        return None;
+    }
+    skill
+        .metadata
+        .get("target_command")
+        .map(|command| {
+            semantic::suspicious_cli_command_reason(command).unwrap_or_else(|| {
+                if command.trim().is_empty() {
+                    "empty target_command".into()
+                } else {
+                    String::new()
+                }
+            })
+        })
+        .filter(|reason| !reason.is_empty())
+        .or_else(|| Some("missing target_command metadata".into()))
+}
+
+fn mark_suspicious_cli_for_review(skill: &mut Skill, provider: &str) {
+    skill.status = SkillStatus::NeedsReview;
+    skill.maturity = SkillMaturity::Level1StructuredCandidate;
+    skill.confidence.raw = skill.confidence.raw.min(0.35);
+    skill.confidence.extraction = skill.confidence.extraction.min(0.35);
+    skill.confidence.inference = skill.confidence.inference.min(0.2);
+    skill.confidence.routing = skill.confidence.routing.min(0.35);
+    skill.confidence.runtime = skill.confidence.runtime.min(0.25);
+    if let Some(reason) = suspicious_cli_skill_reason(skill) {
+        skill
+            .metadata
+            .insert("semantic_plausibility".into(), "failed".into());
+        skill
+            .metadata
+            .insert("semantic_plausibility_reason".into(), reason.clone());
+        push_unique(
+            &mut skill.guardrails,
+            "Do not execute or route this as a CLI command until a human or live provider reclassifies the source fragment.",
+        );
+        push_unique(
+            &mut skill.anti_patterns,
+            "Do not promote markdown/prose/code syntax into operational CLI commands.",
+        );
+        skill.inference_records.push(InferenceRecord {
+            inference_id: stable_inference_id(&skill.id, "semantic-plausibility-block", &skill.source_section_ids),
+            candidate_ids_used: vec![skill.id.clone()],
+            source_refs_used: skill.source_section_ids.clone(),
+            reasoning_summary: format!(
+                "Deterministic semantic plausibility gate blocked Forge enhancement of a suspicious CliOperation: {reason}"
+            ),
+            inference_type: InferenceType::Critique,
+            evidence_type: EvidenceClass::SpeculativeCandidate,
+            confidence: 0.9,
+            unsupported_assumptions: vec![],
+            required_review: true,
+            risk_flags: vec!["suspicious_cli_operation".into()],
+            generated_by_agent: provider.into(),
+            created_at: Utc::now(),
+        });
+    }
 }
 
 fn apply_expansion(skill: &mut Skill, provider: &str, profile: Option<&DomainProfile>) {

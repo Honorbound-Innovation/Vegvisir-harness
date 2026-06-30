@@ -61,6 +61,7 @@ skiller list <bundle>
 skiller route <bundle> <query>
 skiller load <bundle> <skill-id> --mode card|body|extended
 skiller eval <bundle>
+skiller suspicious-commands <bundle>
 skiller forge <bundle> --out <bundle> [--provider mock|vegvisir] [--domain-profile <profile>]
 skiller forge-request <bundle> --out <request.yaml> [--pass <pass>] [--domain-profile <profile>]
 skiller forge-handoff <bundle> --out <dir> [--pass <pass>] [--domain-profile <profile>]
@@ -145,6 +146,16 @@ cargo run -- compile-url https://example.com/docs \
 ```
 
 The URL path is intentionally conservative: it uses excerpts-only retention, redacts secret-like material, records the source origin/hash, and only follows same-host links up to `--max-pages`. Private/authenticated docs should be integrated through Vegvisir/HBSE-backed connectors rather than pasted credentials or secret-bearing URLs.
+
+## Semantic diagnostics
+
+Skiller includes a compact deterministic diagnostic for common non-model extraction hardpoints:
+
+```bash
+skiller suspicious-commands dist/example-skills
+```
+
+The report summarizes suspicious `CliOperation` targets, weak source-fragment titles, and whether Forge history indicates deterministic fallback instead of live provider review. This is intended for quick triage without dumping full bundle YAML into an agent conversation.
 
 ## Vegvisir integration
 

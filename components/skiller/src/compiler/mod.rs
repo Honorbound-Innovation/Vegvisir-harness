@@ -2,6 +2,7 @@ use crate::corpus;
 use crate::domain;
 use crate::ingest;
 use crate::models::*;
+use crate::semantic;
 use crate::source_meta;
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
@@ -881,9 +882,11 @@ fn skill_seeds(section: &DocumentSection) -> Vec<SkillSeed> {
         });
     }
     for command in &section.detected_commands {
-        seeds.push(SkillSeed::CliCommand {
-            command: command.clone(),
-        });
+        if semantic::is_plausible_cli_command(command) {
+            seeds.push(SkillSeed::CliCommand {
+                command: command.clone(),
+            });
+        }
     }
     if seeds.is_empty() && is_capability_bearing(section) {
         seeds.push(SkillSeed::Procedure {
@@ -1202,9 +1205,10 @@ fn tool_requirements_for_seed(section: &DocumentSection, seed: &SkillSeed) -> Ve
 }
 
 fn cli_tool_name(command: &str) -> Option<String> {
-    command
-        .split_whitespace()
-        .next()
+    if !semantic::is_plausible_cli_command(command) {
+        return None;
+    }
+    semantic::cli_tool_name_if_plausible(command)
         .map(|tool| tool.trim_start_matches("./").to_string())
         .filter(|tool| !tool.is_empty())
 }
