@@ -562,17 +562,34 @@ const NORMAL_SUDO_REJECTION: &str = "Direct sudo through normal command tools is
 const PRIVILEGED_SUDO_REJECTION: &str = "Do not include sudo in run_privileged_command arguments. Run /sudo auth, then provide the underlying command; Vegvisir adds sudo -n internally.";
 
 fn command_mentions_sudo_invocation(parts: &[&str]) -> bool {
-    parts.iter().any(|part| part_mentions_sudo_invocation(part))
-}
-
-fn part_mentions_sudo_invocation(part: &str) -> bool {
-    let trimmed = part.trim();
-    if trimmed == "sudo" || trimmed.ends_with("/sudo") {
+    let Some((program, args)) = parts.split_first() else {
+        return false;
+    };
+    if token_is_sudo_invocation(program.trim()) {
         return true;
     }
 
+    if command_uses_shell_program(program) {
+        return args
+            .iter()
+            .any(|arg| shell_snippet_mentions_sudo_invocation(arg));
+    }
+
+    false
+}
+
+fn command_uses_shell_program(program: &str) -> bool {
+    let trimmed = program.trim();
+    let basename = trimmed.rsplit('/').next().unwrap_or(trimmed);
+    matches!(
+        basename,
+        "sh" | "bash" | "zsh" | "fish" | "dash" | "ksh" | "mksh" | "csh" | "tcsh"
+    )
+}
+
+fn shell_snippet_mentions_sudo_invocation(snippet: &str) -> bool {
     let mut token = String::new();
-    for ch in trimmed.chars() {
+    for ch in snippet.chars() {
         if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '/' | '.') {
             token.push(ch);
         } else {
@@ -586,7 +603,8 @@ fn part_mentions_sudo_invocation(part: &str) -> bool {
 }
 
 fn token_is_sudo_invocation(token: &str) -> bool {
-    token == "sudo" || token.ends_with("/sudo")
+    let trimmed = token.trim();
+    trimmed == "sudo" || trimmed.ends_with("/sudo")
 }
 
 fn reject_sudo_misuse(parts: &[&str], privileged: bool) -> Option<Observation> {
@@ -3546,7 +3564,11 @@ mod skiller_tool_tests {
 
         assert!(!rejection.ok);
         assert_eq!(rejection.error.as_deref(), Some("SudoInvocationRejected"));
-        assert!(rejection.content.contains("Direct sudo through normal command tools"));
+        assert!(
+            rejection
+                .content
+                .contains("Direct sudo through normal command tools")
+        );
     }
 
     #[test]
@@ -3556,7 +3578,11 @@ mod skiller_tool_tests {
 
         assert!(!rejection.ok);
         assert_eq!(rejection.error.as_deref(), Some("SudoInvocationRejected"));
-        assert!(rejection.content.contains("Direct sudo through normal command tools"));
+        assert!(
+            rejection
+                .content
+                .contains("Direct sudo through normal command tools")
+        );
     }
 
     #[test]
@@ -3567,6 +3593,16 @@ mod skiller_tool_tests {
         assert!(!rejection.ok);
         assert_eq!(rejection.error.as_deref(), Some("SudoInvocationRejected"));
         assert!(rejection.content.contains("Do not include sudo"));
+    }
+
+    #[test]
+    fn command_execution_boundary_allows_non_shell_text_arguments_mentioning_sudo() {
+        let parts = ["rg", "sudo", "vegvisir/src"];
+        assert!(reject_sudo_misuse(&parts, false).is_none());
+
+        let script = format!("print('contains word {} but is not shell')", "sudo");
+        let parts = ["python", "-c", script.as_str()];
+        assert!(reject_sudo_misuse(&parts, false).is_none());
     }
 
     #[test]

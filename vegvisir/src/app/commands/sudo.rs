@@ -32,7 +32,7 @@ impl TuiApplication {
                 }
 
                 self.open_sudo_password_prompt();
-                "Opened secure sudo password prompt inside Vegvisir. Type the password in the modal only; it is masked and is not written to chat, command history, provider context, tools, traces, or run artifacts. Press Esc to cancel.".to_string()
+                String::new()
             }
             Some("clear" | "invalidate" | "logout" | "forget") => {
                 match crate::privilege::sudo_invalidate() {
@@ -54,7 +54,15 @@ impl TuiApplication {
         self.profile_overlay = None;
         self.input.clear();
         self.input.update_suggestions(Vec::new());
+        self.clear_requested = true;
         self.redraw_requested = true;
+        self.session.status = "sudo auth prompt open".to_string();
+        self.session.activity = "Secure sudo password prompt is open; type password in the masked modal, Enter authenticates, Esc cancels.".to_string();
+        self.ephemeral_notice = Some(EphemeralNotice::new(
+            "Secure sudo password prompt opened. Type only in the masked modal; Esc cancels.",
+            EphemeralNoticeKind::Info,
+            std::time::Duration::from_secs(8),
+        ));
     }
 
     fn sudo_status_text(&self) -> String {

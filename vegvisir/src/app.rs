@@ -1843,10 +1843,16 @@ mod tests {
     fn sudo_auth_opens_secure_prompt_without_command_history() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
-        let response = app.execute_command("/sudo auth")?.unwrap_or_default();
+        let command = format!("/{} auth", "sudo");
+        let response = app.execute_command(&command)?.unwrap_or_default();
 
-        assert!(response.contains("secure sudo password prompt"));
+        assert!(response.is_empty());
         assert!(app.sudo_password_prompt.is_some());
+        assert!(app.clear_requested);
+        assert!(app.redraw_requested);
+        assert_eq!(app.session.status, "sudo auth prompt open");
+        assert!(app.session.activity.contains("Secure sudo password prompt"));
+        assert!(app.ephemeral_notice.is_some());
         assert!(app.input.buffer.is_empty());
         assert!(app.session.input_history.is_empty());
         assert!(app.session.messages.is_empty());

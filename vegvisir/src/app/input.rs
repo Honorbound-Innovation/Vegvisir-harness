@@ -385,6 +385,8 @@ impl TuiApplication {
                 if let Some(mut prompt) = self.sudo_password_prompt.take() {
                     prompt.clear_secret();
                 }
+                self.session.status = "ready".to_string();
+                self.session.activity.clear();
                 self.push_system_message(
                     "Sudo authentication cancelled. No password was stored or logged.",
                 );
@@ -395,6 +397,8 @@ impl TuiApplication {
                 if let Some(mut prompt) = self.sudo_password_prompt.take() {
                     prompt.clear_secret();
                 }
+                self.session.status = "ready".to_string();
+                self.session.activity.clear();
                 self.push_system_message(
                     "Sudo authentication cancelled. No password was stored or logged.",
                 );
@@ -418,6 +422,8 @@ impl TuiApplication {
                                 "password_visibility": "local-tui-secure-prompt; redacted; not logged",
                             }),
                         );
+                        self.session.status = "ready".to_string();
+                        self.session.activity.clear();
                         self.push_system_message("Sudo authentication refreshed. Password was accepted through Vegvisir's local secure prompt and was not sent to chat/model/tools/logs/traces.");
                     }
                     Err(error) => {
@@ -429,6 +435,8 @@ impl TuiApplication {
                             );
                             self.sudo_password_prompt = Some(retry);
                         } else {
+                            self.session.status = "ready".to_string();
+                            self.session.activity.clear();
                             self.push_system_message(format!(
                                 "Sudo authentication failed after {} attempts: {error}. No password was stored or logged.",
                                 prompt.attempts
