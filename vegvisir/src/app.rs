@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    fmt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
@@ -135,6 +136,7 @@ pub struct TuiApplication {
     pub info_scroll_offset: usize,
     pub sessions_overlay: Option<SessionsOverlay>,
     pub profile_overlay: Option<ProfileOverlay>,
+    pub sudo_password_prompt: Option<SudoPasswordPrompt>,
     pub approval_selected_index: usize,
     pub ephemeral_notice: Option<EphemeralNotice>,
     pub search_open: bool,
@@ -332,6 +334,66 @@ pub struct SessionsOverlayEntry {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub message_count: usize,
     pub current: bool,
+}
+
+/// Local-only sudo authentication prompt state.
+///
+/// The buffer intentionally stores chars outside normal `InputState`, command history,
+/// session messages, provider context, tool args, run artifacts, and traces. Rendering
+/// must use `masked_value` only. `Debug` is redacted to avoid accidental test/log leaks.
+pub struct SudoPasswordPrompt {
+    pub buffer: Vec<char>,
+    pub status: String,
+    pub attempts: usize,
+}
+
+impl SudoPasswordPrompt {
+    pub fn new() -> Self {
+        Self {
+            buffer: Vec::new(),
+            status: "Enter sudo password. Esc cancels. Enter authenticates. Password is never sent to chat/model/tools/logs.".to_string(),
+            attempts: 0,
+        }
+    }
+
+    pub fn push(&mut self, ch: char) {
+        self.buffer.push(ch);
+    }
+
+    pub fn pop(&mut self) {
+        let _ = self.buffer.pop();
+    }
+
+    pub fn clear_secret(&mut self) {
+        for ch in &mut self.buffer {
+            *ch = '\0';
+        }
+        self.buffer.clear();
+    }
+
+    pub fn masked_value(&self) -> String {
+        "•".repeat(self.buffer.len())
+    }
+
+    pub fn len(&self) -> usize {
+        self.buffer.len()
+    }
+}
+
+impl fmt::Debug for SudoPasswordPrompt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SudoPasswordPrompt")
+            .field("buffer", &"<redacted>")
+            .field("status", &self.status)
+            .field("attempts", &self.attempts)
+            .finish()
+    }
+}
+
+impl Drop for SudoPasswordPrompt {
+    fn drop(&mut self) {
+        self.clear_secret();
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1016,6 +1078,7 @@ impl TuiApplication {
             info_scroll_offset: 0,
             sessions_overlay: None,
             profile_overlay: None,
+            sudo_password_prompt: None,
             approval_selected_index: 0,
             ephemeral_notice: None,
             search_open: false,
@@ -1750,13 +1813,45 @@ fn configured_subagent_spawn_defaults(
 
 #[cfg(test)]
 mod tests {
-    use super::{StreamEvent, TuiApplication};
+    use super::{StreamEvent, SudoPasswordPrompt, TuiApplication};
     use crate::core::{ChatMessage, SessionState};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
     use std::{
         sync::{Arc, atomic::AtomicBool, mpsc},
         time::Instant,
     };
+
+    #[test]
+    fn sudo_password_prompt_masks_and_redacts_secret() {
+        let mut prompt = SudoPasswordPrompt::new();
+        for ch in "super-secret".chars() {
+            prompt.push(ch);
+        }
+
+        assert_eq!(
+            prompt.masked_value(),
+            "•".repeat("super-secret".chars().count())
+        );
+        assert!(!prompt.masked_value().contains("super-secret"));
+        assert!(!format!("{prompt:?}").contains("super-secret"));
+
+        prompt.clear_secret();
+        assert_eq!(prompt.len(), 0);
+    }
+
+    #[test]
+    fn sudo_auth_opens_secure_prompt_without_command_history() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        let response = app.execute_command("/sudo auth")?.unwrap_or_default();
+
+        assert!(response.contains("secure sudo password prompt"));
+        assert!(app.sudo_password_prompt.is_some());
+        assert!(app.input.buffer.is_empty());
+        assert!(app.session.input_history.is_empty());
+        assert!(app.session.messages.is_empty());
+        Ok(())
+    }
 
     #[test]
     fn typed_approval_control_response_applies_once_through_ledger() -> anyhow::Result<()> {

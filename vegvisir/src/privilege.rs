@@ -32,7 +32,7 @@ pub fn sudo_status() -> SudoStatus {
         Ok(_) => SudoStatus {
             authenticated: false,
             sudo_available: true,
-            message: "sudo timestamp is not currently valid; run /sudo auth to authenticate via the OS prompt".to_string(),
+            message: "sudo timestamp is not currently valid; run /sudo auth to authenticate through Vegvisir's secure prompt".to_string(),
         },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => SudoStatus {
             authenticated: false,
@@ -58,6 +58,61 @@ pub fn sudo_invalidate() -> anyhow::Result<()> {
         Ok(())
     } else {
         anyhow::bail!("sudo -k failed with exit code {:?}", status.code())
+    }
+}
+
+/// Refresh the sudo timestamp using a password collected by the local TUI's
+/// secure prompt.
+///
+/// Security invariants:
+/// - The password must come only from trusted local UI state, never chat/model/tool args.
+/// - The password is written only to sudo's stdin.
+/// - stdout/stderr are not inherited/captured for password material; sudo receives an empty prompt.
+/// - Temporary encoded buffers are overwritten before return.
+///
+/// This is intentionally separate from generic command tools. Model-callable tools remain
+/// non-interactive and must use `sudo -n` against an existing timestamp.
+pub fn sudo_refresh_with_tui_password(password: &mut Vec<char>) -> anyhow::Result<()> {
+    if password.is_empty() {
+        anyhow::bail!("sudo password was empty");
+    }
+
+    let mut password_bytes = Vec::new();
+    for ch in password.iter().copied() {
+        let mut buf = [0u8; 4];
+        let encoded = ch.encode_utf8(&mut buf);
+        password_bytes.extend_from_slice(encoded.as_bytes());
+        buf.fill(0);
+    }
+    password_bytes.push(b'\n');
+
+    let result = run_sudo_validate_with_stdin_password(&password_bytes);
+
+    password_bytes.fill(0);
+    result
+}
+
+fn run_sudo_validate_with_stdin_password(password_bytes: &[u8]) -> anyhow::Result<()> {
+    let mut child = Command::new("sudo")
+        .args(["-S", "-p", "", "-v"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(password_bytes)?;
+        stdin.flush()?;
+    }
+
+    let status = child.wait()?;
+    if status.success() {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "sudo authentication failed with exit code {:?}",
+            status.code()
+        )
     }
 }
 

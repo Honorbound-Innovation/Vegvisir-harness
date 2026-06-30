@@ -40,7 +40,13 @@ impl TuiApplication {
                     Event::Key(key) => self.handle_key_event(key),
                     Event::Mouse(mouse) => self.handle_mouse_event(mouse),
                     Event::Paste(text) => {
-                        self.input.append_text(&text, true);
+                        if let Some(prompt) = self.sudo_password_prompt.as_mut() {
+                            for ch in text.chars().filter(|ch| *ch != '\n' && *ch != '\r') {
+                                prompt.push(ch);
+                            }
+                        } else {
+                            self.input.append_text(&text, true);
+                        }
                         self.redraw_requested = true;
                     }
                     Event::Resize(_, _) => {

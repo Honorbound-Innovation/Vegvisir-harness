@@ -110,6 +110,9 @@ pub fn draw(f: &mut Frame<'_>, app: &mut TuiApplication) {
     if let Some(profile) = app.profile_overlay.as_ref() {
         draw_profile_overlay(f, profile, centered_rect(104, 28, area));
     }
+    if app.sudo_password_prompt.is_some() {
+        draw_sudo_password_prompt(f, app, centered_rect(86, 12, area));
+    }
     if !pending_approvals.is_empty() {
         draw_approval_modal(
             f,
@@ -118,7 +121,9 @@ pub fn draw(f: &mut Frame<'_>, app: &mut TuiApplication) {
             centered_rect(88, 14, area),
         );
     }
-    set_input_cursor(f, app, chunks[3]);
+    if app.sudo_password_prompt.is_none() {
+        set_input_cursor(f, app, chunks[3]);
+    }
 }
 
 fn activity_strip_height(app: &TuiApplication, pending: Option<&ApprovalRequest>) -> u16 {
@@ -3112,6 +3117,65 @@ fn sessions_overlay_lines(
         )));
     }
     lines
+}
+
+fn draw_sudo_password_prompt(f: &mut Frame<'_>, app: &TuiApplication, area: Rect) {
+    let Some(prompt) = app.sudo_password_prompt.as_ref() else {
+        return;
+    };
+    f.render_widget(Clear, area);
+    let content_width = area.width.saturating_sub(4) as usize;
+    let masked = prompt.masked_value();
+    let masked_display = if masked.is_empty() {
+        "<password hidden>".to_string()
+    } else {
+        truncate(&masked, content_width.saturating_sub(12).max(1))
+    };
+    let lines = vec![
+        Line::from(vec![
+            Span::styled(
+                "Sudo authentication",
+                Style::default().fg(AMBER).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  local secure prompt", Style::default().fg(DIM)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Password: ", Style::default().fg(CYAN)),
+            Span::styled(masked_display, Style::default().fg(GREEN)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            truncate(&prompt.status, content_width),
+            Style::default().fg(DIM),
+        )),
+        Line::from(Span::styled(
+            "Security: not chat/model-visible; not traced/logged; cleared after sudo -v.",
+            Style::default().fg(DIM),
+        )),
+    ];
+    let block = Block::default()
+        .title(" /sudo auth ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(AMBER))
+        .padding(Padding::new(1, 1, 0, 0));
+    f.render_widget(
+        Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false }),
+        area,
+    );
+
+    let cursor_x = area
+        .x
+        .saturating_add(2)
+        .saturating_add("Password: ".len() as u16)
+        .saturating_add(prompt.len().min(content_width.saturating_sub(12)) as u16);
+    let cursor_y = area.y.saturating_add(3);
+    f.set_cursor_position(Position::new(
+        cursor_x.min(area.right().saturating_sub(2)),
+        cursor_y,
+    ));
 }
 
 fn draw_profile_overlay(f: &mut Frame<'_>, overlay: &ProfileOverlay, area: Rect) {

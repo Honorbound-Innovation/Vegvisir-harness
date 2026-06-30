@@ -402,11 +402,16 @@ impl TuiApplication {
         let Some((command, args)) = self.commands.parse_with_aliases(raw) else {
             return Ok(None);
         };
+        let logged_args = if command == "/sudo" {
+            json!("<redacted>")
+        } else {
+            json!(args.clone())
+        };
         self.logger.emit(
             "command_start",
             json!({
                 "command": command.clone(),
-                "args": args.clone(),
+                "args": logged_args,
                 "session": self.session.session_id,
                 "workspace": self.cwd.display().to_string(),
             }),
