@@ -56,7 +56,12 @@ impl RuntimePolicy {
         }
         let risky = matches!(
             request.operation.as_str(),
-            "write_file" | "run_command" | "mcp_tool_call" | "spawn_subagent" | "cms_writeback"
+            "write_file"
+                | "run_command"
+                | "run_privileged_command"
+                | "mcp_tool_call"
+                | "spawn_subagent"
+                | "cms_writeback"
         );
         if self.strict_usrl && risky && contract_id.is_none() {
             return RuntimeGateDecision {
@@ -181,7 +186,11 @@ impl RuntimePolicy {
                 "USRL contract denied operation: evidence or justification is required".to_string(),
             );
         }
-        if request.operation == "run_command" && has(&["no_command", "no_shell", "no_exec"]) {
+        if matches!(
+            request.operation.as_str(),
+            "run_command" | "run_privileged_command"
+        ) && has(&["no_command", "no_shell", "no_exec"])
+        {
             return Some(
                 "USRL contract denied operation: command execution is forbidden".to_string(),
             );

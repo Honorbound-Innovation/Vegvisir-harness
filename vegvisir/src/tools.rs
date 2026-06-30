@@ -32,6 +32,7 @@ use crate::{
     memory::{ContextPrepareOptions, VegvisirCms, VegvisirCmsConfig},
     observability::EventLogger,
     policy::RuntimePolicy,
+    privilege,
     sandbox::WorkspaceSandbox,
     subagents::{
         SubAgentFileChange, SubAgentFileChangeKind, SubAgentFileOwnership, SubAgentObservability,
@@ -564,8 +565,31 @@ fn execute_bounded_command(
     output_limit: usize,
     failure_error: &str,
     include_command_in_data: bool,
+    privileged: bool,
 ) -> Observation {
-    let sandboxed_command = match build_sandboxed_command(parts, sandbox_config) {
+    let effective_parts = if privileged {
+        if parts.is_empty() {
+            return Observation::err("Empty command", "ValueError");
+        }
+        let sudo_status = privilege::sudo_status();
+        if !sudo_status.authenticated {
+            return Observation::err(
+                format!(
+                    "Privileged command requires an active sudo timestamp. {}",
+                    sudo_status.message
+                ),
+                "SudoAuthenticationRequired",
+            );
+        }
+        let mut prefixed = Vec::with_capacity(parts.len() + 2);
+        prefixed.push("sudo");
+        prefixed.push("-n");
+        prefixed.extend_from_slice(parts);
+        prefixed
+    } else {
+        parts.to_vec()
+    };
+    let sandboxed_command = match build_sandboxed_command(&effective_parts, sandbox_config) {
         Ok(command) => command,
         Err(error) => return Observation::err(error.to_string(), "CommandError"),
     };
@@ -573,6 +597,7 @@ fn execute_bounded_command(
     command
         .args(&sandboxed_command.args)
         .current_dir(&sandboxed_command.current_dir)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = match spawn_command_in_own_process_group(&mut command) {
@@ -631,6 +656,15 @@ fn execute_bounded_command(
             data.insert("timed_out".to_string(), json!(timed_out));
             data.insert("timeout_seconds".to_string(), json!(timeout));
             data.insert("output_truncated".to_string(), json!(truncated));
+            data.insert("privileged".to_string(), json!(privileged));
+            data.insert(
+                "sudo_password_visibility".to_string(),
+                json!(if privileged {
+                    "not-collected; sudo -n uses existing timestamp only"
+                } else {
+                    "not-applicable"
+                }),
+            );
             Observation {
                 ok: !timed_out && output.status.success(),
                 content,
@@ -1255,6 +1289,43 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
                 output_limit,
                 "CommandFailed",
                 false,
+                false,
+            )
+        }),
+        json!({"required": ["command"], "properties": {"command": "array", "timeout": "integer", "output_limit": "integer"}}),
+        true,
+    ))?;
+
+    let privileged_sandbox_config = command_sandbox_config.clone();
+    registry.register(Tool::new(
+        "run_privileged_command",
+        "Run an allow-listed privileged command via sudo -n using an existing sudo timestamp; Vegvisir never reads or logs the sudo password.",
+        Arc::new(move |args| {
+            let Some(command) = args.get("command").and_then(Value::as_array) else {
+                return Observation::err("Missing command", "ValueError");
+            };
+            let parts = command.iter().filter_map(Value::as_str).collect::<Vec<_>>();
+            if parts.is_empty() {
+                return Observation::err("Empty command", "ValueError");
+            }
+            let timeout = args
+                .get("timeout")
+                .and_then(Value::as_u64)
+                .unwrap_or(30)
+                .clamp(1, 3600);
+            let output_limit = args
+                .get("output_limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(20000)
+                .clamp(1024, 1_000_000) as usize;
+            execute_bounded_command(
+                &parts,
+                &privileged_sandbox_config,
+                timeout,
+                output_limit,
+                "PrivilegedCommandFailed",
+                false,
+                true,
             )
         }),
         json!({"required": ["command"], "properties": {"command": "array", "timeout": "integer", "output_limit": "integer"}}),
@@ -1304,6 +1375,7 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
                 output_limit,
                 "TestsFailed",
                 true,
+                false,
             )
         }),
         json!({"properties": {"command": "array", "timeout": "integer", "output_limit": "integer"}}),

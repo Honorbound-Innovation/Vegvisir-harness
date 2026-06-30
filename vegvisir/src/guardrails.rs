@@ -307,7 +307,10 @@ impl GuardrailEngine {
             anyhow::bail!("Tool is denied by policy: {}", tool.name);
         }
         let mut approval_granted = false;
-        if tool.name == "run_command"
+        if sudo_guarded_tool_name(&tool.name) {
+            reject_unsafe_sudo_invocation(&tool.name, args)?;
+        }
+        if command_policy_tool_name(&tool.name)
             && let Some(executable) = command_name_from_args(args)
             && !self.policy.allowed_commands.contains(&executable)
         {
@@ -333,7 +336,7 @@ impl GuardrailEngine {
                 anyhow::bail!("{reason}; approval_id={id}");
             }
         }
-        if tool.name == "run_command" && !approval_granted {
+        if command_policy_tool_name(&tool.name) && !approval_granted {
             let parts = args
                 .get("command")
                 .and_then(Value::as_array)
@@ -388,7 +391,7 @@ impl GuardrailEngine {
         if tool.risky && !self.policy.allow_risky_tools && !approval_granted {
             anyhow::bail!("Risky tool requires permission: {}", tool.name);
         }
-        if tool.name == "run_command" && !approval_granted {
+        if command_policy_tool_name(&tool.name) && !approval_granted {
             let executable = args
                 .get("command")
                 .and_then(Value::as_array)
@@ -401,6 +404,55 @@ impl GuardrailEngine {
         }
         Ok(())
     }
+}
+
+fn reject_unsafe_sudo_invocation(tool_name: &str, args: &Map<String, Value>) -> anyhow::Result<()> {
+    let parts = args
+        .get("command")
+        .and_then(Value::as_array)
+        .map(|items| items.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+        .unwrap_or_default();
+    if parts.is_empty() {
+        return Ok(());
+    }
+    if tool_name == "run_privileged_command" && command_mentions_sudo_invocation(&parts) {
+        anyhow::bail!(
+            "Do not include sudo in run_privileged_command arguments. Run /sudo auth, then provide the underlying command; Vegvisir adds sudo -n internally."
+        );
+    }
+    if tool_name != "run_privileged_command" && command_mentions_sudo_invocation(&parts) {
+        anyhow::bail!(
+            "Direct sudo through normal command tools is disabled so sudo passwords cannot enter chat/session/trace history. Run /sudo auth, then use run_privileged_command."
+        );
+    }
+    Ok(())
+}
+
+fn command_mentions_sudo_invocation(parts: &[&str]) -> bool {
+    parts.iter().any(|part| {
+        let trimmed = part.trim();
+        trimmed == "sudo"
+            || trimmed.ends_with("/sudo")
+            || trimmed.starts_with("sudo ")
+            || trimmed.contains(" sudo ")
+            || trimmed.contains(";sudo ")
+            || trimmed.contains("; sudo ")
+            || trimmed.contains("&&sudo ")
+            || trimmed.contains("&& sudo ")
+            || trimmed.contains("|sudo ")
+            || trimmed.contains("| sudo ")
+    })
+}
+
+fn sudo_guarded_tool_name(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "run_command" | "run_privileged_command" | "run_tests"
+    )
+}
+
+fn command_policy_tool_name(tool_name: &str) -> bool {
+    matches!(tool_name, "run_command" | "run_privileged_command")
 }
 
 fn approval_request_id(tool_name: &str, args: &Map<String, Value>) -> String {
@@ -421,6 +473,7 @@ fn approval_session_key(tool_name: &str, args: &Map<String, Value>) -> String {
 fn risk_label(tool_name: &str) -> &'static str {
     match tool_name {
         "run_command" => "command-execution",
+        "run_privileged_command" => "privileged-command-execution",
         "write_file" => "filesystem-write",
         name if name.starts_with("mcp::") => "external-tool",
         _ => "risky-tool",
@@ -430,6 +483,7 @@ fn risk_label(tool_name: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{tools::Tool, types::Observation};
     use serde_json::json;
 
     fn sample_request() -> ApprovalRequest {
@@ -442,6 +496,86 @@ mod tests {
             args,
             risk_label: "filesystem-write".to_string(),
         }
+    }
+
+    #[test]
+    fn guardrails_reject_direct_sudo_through_run_command() {
+        let mut engine = GuardrailEngine {
+            policy: PermissionPolicy {
+                allow_risky_tools: true,
+                ..PermissionPolicy::default()
+            },
+            approvals: ApprovalLedger::default(),
+        };
+        let tool = Tool::new(
+            "run_command",
+            "test",
+            std::sync::Arc::new(|_| Observation::ok("")),
+            serde_json::json!({"required": ["command"], "properties": {"command": "array"}}),
+            true,
+        );
+        let args = serde_json::json!({"command": ["sudo", "id"]})
+            .as_object()
+            .cloned()
+            .unwrap();
+
+        let error = engine.authorize_tool(&tool, &args).unwrap_err().to_string();
+
+        assert!(error.contains("Direct sudo through normal command tools is disabled"));
+    }
+
+    #[test]
+    fn guardrails_reject_nested_sudo_patterns() {
+        let mut engine = GuardrailEngine {
+            policy: PermissionPolicy {
+                allow_risky_tools: true,
+                allowed_commands: ["bash".to_string()].into_iter().collect(),
+                ..PermissionPolicy::default()
+            },
+            approvals: ApprovalLedger::default(),
+        };
+        let tool = Tool::new(
+            "run_command",
+            "test",
+            std::sync::Arc::new(|_| Observation::ok("")),
+            serde_json::json!({"required": ["command"], "properties": {"command": "array"}}),
+            true,
+        );
+        let args = serde_json::json!({"command": ["bash", "-lc", "printf x | sudo -S id"]})
+            .as_object()
+            .cloned()
+            .unwrap();
+
+        let error = engine.authorize_tool(&tool, &args).unwrap_err().to_string();
+
+        assert!(error.contains("Direct sudo through normal command tools is disabled"));
+    }
+
+    #[test]
+    fn guardrails_reject_nested_sudo_for_privileged_tool() {
+        let mut engine = GuardrailEngine {
+            policy: PermissionPolicy {
+                allow_risky_tools: true,
+                allowed_commands: ["sudo".to_string()].into_iter().collect(),
+                ..PermissionPolicy::default()
+            },
+            approvals: ApprovalLedger::default(),
+        };
+        let tool = Tool::new(
+            "run_privileged_command",
+            "test",
+            std::sync::Arc::new(|_| Observation::ok("")),
+            serde_json::json!({"required": ["command"], "properties": {"command": "array"}}),
+            true,
+        );
+        let args = serde_json::json!({"command": ["sudo", "id"]})
+            .as_object()
+            .cloned()
+            .unwrap();
+
+        let error = engine.authorize_tool(&tool, &args).unwrap_err().to_string();
+
+        assert!(error.contains("Do not include sudo"));
     }
 
     #[test]

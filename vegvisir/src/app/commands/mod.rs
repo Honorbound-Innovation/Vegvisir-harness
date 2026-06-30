@@ -12,6 +12,7 @@ mod runs;
 mod sessions;
 mod skills;
 mod speech;
+mod sudo;
 mod summary;
 mod tasks;
 mod tools;

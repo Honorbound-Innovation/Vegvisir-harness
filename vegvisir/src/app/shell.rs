@@ -500,6 +500,7 @@ impl TuiApplication {
             "/subagents" => self.subagents_command(&args)?,
             "/mcp" => self.mcp_command(&args)?,
             "/hbse" => self.hbse_command(&args),
+            "/sudo" => self.sudo_command(&args),
             "/config" => self.config_command(&args)?,
             "/exit" => {
                 self.running = false;

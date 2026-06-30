@@ -292,7 +292,10 @@ pub struct ToolSpec {
 impl ToolSpec {
     pub fn from_definition(definition: &ToolDefinition) -> Self {
         let read_only = !definition.risky;
-        let destructive = matches!(definition.name.as_str(), "write_file" | "run_command");
+        let destructive = matches!(
+            definition.name.as_str(),
+            "write_file" | "run_command" | "run_privileged_command"
+        );
         let approval_category = if destructive || definition.risky {
             ApprovalCategory::RiskyTool
         } else {
@@ -636,6 +639,12 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
             &["/permission"],
         ),
         cmd(
+            "/sudo",
+            "manage sudo authentication without exposing the password to chat, session, or trace history",
+            "/sudo [status|auth|clear|help]",
+            &["/privilege", "/privileged"],
+        ),
+        cmd(
             "/tasks",
             "list, inspect, tail, run, or cancel session task manager records",
             "/tasks [list|show <task-id>|tail <task-id> [--bytes=<bytes>]|run [--timeout=<seconds>] [--stall-timeout=<seconds>|--no-stall-timeout] -- <cmd> [args...]|cancel <task-id>|events|--json]",
@@ -820,7 +829,7 @@ fn infer_command_category(name: &str) -> CommandCategory {
             CommandCategory::AgentsTasks
         }
         "/skills" => CommandCategory::Skills,
-        "/tools" | "/approvals" | "/permissions" | "/hbse" | "/mcp" => {
+        "/tools" | "/approvals" | "/permissions" | "/hbse" | "/sudo" | "/mcp" => {
             CommandCategory::SecurityPermissions
         }
         "/status" | "/verify" | "/eval" | "/trace" | "/runs" | "/recover" | "/turn-repair" => {
@@ -841,7 +850,9 @@ fn infer_command_safety(name: &str) -> CommandSafety {
         }
         "/workspace" | "/projects" | "/system" | "/agent" | "/agents" | "/ka" | "/profile"
         | "/model" | "/provider" | "/effort" | "/fast" | "/tools" | "/approvals" | "/skills"
-        | "/memory" | "/remember" | "/hbse" | "/mcp" | "/config" => CommandSafety::SessionMutation,
+        | "/memory" | "/remember" | "/hbse" | "/sudo" | "/mcp" | "/config" => {
+            CommandSafety::SessionMutation
+        }
         "/tasks" => CommandSafety::Destructive,
         "/attach" | "/speech" | "/tts" => CommandSafety::ExternalEffect,
         "/diff" | "/eval" | "/verify" => CommandSafety::ReadOnly,

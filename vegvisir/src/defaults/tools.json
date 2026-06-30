@@ -23,6 +23,12 @@
       "risky": true
     },
     {
+      "name": "run_privileged_command",
+      "category": "execution",
+      "description": "Run an allow-listed privileged command via sudo -n after /sudo auth; Vegvisir never reads or logs the sudo password.",
+      "risky": true
+    },
+    {
       "name": "run_tests",
       "category": "verification",
       "description": "Run configured project tests."

@@ -639,6 +639,7 @@ impl TaskRunner {
         command
             .args(&sandboxed_command.args)
             .current_dir(&sandboxed_command.current_dir)
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let mut child = match spawn_command_in_own_process_group(&mut command) {
