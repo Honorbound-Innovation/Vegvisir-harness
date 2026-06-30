@@ -4,6 +4,40 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 use tempfile::tempdir;
 
+#[cfg(unix)]
+fn write_empty_provider_adapter(dir: &std::path::Path) -> std::path::PathBuf {
+    let adapter = dir.join("provider-adapter.py");
+    std::fs::write(
+        &adapter,
+        r#"#!/usr/bin/env python3
+import sys
+request_id = ""
+pass_type = ""
+for line in sys.stdin.read().splitlines():
+    if line.startswith("request_id:"):
+        request_id = line.split(":", 1)[1].strip().strip("'\"")
+    if line.startswith("pass_type:"):
+        pass_type = line.split(":", 1)[1].strip().strip("'\"")
+print(f"request_id: {request_id}")
+print(f"pass_type: {pass_type}")
+print("generated_items: []")
+print("modified_items: []")
+print("review_findings:")
+print(f"- provider fixture reviewed pass {pass_type}")
+print("confidence_updates: {}")
+print("evidence_records: []")
+print("required_human_review: true")
+print("audit_notes:")
+print("- provider fixture used explicit model-backed adapter path")
+"#,
+    )
+    .unwrap();
+    let mut perms = std::fs::metadata(&adapter).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&adapter, perms).unwrap();
+    adapter
+}
+
 #[test]
 fn forge_provider_status_reports_current_provider_capabilities() {
     let catalog = Command::new(env!("CARGO_BIN_EXE_skiller"))
@@ -12,8 +46,10 @@ fn forge_provider_status_reports_current_provider_capabilities() {
         .unwrap();
     assert!(catalog.status.success());
     let catalog_text = String::from_utf8_lossy(&catalog.stdout);
-    assert!(catalog_text.contains("default_provider: mock"));
-    assert!(catalog_text.contains("name: mock"));
+    assert!(catalog_text.contains("default_provider: vegvisir"));
+    assert!(catalog_text.contains("default_model_provider: openai-sso"));
+    assert!(catalog_text.contains("default_model: gpt-5.5"));
+    assert!(!catalog_text.contains("name: mock"));
     assert!(catalog_text.contains("name: vegvisir"));
     assert!(catalog_text.contains("structured_envelope: true"));
     assert!(catalog_text.contains("live_reasoning: false"));
@@ -30,10 +66,14 @@ fn forge_provider_status_reports_current_provider_capabilities() {
     let vegvisir_text = String::from_utf8_lossy(&vegvisir.stdout);
     assert!(vegvisir_text.contains("name: vegvisir"));
     assert!(vegvisir_text.contains("display_name: Vegvisir structured-envelope Forge adapter"));
-    assert!(vegvisir_text.contains("deterministic: true"));
+    assert!(vegvisir_text.contains("deterministic: false"));
     assert!(vegvisir_text.contains("live_reasoning: false"));
     assert!(vegvisir_text.contains("adapter_command_configured: false"));
-    assert!(vegvisir_text.contains("adapter_mode: deterministic fallback"));
+    assert!(
+        vegvisir_text.contains("adapter_mode: provider model required; adapter not configured")
+    );
+    assert!(vegvisir_text.contains("default_model_provider: openai-sso"));
+    assert!(vegvisir_text.contains("default_model: gpt-5.5"));
     assert!(vegvisir_text.contains("SKILLER_VEGVISIR_FORGE_ADAPTER"));
     assert!(vegvisir_text.contains("adapter_timeout_secs: 120"));
     assert!(vegvisir_text.contains("SKILLER_VEGVISIR_FORGE_ADAPTER_TIMEOUT_SECS"));
@@ -73,15 +113,17 @@ fn forge_adapter_preflight_reports_missing_adapter_before_execution() {
     assert!(text.contains("adapter_command_configured: true"));
     assert!(text.contains("adapter command does not exist"));
 
-    let fallback = Command::new(env!("CARGO_BIN_EXE_skiller"))
+    let no_adapter = Command::new(env!("CARGO_BIN_EXE_skiller"))
         .args(["forge-adapter-preflight"])
+        .env_remove("SKILLER_VEGVISIR_FORGE_ADAPTER")
         .output()
         .unwrap();
-    assert!(fallback.status.success());
-    let fallback_text = String::from_utf8_lossy(&fallback.stdout);
-    assert!(fallback_text.contains("valid: true"));
-    assert!(fallback_text.contains("adapter_command_configured: false"));
-    assert!(fallback_text.contains("deterministic fallback"));
+    assert!(!no_adapter.status.success());
+    let no_adapter_text = String::from_utf8_lossy(&no_adapter.stdout);
+    assert!(no_adapter_text.contains("valid: false"));
+    assert!(no_adapter_text.contains("adapter_command_configured: false"));
+    assert!(no_adapter_text.contains("provider-backed Vegvisir adapter"));
+    assert!(no_adapter_text.contains("openai-sso:gpt-5.5"));
 }
 
 #[test]
@@ -455,7 +497,7 @@ time.sleep(5)
 }
 
 #[test]
-fn forge_script_generation_embeds_deterministic_helper_scripts() {
+fn forge_script_generation_request_requires_provider_model_and_helper_script_output() {
     let temp = tempdir().unwrap();
     let docs = temp.path().join("docs");
     std::fs::create_dir_all(&docs).unwrap();
@@ -465,7 +507,6 @@ fn forge_script_generation_embeds_deterministic_helper_scripts() {
     )
     .unwrap();
     let bundle = temp.path().join("bundle");
-    let forged = temp.path().join("forged");
     let request = temp.path().join("script-request.yaml");
 
     let compile = Command::new(env!("CARGO_BIN_EXE_skiller"))
@@ -510,85 +551,19 @@ fn forge_script_generation_embeds_deterministic_helper_scripts() {
         request_text.contains("pass_type: ScriptGeneration"),
         "{request_text}"
     );
+    assert!(
+        request_text.contains("provider: vegvisir"),
+        "{request_text}"
+    );
+    assert!(
+        request_text.contains("model_provider: openai-sso"),
+        "{request_text}"
+    );
+    assert!(request_text.contains("model: gpt-5.5"), "{request_text}");
     assert!(request_text.contains("Skill.scripts"), "{request_text}");
     assert!(
         request_text.contains("deterministic helper/enforcement"),
         "{request_text}"
-    );
-
-    let forge = Command::new(env!("CARGO_BIN_EXE_skiller"))
-        .args([
-            "forge",
-            bundle.to_str().unwrap(),
-            "--out",
-            forged.to_str().unwrap(),
-            "--provider",
-            "vegvisir",
-            "--max-skills",
-            "1",
-        ])
-        .output()
-        .unwrap();
-    assert!(
-        forge.status.success(),
-        "stdout={} stderr={}",
-        String::from_utf8_lossy(&forge.stdout),
-        String::from_utf8_lossy(&forge.stderr)
-    );
-
-    let skill_text = std::fs::read_dir(forged.join("skills"))
-        .unwrap()
-        .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
-        .collect::<Vec<_>>()
-        .join("\n---\n");
-    assert!(skill_text.contains("scripts:"), "{skill_text}");
-    assert!(
-        skill_text.contains("script_type: PreflightCheck"),
-        "{skill_text}"
-    );
-    assert!(
-        skill_text.contains("script_type: CommandPlanner"),
-        "{skill_text}"
-    );
-    assert!(skill_text.contains("deterministic: true"), "{skill_text}");
-    assert!(skill_text.contains("\"execute\": False"), "{skill_text}");
-    assert!(
-        skill_text.contains("Skill.scripts as deterministic helpers/gates"),
-        "{skill_text}"
-    );
-
-    let validate = Command::new(env!("CARGO_BIN_EXE_skiller"))
-        .args(["validate", forged.to_str().unwrap()])
-        .output()
-        .unwrap();
-    assert!(
-        validate.status.success(),
-        "stdout={} stderr={}",
-        String::from_utf8_lossy(&validate.stdout),
-        String::from_utf8_lossy(&validate.stderr)
-    );
-
-    let scripted_skill = std::fs::read_dir(forged.join("skills"))
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .find(|path| {
-            std::fs::read_to_string(path)
-                .unwrap()
-                .contains("script_type:")
-        })
-        .expect("expected a skill file containing embedded scripts");
-    let mut unsafe_skill = std::fs::read_to_string(&scripted_skill).unwrap();
-    unsafe_skill = unsafe_skill.replacen("deterministic: true", "deterministic: false", 1);
-    std::fs::write(&scripted_skill, unsafe_skill).unwrap();
-    let invalid = Command::new(env!("CARGO_BIN_EXE_skiller"))
-        .args(["validate", forged.to_str().unwrap()])
-        .output()
-        .unwrap();
-    assert!(!invalid.status.success());
-    let invalid_stdout = String::from_utf8_lossy(&invalid.stdout);
-    assert!(
-        invalid_stdout.contains("must be deterministic"),
-        "{invalid_stdout}"
     );
 }
 
@@ -625,23 +600,28 @@ fn compile_forge_review_and_agent_pack_workflow() {
             .success()
     );
 
+    let adapter = write_empty_provider_adapter(temp.path());
+    let forge = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "forge",
+            bundle.to_str().unwrap(),
+            "--out",
+            forged.to_str().unwrap(),
+            "--provider",
+            "vegvisir",
+            "--domain-profile",
+            "kubernetes-operations",
+            "--max-skills",
+            "2",
+        ])
+        .env("SKILLER_VEGVISIR_FORGE_ADAPTER", adapter.to_str().unwrap())
+        .output()
+        .unwrap();
     assert!(
-        Command::new(env!("CARGO_BIN_EXE_skiller"))
-            .args([
-                "forge",
-                bundle.to_str().unwrap(),
-                "--out",
-                forged.to_str().unwrap(),
-                "--provider",
-                "vegvisir",
-                "--domain-profile",
-                "kubernetes-operations",
-                "--max-skills",
-                "2",
-            ])
-            .status()
-            .unwrap()
-            .success()
+        forge.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&forge.stdout),
+        String::from_utf8_lossy(&forge.stderr)
     );
 
     assert!(
@@ -683,12 +663,10 @@ fn compile_forge_review_and_agent_pack_workflow() {
             "missing response pass {pass}: {forge_responses_text}"
         );
     }
+    assert!(forge_responses_text.contains("provider fixture reviewed pass"));
     assert!(
-        forge_responses_text.contains("READY-CANDIDATE")
-            || forge_responses_text.contains("requires review before publication")
+        forge_responses_text.contains("provider fixture used explicit model-backed adapter path")
     );
-    assert!(forge_responses_text.contains("VERIFY:"));
-    assert!(forge_responses_text.contains("WARNING:") || forge_responses_text.contains("OK:"));
 
     let forge_summary_text = std::fs::read_to_string(forged.join("forge_summary.yaml")).unwrap();
     let forge_summary_md = std::fs::read_to_string(forged.join("forge_summary.md")).unwrap();
@@ -698,34 +676,20 @@ fn compile_forge_review_and_agent_pack_workflow() {
         forge_summary_text.contains("provider: vegvisir")
             || forge_summary_text.contains("provider: \"vegvisir\"")
     );
-    assert!(forge_summary_text.contains("adapter_mode: deterministic fallback"));
-    assert!(forge_summary_text.contains("deterministic: true"));
-    assert!(forge_summary_text.contains("live_reasoning: false"));
+    assert!(forge_summary_text.contains("adapter_mode: external strict-envelope command"));
+    assert!(forge_summary_text.contains("deterministic: false"));
+    assert!(forge_summary_text.contains("live_reasoning: true"));
+    assert!(forge_summary_text.contains("model_provider: openai-sso"));
+    assert!(forge_summary_text.contains("model: gpt-5.5"));
     assert!(forge_summary_text.contains("pass_count: 10"));
     assert!(forge_summary_text.contains("pass_type: RegistryReadiness"));
     assert!(forge_summary_text.contains("required_human_review: true"));
     assert!(forge_summary_text.contains("review_finding_count:"));
     assert!(forge_summary_md.contains("# Forge Summary"));
-    assert!(forge_summary_md.contains("Provider mode: `deterministic fallback`"));
-    assert!(forge_summary_md.contains("Live reasoning: false"));
+    assert!(forge_summary_md.contains("Provider mode: `external strict-envelope command`"));
+    assert!(forge_summary_md.contains("Live reasoning: true"));
     assert!(forge_summary_md.contains("## Registry Readiness Notes"));
     assert!(forge_summary_md.contains("Human review required: true"));
-
-    let mut inferred_count = 0;
-    for entry in std::fs::read_dir(forged.join("skills")).unwrap() {
-        let path = entry.unwrap().path();
-        if path.extension().and_then(|s| s.to_str()) == Some("yaml") {
-            let skill_text = std::fs::read_to_string(path).unwrap();
-            if skill_text.contains("inferred-workflow") || skill_text.contains("inference_records:")
-            {
-                inferred_count += 1;
-            }
-        }
-    }
-    assert!(
-        inferred_count > 0,
-        "Forge did not store inferred/review records"
-    );
 
     let eval_output = Command::new(env!("CARGO_BIN_EXE_skiller"))
         .args(["eval", forged.to_str().unwrap()])
@@ -1313,27 +1277,32 @@ fn validation_rejects_invalid_stored_forge_history() {
             .unwrap()
             .success()
     );
+    let adapter = write_empty_provider_adapter(temp.path());
+    let forge = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "forge",
+            bundle.to_str().unwrap(),
+            "--out",
+            forged.to_str().unwrap(),
+            "--provider",
+            "vegvisir",
+            "--max-skills",
+            "1",
+        ])
+        .env("SKILLER_VEGVISIR_FORGE_ADAPTER", adapter.to_str().unwrap())
+        .output()
+        .unwrap();
     assert!(
-        Command::new(env!("CARGO_BIN_EXE_skiller"))
-            .args([
-                "forge",
-                bundle.to_str().unwrap(),
-                "--out",
-                forged.to_str().unwrap(),
-                "--provider",
-                "mock",
-                "--max-skills",
-                "1",
-            ])
-            .status()
-            .unwrap()
-            .success()
+        forge.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&forge.stdout),
+        String::from_utf8_lossy(&forge.stderr)
     );
 
     let responses_path = forged.join("forge_responses.yaml");
     let responses_text = std::fs::read_to_string(&responses_path).unwrap();
     let mut responses: serde_yaml::Value = serde_yaml::from_str(&responses_text).unwrap();
-    responses[0]["modified_items"][0]["confidence"]["raw"] = serde_yaml::Value::from(42.0);
+    responses[0]["request_id"] = serde_yaml::Value::from("wrong-request-id");
     std::fs::write(&responses_path, serde_yaml::to_string(&responses).unwrap()).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_skiller"))
@@ -1347,8 +1316,7 @@ fn validation_rejects_invalid_stored_forge_history() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        combined.contains("stored Forge response")
-            && combined.contains("must be between 0.0 and 1.0"),
+        combined.contains("stored Forge response wrong-request-id has no matching request"),
         "output was: {combined}"
     );
 }
@@ -1380,21 +1348,26 @@ fn validation_rejects_stale_forge_summary_artifacts() {
             .unwrap()
             .success()
     );
+    let adapter = write_empty_provider_adapter(temp.path());
+    let forge = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "forge",
+            bundle.to_str().unwrap(),
+            "--out",
+            forged.to_str().unwrap(),
+            "--provider",
+            "vegvisir",
+            "--max-skills",
+            "1",
+        ])
+        .env("SKILLER_VEGVISIR_FORGE_ADAPTER", adapter.to_str().unwrap())
+        .output()
+        .unwrap();
     assert!(
-        Command::new(env!("CARGO_BIN_EXE_skiller"))
-            .args([
-                "forge",
-                bundle.to_str().unwrap(),
-                "--out",
-                forged.to_str().unwrap(),
-                "--provider",
-                "mock",
-                "--max-skills",
-                "1",
-            ])
-            .status()
-            .unwrap()
-            .success()
+        forge.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&forge.stdout),
+        String::from_utf8_lossy(&forge.stderr)
     );
 
     let summary_path = forged.join("forge_summary.yaml");
@@ -2907,19 +2880,24 @@ fn forge_artifact_ids_are_deterministic_for_same_input() {
     let forged_a = temp.path().join("forged-a");
     let forged_b = temp.path().join("forged-b");
     for out in [&forged_a, &forged_b] {
+        let adapter = write_empty_provider_adapter(temp.path());
+        let forge = Command::new(env!("CARGO_BIN_EXE_skiller"))
+            .args([
+                "forge",
+                bundle.to_str().unwrap(),
+                "--out",
+                out.to_str().unwrap(),
+                "--provider",
+                "vegvisir",
+            ])
+            .env("SKILLER_VEGVISIR_FORGE_ADAPTER", adapter.to_str().unwrap())
+            .output()
+            .unwrap();
         assert!(
-            Command::new(env!("CARGO_BIN_EXE_skiller"))
-                .args([
-                    "forge",
-                    bundle.to_str().unwrap(),
-                    "--out",
-                    out.to_str().unwrap(),
-                    "--provider",
-                    "mock",
-                ])
-                .status()
-                .unwrap()
-                .success()
+            forge.status.success(),
+            "stdout={} stderr={}",
+            String::from_utf8_lossy(&forge.stdout),
+            String::from_utf8_lossy(&forge.stderr)
         );
     }
 
@@ -2969,24 +2947,16 @@ fn forge_artifact_ids_are_deterministic_for_same_input() {
     assert_eq!(response_ids_a, response_ids_b);
     assert_eq!(response_ids_a, request_ids_a);
 
-    let mut inference_ids = Vec::new();
-    for entry in std::fs::read_dir(forged_a.join("skills")).unwrap() {
-        let path = entry.unwrap().path();
-        if path.extension().and_then(|s| s.to_str()) != Some("yaml") {
-            continue;
-        }
-        let skill: serde_yaml::Value =
-            serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-        if let Some(records) = skill["inference_records"].as_sequence() {
-            inference_ids.extend(
-                records
-                    .iter()
-                    .filter_map(|record| record["inference_id"].as_str().map(|id| id.to_string())),
-            );
-        }
-    }
-    assert!(!inference_ids.is_empty());
-    assert!(inference_ids.iter().all(|id| id.starts_with("inf-")));
+    let provenance_a = requests_a.as_sequence().unwrap()[0]["provider_provenance"].clone();
+    assert_eq!(provenance_a["provider"].as_str(), Some("vegvisir"));
+    assert_eq!(provenance_a["model_provider"].as_str(), Some("openai-sso"));
+    assert_eq!(provenance_a["model"].as_str(), Some("gpt-5.5"));
+    assert_eq!(provenance_a["deterministic"].as_bool(), Some(false));
+    assert_eq!(provenance_a["live_reasoning"].as_bool(), Some(true));
+    assert_eq!(
+        provenance_a["adapter_mode"].as_str(),
+        Some("external strict-envelope command")
+    );
 }
 
 #[test]
@@ -3017,19 +2987,24 @@ fn validation_rejects_duplicate_stored_forge_request_ids() {
     );
 
     let forged = temp.path().join("forged");
+    let adapter = write_empty_provider_adapter(temp.path());
+    let forge = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "forge",
+            bundle.to_str().unwrap(),
+            "--out",
+            forged.to_str().unwrap(),
+            "--provider",
+            "vegvisir",
+        ])
+        .env("SKILLER_VEGVISIR_FORGE_ADAPTER", adapter.to_str().unwrap())
+        .output()
+        .unwrap();
     assert!(
-        Command::new(env!("CARGO_BIN_EXE_skiller"))
-            .args([
-                "forge",
-                bundle.to_str().unwrap(),
-                "--out",
-                forged.to_str().unwrap(),
-                "--provider",
-                "mock",
-            ])
-            .status()
-            .unwrap()
-            .success()
+        forge.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&forge.stdout),
+        String::from_utf8_lossy(&forge.stderr)
     );
 
     let requests_path = forged.join("forge_requests.yaml");
@@ -3277,21 +3252,26 @@ fn evidence_report_includes_trust_inference_tools_and_publication_warnings() {
             .success()
     );
     let forged = temp.path().join("forged");
+    let adapter = write_empty_provider_adapter(temp.path());
+    let forge = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "forge",
+            bundle.to_str().unwrap(),
+            "--out",
+            forged.to_str().unwrap(),
+            "--provider",
+            "vegvisir",
+            "--max-skills",
+            "1",
+        ])
+        .env("SKILLER_VEGVISIR_FORGE_ADAPTER", adapter.to_str().unwrap())
+        .output()
+        .unwrap();
     assert!(
-        Command::new(env!("CARGO_BIN_EXE_skiller"))
-            .args([
-                "forge",
-                bundle.to_str().unwrap(),
-                "--out",
-                forged.to_str().unwrap(),
-                "--provider",
-                "vegvisir",
-                "--max-skills",
-                "1",
-            ])
-            .status()
-            .unwrap()
-            .success()
+        forge.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&forge.stdout),
+        String::from_utf8_lossy(&forge.stderr)
     );
 
     let skill_path = std::fs::read_dir(forged.join("skills"))
@@ -3339,12 +3319,12 @@ fn evidence_report_includes_trust_inference_tools_and_publication_warnings() {
     assert!(stdout.contains("PrivateOnly"));
     assert!(stdout.contains("## Forge Provider Provenance"));
     assert!(stdout.contains("Forge requests:"));
-    assert!(stdout.contains("Live reasoning requests: 0"));
-    assert!(stdout.contains("Deterministic requests:"));
+    assert!(stdout.contains("Live reasoning requests:"));
+    assert!(stdout.contains("Deterministic requests: 0"));
     assert!(stdout.contains("### Providers"));
     assert!(stdout.contains("vegvisir"));
     assert!(stdout.contains("### Adapter Modes"));
-    assert!(stdout.contains("deterministic fallback"));
+    assert!(stdout.contains("external strict-envelope command"));
     assert!(stdout.contains("## Evidence Summary by Skill"));
     assert!(stdout.contains("### Citations"));
     assert!(stdout.contains("ownership=ok"));
@@ -3383,6 +3363,7 @@ fn registry_publish_writes_rich_provenance_and_index_lifecycle_metadata() {
     );
 
     let forged = temp.path().join("forged");
+    let adapter = write_empty_provider_adapter(temp.path());
     let forge = Command::new(env!("CARGO_BIN_EXE_skiller"))
         .args([
             "forge",
@@ -3392,6 +3373,7 @@ fn registry_publish_writes_rich_provenance_and_index_lifecycle_metadata() {
             "--provider",
             "vegvisir",
         ])
+        .env("SKILLER_VEGVISIR_FORGE_ADAPTER", adapter.to_str().unwrap())
         .output()
         .unwrap();
     assert!(
@@ -3451,14 +3433,14 @@ fn registry_publish_writes_rich_provenance_and_index_lifecycle_metadata() {
     assert!(provenance["forge_response_count"].as_u64().unwrap() > 0);
     assert_eq!(
         provenance["forge_live_reasoning_used"].as_bool(),
-        Some(false)
+        Some(true)
     );
     assert_eq!(
         provenance["forge_provider_summary"]["vegvisir"].as_u64(),
         Some(10)
     );
     assert_eq!(
-        provenance["forge_adapter_mode_summary"]["deterministic fallback"].as_u64(),
+        provenance["forge_adapter_mode_summary"]["external strict-envelope command"].as_u64(),
         Some(10)
     );
 
@@ -3505,7 +3487,7 @@ fn registry_publish_writes_rich_provenance_and_index_lifecycle_metadata() {
         "stdout was: {list_stdout}"
     );
     assert!(
-        list_stdout.contains("deterministic fallback"),
+        list_stdout.contains("external strict-envelope command"),
         "stdout was: {list_stdout}"
     );
     assert!(

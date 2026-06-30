@@ -15,8 +15,8 @@ The current root implementation is Rust. The earlier Python prototype is preserv
 - Bundle writing and loading using reviewable YAML artifacts.
 - Bundle validation, structural evals, readiness reports, and hash manifests.
 - Runtime routing and skill materialization.
-- Forge provider adapter layer with strict request/response envelopes, stored Forge audit artifacts, deterministic `mock` provider, and a `vegvisir` provider boundary for full Vegvisir integration.
-- Mock/local Forge pass for schema-safe enhancement, inference records, evidence reports, critique reports, and inferred workflow candidates.
+- Forge provider adapter layer with strict request/response envelopes, stored Forge audit artifacts, and a provider-backed `vegvisir` adapter boundary for full Vegvisir integration.
+- Deterministic local non-Forge helpers for inference records, evidence reports, critique reports, and workflow candidate scaffolding; public Forge execution requires a provider-backed Vegvisir adapter.
 - Built-in domain profile listing.
 - Agent profile proposal, proposal indexes, verified agent-pack handoff generation, pack manifests, build reports, and consolidated Agent Builder artifact indexes.
 - Filesystem registry publication with readiness gates, provenance, manifest verification, deprecation records, rollback markers, and refreshed registry indexes.
@@ -36,7 +36,7 @@ cargo run -- forge dist/example-skills --out dist/example-skills-forged --domain
 cargo run -- evidence-report dist/example-skills-forged
 
 
-Evidence reports for forged bundles include Forge provider provenance, including provider name, deterministic/live mode, and adapter mode, so reviewers can tell whether output came from deterministic fallback or a configured live adapter.
+Evidence reports for forged bundles include Forge provider provenance, including provider name, target model, live mode, and adapter mode, so reviewers can confirm output came from a configured provider-backed adapter.
 cargo run -- propose-agents dist/example-skills-forged --out dist/agents
 cargo run -- verify-agent-proposals dist/agents
 cargo run -- build-agent-pack dist/example-skills-forged --agent "Cluster Diagnostic Agent" --out dist/cluster-agent --report dist/cluster-agent-build-report.yaml
@@ -62,7 +62,7 @@ skiller route <bundle> <query>
 skiller load <bundle> <skill-id> --mode card|body|extended
 skiller eval <bundle>
 skiller suspicious-commands <bundle>
-skiller forge <bundle> --out <bundle> [--provider mock|vegvisir] [--domain-profile <profile>]
+skiller forge <bundle> --out <bundle> [--provider vegvisir] [--domain-profile <profile>]
 skiller forge-request <bundle> --out <request.yaml> [--pass <pass>] [--domain-profile <profile>]
 skiller forge-handoff <bundle> --out <dir> [--pass <pass>] [--domain-profile <profile>]
 skiller forge-validate <bundle> --request <request.yaml> --response <response.yaml> [--report <report.yaml>]
@@ -155,7 +155,7 @@ Skiller includes a compact deterministic diagnostic for common non-model extract
 skiller suspicious-commands dist/example-skills
 ```
 
-The report summarizes suspicious `CliOperation` targets, weak source-fragment titles, and whether Forge history indicates deterministic fallback instead of live provider review. This is intended for quick triage without dumping full bundle YAML into an agent conversation.
+The report summarizes suspicious `CliOperation` targets, weak source-fragment titles, and whether Forge history lacks live provider-backed review. This is intended for quick triage without dumping full bundle YAML into an agent conversation.
 
 ## Vegvisir integration
 
@@ -163,7 +163,7 @@ Skiller is designed so Vegvisir provides the AI reasoning layer. The Rust CLI no
 
 - `ForgeRequestEnvelope` contains bundle metadata, selected source-section packets, candidate skills, citation IDs, graph context, pass instruction, output schema, token budget, and risk policy.
 - `ForgeResponseEnvelope` contains generated skills, modified skills, review findings, confidence updates, evidence records, human-review requirements, and audit notes.
-- `--provider vegvisir` uses the Vegvisir adapter path and writes the same strict request/response artifacts as `--provider mock`. The current adapter is deterministic until Skiller is wired into Vegvisir as a first-class local tool/provider.
+- `--provider vegvisir` requires a configured Vegvisir adapter path. Skiller Forge fails instead of using deterministic fallback when `SKILLER_VEGVISIR_FORGE_ADAPTER` is missing or invalid. The default provider/model target for Forge handoff is `openai-sso:gpt-5.5`.
 - Forge responses are validated before being applied: citation/section references must exist, new skills need inference records, secret-like material is rejected, and mutating external-system policy must require approval.
 
 Example:
@@ -365,9 +365,9 @@ skiller forge-provider-status
 skiller forge-provider-status --provider vegvisir
 ```
 
-The current `vegvisir` Forge provider is a structured-envelope adapter. When no live adapter is configured, it uses deterministic strict-envelope fallback behavior.
+The current `vegvisir` Forge provider is a structured-envelope adapter that must be backed by a provider model. When no live adapter is configured, `skiller forge` fails; use `forge-request`/`forge-handoff` for external Vegvisir execution or configure `SKILLER_VEGVISIR_FORGE_ADAPTER`.
 
-After deterministic generation, Skiller's default Vegvisir handoff treats the generated bundle as a draft only: the model prompt now embeds a Skiller-specialized Vegvisir system prompt and asks the model to enhance, expand, clean up, validate, and verify skills before the bundle is considered agent-ready. Tooling exposes this as the default `SkillExpansion` Forge pass plus explicit `forge_system_prompt` / `system_prompt` metadata for provider adapters.
+After deterministic generation, Skiller's default Vegvisir handoff targets `openai-sso:gpt-5.5` and treats the generated bundle as a draft only: the model prompt now embeds a Skiller-specialized Vegvisir system prompt and asks the model to enhance, expand, clean up, validate, and verify skills before the bundle is considered agent-ready. Tooling exposes this as the default `SkillExpansion` Forge pass plus explicit `forge_system_prompt` / `system_prompt` metadata for provider adapters.
 
 To configure a Vegvisir-managed live adapter:
 

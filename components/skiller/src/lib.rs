@@ -145,7 +145,7 @@ enum Commands {
         bundle: PathBuf,
         #[arg(long)]
         out: PathBuf,
-        #[arg(long, default_value = "mock")]
+        #[arg(long, default_value = "vegvisir")]
         provider: String,
         #[arg(long)]
         domain_profile: Option<String>,
@@ -477,7 +477,7 @@ fn semantic_diagnostic_report(bundle: &models::SkillBundle) -> SemanticDiagnosti
             skill_id: None,
             title: None,
             target_command: None,
-            reason: "provider semantic review was not performed; Forge history used deterministic fallback or lacks live provider provenance".into(),
+            reason: "provider semantic review was not performed; Forge history lacks live provider-backed provenance".into(),
         });
     }
 

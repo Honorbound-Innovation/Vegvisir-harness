@@ -205,7 +205,7 @@ fn validation_rejects_legacy_suspicious_cli_operation() {
 }
 
 #[test]
-fn vegvisir_forge_fallback_marks_provider_review_absent() {
+fn vegvisir_forge_requires_provider_backed_model_when_adapter_missing() {
     let temp = tempdir().unwrap();
     let help = temp.path().join("deployctl-help.txt");
     std::fs::write(
@@ -241,25 +241,18 @@ fn vegvisir_forge_fallback_marks_provider_review_absent() {
         ])
         .output()
         .unwrap();
+    assert!(!forge.status.success());
+    let stderr = String::from_utf8_lossy(&forge.stderr);
     assert!(
-        forge.status.success(),
-        "stdout={} stderr={}",
-        String::from_utf8_lossy(&forge.stdout),
-        String::from_utf8_lossy(&forge.stderr)
+        stderr.contains("provider-backed model execution")
+            || stderr.contains("provider vegvisir is not live"),
+        "{stderr}"
     );
-
-    let responses = std::fs::read_to_string(forged.join("forge_responses.yaml")).unwrap();
+    assert!(stderr.contains("openai-sso:gpt-5.5"), "{stderr}");
     assert!(
-        responses.contains("semantic_review: deterministic_fallback_only"),
-        "{responses}"
+        !forged.exists(),
+        "forge output should not be written without provider model"
     );
-    assert!(
-        responses.contains("provider_reviewed: 'false'")
-            || responses.contains("provider_reviewed: \"false\""),
-        "{responses}"
-    );
-    let summary = std::fs::read_to_string(forged.join("forge_summary.yaml")).unwrap();
-    assert!(summary.contains("live_reasoning: false"), "{summary}");
 }
 
 #[test]

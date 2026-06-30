@@ -428,6 +428,10 @@ pub struct ForgeRequestEnvelope {
     pub request_id: String,
     pub provider: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_provenance: Option<crate::forge::ForgeProviderProvenance>,
     pub pass_type: ForgePassType,
     pub bundle_id: String,

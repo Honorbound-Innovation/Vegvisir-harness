@@ -47,6 +47,10 @@ pub struct ForgePassSummary {
 pub struct ForgeProviderProvenance {
     pub provider: String,
     pub provider_display_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     pub deterministic: bool,
     pub live_reasoning: bool,
     pub adapter_mode: String,
@@ -287,6 +291,8 @@ fn push_unique_string(values: &mut Vec<String>, value: String) {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ForgeProviderCatalog {
     pub default_provider: String,
+    pub default_model_provider: String,
+    pub default_model: String,
     pub providers: Vec<ForgeProviderStatus>,
 }
 
@@ -295,6 +301,8 @@ pub struct ForgeProviderStatus {
     pub name: String,
     pub display_name: String,
     pub available: bool,
+    pub default_model_provider: Option<String>,
+    pub default_model: Option<String>,
     pub deterministic: bool,
     pub live_reasoning: bool,
     pub structured_envelope: bool,
@@ -348,8 +356,10 @@ pub struct ForgeAdapterSelfTestReport {
 
 pub fn provider_catalog() -> ForgeProviderCatalog {
     ForgeProviderCatalog {
-        default_provider: "mock".into(),
-        providers: vec![mock_provider_status(), vegvisir_provider_status()],
+        default_provider: "vegvisir".into(),
+        default_model_provider: DEFAULT_FORGE_MODEL_PROVIDER.into(),
+        default_model: DEFAULT_FORGE_MODEL.into(),
+        providers: vec![vegvisir_provider_status()],
     }
 }
 
@@ -367,6 +377,8 @@ fn provider_provenance_for(name: Option<&str>) -> Option<ForgeProviderProvenance
     Some(ForgeProviderProvenance {
         provider: status.name,
         provider_display_name: status.display_name,
+        model_provider: status.default_model_provider,
+        model: status.default_model,
         deterministic: status.deterministic,
         live_reasoning: status.live_reasoning,
         adapter_mode: status.adapter_mode,
@@ -395,36 +407,12 @@ fn all_forge_passes() -> Vec<ForgePassType> {
     ]
 }
 
-fn mock_provider_status() -> ForgeProviderStatus {
-    ForgeProviderStatus {
-        name: "mock".into(),
-        display_name: "Deterministic local Forge provider".into(),
-        available: true,
-        deterministic: true,
-        live_reasoning: false,
-        structured_envelope: true,
-        secret_safe: true,
-        supported_passes: all_forge_passes(),
-        adapter_command_configured: false,
-        adapter_command_env: None,
-        adapter_command: None,
-        adapter_mode: "in-process deterministic".into(),
-        adapter_timeout_secs: None,
-        adapter_timeout_env: None,
-        adapter_preflight_ok: None,
-        adapter_preflight_errors: vec![],
-        required_setup: vec![],
-        caveats: vec![
-            "Uses deterministic rule-based refinement; does not call an AI model.".into(),
-            "Useful for tests, dry runs, GUI integration, and local governance validation.".into(),
-        ],
-    }
-}
-
 pub const VEGVISIR_FORGE_ADAPTER_COMMAND_ENV: &str = "SKILLER_VEGVISIR_FORGE_ADAPTER";
 pub const VEGVISIR_FORGE_ADAPTER_TIMEOUT_ENV: &str = "SKILLER_VEGVISIR_FORGE_ADAPTER_TIMEOUT_SECS";
 const DEFAULT_VEGVISIR_FORGE_ADAPTER_TIMEOUT_SECS: u64 = 120;
 const MAX_VEGVISIR_FORGE_ADAPTER_TIMEOUT_SECS: u64 = 900;
+pub const DEFAULT_FORGE_MODEL_PROVIDER: &str = "openai-sso";
+pub const DEFAULT_FORGE_MODEL: &str = "gpt-5.5";
 
 fn vegvisir_adapter_command_configured() -> bool {
     std::env::var_os(VEGVISIR_FORGE_ADAPTER_COMMAND_ENV).is_some()
@@ -446,12 +434,12 @@ pub fn vegvisir_adapter_preflight_report() -> ForgeAdapterPreflightReport {
         "adapter timeout parsed and bounded".to_string(),
     ];
     let mut errors = Vec::new();
-    let mut warnings = Vec::new();
+    let warnings = Vec::new();
 
     match (&configured, &command) {
         (false, _) => {
-            warnings.push(format!(
-                "{VEGVISIR_FORGE_ADAPTER_COMMAND_ENV} is not set; vegvisir provider will use deterministic fallback"
+            errors.push(format!(
+                "{VEGVISIR_FORGE_ADAPTER_COMMAND_ENV} is not set; Skiller Forge requires a provider-backed Vegvisir adapter using {DEFAULT_FORGE_MODEL_PROVIDER}:{DEFAULT_FORGE_MODEL}"
             ));
         }
         (true, None) => {
@@ -534,19 +522,21 @@ fn vegvisir_provider_status() -> ForgeProviderStatus {
     } else {
         required_setup.push(
             format!(
-                "Set {VEGVISIR_FORGE_ADAPTER_COMMAND_ENV} to a Vegvisir-managed adapter command for live reasoning."
+                "Set {VEGVISIR_FORGE_ADAPTER_COMMAND_ENV} to a Vegvisir-managed adapter command that invokes {DEFAULT_FORGE_MODEL_PROVIDER}:{DEFAULT_FORGE_MODEL}."
             ),
         );
         caveats.push(
-            "No external adapter command is configured; provider uses deterministic local refinement while preserving Vegvisir-generated-agent metadata.".into(),
+            "No external adapter command is configured; Skiller Forge will fail rather than using deterministic fallback.".into(),
         );
     }
 
     ForgeProviderStatus {
         name: "vegvisir".into(),
         display_name: "Vegvisir structured-envelope Forge adapter".into(),
-        available: !adapter_command_configured || adapter_preflight_ok,
-        deterministic: !adapter_command_configured,
+        available: adapter_command_configured && adapter_preflight_ok,
+        default_model_provider: Some(DEFAULT_FORGE_MODEL_PROVIDER.into()),
+        default_model: Some(DEFAULT_FORGE_MODEL.into()),
+        deterministic: false,
         live_reasoning: adapter_command_configured && adapter_preflight_ok,
         structured_envelope: true,
         secret_safe: true,
@@ -561,7 +551,7 @@ fn vegvisir_provider_status() -> ForgeProviderStatus {
                 "external strict-envelope command (preflight failed)".into()
             }
         } else {
-            "deterministic fallback".into()
+            "provider model required; adapter not configured".into()
         },
         adapter_timeout_secs: Some(preflight.adapter_timeout_secs),
         adapter_timeout_env: Some(VEGVISIR_FORGE_ADAPTER_TIMEOUT_ENV.into()),
@@ -689,18 +679,17 @@ impl ForgeProvider for VegvisirForgeProvider {
     }
 
     fn run_pass(&self, request: &ForgeRequestEnvelope) -> Result<ForgeResponseEnvelope> {
-        if vegvisir_adapter_command_configured() {
-            return run_vegvisir_adapter_command(request);
+        if !vegvisir_adapter_command_configured() {
+            bail!(
+                "Skiller Forge requires provider-backed model execution; {VEGVISIR_FORGE_ADAPTER_COMMAND_ENV} is not configured. Default target is {DEFAULT_FORGE_MODEL_PROVIDER}:{DEFAULT_FORGE_MODEL}. Use forge-request/forge-handoff for external Vegvisir execution or configure a Vegvisir-managed adapter command."
+            );
         }
 
-        // This is the stable in-process adapter boundary for Vegvisir runtime integration.
-        // It intentionally accepts and returns strict envelopes, avoids plaintext credentials,
-        // and falls back to deterministic behavior unless an explicit Vegvisir-managed adapter
-        // command is configured through SKILLER_VEGVISIR_FORGE_ADAPTER.
-        let mock = MockForgeProvider;
-        let mut response = mock.run_pass(request)?;
+        let mut response = run_vegvisir_adapter_command(request)?;
         for record in &mut response.evidence_records {
-            record.generated_by_agent = "vegvisir".into();
+            if record.generated_by_agent.trim().is_empty() {
+                record.generated_by_agent = "vegvisir".into();
+            }
         }
         for skill in response
             .modified_items
@@ -708,32 +697,34 @@ impl ForgeProvider for VegvisirForgeProvider {
             .chain(response.generated_items.iter_mut())
         {
             for record in &mut skill.inference_records {
-                record.generated_by_agent = "vegvisir".into();
+                if record.generated_by_agent.trim().is_empty() {
+                    record.generated_by_agent = "vegvisir".into();
+                }
             }
             for script in &mut skill.scripts {
-                script.generated_by = "vegvisir".into();
+                if script.generated_by.trim().is_empty() {
+                    script.generated_by = "vegvisir".into();
+                }
             }
-            skill.metadata.insert(
-                "forge_provider".into(),
-                "vegvisir-adapter-structured-envelope".into(),
-            );
-        }
-        for skill in response
-            .modified_items
-            .iter_mut()
-            .chain(response.generated_items.iter_mut())
-        {
             skill
                 .metadata
-                .insert("provider_reviewed".into(), "false".into());
-            skill.metadata.insert(
-                "semantic_review".into(),
-                "deterministic_fallback_only".into(),
-            );
+                .insert("forge_provider".into(), "vegvisir-provider-model".into());
+            skill
+                .metadata
+                .insert("provider_reviewed".into(), "true".into());
+            skill
+                .metadata
+                .insert("semantic_review".into(), "provider_model".into());
+            skill
+                .metadata
+                .insert("model_provider".into(), DEFAULT_FORGE_MODEL_PROVIDER.into());
+            skill
+                .metadata
+                .insert("model".into(), DEFAULT_FORGE_MODEL.into());
         }
-        response.audit_notes.push(
-            "Vegvisir adapter used structured request/response envelope with deterministic fallback; provider_reviewed=false and semantic_review=deterministic_fallback_only. Configure SKILLER_VEGVISIR_FORGE_ADAPTER for live external reasoning.".into(),
-        );
+        response.audit_notes.push(format!(
+            "Vegvisir adapter returned provider-backed ForgeResponseEnvelope; default model target {DEFAULT_FORGE_MODEL_PROVIDER}:{DEFAULT_FORGE_MODEL}."
+        ));
         Ok(response)
     }
 }
@@ -899,6 +890,8 @@ fn minimal_adapter_self_test_bundle_and_request() -> (SkillBundle, ForgeRequestE
     let request = ForgeRequestEnvelope {
         request_id: stable_id("forge-adapter-self-test", "vegvisir:strict-envelope"),
         provider: "vegvisir".into(),
+        model_provider: Some(DEFAULT_FORGE_MODEL_PROVIDER.into()),
+        model: Some(DEFAULT_FORGE_MODEL.into()),
         provider_provenance: provider_provenance_for(Some("vegvisir")),
         pass_type: ForgePassType::Interpretation,
         bundle_id: bundle.package.bundle_id.clone(),
@@ -1065,6 +1058,24 @@ fn run_vegvisir_adapter_command(request: &ForgeRequestEnvelope) -> Result<ForgeR
     Ok(response)
 }
 
+fn ensure_provider_backed_forge_provider(provider: &str) -> Result<()> {
+    match provider {
+        "vegvisir" => {
+            let status = vegvisir_provider_status();
+            if !status.live_reasoning {
+                bail!(
+                    "Skiller Forge requires provider-backed model execution; provider vegvisir is not live. Configure {VEGVISIR_FORGE_ADAPTER_COMMAND_ENV} with an executable adapter that invokes {DEFAULT_FORGE_MODEL_PROVIDER}:{DEFAULT_FORGE_MODEL}."
+                );
+            }
+            Ok(())
+        }
+        "mock" | "local" => bail!(
+            "deterministic Forge provider `{provider}` is disabled for Forge; Forge must be backed by provider model {DEFAULT_FORGE_MODEL_PROVIDER}:{DEFAULT_FORGE_MODEL}"
+        ),
+        other => bail!("unsupported forge provider `{other}`"),
+    }
+}
+
 pub fn forge_bundle(
     mut bundle: SkillBundle,
     provider: &str,
@@ -1088,20 +1099,38 @@ pub fn forge_bundle(
 }
 
 pub fn infer_bundle(mut bundle: SkillBundle) -> Result<SkillBundle> {
-    run_forge_passes(
-        &mut bundle,
-        "mock",
-        None,
-        100,
-        &[ForgePassType::SkillInference],
-    )?;
-    bundle
-        .audit_events
-        .push(compiler::audit("infer", "inference pass completed"));
+    if bundle.skills.len() >= 2 {
+        let request = build_request(
+            &bundle,
+            "local-infer",
+            ForgePassType::SkillInference,
+            None,
+            100,
+        );
+        let inferred = inferred_skill_from_request(&request, "local-infer");
+        if bundle.skills.iter().all(|skill| skill.id != inferred.id) {
+            bundle.skills.push(inferred);
+        }
+    }
+    bundle.audit_events.push(compiler::audit(
+        "infer",
+        "local deterministic inference completed without Forge provider history",
+    ));
     Ok(bundle)
 }
 
 pub fn run_forge_passes(
+    bundle: &mut SkillBundle,
+    provider: &str,
+    domain_profile: Option<&str>,
+    max_skills: usize,
+    passes: &[ForgePassType],
+) -> Result<()> {
+    ensure_provider_backed_forge_provider(provider)?;
+    run_forge_passes_unchecked(bundle, provider, domain_profile, max_skills, passes)
+}
+
+fn run_forge_passes_unchecked(
     bundle: &mut SkillBundle,
     provider: &str,
     domain_profile: Option<&str>,
@@ -1269,6 +1298,8 @@ pub fn build_request(
     ForgeRequestEnvelope {
         request_id: stable_forge_request_id(bundle, provider, &pass_type, max_skills),
         provider: provider.into(),
+        model_provider: Some(DEFAULT_FORGE_MODEL_PROVIDER.into()),
+        model: Some(DEFAULT_FORGE_MODEL.into()),
         provider_provenance: provider_provenance_for(Some(provider)),
         pass_type: pass_type.clone(),
         bundle_id: bundle.package.bundle_id.clone(),

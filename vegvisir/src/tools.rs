@@ -153,6 +153,15 @@ fn add_skiller_forge_observation_data(
     response_template: Value,
 ) {
     data.insert("forge_required_by_default".to_string(), json!(true));
+    data.insert("forge_requires_provider_model".to_string(), json!(true));
+    data.insert(
+        "default_forge_model_provider".to_string(),
+        json!(skiller_forge::DEFAULT_FORGE_MODEL_PROVIDER),
+    );
+    data.insert(
+        "default_forge_model".to_string(),
+        json!(skiller_forge::DEFAULT_FORGE_MODEL),
+    );
     data.insert(
         "default_forge_pass".to_string(),
         json!(format!("{:?}", forge_request.pass_type)),
@@ -1565,7 +1574,7 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
                     if fallback_only_forge {
                         findings.push(json!({
                             "kind": "forge_provider_review",
-                            "reason": "provider semantic review was not performed; Forge history used deterministic fallback or lacks live provider provenance",
+                            "reason": "provider semantic review was not performed; Forge history lacks live provider-backed provenance",
                         }));
                     }
                     let report = json!({
@@ -1776,7 +1785,7 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
                     data.insert("request".to_string(), serde_json::to_value(&request).unwrap_or(Value::Null));
                     data.insert("response_template".to_string(), serde_json::to_value(&template).unwrap_or(Value::Null));
                     data.insert("prompt".to_string(), json!(prompt));
-                    Observation { ok: true, content: prompt, data, error: None }
+                    Observation { ok: true, content: format!("Default Forge model target: {}:{}\n\n{}", skiller_forge::DEFAULT_FORGE_MODEL_PROVIDER, skiller_forge::DEFAULT_FORGE_MODEL, prompt), data, error: None }
                 }
                 Err(error) => Observation::err(error.to_string(), "SkillerForgeRequestError"),
             }

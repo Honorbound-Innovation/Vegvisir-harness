@@ -610,7 +610,7 @@ pub fn readiness_report(bundle: &SkillBundle) -> ReadinessReport {
             .unwrap_or_else(|| request.provider.eq_ignore_ascii_case("vegvisir"))
     }) {
         blockers.push(
-            "provider semantic review not performed; Forge history used deterministic fallback or lacks live provider provenance".into(),
+            "provider semantic review not performed; Forge history lacks live provider-backed provenance".into(),
         );
     }
     for s in &bundle.skills {
