@@ -188,6 +188,104 @@ print("audit_notes: []")
 }
 
 #[test]
+fn import_skill_cli_skips_raw_generation_and_scaffolds_review_artifacts() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("skills.yaml");
+    std::fs::write(
+        &input,
+        r#"skills:
+- id: imported-release-check
+  title: Imported Release Check
+  summary: Verify a release candidate before publication.
+  procedure:
+    - Run the existing release checklist.
+    - Collect test evidence before publishing.
+  guardrails:
+    - Do not publish without human approval.
+  runtime_policy:
+    conceptual_answer: true
+    recommend_commands: true
+    run_read_only_commands: true
+    modify_files: false
+    modify_external_systems: false
+    requires_user_approval: true
+    requires_backup_or_rollback: false
+    handles_secrets: false
+    handles_licensed_source: false
+"#,
+    )
+    .unwrap();
+    let out = temp.path().join("imported-bundle");
+
+    let import = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "import-skill",
+            input.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--name",
+            "imported-release",
+            "--domain",
+            "release-management",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        import.status.success(),
+        "stdout={}
+stderr={}",
+        String::from_utf8_lossy(&import.stdout),
+        String::from_utf8_lossy(&import.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&import.stdout).contains("wrote imported skill bundle"),
+        "{}",
+        String::from_utf8_lossy(&import.stdout)
+    );
+
+    let validate = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["validate", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        validate.status.success(),
+        "stdout={}
+stderr={}",
+        String::from_utf8_lossy(&validate.stdout),
+        String::from_utf8_lossy(&validate.stderr)
+    );
+
+    let package_text = std::fs::read_to_string(out.join("package.yaml")).unwrap();
+    assert!(
+        package_text.contains("import_mode: pre_existing_skill"),
+        "{package_text}"
+    );
+    assert!(
+        package_text.contains("deterministic_generation: skipped"),
+        "{package_text}"
+    );
+    assert!(
+        package_text.contains("post_import_pipeline:"),
+        "{package_text}"
+    );
+
+    let skill_text =
+        std::fs::read_to_string(out.join("skills/imported-release-check.yaml")).unwrap();
+    assert!(
+        skill_text.contains("import_mode: pre_existing_skill"),
+        "{skill_text}"
+    );
+    assert!(
+        skill_text.contains("deterministic_generation: skipped"),
+        "{skill_text}"
+    );
+    assert!(skill_text.contains("SourceGrounding"), "{skill_text}");
+    assert!(skill_text.contains("Routing"), "{skill_text}");
+    assert!(skill_text.contains("ToolUsePlanning"), "{skill_text}");
+    assert!(skill_text.contains("citations:"), "{skill_text}");
+}
+
+#[test]
 #[cfg(unix)]
 fn vegvisir_forge_provider_uses_configured_strict_envelope_adapter() {
     let temp = tempdir().unwrap();

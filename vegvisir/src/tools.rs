@@ -11,7 +11,10 @@ use std::{
 };
 
 use chrono::Utc;
-use msp_client::{LoadMode as MspLoadMode, MspClient, SearchRequest as MspSearchRequest};
+use msp_client::{
+    ImportSkillerBundleRequest as MspImportSkillerBundleRequest, LoadMode as MspLoadMode,
+    MspClient, SearchRequest as MspSearchRequest,
+};
 use serde_json::{Map, Value, json};
 use skiller::{
     compiler, forge as skiller_forge,
@@ -73,6 +76,9 @@ fn parse_skiller_forge_pass(value: Option<&str>) -> anyhow::Result<ForgePassType
         "deduplication_and_scope" | "deduplication-and-scope" | "DeduplicationAndScope" => {
             Ok(ForgePassType::DeduplicationAndScope)
         }
+        "script_generation" | "script-generation" | "ScriptGeneration" => {
+            Ok(ForgePassType::ScriptGeneration)
+        }
         other => anyhow::bail!("Unsupported Skiller Forge pass: {other}"),
     }
 }
@@ -115,6 +121,64 @@ fn extract_fenced_yaml(text: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn skiller_bundle_handoff_observation_data(
+    bundle: &skiller::models::SkillBundle,
+    pass: ForgePassType,
+    domain: Option<&str>,
+) -> (ForgeRequestEnvelope, String, String, Value) {
+    let skill_count = bundle.skills.len();
+    let forge_request =
+        skiller_forge::build_vegvisir_handoff(bundle, pass, domain, skill_count.clamp(1, 100));
+    let forge_system_prompt =
+        skiller_forge::skiller_specialized_vegvisir_system_prompt().to_string();
+    let forge_prompt = skiller_forge::vegvisir_prompt_markdown(&forge_request);
+    let response_template =
+        serde_json::to_value(skiller_forge::response_template_for(&forge_request))
+            .unwrap_or(Value::Null);
+    (
+        forge_request,
+        forge_system_prompt,
+        forge_prompt,
+        response_template,
+    )
+}
+
+fn add_skiller_forge_observation_data(
+    data: &mut Map<String, Value>,
+    forge_request: &ForgeRequestEnvelope,
+    forge_system_prompt: String,
+    forge_prompt: String,
+    response_template: Value,
+) {
+    data.insert("forge_required_by_default".to_string(), json!(true));
+    data.insert(
+        "default_forge_pass".to_string(),
+        json!(format!("{:?}", forge_request.pass_type)),
+    );
+    data.insert(
+        "forge_request_id".to_string(),
+        json!(forge_request.request_id),
+    );
+    data.insert(
+        "forge_default_objective".to_string(),
+        json!(skiller_forge::skiller_default_forge_objective()),
+    );
+    data.insert(
+        "forge_system_prompt".to_string(),
+        json!(forge_system_prompt),
+    );
+    data.insert(
+        "forge_request".to_string(),
+        serde_json::to_value(forge_request).unwrap_or(Value::Null),
+    );
+    data.insert("forge_response_template".to_string(), response_template);
+    data.insert("forge_prompt".to_string(), json!(forge_prompt));
+    data.insert(
+        "recommended_apply_tool".to_string(),
+        json!("skiller_forge_apply"),
+    );
 }
 
 fn compact_excerpt(text: &str, max_chars: usize) -> String {
@@ -937,6 +1001,88 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
         false,
     ))?;
 
+    let msp_import_skiller_sandbox = sandbox.clone();
+    registry.register(Tool::new(
+        "msp_client_import_skiller",
+        "Import a current Skiller bundle into a local MSP registry through Vegvisir's native MSP client component.",
+        Arc::new(move |args| {
+            let Some(bundle) = args.get("bundle").and_then(Value::as_str) else {
+                return Observation::err("Missing bundle", "ValueError");
+            };
+            let Some(issuer) = args.get("issuer").and_then(Value::as_str) else {
+                return Observation::err("Missing issuer", "ValueError");
+            };
+            let registry_path = msp_registry_path(&args, &msp_import_skiller_sandbox.root);
+            let registry_path = match msp_import_skiller_sandbox.resolve(&registry_path) {
+                Ok(path) => path,
+                Err(error) => return Observation::err(error.to_string(), "SandboxViolation"),
+            };
+            let bundle_path = match msp_import_skiller_sandbox.resolve(bundle) {
+                Ok(path) => path,
+                Err(error) => return Observation::err(error.to_string(), "SandboxViolation"),
+            };
+            let signing_key = match args.get("signing_key").and_then(Value::as_str) {
+                Some(path) if !path.trim().is_empty() => match msp_import_skiller_sandbox.resolve(path) {
+                    Ok(path) => Some(path),
+                    Err(error) => return Observation::err(error.to_string(), "SandboxViolation"),
+                },
+                _ => None,
+            };
+            let request = MspImportSkillerBundleRequest {
+                bundle: bundle_path,
+                issuer: issuer.to_string(),
+                force: args.get("force").and_then(Value::as_bool).unwrap_or(false),
+                allow_mutable_version: args
+                    .get("allow_mutable_version")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                signing_key,
+                deprecation: msp_client::msp_publisher::PublicationDeprecation {
+                    deprecated: args.get("deprecated").and_then(Value::as_bool).unwrap_or(false),
+                    reason: args
+                        .get("deprecation_reason")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    skill_replacement: args
+                        .get("replacement_skill")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    pack_replacement: args
+                        .get("replacement_pack")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    sunset_at: args
+                        .get("sunset_at")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                },
+            };
+            match MspClient::open(&registry_path)
+                .and_then(|client| client.import_skiller_bundle(request))
+            {
+                Ok(response) => msp_json_observation(response),
+                Err(error) => Observation::err(error.to_string(), "MspImportSkillerError"),
+            }
+        }),
+        json!({
+            "required": ["bundle", "issuer"],
+            "properties": {
+                "registry": "string",
+                "bundle": "string",
+                "issuer": "string",
+                "force": "boolean",
+                "allow_mutable_version": "boolean",
+                "signing_key": "string",
+                "deprecated": "boolean",
+                "deprecation_reason": "string",
+                "replacement_skill": "string",
+                "replacement_pack": "string",
+                "sunset_at": "string"
+            }
+        }),
+        true,
+    ))?;
+
     let msp_client_load_sandbox = sandbox.clone();
     registry.register(Tool::new(
         "msp_client_load",
@@ -1170,15 +1316,8 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
                 let bundle_id = bundle.package.bundle_id.clone();
                 let skill_count = bundle.skills.len();
                 let source_count = bundle.sources.len();
-                let forge_request = skiller_forge::build_vegvisir_handoff(
-                    &bundle,
-                    ForgePassType::SkillExpansion,
-                    domain,
-                    skill_count.clamp(1, 100),
-                );
-                let forge_system_prompt = skiller_forge::skiller_specialized_vegvisir_system_prompt().to_string();
-                let forge_prompt = skiller_forge::vegvisir_prompt_markdown(&forge_request);
-                let response_template = skiller_forge::response_template_for(&forge_request);
+                let (forge_request, forge_system_prompt, forge_prompt, response_template) =
+                    skiller_bundle_handoff_observation_data(&bundle, ForgePassType::SkillExpansion, domain);
                 skiller_registry::write_bundle(&bundle, &out_path)?;
                 Ok((bundle_id, skill_count, source_count, forge_request, forge_system_prompt, forge_prompt, response_template))
             }) {
@@ -1190,15 +1329,7 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
                     data.insert("source_count".to_string(), json!(source_count));
                     data.insert("out".to_string(), json!(out));
                     data.insert("deterministic_stage".to_string(), json!(true));
-                    data.insert("forge_required_by_default".to_string(), json!(true));
-                    data.insert("default_forge_pass".to_string(), json!("SkillExpansion"));
-                    data.insert("forge_request_id".to_string(), json!(request_id));
-                    data.insert("forge_default_objective".to_string(), json!(skiller_forge::skiller_default_forge_objective()));
-                    data.insert("forge_system_prompt".to_string(), json!(forge_system_prompt));
-                    data.insert("forge_request".to_string(), serde_json::to_value(&forge_request).unwrap_or(Value::Null));
-                    data.insert("forge_response_template".to_string(), serde_json::to_value(&response_template).unwrap_or(Value::Null));
-                    data.insert("forge_prompt".to_string(), json!(forge_prompt));
-                    data.insert("recommended_apply_tool".to_string(), json!("skiller_forge_apply"));
+                    add_skiller_forge_observation_data(&mut data, &forge_request, forge_system_prompt, forge_prompt, response_template);
                     Observation { ok: true, content: format!("Compiled deterministic Skiller draft bundle {bundle_id} to {out} ({skill_count} skills, {source_count} sources). Forge refinement is required by default before treating this as agent-ready: use the included ForgeRequestEnvelope ({request_id}) as model context, then apply the model's ForgeResponseEnvelope with skiller_forge_apply."), data, error: None }
                 }
                 Err(error) => Observation::err(error.to_string(), "SkillerCompileError"),
@@ -1223,15 +1354,8 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
                 let bundle_id = bundle.package.bundle_id.clone();
                 let skill_count = bundle.skills.len();
                 let source_count = bundle.sources.len();
-                let forge_request = skiller_forge::build_vegvisir_handoff(
-                    &bundle,
-                    ForgePassType::SkillExpansion,
-                    domain,
-                    skill_count.clamp(1, 100),
-                );
-                let forge_system_prompt = skiller_forge::skiller_specialized_vegvisir_system_prompt().to_string();
-                let forge_prompt = skiller_forge::vegvisir_prompt_markdown(&forge_request);
-                let response_template = skiller_forge::response_template_for(&forge_request);
+                let (forge_request, forge_system_prompt, forge_prompt, response_template) =
+                    skiller_bundle_handoff_observation_data(&bundle, ForgePassType::SkillExpansion, domain);
                 skiller_registry::write_bundle(&bundle, &out_path)?;
                 Ok((bundle_id, skill_count, source_count, forge_request, forge_system_prompt, forge_prompt, response_template))
             }) {
@@ -1243,18 +1367,50 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
                     data.insert("source_count".to_string(), json!(source_count));
                     data.insert("out".to_string(), json!(out));
                     data.insert("deterministic_stage".to_string(), json!(true));
-                    data.insert("forge_required_by_default".to_string(), json!(true));
-                    data.insert("default_forge_pass".to_string(), json!("SkillExpansion"));
-                    data.insert("forge_request_id".to_string(), json!(request_id));
-                    data.insert("forge_default_objective".to_string(), json!(skiller_forge::skiller_default_forge_objective()));
-                    data.insert("forge_system_prompt".to_string(), json!(forge_system_prompt));
-                    data.insert("forge_request".to_string(), serde_json::to_value(&forge_request).unwrap_or(Value::Null));
-                    data.insert("forge_response_template".to_string(), serde_json::to_value(&response_template).unwrap_or(Value::Null));
-                    data.insert("forge_prompt".to_string(), json!(forge_prompt));
-                    data.insert("recommended_apply_tool".to_string(), json!("skiller_forge_apply"));
+                    add_skiller_forge_observation_data(&mut data, &forge_request, forge_system_prompt, forge_prompt, response_template);
                     Observation { ok: true, content: format!("Compiled deterministic Skiller CLI help draft bundle {bundle_id} to {out} ({skill_count} skills, {source_count} sources). Forge refinement is required by default before treating this as agent-ready: use the included ForgeRequestEnvelope ({request_id}) as model context, then apply the model's ForgeResponseEnvelope with skiller_forge_apply."), data, error: None }
                 }
                 Err(error) => Observation::err(error.to_string(), "SkillerCompileError"),
+            }
+        }),
+        json!({"required": ["input", "out"], "properties": {"input": "string", "out": "string", "name": "string", "domain": "string"}}),
+        true,
+    ))?;
+
+    let skiller_import_skill_sandbox = sandbox.clone();
+    registry.register(Tool::new(
+        "skiller_import_skill",
+        "Import pre-existing skill YAML/JSON or an existing Skiller bundle without deterministic raw-source generation, then prepare a ScriptGeneration Forge handoff for cleanup, helper scripts, validation, and review.",
+        Arc::new(move |args| {
+            let Some(input) = args.get("input").and_then(Value::as_str) else { return Observation::err("Missing input", "ValueError"); };
+            let Some(out) = args.get("out").and_then(Value::as_str) else { return Observation::err("Missing out", "ValueError"); };
+            let name = args.get("name").and_then(Value::as_str).unwrap_or("skiller-imported-bundle");
+            let domain = args.get("domain").and_then(Value::as_str);
+            let input_path = match skiller_import_skill_sandbox.resolve(input) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
+            let out_path = match skiller_import_skill_sandbox.resolve(out) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
+            match compiler::import_skill_path(&input_path, name, domain).and_then(|bundle| {
+                let bundle_id = bundle.package.bundle_id.clone();
+                let skill_count = bundle.skills.len();
+                let source_count = bundle.sources.len();
+                let (forge_request, forge_system_prompt, forge_prompt, response_template) =
+                    skiller_bundle_handoff_observation_data(&bundle, ForgePassType::ScriptGeneration, domain);
+                skiller_registry::write_bundle(&bundle, &out_path)?;
+                Ok((bundle_id, skill_count, source_count, forge_request, forge_system_prompt, forge_prompt, response_template))
+            }) {
+                Ok((bundle_id, skill_count, source_count, forge_request, forge_system_prompt, forge_prompt, response_template)) => {
+                    let request_id = forge_request.request_id.clone();
+                    let mut data = Map::new();
+                    data.insert("bundle_id".to_string(), json!(bundle_id));
+                    data.insert("skill_count".to_string(), json!(skill_count));
+                    data.insert("source_count".to_string(), json!(source_count));
+                    data.insert("out".to_string(), json!(out));
+                    data.insert("import_mode".to_string(), json!("pre_existing_skill"));
+                    data.insert("deterministic_stage".to_string(), json!(false));
+                    data.insert("deterministic_generation".to_string(), json!("skipped"));
+                    add_skiller_forge_observation_data(&mut data, &forge_request, forge_system_prompt, forge_prompt, response_template);
+                    Observation { ok: true, content: format!("Imported pre-existing Skiller skill bundle {bundle_id} to {out} ({skill_count} skills, {source_count} sources). Deterministic raw-source generation was skipped. ScriptGeneration Forge refinement is required by default before treating this as agent-ready: use the included ForgeRequestEnvelope ({request_id}) as model context, then apply the model's ForgeResponseEnvelope with skiller_forge_apply."), data, error: None }
+                }
+                Err(error) => Observation::err(error.to_string(), "SkillerImportSkillError"),
             }
         }),
         json!({"required": ["input", "out"], "properties": {"input": "string", "out": "string", "name": "string", "domain": "string"}}),
@@ -4084,6 +4240,110 @@ TRAILING_GARBAGE",
 
         let contents = std::fs::read_to_string(&board_path)?;
         assert!(contents.trim_start().starts_with('['));
+        Ok(())
+    }
+
+    #[test]
+    fn skiller_import_skill_tool_uses_script_generation_handoff() -> anyhow::Result<()> {
+        let workspace = TempDir::new()?;
+        std::fs::write(
+            workspace.path().join("skill.yaml"),
+            r#"skill:
+  id: imported-maintenance-check
+  title: Imported Maintenance Check
+  summary: Inspect service maintenance readiness.
+  procedure:
+    - Review the maintenance window.
+    - Gather read-only health evidence.
+  guardrails:
+    - Do not mutate production systems.
+  runtime_policy:
+    conceptual_answer: true
+    recommend_commands: true
+    run_read_only_commands: true
+    modify_files: false
+    modify_external_systems: false
+    requires_user_approval: true
+    requires_backup_or_rollback: false
+    handles_secrets: false
+    handles_licensed_source: false
+"#,
+        )?;
+        let registry = build_builtin_registry_with_cms_and_mode(
+            workspace.path(),
+            VegvisirCmsConfig::for_workspace(workspace.path()),
+            true,
+        )?;
+        let mut executor = ToolExecutor {
+            registry,
+            guardrails: GuardrailEngine {
+                policy: crate::guardrails::PermissionPolicy {
+                    allow_risky_tools: true,
+                    require_human_approval: false,
+                    ..crate::guardrails::PermissionPolicy::default()
+                },
+                approvals: crate::guardrails::ApprovalLedger::default(),
+            },
+            runtime_policy: RuntimePolicy::default(),
+            logger: EventLogger::new(None),
+        };
+
+        let import = executor.execute(ToolCall {
+            name: "skiller_import_skill".to_string(),
+            args: serde_json::from_value(json!({
+                "input": "skill.yaml",
+                "out": "imported-bundle",
+                "name": "maintenance",
+                "domain": "operations"
+            }))?,
+        });
+        assert!(import.ok, "{}", import.content);
+        assert!(
+            import
+                .content
+                .contains("Deterministic raw-source generation was skipped")
+        );
+        assert_eq!(
+            import.data.get("import_mode"),
+            Some(&json!("pre_existing_skill"))
+        );
+        assert_eq!(import.data.get("deterministic_stage"), Some(&json!(false)));
+        assert_eq!(
+            import.data.get("deterministic_generation"),
+            Some(&json!("skipped"))
+        );
+        assert_eq!(
+            import.data.get("forge_required_by_default"),
+            Some(&json!(true))
+        );
+        assert_eq!(
+            import.data.get("default_forge_pass"),
+            Some(&json!("ScriptGeneration"))
+        );
+        assert_eq!(
+            import.data.get("recommended_apply_tool"),
+            Some(&json!("skiller_forge_apply"))
+        );
+        assert!(
+            import
+                .data
+                .get("forge_prompt")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("ScriptGeneration")
+        );
+        assert!(
+            workspace
+                .path()
+                .join("imported-bundle/package.yaml")
+                .exists()
+        );
+
+        let validate = executor.execute(ToolCall {
+            name: "skiller_validate".to_string(),
+            args: serde_json::from_value(json!({"bundle": "imported-bundle"}))?,
+        });
+        assert!(validate.ok, "{}", validate.content);
         Ok(())
     }
 

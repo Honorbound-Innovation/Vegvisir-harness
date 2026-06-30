@@ -1177,6 +1177,103 @@ fn startup_dangerous_bypass_authorizes_tools_commands_and_sandbox_escape() -> an
 }
 
 #[test]
+fn msp_client_import_skiller_tool_publishes_current_bundle_shape() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let workspace = tmp.path().join("workspace");
+    fs::create_dir_all(&workspace)?;
+    let source_bundle = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../components/msp/examples/skiller-bundles/sample-rust-bundle");
+    let bundle = workspace.join("bundle");
+    copy_dir_recursive_for_msp_tool_test(&source_bundle, &bundle)?;
+    fs::write(
+        bundle.join("sources/sections.yaml"),
+        r#"- section_id: sec-1
+  source_id: src-1
+  title: Small-step refactor workflow
+  content: Refactor in small steps and verify each step.
+"#,
+    )?;
+    fs::write(bundle.join("candidates.yaml"), "[]\n")?;
+    fs::write(bundle.join("forge_requests.yaml"), "[]\n")?;
+    fs::write(bundle.join("forge_responses.yaml"), "[]\n")?;
+    fs::write(bundle.join("MANIFEST.sha256"), "sha256:test\n")?;
+
+    let registry_path = workspace.join("registry");
+    let mut executor = ToolExecutor {
+        registry: build_builtin_registry(&workspace)?,
+        guardrails: GuardrailEngine {
+            policy: PermissionPolicy {
+                allow_risky_tools: true,
+                ..PermissionPolicy::default()
+            },
+            ..GuardrailEngine::default()
+        },
+        runtime_policy: vegvisir_rust::policy::RuntimePolicy::default(),
+        logger: vegvisir_rust::observability::EventLogger::default(),
+    };
+
+    let imported = executor.execute(ToolCall {
+        name: "msp_client_import_skiller".to_string(),
+        args: json!({
+            "registry": "registry",
+            "bundle": "bundle",
+            "issuer": "vegvisir-test.local"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    });
+    assert!(imported.ok, "{}", imported.content);
+    assert_eq!(
+        imported
+            .data
+            .get("registry")
+            .and_then(|value| value.get("skill_count"))
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert!(registry_path.join("skills").exists());
+
+    let loaded = executor.execute(ToolCall {
+        name: "msp_client_load".to_string(),
+        args: json!({
+            "registry": "registry",
+            "id": "skill.software_engineering.rust.refactor-module.v1",
+            "mode": "card"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    });
+    assert!(loaded.ok, "{}", loaded.content);
+    assert!(loaded.content.contains("Refactor Rust Module"));
+    assert_eq!(
+        loaded.data.get("body_hash_valid").and_then(Value::as_bool),
+        Some(true)
+    );
+
+    Ok(())
+}
+
+fn copy_dir_recursive_for_msp_tool_test(
+    src: &std::path::Path,
+    dst: &std::path::Path,
+) -> anyhow::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_recursive_for_msp_tool_test(&src_path, &dst_path)?;
+        } else {
+            fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn risky_tools_use_pending_approval_queue() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let registry = build_builtin_registry(tmp.path())?;
@@ -6895,7 +6992,7 @@ fn builtin_registry_exposes_cms_tools() -> anyhow::Result<()> {
 
     let prepared = executor.execute(vegvisir_rust::types::ToolCall {
         name: "cms_prepare_context".to_string(),
-        args: json!({"message": "Continue tool execution memory work"})
+        args: json!({"message": "Continue CMS tool memory and tool execution CMS-v2 work"})
             .as_object()
             .unwrap()
             .clone(),
@@ -6905,7 +7002,7 @@ fn builtin_registry_exposes_cms_tools() -> anyhow::Result<()> {
 
     let legacy_context = executor.execute(vegvisir_rust::types::ToolCall {
         name: "eternium_prepare_context".to_string(),
-        args: json!({"user_message": "Continue tool execution memory work", "mode": "balanced"})
+        args: json!({"user_message": "Continue CMS tool memory and tool execution CMS-v2 work", "mode": "balanced"})
             .as_object()
             .unwrap()
             .clone(),

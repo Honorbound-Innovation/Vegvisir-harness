@@ -1895,7 +1895,11 @@ pub(crate) fn collect_skill_script_validation_errors(
 }
 
 fn skill_needs_script(skill: &Skill) -> bool {
-    !skill.tool_requirements.is_empty()
+    skill
+        .metadata
+        .get("import_mode")
+        .is_some_and(|value| value == "pre_existing_skill")
+        || !skill.tool_requirements.is_empty()
         || skill.runtime_policy.run_read_only_commands
         || skill.runtime_policy.modify_files
         || skill.runtime_policy.modify_external_systems

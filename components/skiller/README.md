@@ -8,6 +8,7 @@ The current root implementation is Rust. The earlier Python prototype is preserv
 
 - Local deterministic source ingestion for Markdown, HTML, text, OpenAPI/API specs, CLI specs, CLI help-like files, and repository evidence.
 - Explicit API/CLI compiler commands for OpenAPI, lightweight API specs, lightweight CLI specs, and captured CLI help/manpage text.
+- Pre-existing skill import via `import-skill`, which skips raw-source deterministic generation and normalizes YAML/JSON skills or existing bundles into governed reviewable bundles.
 - Public URL ingestion with conservative same-host crawl limits via `compile-url`.
 - Structure-preserving section extraction with source IDs, hashes, citation pointers, warning/command/API-operation detection, and secret-like redaction.
 - Candidate skill generation with procedures, guardrails, citations, eval scaffolding, confidence metadata, evidence breakdowns, runtime policy, tool requirements, role suitability, and version applicability fields.
@@ -54,6 +55,7 @@ skiller compile-openapi <spec> --out <bundle> [--name <name>] [--domain <domain>
 skiller compile-api <spec> --out <bundle> [--name <name>] [--domain <domain>]
 skiller compile-cli <spec> --out <bundle> [--name <name>] [--domain <domain>]
 skiller compile-cli-help <help.txt> --out <bundle> [--name <name>] [--domain <domain>]
+skiller import-skill <skill.yaml|skills.json|bundle-dir> --out <bundle> [--name <name>] [--domain <domain>]
 skiller validate <bundle>
 skiller list <bundle>
 skiller route <bundle> <query>
@@ -90,6 +92,19 @@ skiller domain-template <name>
 skiller bump-version <bundle> --out <bundle> [--version <version>]
 ```
 
+
+## Pre-existing skill import
+
+Skiller can import already-authored skills without re-running deterministic raw-source generation:
+
+```bash
+cargo run -- import-skill path/to/skill.yaml \
+  --out dist/imported-skills \
+  --name imported-skills \
+  --domain operations
+```
+
+The importer accepts a single skill YAML/JSON file, a document containing `skill:` or `skills:`, a directory of skill YAML/JSON files, or an existing Skiller bundle directory. Imported bundles are normalized with private import source/citation metadata, review guardrails, eval scaffolding, and compatibility metadata marking `import_mode: pre_existing_skill` and `deterministic_generation: skipped`. The intended post-import path is Forge cleanup plus `ScriptGeneration`, validation, eval, and readiness review before agent use or publication.
 
 ## API and CLI skill compilation
 

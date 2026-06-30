@@ -80,6 +80,7 @@ pub struct PublishReport {
     pub public_key_sha256: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 struct SkillerPackage {
     bundle_id: String,
@@ -95,21 +96,43 @@ struct SkillerPackage {
     publish_status: Option<String>,
     #[serde(default)]
     compatibility: BTreeMap<String, String>,
+    #[serde(default)]
+    created_at: Option<serde_json::Value>,
+    #[serde(default, flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize, Default)]
 struct SkillerSourceDocument {
     source_id: String,
     title: String,
     origin: String,
     #[serde(default)]
+    source_type: Option<String>,
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
     license: Option<String>,
+    #[serde(default)]
+    owner: Option<String>,
     #[serde(default)]
     visibility: Option<String>,
     #[serde(default)]
+    retention_policy: Option<String>,
+    #[serde(default)]
     export_policy: Option<String>,
+    #[serde(default)]
+    secret_scan_status: Option<serde_json::Value>,
+    #[serde(default)]
+    permission_status: Option<serde_json::Value>,
+    #[serde(default)]
+    citation_policy: Option<String>,
+    #[serde(default, flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize, Default)]
 struct SkillerSkill {
     id: String,
@@ -140,7 +163,15 @@ struct SkillerSkill {
     #[serde(default)]
     evals: Vec<SkillerEvalCase>,
     #[serde(default)]
+    scripts: Vec<SkillerScript>,
+    #[serde(default)]
     citations: Vec<SkillerCitation>,
+    #[serde(default)]
+    confidence: Option<serde_json::Value>,
+    #[serde(default)]
+    evidence_breakdown: Option<serde_json::Value>,
+    #[serde(default)]
+    inference_records: Vec<serde_json::Value>,
     #[serde(default)]
     tool_requirements: Vec<SkillerToolRequirement>,
     #[serde(default)]
@@ -148,9 +179,53 @@ struct SkillerSkill {
     #[serde(default)]
     role_suitability: Vec<SkillerRoleSuitability>,
     #[serde(default)]
+    version_applicability: Option<serde_json::Value>,
+    #[serde(default)]
     metadata: BTreeMap<String, String>,
+    #[serde(default, flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize, Default)]
+struct SkillerScript {
+    id: String,
+    title: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    script_type: Option<String>,
+    #[serde(default)]
+    language: Option<String>,
+    #[serde(default)]
+    entrypoint: String,
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    inputs: Vec<String>,
+    #[serde(default)]
+    outputs: Vec<String>,
+    #[serde(default)]
+    deterministic: bool,
+    #[serde(default)]
+    idempotent: bool,
+    #[serde(default)]
+    requires_approval: bool,
+    #[serde(default)]
+    permission_level: Option<String>,
+    #[serde(default)]
+    when_to_use: Vec<String>,
+    #[serde(default)]
+    guardrails: Vec<String>,
+    #[serde(default)]
+    generated_by: String,
+    #[serde(default)]
+    source_section_ids: Vec<String>,
+    #[serde(default, flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
+}
+
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize, Default)]
 struct SkillerEvalCase {
     id: String,
@@ -160,16 +235,22 @@ struct SkillerEvalCase {
     eval_type: Option<String>,
     #[serde(default)]
     safety_notes: Vec<String>,
+    #[serde(default, flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize, Default)]
 struct SkillerCitation {
     citation_id: String,
     source_id: String,
     section_id: String,
     excerpt: String,
+    #[serde(default, flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize, Default)]
 struct SkillerToolRequirement {
     name: String,
@@ -181,8 +262,11 @@ struct SkillerToolRequirement {
     dry_run_available: Option<bool>,
     #[serde(default)]
     rollback_required: bool,
+    #[serde(default, flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize, Default)]
 struct SkillerRuntimePolicy {
     #[serde(default)]
@@ -203,28 +287,45 @@ struct SkillerRuntimePolicy {
     handles_secrets: bool,
     #[serde(default)]
     handles_licensed_source: bool,
+    #[serde(default, flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize, Default)]
 struct SkillerRoleSuitability {
     role: String,
     suitability: f64,
     rationale: String,
+    #[serde(default, flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize, Default)]
 struct SkillerDependency {
     from_skill: String,
     to_skill: String,
     #[serde(default)]
     dependency_type: Option<String>,
+    #[serde(default, flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
 }
 
+#[allow(dead_code)]
 struct SkillerBundle {
     package: SkillerPackage,
     sources: Vec<SkillerSourceDocument>,
+    sections: Vec<serde_json::Value>,
     skills: Vec<SkillerSkill>,
     dependencies: Vec<SkillerDependency>,
+    related: Vec<serde_json::Value>,
+    concepts: Vec<serde_json::Value>,
+    candidates: Vec<serde_json::Value>,
+    forge_requests: Vec<serde_json::Value>,
+    forge_responses: Vec<serde_json::Value>,
+    manifest_sha256: Option<String>,
+    provenance: Option<serde_json::Value>,
 }
 
 pub fn import_skiller_bundle_as_draft(
@@ -415,7 +516,7 @@ pub fn publish_skiller_bundle(
             generator: Some("skiller".to_string()),
             source_documents: package_source_documents(&bundle),
             generated_at: None,
-            published_at: None,
+            published_at: skiller_published_at(&bundle),
         }),
         deprecation: Some(options.deprecation.pack_deprecation()),
         extensions: BTreeMap::from([(
@@ -425,12 +526,17 @@ pub fn publish_skiller_bundle(
                 "source_corpus": bundle.package.source_corpus,
                 "publish_status": bundle.package.publish_status,
                 "compatibility": bundle.package.compatibility,
-                "source_rights": bundle.sources.iter().map(|source| serde_json::json!({
-                    "source_id": source.source_id,
-                    "title": source.title,
-                    "visibility": source.visibility,
-                    "export_policy": source.export_policy,
-                })).collect::<Vec<_>>(),
+                "created_at": skiller_created_at(&bundle.package),
+                "source_rights": bundle.sources.iter().map(source_rights_json).collect::<Vec<_>>(),
+                "section_count": bundle.sections.len(),
+                "candidate_count": bundle.candidates.len(),
+                "concept_count": bundle.concepts.len(),
+                "related_count": bundle.related.len(),
+                "dependency_count": bundle.dependencies.len(),
+                "forge_request_count": bundle.forge_requests.len(),
+                "forge_response_count": bundle.forge_responses.len(),
+                "manifest_sha256_present": bundle.manifest_sha256.is_some(),
+                "provenance_present": bundle.provenance.is_some(),
             }),
         )]),
     };
@@ -497,8 +603,24 @@ fn read_skiller_bundle(path: &Path) -> Result<SkillerBundle> {
     let package: SkillerPackage = read_yaml(&path.join("package.yaml"))?;
     let sources: Vec<SkillerSourceDocument> =
         read_yaml(&path.join("sources/index.yaml")).unwrap_or_default();
+    let sections: Vec<serde_json::Value> =
+        read_yaml(&path.join("sources/sections.yaml")).unwrap_or_default();
     let dependencies: Vec<SkillerDependency> =
         read_yaml(&path.join("graph/dependencies.yaml")).unwrap_or_default();
+    let related: Vec<serde_json::Value> =
+        read_yaml(&path.join("graph/related.yaml")).unwrap_or_default();
+    let concepts: Vec<serde_json::Value> =
+        read_yaml(&path.join("graph/concepts.yaml")).unwrap_or_default();
+    let candidates: Vec<serde_json::Value> =
+        read_yaml(&path.join("candidates.yaml")).unwrap_or_default();
+    let forge_requests: Vec<serde_json::Value> =
+        read_yaml(&path.join("forge_requests.yaml")).unwrap_or_default();
+    let forge_responses: Vec<serde_json::Value> =
+        read_yaml(&path.join("forge_responses.yaml")).unwrap_or_default();
+    let manifest_sha256 = fs::read_to_string(path.join("MANIFEST.sha256")).ok();
+    let provenance = fs::read_to_string(path.join("PROVENANCE.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok());
     let skills_dir = path.join("skills");
     let mut skills = Vec::new();
     for entry in
@@ -517,8 +639,16 @@ fn read_skiller_bundle(path: &Path) -> Result<SkillerBundle> {
     Ok(SkillerBundle {
         package,
         sources,
+        sections,
         skills,
         dependencies,
+        related,
+        concepts,
+        candidates,
+        forge_requests,
+        forge_responses,
+        manifest_sha256,
+        provenance,
     })
 }
 
@@ -632,8 +762,8 @@ fn skill_manifest(build: SkillManifestBuild<'_>) -> SkillManifest {
             author: None,
             generator: Some("skiller".to_string()),
             source_documents: source_documents_for(bundle, skill),
-            generated_at: None,
-            published_at: None,
+            generated_at: skiller_created_at(&bundle.package),
+            published_at: skiller_published_at(bundle),
         }),
         compatibility: Some(Compatibility {
             min_msp_version: Some(MSP_VERSION.to_string()),
@@ -652,6 +782,12 @@ fn skill_manifest(build: SkillManifestBuild<'_>) -> SkillManifest {
                 "maturity": skill.maturity,
                 "metadata": skill.metadata,
                 "source_section_ids": skill.source_section_ids,
+                "confidence": skill.confidence,
+                "evidence_breakdown": skill.evidence_breakdown,
+                "inference_record_count": skill.inference_records.len(),
+                "version_applicability": skill.version_applicability,
+                "script_count": skill.scripts.len(),
+                "scripts": skill.scripts.iter().map(script_extension_json).collect::<Vec<_>>(),
             }),
         )]),
     }
@@ -792,6 +928,30 @@ fn requirements(skill: &SkillerSkill) -> Requirements {
     if skill.runtime_policy.requires_backup_or_rollback {
         permissions.push("backup_or_rollback".to_string());
     }
+    for script in &skill.scripts {
+        if !script.content.trim().is_empty() {
+            runtime_capabilities.push("script_review".to_string());
+        }
+        if script.requires_approval {
+            permissions.push("user_approval".to_string());
+        }
+        match script.permission_level.as_deref() {
+            Some("ReadOnly") => permissions.push("read_only_command".to_string()),
+            Some("FileMutation") => {
+                runtime_capabilities.push("workspace_write".to_string());
+                permissions.push("workspace_write".to_string());
+            }
+            Some("ExternalMutation") => {
+                runtime_capabilities.push("external_mutation".to_string());
+                permissions.push("external_mutation".to_string());
+            }
+            Some("Dangerous") => {
+                runtime_capabilities.push("dangerous_operation_review".to_string());
+                permissions.push("dangerous_operation".to_string());
+            }
+            _ => {}
+        }
+    }
 
     Requirements {
         model_capabilities: vec!["instruction_following".to_string()],
@@ -880,6 +1040,29 @@ fn render_skill_body(package: &SkillerPackage, skill: &SkillerSkill) -> String {
             ));
         }
         out.push('\n');
+    }
+    if !skill.scripts.is_empty() {
+        out.push_str("## Generated Scripts\n");
+        for script in &skill.scripts {
+            out.push_str(&format!(
+                "### {}\n\n- id: `{}`\n- type: `{}`\n- language: `{}`\n- entrypoint: `{}`\n- deterministic: {}\n- idempotent: {}\n- requires_approval: {}\n- permission_level: `{}`\n\n{}\n\n",
+                non_empty(&script.title, &script.id),
+                script.id,
+                script.script_type.as_deref().unwrap_or("unknown"),
+                script.language.as_deref().unwrap_or("unknown"),
+                script.entrypoint,
+                script.deterministic,
+                script.idempotent,
+                script.requires_approval,
+                script.permission_level.as_deref().unwrap_or("unknown"),
+                script.description,
+            ));
+            write_list(&mut out, "When to use", &script.when_to_use);
+            write_list(&mut out, "Script guardrails", &script.guardrails);
+            if !script.content.trim().is_empty() {
+                out.push_str("Script content is preserved in manifest extension metadata for host review; runtimes must not execute it without host policy approval.\n\n");
+            }
+        }
     }
     out.push_str("## Runtime Policy\n");
     out.push_str(&format!(
@@ -1206,6 +1389,12 @@ fn risk_level(skill: &SkillerSkill) -> RiskLevel {
                 Some("Dangerous") | Some("ExternalMutation")
             )
         })
+        || skill.scripts.iter().any(|script| {
+            matches!(
+                script.permission_level.as_deref(),
+                Some("Dangerous") | Some("ExternalMutation")
+            )
+        })
     {
         RiskLevel::High
     } else if skill.runtime_policy.modify_files
@@ -1213,6 +1402,10 @@ fn risk_level(skill: &SkillerSkill) -> RiskLevel {
             .tool_requirements
             .iter()
             .any(|tool| matches!(tool.permission_level.as_deref(), Some("FileMutation")))
+        || skill
+            .scripts
+            .iter()
+            .any(|script| matches!(script.permission_level.as_deref(), Some("FileMutation")))
     {
         RiskLevel::Medium
     } else if skill.runtime_policy.handles_secrets {
@@ -1254,15 +1447,88 @@ fn forbidden_behaviors(skill: &SkillerSkill) -> Vec<String> {
 }
 
 fn sandbox_profile(skill: &SkillerSkill) -> Option<String> {
-    if skill.runtime_policy.modify_external_systems {
+    if skill.runtime_policy.modify_external_systems
+        || skill.scripts.iter().any(|script| {
+            matches!(
+                script.permission_level.as_deref(),
+                Some("ExternalMutation") | Some("Dangerous")
+            )
+        })
+    {
         Some("approval_required_external".to_string())
-    } else if skill.runtime_policy.modify_files {
+    } else if skill.runtime_policy.modify_files
+        || skill
+            .scripts
+            .iter()
+            .any(|script| matches!(script.permission_level.as_deref(), Some("FileMutation")))
+    {
         Some("workspace_edit".to_string())
     } else if skill.runtime_policy.run_read_only_commands {
         Some("read_only_commands".to_string())
     } else {
         Some("conceptual".to_string())
     }
+}
+
+fn skiller_created_at(package: &SkillerPackage) -> Option<String> {
+    package.created_at.as_ref().and_then(json_scalar_to_string)
+}
+
+fn skiller_published_at(bundle: &SkillerBundle) -> Option<String> {
+    bundle
+        .provenance
+        .as_ref()
+        .and_then(|value| value.get("published_at"))
+        .and_then(json_scalar_to_string)
+}
+
+fn json_scalar_to_string(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(s) if !s.trim().is_empty() => Some(s.clone()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        serde_json::Value::Bool(b) => Some(b.to_string()),
+        _ => None,
+    }
+}
+
+fn source_rights_json(source: &SkillerSourceDocument) -> serde_json::Value {
+    serde_json::json!({
+        "source_id": source.source_id,
+        "title": source.title,
+        "origin": source.origin,
+        "source_type": source.source_type,
+        "version": source.version,
+        "license": source.license,
+        "owner": source.owner,
+        "visibility": source.visibility,
+        "retention_policy": source.retention_policy,
+        "export_policy": source.export_policy,
+        "secret_scan_status": source.secret_scan_status,
+        "permission_status": source.permission_status,
+        "citation_policy": source.citation_policy,
+    })
+}
+
+fn script_extension_json(script: &SkillerScript) -> serde_json::Value {
+    serde_json::json!({
+        "id": script.id,
+        "title": script.title,
+        "description": script.description,
+        "script_type": script.script_type,
+        "language": script.language,
+        "entrypoint": script.entrypoint,
+        "inputs": script.inputs,
+        "outputs": script.outputs,
+        "deterministic": script.deterministic,
+        "idempotent": script.idempotent,
+        "requires_approval": script.requires_approval,
+        "permission_level": script.permission_level,
+        "when_to_use": script.when_to_use,
+        "guardrails": script.guardrails,
+        "generated_by": script.generated_by,
+        "source_section_ids": script.source_section_ids,
+        "content": script.content,
+    })
 }
 
 fn pack_manifest_json(pack: &SkillPackManifest) -> Result<serde_json::Value> {
@@ -1401,7 +1667,42 @@ created_at: "2026-01-01T00:00:00Z"
 "#,
         )
         .unwrap();
+        fs::write(
+            root.join("sources/sections.yaml"),
+            r#"- section_id: sec-1
+  source_id: src-1
+  heading: Sample Docs
+  breadcrumbs: []
+  line_start: 1
+  line_end: 3
+  text_excerpt: Refactor in small steps.
+  code_blocks: []
+  links: []
+  detected_commands: []
+  detected_api_operations: []
+  detected_warnings: []
+  detected_examples: []
+  detected_normative_language: []
+"#,
+        )
+        .unwrap();
+        fs::write(root.join("candidates.yaml"), "[]\n").unwrap();
+        fs::write(root.join("graph/concepts.yaml"), "[]\n").unwrap();
         fs::write(root.join("graph/dependencies.yaml"), "[]\n").unwrap();
+        fs::write(root.join("graph/related.yaml"), "[]\n").unwrap();
+        fs::write(root.join("forge_requests.yaml"), "[]\n").unwrap();
+        fs::write(root.join("forge_responses.yaml"), "[]\n").unwrap();
+        fs::write(root.join("MANIFEST.sha256"), "abcd  package.yaml\n").unwrap();
+        fs::write(
+            root.join("PROVENANCE.json"),
+            r#"{
+  "bundle_id": "sample-skiller-bundle",
+  "published_at": "2026-01-02T00:00:00Z",
+  "content_manifest_hash": "abcd"
+}
+"#,
+        )
+        .unwrap();
         fs::write(
             root.join("skills/refactor.yaml"),
             r#"id: refactor-module
@@ -1431,6 +1732,57 @@ evals:
     expected_behavior: Select this skill and ask for module path if missing.
     eval_type: Routing
     safety_notes: []
+scripts:
+  - id: preflight
+    title: Refactor Preflight
+    description: Check the target module before editing.
+    script_type: PreflightCheck
+    language: Pseudocode
+    entrypoint: preflight
+    content: inspect module path and planned edits
+    inputs:
+      - module path
+    outputs:
+      - preflight notes
+    deterministic: true
+    idempotent: true
+    requires_approval: true
+    permission_level: FileMutation
+    when_to_use:
+      - before editing files
+    guardrails:
+      - do not execute without host approval
+    generated_by: skiller-test
+    source_section_ids:
+      - sec-1
+confidence:
+  raw: 0.62
+  extraction: 0.8
+  inference: 0.1
+  procedure: 0.72
+  guardrail: 0.55
+  eval: 0.68
+  routing: 0.68
+  source_quality: 0.72
+  human_review: 0.0
+  runtime: 0.0
+evidence_breakdown:
+  direct_extraction: 1.0
+  supporting_inference: 0.0
+  operational_synthesis: 0.0
+  speculative_candidate: 0.0
+  community_derived: 0.0
+  internal_policy_derived: 0.0
+inference_records:
+  - inference_id: inf-1
+    required_review: false
+version_applicability:
+  supported_versions: []
+  unsupported_versions: []
+  version_source_refs: []
+  version_confidence: 0.0
+  migration_notes: []
+  deprecated_flags: []
 citations:
   - citation_id: cite-1
     source_id: src-1
@@ -1462,13 +1814,6 @@ role_suitability:
     suitability: 0.9
     rationale: Good fit for Rust refactors.
 metadata: {}
-version_applicability:
-  supported_versions: []
-  unsupported_versions: []
-  version_source_refs: []
-  version_confidence: 0.0
-  migration_notes: []
-  deprecated_flags: []
 "#,
         )
         .unwrap();
@@ -1514,6 +1859,39 @@ version_applicability:
         let loaded = registry.load_skill(&report.skills_published[0]).unwrap();
         assert!(loaded.body_hash_valid);
         assert!(loaded.verification_contract.is_some());
+        assert!(loaded.body.contains("## Generated Scripts"));
+        assert_eq!(
+            loaded
+                .manifest
+                .provenance
+                .as_ref()
+                .and_then(|p| p.generated_at.as_deref()),
+            Some("2026-01-01T00:00:00Z")
+        );
+        assert_eq!(
+            loaded
+                .manifest
+                .provenance
+                .as_ref()
+                .and_then(|p| p.published_at.as_deref()),
+            Some("2026-01-02T00:00:00Z")
+        );
+        assert_eq!(loaded.manifest.trust.risk_level, RiskLevel::Medium);
+        assert!(
+            loaded
+                .manifest
+                .requirements
+                .runtime_capabilities
+                .contains(&"script_review".to_string())
+        );
+        let skiller_ext = loaded
+            .manifest
+            .extensions
+            .get("msp:skiller")
+            .expect("skiller extension metadata");
+        assert_eq!(skiller_ext["script_count"], 1);
+        assert_eq!(skiller_ext["inference_record_count"], 1);
+        assert_eq!(skiller_ext["scripts"][0]["id"], "preflight");
         let member_validation = registry
             .validate_pack_members(report.pack_id.as_deref().unwrap())
             .unwrap();

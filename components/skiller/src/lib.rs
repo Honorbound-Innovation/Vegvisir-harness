@@ -99,6 +99,16 @@ enum Commands {
         #[arg(long)]
         domain: Option<String>,
     },
+    /// Import pre-existing skill YAML/JSON or an existing Skiller bundle without deterministic raw-source generation.
+    ImportSkill {
+        input: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long, default_value = "skiller-imported-bundle")]
+        name: String,
+        #[arg(long)]
+        domain: Option<String>,
+    },
     /// Validate a skill bundle.
     Validate { bundle: PathBuf },
     /// List skills in a bundle.
@@ -482,6 +492,16 @@ where
             compiler::compile_cli_help(&input, &name, domain.as_deref())?,
             out,
             "CLI help",
+        )?,
+        Commands::ImportSkill {
+            input,
+            out,
+            name,
+            domain,
+        } => write_bundle(
+            compiler::import_skill_path(&input, &name, domain.as_deref())?,
+            out,
+            "imported skill",
         )?,
         Commands::Validate { bundle } => {
             let report = registry::validate_bundle_path(&bundle)?;

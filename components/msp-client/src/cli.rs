@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 
 use crate::msp_core::{RuntimeCompatibilityQuery, SkillTrustPolicy};
+use crate::msp_publisher::PublicationDeprecation;
 use crate::{
-    CompatibilityRequest, LoadMode, MspClient, PackSearchRequest, SearchRequest,
-    TrustEvaluationRequest, parse_risk_level,
+    CompatibilityRequest, ImportSkillerBundleRequest, LoadMode, MspClient, PackSearchRequest,
+    SearchRequest, TrustEvaluationRequest, parse_risk_level,
 };
 use clap::{Args, Parser, Subcommand};
 
@@ -30,6 +31,8 @@ enum Commands {
     Summary,
     /// Search local MSP skills.
     Search(SearchArgs),
+    /// Import a Skiller bundle into the local MSP registry.
+    ImportSkiller(ImportSkillerArgs),
     /// Load skill context from a local MSP registry.
     Load {
         id: String,
@@ -56,6 +59,35 @@ enum Commands {
     DiscoverPacks(PackSearchArgs),
     /// Print a pack manifest as JSON.
     PackManifest { id: String },
+}
+
+#[derive(Args, Debug)]
+struct ImportSkillerArgs {
+    /// Skiller bundle directory containing package.yaml and skills/*.yaml.
+    bundle: PathBuf,
+    /// Trust issuer to stamp on generated MSP artifacts.
+    #[arg(long)]
+    issuer: String,
+    /// Regenerate an identical existing publication.
+    #[arg(long)]
+    force: bool,
+    /// Explicit local override allowing same-version publication bytes to change.
+    #[arg(long)]
+    allow_mutable_version: bool,
+    /// Optional Ed25519 signing seed file. Keep real credentials behind HBSE-managed paths.
+    #[arg(long)]
+    signing_key: Option<PathBuf>,
+    /// Mark generated skill/pack artifacts deprecated.
+    #[arg(long)]
+    deprecated: bool,
+    #[arg(long)]
+    deprecation_reason: Option<String>,
+    #[arg(long)]
+    replacement_skill: Option<String>,
+    #[arg(long)]
+    replacement_pack: Option<String>,
+    #[arg(long)]
+    sunset_at: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -152,6 +184,23 @@ where
                 limit: args.limit,
             };
             print_json(&client.search(request))
+        }
+        Commands::ImportSkiller(args) => {
+            let request = ImportSkillerBundleRequest {
+                bundle: args.bundle,
+                issuer: args.issuer,
+                force: args.force,
+                allow_mutable_version: args.allow_mutable_version,
+                signing_key: args.signing_key,
+                deprecation: PublicationDeprecation {
+                    deprecated: args.deprecated,
+                    reason: args.deprecation_reason,
+                    skill_replacement: args.replacement_skill,
+                    pack_replacement: args.replacement_pack,
+                    sunset_at: args.sunset_at,
+                },
+            };
+            print_json(&client.import_skiller_bundle(request)?)
         }
         Commands::Load { id, mode } => print_json(&client.load_skill(&id, mode.0)?),
         Commands::Manifest { id } => print_json(&client.get_manifest(&id)?),

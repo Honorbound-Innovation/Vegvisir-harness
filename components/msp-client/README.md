@@ -11,7 +11,8 @@ The component wraps the vendored MSP reference registry crates under
   registration;
 - a JSON CLI (`msp-client`) for component smoke tests, packaging, and manual
   operation;
-- bounded search/load defaults intended for model-facing observations.
+- bounded search/load defaults intended for model-facing observations;
+- Skiller bundle import into canonical MSP registry artifacts using the vendored MSP publisher.
 
 ## Build
 
@@ -29,6 +30,8 @@ Use the vendored reference registry:
 cargo run -p msp-client -- --registry components/msp/examples/registry info
 cargo run -p msp-client -- --registry components/msp/examples/registry summary
 cargo run -p msp-client -- --registry components/msp/examples/registry search --task "refactor rust module" --tool read_file --tool write_file
+# Import a current Skiller bundle into a local MSP registry. Writes skills/<id>/ and packs/<id>/ artifacts.
+cargo run -p msp-client -- --registry tmp/msp-registry import-skiller components/msp/examples/skiller-bundles/sample-rust-bundle --issuer local.dev
 cargo run -p msp-client -- --registry components/msp/examples/registry load skill.rust.refactor.module.v1 --mode card
 cargo run -p msp-client -- --registry components/msp/examples/registry check-compatibility skill.rust.refactor.module.v1 --tool read_file --tool write_file --runtime-capability workspace_read --runtime-capability workspace_write
 ```
@@ -57,6 +60,7 @@ Supported operations:
 - `info`
 - `summary`
 - `search`
+- `import_skiller_bundle`
 - `load_skill`
 - `get_manifest`
 - `verify_trust`
@@ -67,6 +71,8 @@ Supported operations:
 - `get_pack_manifest`
 
 ## Integration intent
+
+Vegvisir exposes this through native MSP tools including `msp_client_import_skiller` (risky/write), `msp_client_search`, `msp_client_load`, and trust/compatibility checks.
 
 This crate is deliberately separate from MCP. It is the in-process client layer
 Vegvisir can later expose through first-class tools/commands while still using

@@ -1538,6 +1538,7 @@ dependencies = [
  "anyhow",
  "clap",
  "msp-core",
+ "msp-publisher",
  "msp-registry",
  "serde",
  "serde_json",
@@ -1558,6 +1559,20 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "msp-publisher"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hex",
+ "msp-core",
+ "msp-registry",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "walkdir",
 ]
 
 [[package]]

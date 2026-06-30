@@ -6,7 +6,10 @@
 //! first: callers pass a registry root and receive strongly typed JSON-friendly
 //! results that can be embedded in model observations.
 
-use std::{path::Path, str::FromStr};
+use std::{
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 pub mod cli;
 pub use cli::{run_cli, run_cli_from};
@@ -17,10 +20,12 @@ use msp_core::{
     SkillLoadResult, SkillManifest, SkillPackManifest, SkillSearchQuery, SkillTrustPolicy,
     TrustPolicyEvaluation, TrustVerifyResult, core_methods,
 };
+use msp_publisher::{PublicationDeprecation, PublishOptions, PublishReport};
 use msp_registry::LocalRegistry;
 use serde::{Deserialize, Serialize};
 
 pub use msp_core;
+pub use msp_publisher;
 pub use msp_registry;
 
 /// Conservative result cap for user/model-controlled searches.
@@ -133,6 +138,27 @@ pub struct TrustEvaluationRequest {
     pub policy: SkillTrustPolicy,
     #[serde(default)]
     pub dependency_graph: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ImportSkillerBundleRequest {
+    pub bundle: PathBuf,
+    pub issuer: String,
+    #[serde(default)]
+    pub force: bool,
+    /// Explicitly allow replacing an existing same-id/same-version publication with different bytes.
+    #[serde(default)]
+    pub allow_mutable_version: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signing_key: Option<PathBuf>,
+    #[serde(default)]
+    pub deprecation: PublicationDeprecation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportSkillerBundleResponse {
+    pub registry: RegistrySummary,
+    pub report: PublishReport,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -266,6 +292,26 @@ impl MspClient {
         let mut results = self.registry.discover_packs(&query);
         results.truncate(limit);
         results
+    }
+
+    pub fn import_skiller_bundle(
+        &self,
+        request: ImportSkillerBundleRequest,
+    ) -> anyhow::Result<ImportSkillerBundleResponse> {
+        let options = PublishOptions {
+            registry: self.registry.root().to_path_buf(),
+            issuer: request.issuer,
+            force: request.force,
+            allow_mutable_version: request.allow_mutable_version,
+            signing_key: request.signing_key,
+            deprecation: request.deprecation,
+        };
+        let report = msp_publisher::publish_skiller_bundle(request.bundle, options)?;
+        let refreshed = MspClient::open(&report.registry)?;
+        Ok(ImportSkillerBundleResponse {
+            registry: refreshed.summary(),
+            report,
+        })
     }
 
     pub fn get_pack_manifest(&self, id: &str) -> anyhow::Result<SkillPackManifest> {
