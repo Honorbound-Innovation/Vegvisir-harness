@@ -216,15 +216,25 @@ When adding or renaming a script, update both:
 - `README.md` for humans
 - `manifest.tsv` for dispatcher discovery and automated checks
 
-For a broader pre-commit gate, run:
+For a fast hook-friendly pre-commit gate, run:
 
 ```bash
 ./companion_scripts/v.sh precommit
+```
+
+The default `precommit` mode is intentionally quick: staged whitespace checks,
+staged Shell syntax checks, and staged-file secret scanning only when files are
+staged. It ignores unrelated unstaged work by default. Use `precommit --worktree`
+when you also want to check unstaged/untracked files. For broader checks, use:
+
+```bash
+./companion_scripts/v.sh precommit --strict
 ./companion_scripts/v.sh precommit --full
 ```
 
-`precommit --full` runs project tests through `vtest.sh`. For Rust repositories
-with env-mutating tests, use `precommit --full --serial-rust-tests` to run with
-`RUST_TEST_THREADS=1`; this is more deterministic but can be much slower.
+`precommit --strict` adds `vdoctor --strict`. `precommit --full` also runs
+project tests through `vtest.sh`. For Rust repositories with env-mutating tests,
+use `precommit --full --serial-rust-tests` to run with `RUST_TEST_THREADS=1`;
+this is more deterministic but can be much slower.
 
 If you want a functional pass, run the most relevant scripts for the area you changed.

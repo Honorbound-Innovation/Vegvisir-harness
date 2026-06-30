@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run Vegvisir-oriented pre-commit quality checks.
-# Usage: ./vprecommit.sh [--quick|--full] [--no-secret-scan] [--serial-rust-tests]
+# Fast Vegvisir-oriented pre-commit quality checks.
+# Usage: ./vprecommit.sh [--quick|--strict|--full] [--worktree] [--no-secret-scan] [--serial-rust-tests]
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
@@ -10,22 +10,37 @@ source "$DIR/lib/common.sh"
 
 usage() {
   cat <<'USAGE'
-Usage: vprecommit.sh [--quick|--full] [--no-secret-scan] [--serial-rust-tests]
+Usage: vprecommit.sh [--quick|--strict|--full] [--worktree] [--no-secret-scan] [--serial-rust-tests]
 
-Default is --quick: git whitespace checks, Bash syntax, companion doctor, and
-staged secret scan. --full also runs project-level test tooling when recognized.
-Use --serial-rust-tests to run Rust tests with RUST_TEST_THREADS=1 for
-deterministic env-mutating test suites; this can be significantly slower.
+Modes:
+  --quick   Fast default for git hooks. Checks staged whitespace, staged shell
+            syntax, and staged-file secret scan only when files are staged.
+  --strict  Quick checks plus companion-wide vdoctor --strict.
+  --full    Strict checks plus project-level tests through vtest.sh.
+
+Options:
+  --worktree           Also check unstaged/untracked changed files where useful.
+                       This is intentionally off by default for hook speed and
+                       to avoid blocking commits on unrelated unstaged work.
+  --no-secret-scan     Skip staged secret scan.
+  --serial-rust-tests  With --full, run Rust tests with RUST_TEST_THREADS=1
+                       when the caller has not already set it.
+
+The default is intentionally fast. Expensive whole-repo/project tests only run
+when explicitly requested with --full.
 USAGE
 }
 
-full=0
+mode="quick"
 secret_scan=1
 serial_rust_tests=0
+include_worktree=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --quick) full=0 ;;
-    --full) full=1 ;;
+    --quick) mode="quick" ;;
+    --strict) mode="strict" ;;
+    --full) mode="full" ;;
+    --worktree|--include-worktree) include_worktree=1 ;;
     --no-secret-scan) secret_scan=0 ;;
     --serial-rust-tests) serial_rust_tests=1 ;;
     -h|--help) usage; exit 0 ;;
@@ -41,20 +56,78 @@ run_check() {
   "$@"
 }
 
-run_check "git status" git status --short --branch
-run_check "git diff --check" git diff --check
-run_check "git diff --cached --check" git diff --cached --check
-run_check "bash syntax" bash -n "$DIR"/*.sh "$DIR"/lib/common.sh
+read_git_files() {
+  "$@" 2>/dev/null | sort -u || true
+}
 
-[[ -x "$DIR/vdoctor.sh" ]] || { echo "Required helper is missing or not executable: $DIR/vdoctor.sh" >&2; exit 127; }
-run_check "companion doctor" "$DIR/vdoctor.sh" --strict
-
-if (( secret_scan == 1 )); then
-  [[ -x "$DIR/vsecret-scan.sh" ]] || { echo "Required helper is missing or not executable: $DIR/vsecret-scan.sh" >&2; exit 127; }
-  run_check "staged secret scan" "$DIR/vsecret-scan.sh" --staged
+mapfile -t staged_files < <(read_git_files git diff --cached --name-only --diff-filter=ACMR)
+check_files=("${staged_files[@]}")
+if (( include_worktree == 1 )); then
+  mapfile -t worktree_files < <(
+    {
+      git diff --name-only --diff-filter=ACMR 2>/dev/null || true
+      git ls-files --others --exclude-standard 2>/dev/null || true
+    } | sort -u
+  )
+  check_files+=("${worktree_files[@]}")
 fi
 
-if (( full == 1 )); then
+# De-duplicate file list while preserving simple Bash-only portability.
+if (( ${#check_files[@]} > 0 )); then
+  mapfile -t check_files < <(printf '%s\n' "${check_files[@]}" | sort -u)
+fi
+
+run_check "git status" git status --short --branch
+run_check "git diff --cached --check" git diff --cached --check
+if (( include_worktree == 1 )); then
+  run_check "git diff --check" git diff --check
+else
+  printf '\n== git diff --check ==\n'
+  echo "skipped; use --worktree to check unstaged whitespace"
+fi
+
+# Fast path: syntax-check only staged shell files by default. With --worktree,
+# include unstaged/untracked shell files too.
+shell_targets=()
+for file in "${check_files[@]}"; do
+  [[ -f "$file" ]] || continue
+  case "$file" in
+    *.sh|*/lib/*.sh) shell_targets+=("$file") ;;
+  esac
+done
+if (( ${#shell_targets[@]} > 0 )); then
+  run_check "bash syntax (selected shell files)" bash -n "${shell_targets[@]}"
+else
+  printf '\n== bash syntax (selected shell files) ==\n'
+  if (( include_worktree == 1 )); then
+    echo "skipped; no staged/changed shell files"
+  else
+    echo "skipped; no staged shell files"
+  fi
+fi
+
+if [[ "$mode" == "strict" || "$mode" == "full" ]]; then
+  [[ -x "$DIR/vdoctor.sh" ]] || { echo "Required helper is missing or not executable: $DIR/vdoctor.sh" >&2; exit 127; }
+  run_check "companion doctor" "$DIR/vdoctor.sh" --strict
+else
+  printf '\n== companion doctor ==\n'
+  echo "skipped in --quick mode; run '$0 --strict' or '$0 --full' for whole companion-suite validation"
+fi
+
+if (( secret_scan == 1 )); then
+  if (( ${#staged_files[@]} > 0 )); then
+    [[ -x "$DIR/vsecret-scan.sh" ]] || { echo "Required helper is missing or not executable: $DIR/vsecret-scan.sh" >&2; exit 127; }
+    run_check "staged secret scan" "$DIR/vsecret-scan.sh" --staged
+  else
+    printf '\n== staged secret scan ==\n'
+    echo "skipped; no staged files"
+  fi
+else
+  printf '\n== staged secret scan ==\n'
+  echo "skipped by --no-secret-scan"
+fi
+
+if [[ "$mode" == "full" ]]; then
   if [[ -x "$DIR/vtest.sh" ]]; then
     if [[ -f Cargo.toml && "$serial_rust_tests" -eq 1 && -z "${RUST_TEST_THREADS:-}" ]]; then
       run_check "project tests" bash -c 'RUST_TEST_THREADS=1 "$1"' _ "$DIR/vtest.sh"
@@ -66,7 +139,7 @@ if (( full == 1 )); then
   fi
 else
   printf '\n== project tests ==\n'
-  echo "skipped in --quick mode; run '$0 --full' for project tests"
+  echo "skipped; run '$0 --full' for project tests"
 fi
 
-printf '\nvprecommit: OK\n'
+printf '\nvprecommit: OK (%s)\n' "$mode"
