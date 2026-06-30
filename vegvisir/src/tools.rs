@@ -558,6 +558,48 @@ fn terminate_child_process_group(child: &mut Child) {
     let _ = child.kill();
 }
 
+const NORMAL_SUDO_REJECTION: &str = "Direct sudo through normal command tools is disabled so sudo passwords cannot enter chat/session/trace history. Run /sudo auth, then use run_privileged_command.";
+const PRIVILEGED_SUDO_REJECTION: &str = "Do not include sudo in run_privileged_command arguments. Run /sudo auth, then provide the underlying command; Vegvisir adds sudo -n internally.";
+
+fn command_mentions_sudo_invocation(parts: &[&str]) -> bool {
+    parts.iter().any(|part| part_mentions_sudo_invocation(part))
+}
+
+fn part_mentions_sudo_invocation(part: &str) -> bool {
+    let trimmed = part.trim();
+    if trimmed == "sudo" || trimmed.ends_with("/sudo") {
+        return true;
+    }
+
+    let mut token = String::new();
+    for ch in trimmed.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '/' | '.') {
+            token.push(ch);
+        } else {
+            if token_is_sudo_invocation(&token) {
+                return true;
+            }
+            token.clear();
+        }
+    }
+    token_is_sudo_invocation(&token)
+}
+
+fn token_is_sudo_invocation(token: &str) -> bool {
+    token == "sudo" || token.ends_with("/sudo")
+}
+
+fn reject_sudo_misuse(parts: &[&str], privileged: bool) -> Option<Observation> {
+    if !command_mentions_sudo_invocation(parts) {
+        return None;
+    }
+    Some(if privileged {
+        Observation::err(PRIVILEGED_SUDO_REJECTION, "SudoInvocationRejected")
+    } else {
+        Observation::err(NORMAL_SUDO_REJECTION, "SudoInvocationRejected")
+    })
+}
+
 fn execute_bounded_command(
     parts: &[&str],
     sandbox_config: &CommandSandboxConfig,
@@ -567,10 +609,14 @@ fn execute_bounded_command(
     include_command_in_data: bool,
     privileged: bool,
 ) -> Observation {
+    if parts.is_empty() {
+        return Observation::err("Empty command", "ValueError");
+    }
+    if let Some(rejection) = reject_sudo_misuse(parts, privileged) {
+        return rejection;
+    }
+
     let effective_parts = if privileged {
-        if parts.is_empty() {
-            return Observation::err("Empty command", "ValueError");
-        }
         let sudo_status = privilege::sudo_status();
         if !sudo_status.authenticated {
             return Observation::err(
@@ -3491,6 +3537,42 @@ mod skiller_tool_tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn command_execution_boundary_rejects_direct_sudo_before_spawn() {
+        let parts = ["sudo", "-n", "true"];
+        let rejection = reject_sudo_misuse(&parts, false).expect("sudo must be rejected");
+
+        assert!(!rejection.ok);
+        assert_eq!(rejection.error.as_deref(), Some("SudoInvocationRejected"));
+        assert!(rejection.content.contains("Direct sudo through normal command tools"));
+    }
+
+    #[test]
+    fn command_execution_boundary_rejects_nested_sudo_before_spawn() {
+        let parts = ["bash", "-lc", "printf x | sudo -S id"];
+        let rejection = reject_sudo_misuse(&parts, false).expect("nested sudo must be rejected");
+
+        assert!(!rejection.ok);
+        assert_eq!(rejection.error.as_deref(), Some("SudoInvocationRejected"));
+        assert!(rejection.content.contains("Direct sudo through normal command tools"));
+    }
+
+    #[test]
+    fn command_execution_boundary_rejects_privileged_tool_sudo_before_auth_check() {
+        let parts = ["sudo", "id"];
+        let rejection = reject_sudo_misuse(&parts, true).expect("privileged sudo must be rejected");
+
+        assert!(!rejection.ok);
+        assert_eq!(rejection.error.as_deref(), Some("SudoInvocationRejected"));
+        assert!(rejection.content.contains("Do not include sudo"));
+    }
+
+    #[test]
+    fn command_execution_boundary_allows_words_containing_sudo() {
+        let parts = ["bash", "-lc", "printf pseudocode"];
+        assert!(reject_sudo_misuse(&parts, false).is_none());
     }
 
     #[test]
