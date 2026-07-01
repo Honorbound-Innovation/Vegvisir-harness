@@ -18,10 +18,10 @@ impl TuiApplication {
                                 json!({
                                     "session": self.session.session_id,
                                     "workspace": self.cwd.display().to_string(),
-                                    "password_visibility": "not-collected; OS sudo prompt only",
+                                    "auth_path": "hbse-broker-os-prompt",
                                 }),
                             );
-                            "Sudo authentication refreshed through the OS prompt. Vegvisir did not read, store, or log the password. Privileged commands can now use the cached sudo timestamp with sudo -n.".to_string()
+                            "Sudo authentication refreshed through the OS prompt / HBSE broker path. Vegvisir did not read, store, or log the password. Privileged commands can now use the cached sudo timestamp with sudo -n.".to_string()
                         }
                         Err(error) => {
                             self.clear_requested = true;
@@ -57,9 +57,9 @@ impl TuiApplication {
         self.clear_requested = true;
         self.redraw_requested = true;
         self.session.status = "sudo auth prompt open".to_string();
-        self.session.activity = "Secure sudo password prompt is open; type password in the masked modal, Enter authenticates, Esc cancels.".to_string();
+        self.session.activity = "Secure sudo prompt is open; type the password locally, Enter hands off to the broker flow, Esc cancels.".to_string();
         self.ephemeral_notice = Some(EphemeralNotice::new(
-            "Secure sudo password prompt opened. Type only in the masked modal; Esc cancels.",
+            "Secure sudo prompt opened. Type only in the masked modal; Esc cancels.",
             EphemeralNoticeKind::Info,
             std::time::Duration::from_secs(8),
         ));
@@ -68,7 +68,7 @@ impl TuiApplication {
     fn sudo_status_text(&self) -> String {
         let status = crate::privilege::sudo_status();
         format!(
-            "Sudo workflow:\n  sudo available: {}\n  authenticated: {}\n  status: {}\n\nUsage:\n  /sudo auth              Opens Vegvisir's local secure masked password prompt.\n  /sudo auth --terminal   Fallback: temporarily leaves the TUI and lets sudo prompt on the controlling terminal.\n  /sudo clear             Invalidates the sudo timestamp with sudo -k.\n\nSecurity invariant: Vegvisir never sends the sudo password to chat/model/tools/logs/traces/run artifacts. The in-app prompt stores it only in local transient UI memory, masks it on screen, writes it only to sudo stdin for `sudo -S -p '' -v`, then clears it. Privileged command execution uses sudo -n and fails closed when no sudo timestamp is active.",
+            "Sudo workflow:\n  sudo available: {}\n  authenticated: {}\n  status: {}\n\nUsage:\n  /sudo auth              Opens Vegvisir's local secure prompt, then refreshes auth through the broker flow.\n  /sudo auth --terminal   Fallback: temporarily leaves the TUI and lets the OS / HBSE prompt handle authentication.\n  /sudo clear             Invalidates the sudo timestamp with sudo -k.\n\nSecurity invariant: Vegvisir never sends the sudo password to chat/model/tools/logs/traces/run artifacts. Authentication is brokered; the prompt buffer is local, masked on screen, and cleared after use. Privileged command execution uses sudo -n and fails closed when no sudo timestamp is active.",
             yes_no(status.sudo_available),
             yes_no(status.authenticated),
             status.message,

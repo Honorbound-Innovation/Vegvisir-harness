@@ -118,6 +118,8 @@ fn apply_setup(options: SetupOptions, choice: ProviderChoice) -> anyhow::Result<
     fs::create_dir_all(options.data_root.join("sessions"))?;
     fs::create_dir_all(options.data_root.join("agents"))?;
     fs::create_dir_all(options.data_root.join("skills"))?;
+    fs::create_dir_all(options.data_root.join("skiller").join("bundles"))?;
+    fs::create_dir_all(options.data_root.join("msp").join("registry"))?;
     fs::create_dir_all(options.data_root.join("traces"))?;
 
     let config_path = options.data_root.join("config.json");

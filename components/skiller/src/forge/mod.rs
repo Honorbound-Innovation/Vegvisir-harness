@@ -715,15 +715,22 @@ impl ForgeProvider for VegvisirForgeProvider {
             skill
                 .metadata
                 .insert("semantic_review".into(), "provider_model".into());
-            skill
-                .metadata
-                .insert("model_provider".into(), DEFAULT_FORGE_MODEL_PROVIDER.into());
-            skill
-                .metadata
-                .insert("model".into(), DEFAULT_FORGE_MODEL.into());
+            if let Some(model_provider) = request.model_provider.as_ref() {
+                skill
+                    .metadata
+                    .insert("model_provider".into(), model_provider.clone());
+            }
+            if let Some(model) = request.model.as_ref() {
+                skill.metadata.insert("model".into(), model.clone());
+            }
         }
         response.audit_notes.push(format!(
-            "Vegvisir adapter returned provider-backed ForgeResponseEnvelope; default model target {DEFAULT_FORGE_MODEL_PROVIDER}:{DEFAULT_FORGE_MODEL}."
+            "Vegvisir adapter returned provider-backed ForgeResponseEnvelope; model target {}:{}.",
+            request
+                .model_provider
+                .as_deref()
+                .unwrap_or(DEFAULT_FORGE_MODEL_PROVIDER),
+            request.model.as_deref().unwrap_or(DEFAULT_FORGE_MODEL),
         ));
         Ok(response)
     }

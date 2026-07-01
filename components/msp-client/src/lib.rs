@@ -32,6 +32,31 @@ pub use msp_registry;
 pub const DEFAULT_SEARCH_LIMIT: usize = 10;
 pub const MAX_SEARCH_LIMIT: usize = 100;
 
+/// Default user-global MSP registry root used by Vegvisir when no explicit registry is supplied.
+pub fn default_registry_root() -> PathBuf {
+    if let Some(path) = std::env::var_os("VEGVISIR_MSP_REGISTRY").filter(|value| !value.is_empty())
+    {
+        return PathBuf::from(path);
+    }
+    default_vegvisir_data_root().join("msp").join("registry")
+}
+
+fn default_vegvisir_data_root() -> PathBuf {
+    if let Some(path) = std::env::var_os("VEGVISIR_HOME").filter(|value| !value.is_empty()) {
+        return PathBuf::from(path);
+    }
+    if let Some(path) = std::env::var_os("XDG_DATA_HOME").filter(|value| !value.is_empty()) {
+        return PathBuf::from(path).join("vegvisir");
+    }
+    if let Some(home) = std::env::var_os("HOME").filter(|value| !value.is_empty()) {
+        return PathBuf::from(home)
+            .join(".local")
+            .join("share")
+            .join("vegvisir");
+    }
+    PathBuf::from(".vegvisir")
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientInfo {
     pub name: String,
@@ -390,6 +415,14 @@ fn render_loaded_skill(load: &SkillLoadResult, mode: LoadMode) -> anyhow::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_var_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env var test lock poisoned")
+    }
 
     #[test]
     fn parses_load_modes() {
@@ -403,5 +436,41 @@ mod tests {
         assert_eq!(clamp_limit(None), DEFAULT_SEARCH_LIMIT);
         assert_eq!(clamp_limit(Some(0)), 1);
         assert_eq!(clamp_limit(Some(MAX_SEARCH_LIMIT + 1)), MAX_SEARCH_LIMIT);
+    }
+
+    #[test]
+    fn default_registry_root_is_user_global() {
+        let _guard = env_var_test_lock();
+        let previous_home = std::env::var_os("VEGVISIR_HOME");
+        let previous_registry = std::env::var_os("VEGVISIR_MSP_REGISTRY");
+        let temp = tempfile::tempdir().unwrap();
+        let data_root = temp.path().join("veg-home");
+        unsafe {
+            std::env::set_var("VEGVISIR_HOME", &data_root);
+            std::env::remove_var("VEGVISIR_MSP_REGISTRY");
+        }
+        assert_eq!(
+            default_registry_root(),
+            data_root.join("msp").join("registry")
+        );
+
+        let override_root = temp.path().join("custom-registry");
+        unsafe {
+            std::env::set_var("VEGVISIR_MSP_REGISTRY", &override_root);
+        }
+        assert_eq!(default_registry_root(), override_root);
+
+        unsafe {
+            if let Some(previous) = previous_registry {
+                std::env::set_var("VEGVISIR_MSP_REGISTRY", previous);
+            } else {
+                std::env::remove_var("VEGVISIR_MSP_REGISTRY");
+            }
+            if let Some(previous) = previous_home {
+                std::env::set_var("VEGVISIR_HOME", previous);
+            } else {
+                std::env::remove_var("VEGVISIR_HOME");
+            }
+        }
     }
 }

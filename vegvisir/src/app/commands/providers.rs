@@ -158,7 +158,9 @@ impl TuiApplication {
                 model.name
             ));
         }
-        self.session.current_model = model.name.clone();
+        let model_name = model.name.clone();
+        let model_provider = model.provider.clone();
+        self.session.current_model = model_name.clone();
         if let Some(context_window) = model.context_window {
             self.session.context_limit = context_window;
         }
@@ -168,10 +170,11 @@ impl TuiApplication {
         } else {
             self.save_workspace_provider_override()?;
         }
+        self.rebuild_tooling_for_cms()?;
         Ok(format!(
             "Selected model {} via provider {} ({}).",
-            model.name,
-            model.provider,
+            model_name,
+            model_provider,
             if global {
                 "global default"
             } else {
@@ -352,6 +355,137 @@ impl TuiApplication {
         }
     }
 
+    pub(crate) fn skiller_provider_command(&mut self, args: &[String]) -> anyhow::Result<String> {
+        if args.is_empty() || matches!(args[0].as_str(), "status" | "show") {
+            return Ok(self.skiller_forge_model_target_status());
+        }
+        let requested = args[0].trim();
+        if matches!(
+            requested,
+            "current" | "default" | "clear" | "reset" | "unset"
+        ) {
+            self.skiller_forge_model_target_defaults.provider = "current".to_string();
+            if matches!(requested, "default" | "clear" | "reset" | "unset") {
+                self.skiller_forge_model_target_defaults.model = "current".to_string();
+            }
+            self.save_skiller_forge_model_target_defaults()?;
+            self.rebuild_tooling_for_cms()?;
+            return Ok(self.skiller_forge_model_target_status());
+        }
+        let Some(provider) = self.provider_registry.get(requested).cloned() else {
+            let matches = close_provider_matches(&self.provider_registry, requested);
+            if !matches.is_empty() {
+                return Ok(format!(
+                    "Unknown Skiller provider override. Close matches:\n{}",
+                    matches.join("\n")
+                ));
+            }
+            return Ok(format!("Unknown Skiller provider override: {requested}"));
+        };
+        if provider.auth_type == "api_key" && !direct_provider_auth_allowed() {
+            return Ok(format!(
+                "Direct API-key provider auth is disabled in production mode for {}. Configure the secret in HBSE, then select an HBSE-routed provider for Skiller Forge.",
+                provider.display_name.as_deref().unwrap_or(&provider.name),
+            ));
+        }
+        self.skiller_forge_model_target_defaults.provider = provider.name.clone();
+        if self.skiller_forge_model_target_defaults.model == "current" {
+            if let Some(model) = self.models.default_for_provider(&provider.name) {
+                self.skiller_forge_model_target_defaults.model = model.name.clone();
+            }
+        }
+        self.save_skiller_forge_model_target_defaults()?;
+        self.rebuild_tooling_for_cms()?;
+        Ok(format!(
+            "Skiller Forge provider override set to {}.\n{}",
+            provider.name,
+            self.skiller_forge_model_target_status()
+        ))
+    }
+
+    pub(crate) fn skiller_model_command(&mut self, args: &[String]) -> anyhow::Result<String> {
+        if args.is_empty() || matches!(args[0].as_str(), "status" | "show") {
+            return Ok(self.skiller_forge_model_target_status());
+        }
+        let requested = args.join(" ");
+        let requested = requested.trim();
+        if matches!(
+            requested,
+            "current" | "default" | "clear" | "reset" | "unset"
+        ) {
+            self.skiller_forge_model_target_defaults.model = "current".to_string();
+            if matches!(requested, "default" | "clear" | "reset" | "unset") {
+                self.skiller_forge_model_target_defaults.provider = "current".to_string();
+            }
+            self.save_skiller_forge_model_target_defaults()?;
+            self.rebuild_tooling_for_cms()?;
+            return Ok(self.skiller_forge_model_target_status());
+        }
+
+        let provider = if self.skiller_forge_model_target_defaults.provider == "current" {
+            self.session.current_provider.clone()
+        } else {
+            self.skiller_forge_model_target_defaults.provider.clone()
+        };
+        let name = repair_model_for_provider(&provider, requested);
+        if self.models.get(&name).is_none() {
+            let _ = self.refresh_provider_models(&provider);
+        }
+        let Some(model) = self.models.get(&name) else {
+            let matches = close_model_matches(&self.models, &provider, &name);
+            if !matches.is_empty() {
+                return Ok(format!(
+                    "Unknown Skiller model override for provider {provider}. Close matches:\n{}",
+                    matches.join("\n")
+                ));
+            }
+            return Ok(format!(
+                "Unknown Skiller model override for provider {provider}: {name}"
+            ));
+        };
+        if !self.models.is_model_allowed_for_provider(model, &provider) {
+            return Ok(format!(
+                "Model {} belongs to provider {}, but Skiller Forge provider target is {}. Run /sprovider {} first, then /smodel {}.",
+                model.name, model.provider, provider, model.provider, model.name
+            ));
+        }
+        let model_name = model.name.clone();
+        self.skiller_forge_model_target_defaults.model = model_name.clone();
+        self.save_skiller_forge_model_target_defaults()?;
+        self.rebuild_tooling_for_cms()?;
+        Ok(format!(
+            "Skiller Forge model override set to {}.\n{}",
+            model_name,
+            self.skiller_forge_model_target_status()
+        ))
+    }
+
+    fn skiller_forge_model_target_status(&self) -> String {
+        let resolved = self
+            .skiller_forge_model_target_defaults
+            .clone()
+            .with_current_session(
+                self.session.current_provider.clone(),
+                self.session.current_model.clone(),
+            )
+            .resolve();
+        match resolved {
+            Ok(target) => format!(
+                "Skiller Forge model target:\n  configured provider: {}\n  configured model: {}\n  resolved: {}:{}\n  source: {}\n\nDefault behavior is provider/model `current`, meaning Skiller Forge follows the main thread. Use /sprovider <provider|current|clear> and /smodel <model|current|clear> to override or reset.",
+                self.skiller_forge_model_target_defaults.provider,
+                self.skiller_forge_model_target_defaults.model,
+                target.provider,
+                target.model,
+                target.source,
+            ),
+            Err(error) => format!(
+                "Skiller Forge model target is misconfigured: {error}\n  configured provider: {}\n  configured model: {}\nUse /sprovider current or /smodel <model> to repair it.",
+                self.skiller_forge_model_target_defaults.provider,
+                self.skiller_forge_model_target_defaults.model,
+            ),
+        }
+    }
+
     pub(crate) fn provider_command(&mut self, args: &[String]) -> anyhow::Result<String> {
         if args.first().map(String::as_str) == Some("diagnose") {
             return Ok(self.provider_diagnose_command(args.get(1).map(String::as_str)));
@@ -410,6 +544,7 @@ impl TuiApplication {
         } else {
             self.save_workspace_provider_override()?;
         }
+        self.rebuild_tooling_for_cms()?;
         if provider.name == "openai-sso" {
             let selected = format!(
                 "Selected provider {}; active model is {} ({}).",

@@ -146,6 +146,41 @@ impl TuiApplication {
                     .collect();
             }
         }
+        if raw.starts_with("/sprovider ") || raw == "/sprovider " {
+            let prefix = if trailing_space {
+                ""
+            } else {
+                parts.get(1).copied().unwrap_or("")
+            };
+            let mut suggestions = ["status", "current", "clear"]
+                .into_iter()
+                .filter(|value| value.starts_with(prefix))
+                .map(|value| {
+                    Suggestion::new(
+                        value.to_string(),
+                        "Skiller Forge provider target".to_string(),
+                        Some(format!("/sprovider {value}")),
+                    )
+                })
+                .collect::<Vec<_>>();
+            suggestions.extend(
+                self.provider_registry
+                    .list()
+                    .into_iter()
+                    .filter(|provider| provider.name.starts_with(prefix))
+                    .map(|provider| {
+                        Suggestion::new(
+                            provider.name.clone(),
+                            provider
+                                .display_name
+                                .clone()
+                                .unwrap_or_else(|| provider.name.clone()),
+                            Some(format!("/sprovider {}", provider.name)),
+                        )
+                    }),
+            );
+            return suggestions;
+        }
         if raw.starts_with("/runs ") || raw == "/runs " {
             let prefix = if trailing_space {
                 ""
@@ -350,6 +385,26 @@ impl TuiApplication {
             }
             return self.model_suggestions_for_prefix(prefix, command);
         }
+        if raw.starts_with("/smodel ") || raw == "/smodel " {
+            let prefix = if trailing_space {
+                ""
+            } else {
+                parts.get(1).copied().unwrap_or("")
+            };
+            let mut suggestions = ["status", "current", "clear"]
+                .into_iter()
+                .filter(|value| value.starts_with(prefix))
+                .map(|value| {
+                    Suggestion::new(
+                        value.to_string(),
+                        "Skiller Forge model target".to_string(),
+                        Some(format!("/smodel {value}")),
+                    )
+                })
+                .collect::<Vec<_>>();
+            suggestions.extend(self.model_suggestions_for_prefix(prefix, "/smodel"));
+            return suggestions;
+        }
         self.commands
             .all()
             .into_iter()
@@ -496,6 +551,8 @@ impl TuiApplication {
             "/effort" => self.effort_command(&args)?,
             "/fast" => self.fast_command(&args)?,
             "/provider" => self.provider_command(&args)?,
+            "/sprovider" => self.skiller_provider_command(&args)?,
+            "/smodel" => self.skiller_model_command(&args)?,
             "/providers" => self.providers_command(),
             "/auth" => self.auth_command(&args),
             "/verify" => self.verify_command(&args),

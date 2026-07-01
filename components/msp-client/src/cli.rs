@@ -12,13 +12,9 @@ use clap::{Args, Parser, Subcommand};
 #[command(name = "msp-client")]
 #[command(about = "Native Vegvisir MSP client component", long_about = None)]
 struct Cli {
-    /// MSP local registry root.
-    #[arg(
-        long,
-        global = true,
-        default_value = "components/msp/examples/registry"
-    )]
-    registry: PathBuf,
+    /// MSP local registry root. Defaults to Vegvisir's user-global MSP registry.
+    #[arg(long, global = true)]
+    registry: Option<PathBuf>,
     #[command(subcommand)]
     command: Commands,
 }
@@ -168,7 +164,8 @@ where
     T: Into<std::ffi::OsString> + Clone,
 {
     let cli = Cli::parse_from(args);
-    let client = MspClient::open(&cli.registry)?;
+    let registry = cli.registry.unwrap_or_else(crate::default_registry_root);
+    let client = MspClient::open(&registry)?;
 
     match cli.command {
         Commands::Info => print_json(&client.info()),

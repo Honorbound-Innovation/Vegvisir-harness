@@ -711,6 +711,18 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
             "/provider [name|diagnose [provider]]",
             &[],
         ),
+        cmd(
+            "/sprovider",
+            "select Skiller Forge provider override",
+            "/sprovider [provider|current|clear|status]",
+            &[],
+        ),
+        cmd(
+            "/smodel",
+            "select Skiller Forge model override",
+            "/smodel [model|current|clear|status]",
+            &[],
+        ),
         cmd("/providers", "show provider auth status", "/providers", &[]),
         cmd("/auth", "show provider auth setup", "/auth [provider]", &[]),
         cmd(
@@ -797,6 +809,8 @@ fn supports_noninteractive(name: &str) -> bool {
             | "/models"
             | "/model"
             | "/provider"
+            | "/sprovider"
+            | "/smodel"
             | "/verify"
             | "/eval"
             | "/trace"
@@ -822,9 +836,8 @@ fn infer_command_category(name: &str) -> CommandCategory {
         "/recall" | "/memory" | "/remember" | "/context" | "/model-request" | "/compress" => {
             CommandCategory::MemoryContext
         }
-        "/models" | "/model" | "/effort" | "/fast" | "/provider" | "/providers" | "/auth" => {
-            CommandCategory::ModelProvider
-        }
+        "/models" | "/model" | "/effort" | "/fast" | "/provider" | "/sprovider" | "/smodel"
+        | "/providers" | "/auth" => CommandCategory::ModelProvider,
         "/agent" | "/agents" | "/subagents" | "/tasks" | "/work" | "/auto" | "/autonomy" => {
             CommandCategory::AgentsTasks
         }
@@ -849,10 +862,9 @@ fn infer_command_safety(name: &str) -> CommandSafety {
             CommandSafety::SessionMutation
         }
         "/workspace" | "/projects" | "/system" | "/agent" | "/agents" | "/ka" | "/profile"
-        | "/model" | "/provider" | "/effort" | "/fast" | "/tools" | "/approvals" | "/skills"
-        | "/memory" | "/remember" | "/hbse" | "/sudo" | "/mcp" | "/config" => {
-            CommandSafety::SessionMutation
-        }
+        | "/model" | "/provider" | "/sprovider" | "/smodel" | "/effort" | "/fast" | "/tools"
+        | "/approvals" | "/skills" | "/memory" | "/remember" | "/hbse" | "/sudo" | "/mcp"
+        | "/config" => CommandSafety::SessionMutation,
         "/tasks" => CommandSafety::Destructive,
         "/attach" | "/speech" | "/tts" => CommandSafety::ExternalEffect,
         "/diff" | "/eval" | "/verify" => CommandSafety::ReadOnly,
