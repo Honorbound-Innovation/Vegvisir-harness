@@ -12,6 +12,7 @@ This document focuses on the newer command/file hardening behavior.
 | Command allow-list | Limits which shell executables the model can run without approval. |
 | Risky-tool approval | Queues risky tool calls for operator review. |
 | Network-aware approval | Queues obvious network-like command requests for operator review. |
+| Subcommand-aware approval | Queues high-risk argv patterns even when the executable is allow-listed. |
 | Command OS sandbox | Optionally wraps shell commands in Bubblewrap isolation. |
 | Dangerous bypass | Startup-only mode that bypasses approvals and sandbox controls for trusted high-risk sessions. |
 
@@ -51,6 +52,20 @@ Examples:
 ```
 
 If a command is not allow-listed, Vegvisir queues a command approval with risk label `command-allow`.
+
+## Subcommand-Aware Command Approval
+
+Executable allow-lists are only the first pass. Some tools have both safe local subcommands and high-impact subcommands, so Vegvisir also inspects argv patterns for commands that require explicit approval even when the executable itself is allow-listed.
+
+Current high-risk patterns include:
+
+- dynamic shell command strings such as `bash -lc ...` (`command-dynamic-shell`),
+- external publication/write operations such as `git push` and selected `gh` commands (`command-external-write`),
+- destructive local git operations such as `git clean` and `git reset --hard` (`command-destructive`),
+- package/container registry operations such as `cargo publish`, `npm publish`, and container pushes/logins (`command-registry-write`),
+- privileged container execution such as `docker run --privileged` (`command-privileged-container`).
+
+This keeps common local checks like `git status`, `cargo test`, and `npm test` low-friction while making publication, destructive, dynamic-shell, and credential/account operations visible to the operator.
 
 ## Approval Queue
 

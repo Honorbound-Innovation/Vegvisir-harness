@@ -18,18 +18,20 @@ use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use crate::{
+    context::{ContextBudgetAction, ContextBudgetDecision, ContextBudgetPolicy},
     control_requests::{ApprovalControlPayload, ControlRequest},
     core::{Attachment, ChatMessage, ModelInfo, ProviderConfig, ProviderRegistry, SessionState},
     environment::get_env,
     guardrails::ApprovalResolution,
     openai_sso::{codex_base_url, load_fresh_tokens_for_metadata},
-    telemetry::selected_usage_or_counted,
-    tools::{ToolExecutor, ToolRegistry},
+    telemetry::{count_text_tokens, selected_usage_or_counted},
+    tools::{CommandOutputSink, ToolExecutor, ToolRegistry, with_command_output_sink},
     types::{Observation, ToolCall},
 };
 
 const TOOL_OBSERVATION_MODEL_MAX_BYTES: usize = 24 * 1024;
 const OPENAI_TOOL_LOOP_MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
+const PROVIDER_CONTEXT_REPAIR_TARGET_PERCENT: f64 = 75.0;
 static RUNTIME_MAX_TOOL_ROUNDS: AtomicUsize = AtomicUsize::new(0);
 
 pub fn direct_provider_auth_allowed() -> bool {
@@ -1662,6 +1664,7 @@ fn anthropic_tool_loop(
         if !system_prompt.is_empty() {
             payload["system"] = anthropic_cached_text_blocks(&system_prompt);
         }
+        enforce_provider_payload_budget(model, &payload)?;
         let response = post(payload)?;
         let content = response
             .get("content")
@@ -1699,16 +1702,15 @@ fn anthropic_tool_loop(
             else {
                 continue;
             };
-            let result = if index == 0 {
-                let args = parse_tool_arguments(tool_use.get("input"));
-                let output = execute_tool_or_stop_for_approval(&name, args, execute_tool)?;
-                let result = completed_tool_observation(&name, &output);
-                let result = truncate_model_observation(&result);
-                observations.push((name.clone(), result.clone()));
-                result
-            } else {
-                deferred_tool_observation(&name)
-            };
+            let args = parse_tool_arguments(tool_use.get("input"));
+            let result = execute_tool_call_for_model(
+                &name,
+                args,
+                index,
+                execute_tool,
+                &mut observations,
+                |result| Ok(truncate_model_observation(result)),
+            )?;
             results.push(json!({
                 "type": "tool_result",
                 "tool_use_id": id,
@@ -2140,6 +2142,7 @@ fn google_tool_loop(
         if let Some(system_instruction) = &system_instruction {
             payload["systemInstruction"] = system_instruction.clone();
         }
+        enforce_provider_payload_budget(model, &payload)?;
         let response = post(payload)?;
         let parts = response
             .pointer("/candidates/0/content/parts")
@@ -2165,16 +2168,15 @@ fn google_tool_loop(
             let Some(name) = call.get("name").and_then(Value::as_str).map(str::to_string) else {
                 continue;
             };
-            let result = if index == 0 {
-                let args = parse_tool_arguments(call.get("args"));
-                let output = execute_tool_or_stop_for_approval(&name, args, execute_tool)?;
-                let result = completed_tool_observation(&name, &output);
-                let result = truncate_model_observation(&result);
-                observations.push((name.clone(), result.clone()));
-                result
-            } else {
-                deferred_tool_observation(&name)
-            };
+            let args = parse_tool_arguments(call.get("args"));
+            let result = execute_tool_call_for_model(
+                &name,
+                args,
+                index,
+                execute_tool,
+                &mut observations,
+                |result| Ok(truncate_model_observation(result)),
+            )?;
             response_parts.push(json!({
                 "functionResponse": {
                     "name": name,
@@ -2267,6 +2269,7 @@ impl ProviderAdapter for OpenAISsoProfileAdapter {
         let max_tool_rounds = max_tool_rounds();
         let mut observations = Vec::<(String, String)>::new();
         for _ in 0..max_tool_rounds {
+            enforce_provider_payload_budget(model, &payload)?;
             let response = self.post_response_stream_json(payload.clone(), on_delta)?;
             let tool_calls = response_function_calls(&response);
             if tool_calls.is_empty() {
@@ -2288,16 +2291,14 @@ impl ProviderAdapter for OpenAISsoProfileAdapter {
                 input.extend(output.iter().map(response_output_item_for_followup));
             }
             for (index, call) in tool_calls.into_iter().enumerate() {
-                let result = if index == 0 {
-                    let output =
-                        execute_tool_or_stop_for_approval(&call.name, call.args, execute_tool)?;
-                    let result = completed_tool_observation(&call.name, &output);
-                    let result = truncate_model_observation(&result);
-                    observations.push((call.name.clone(), result.clone()));
-                    result
-                } else {
-                    deferred_tool_observation(&call.name)
-                };
+                let result = execute_tool_call_for_model(
+                    &call.name,
+                    call.args,
+                    index,
+                    execute_tool,
+                    &mut observations,
+                    |result| Ok(truncate_model_observation(result)),
+                )?;
                 input.push(json!({
                     "type": "function_call_output",
                     "call_id": call.call_id,
@@ -2401,6 +2402,7 @@ fn responses_tool_loop_streaming(
     payload["tools"] = Value::Array(tools.iter().map(responses_tool_schema).collect());
     let mut observations = Vec::<(String, String)>::new();
     for _ in 0..max_tool_rounds {
+        enforce_provider_payload_budget(model, &payload)?;
         let response = post_response(payload.clone())?;
         let tool_calls = response_function_calls(&response);
         if tool_calls.is_empty() {
@@ -2422,16 +2424,14 @@ fn responses_tool_loop_streaming(
             input.extend(output.iter().map(response_output_item_for_followup));
         }
         for (index, call) in tool_calls.into_iter().enumerate() {
-            let result = if index == 0 {
-                let output =
-                    execute_tool_or_stop_for_approval(&call.name, call.args, execute_tool)?;
-                let result = completed_tool_observation(&call.name, &output);
-                let result = truncate_model_observation(&result);
-                observations.push((call.name.clone(), result.clone()));
-                result
-            } else {
-                deferred_tool_observation(&call.name)
-            };
+            let result = execute_tool_call_for_model(
+                &call.name,
+                call.args,
+                index,
+                execute_tool,
+                &mut observations,
+                |result| Ok(truncate_model_observation(result)),
+            )?;
             input.push(json!({
                 "type": "function_call_output",
                 "call_id": call.call_id,
@@ -3610,7 +3610,7 @@ fn responses_payload(messages: &[ChatMessage], model: &ModelInfo) -> Value {
         "input": input,
         "tools": [],
         "tool_choice": "none",
-        "parallel_tool_calls": false,
+        "parallel_tool_calls": true,
         "store": false,
         "stream": true,
         "include": [],
@@ -4561,10 +4561,10 @@ pub fn openai_tool_loop(
             "stream": false,
             "tools": payload_tools,
             "tool_choice": "auto",
-            "parallel_tool_calls": false,
+            "parallel_tool_calls": true,
         });
         apply_chat_reasoning_settings(&mut payload, model);
-        enforce_openai_payload_budget(&payload)?;
+        enforce_openai_payload_budget(model, &payload)?;
         let data = post(payload)?;
         let message = data
             .pointer("/choices/0/message")
@@ -4594,16 +4594,26 @@ pub fn openai_tool_loop(
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
-            let result = if index == 0 {
-                let args = parse_tool_arguments(tool_call.pointer("/function/arguments"));
-                let output = execute_tool_or_stop_for_approval(&name, args, execute_tool)?;
-                let result = completed_tool_observation(&name, &output);
-                let result = truncate_model_observation(&result);
-                observations.push((name.clone(), result.clone()));
-                result
-            } else {
-                deferred_tool_observation(&name)
-            };
+            let args = parse_tool_arguments(tool_call.pointer("/function/arguments"));
+            let tool_call_id = tool_call.get("id").cloned().unwrap_or(Value::Null);
+            let result = execute_tool_call_for_model(
+                &name,
+                args,
+                index,
+                execute_tool,
+                &mut observations,
+                |result| {
+                    compact_model_observation_for_openai_tool_loop(
+                        model,
+                        &wire_messages,
+                        &payload_tools,
+                        tool_call_id,
+                        &name,
+                        result,
+                        false,
+                    )
+                },
+            )?;
             wire_messages.push(json!({
                 "role": "tool",
                 "tool_call_id": tool_call.get("id").cloned().unwrap_or(Value::Null),
@@ -4634,10 +4644,10 @@ pub fn openai_tool_loop_streaming(
             "stream": true,
             "tools": payload_tools,
             "tool_choice": "auto",
-            "parallel_tool_calls": false,
+            "parallel_tool_calls": true,
         });
         apply_chat_reasoning_settings(&mut payload, model);
-        enforce_openai_payload_budget(&payload)?;
+        enforce_openai_payload_budget(model, &payload)?;
         let body = post_stream(payload)?;
         let (content, tool_calls) = parse_openai_tool_sse_with_callback(&body, on_delta)?;
         if tool_calls.is_empty() {
@@ -4654,16 +4664,26 @@ pub fn openai_tool_loop_streaming(
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
-            let result = if index == 0 {
-                let args = parse_tool_arguments(tool_call.pointer("/function/arguments"));
-                let output = execute_tool_or_stop_for_approval(&name, args, execute_tool)?;
-                let result = completed_tool_observation(&name, &output);
-                let result = truncate_model_observation(&result);
-                observations.push((name.clone(), result.clone()));
-                result
-            } else {
-                deferred_tool_observation(&name)
-            };
+            let args = parse_tool_arguments(tool_call.pointer("/function/arguments"));
+            let tool_call_id = tool_call.get("id").cloned().unwrap_or(Value::Null);
+            let result = execute_tool_call_for_model(
+                &name,
+                args,
+                index,
+                execute_tool,
+                &mut observations,
+                |result| {
+                    compact_model_observation_for_openai_tool_loop(
+                        model,
+                        &wire_messages,
+                        &payload_tools,
+                        tool_call_id,
+                        &name,
+                        result,
+                        true,
+                    )
+                },
+            )?;
             wire_messages.push(json!({
                 "role": "tool",
                 "tool_call_id": tool_call.get("id").cloned().unwrap_or(Value::Null),
@@ -4745,14 +4765,221 @@ fn parse_openai_tool_sse_with_callback(
     Ok((output, tool_calls))
 }
 
-fn enforce_openai_payload_budget(payload: &Value) -> anyhow::Result<()> {
-    let bytes = serde_json::to_string(payload)?.len();
+fn enforce_provider_payload_budget(
+    model: &ModelInfo,
+    payload: &Value,
+) -> anyhow::Result<ContextBudgetDecision> {
+    let serialized = serde_json::to_string(payload)?;
+    let bytes = serialized.len();
     if bytes > OPENAI_TOOL_LOOP_MAX_BODY_BYTES {
         anyhow::bail!(
             "Vegvisir blocked an oversized model request before provider send: {bytes} bytes exceeds {OPENAI_TOOL_LOOP_MAX_BODY_BYTES} bytes. This usually means tool observations or context are too large."
         );
     }
-    Ok(())
+    let decision = evaluate_serialized_payload_budget(model, &serialized);
+    if decision.action == ContextBudgetAction::Block {
+        anyhow::bail!(
+            "Vegvisir blocked an oversized model request before provider send: estimated {} input tokens for model {} exceeds the active context budget ({}; {:.1}% used). {}",
+            count_text_tokens(&model.name, &serialized),
+            model.name,
+            model
+                .context_window
+                .map(|limit| limit.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+            decision.percentage,
+            decision.warnings.join(" ")
+        );
+    }
+    Ok(decision)
+}
+
+fn enforce_openai_payload_budget(model: &ModelInfo, payload: &Value) -> anyhow::Result<()> {
+    enforce_provider_payload_budget(model, payload).map(|_| ())
+}
+
+fn evaluate_serialized_payload_budget(
+    model: &ModelInfo,
+    serialized_payload: &str,
+) -> ContextBudgetDecision {
+    let used_tokens = count_text_tokens(&model.name, serialized_payload) as usize;
+    let max_tokens = model.context_window.unwrap_or(0) as usize;
+    ContextBudgetPolicy::default().evaluate(used_tokens, max_tokens)
+}
+
+fn provider_payload_budget_decision(
+    model: &ModelInfo,
+    payload: &Value,
+) -> anyhow::Result<ContextBudgetDecision> {
+    let serialized = serde_json::to_string(payload)?;
+    Ok(evaluate_serialized_payload_budget(model, &serialized))
+}
+
+fn provider_message_budget_decision(
+    messages: &[ChatMessage],
+    model: &ModelInfo,
+) -> anyhow::Result<ContextBudgetDecision> {
+    provider_payload_budget_decision(model, &provider_budget_probe_payload(messages, model))
+}
+
+fn provider_budget_probe_payload(messages: &[ChatMessage], model: &ModelInfo) -> Value {
+    match model.provider.as_str() {
+        "anthropic" => anthropic_messages_payload(messages, model),
+        "google" => google_generate_content_payload(messages, model),
+        _ => {
+            let mut payload = if model_uses_responses_payload(model) {
+                responses_payload(messages, model)
+            } else {
+                json!({
+                    "model": model.name,
+                    "messages": openai_messages(messages),
+                    "stream": true,
+                })
+            };
+            apply_chat_reasoning_settings(&mut payload, model);
+            payload
+        }
+    }
+}
+
+fn model_uses_responses_payload(model: &ModelInfo) -> bool {
+    matches!(model.provider.as_str(), "openai" | "openai-sso")
+        || model
+            .metadata
+            .get("responses_api")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+}
+
+fn context_repair_target_tokens(model: &ModelInfo) -> usize {
+    let max_tokens = model.context_window.unwrap_or(0) as usize;
+    if max_tokens == 0 {
+        return 0;
+    }
+    ((max_tokens as f64) * (PROVIDER_CONTEXT_REPAIR_TARGET_PERCENT / 100.0)).floor() as usize
+}
+
+fn trim_chat_messages_to_provider_budget(
+    messages: Vec<ChatMessage>,
+    model: &ModelInfo,
+) -> anyhow::Result<(Vec<ChatMessage>, ContextBudgetDecision, bool)> {
+    let initial = provider_message_budget_decision(&messages, model)?;
+    if initial.action != ContextBudgetAction::CompactRecommended
+        && initial.action != ContextBudgetAction::Block
+    {
+        return Ok((messages, initial, false));
+    }
+    let target_tokens = context_repair_target_tokens(model);
+    if target_tokens == 0 {
+        return Ok((messages, initial, false));
+    }
+
+    let system_messages = messages
+        .iter()
+        .filter(|message| message.role == "system")
+        .cloned()
+        .collect::<Vec<_>>();
+    let conversational = messages
+        .iter()
+        .filter(|message| message.role != "system")
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut kept = Vec::new();
+    for message in conversational.iter().rev() {
+        kept.push(message.clone());
+        let candidate = repaired_provider_messages(&system_messages, &kept, conversational.len());
+        let decision = provider_message_budget_decision(&candidate, model)?;
+        if decision.action == ContextBudgetAction::Block
+            || (decision.percentage > PROVIDER_CONTEXT_REPAIR_TARGET_PERCENT
+                && count_probe_tokens(&candidate, model) > target_tokens)
+        {
+            kept.pop();
+            if kept.is_empty() {
+                kept.push(truncate_chat_message_for_provider_budget(
+                    message,
+                    model,
+                    target_tokens,
+                ));
+            }
+            break;
+        }
+    }
+    if kept.is_empty() && !conversational.is_empty() {
+        if let Some(message) = conversational.last() {
+            kept.push(truncate_chat_message_for_provider_budget(
+                message,
+                model,
+                target_tokens,
+            ));
+        }
+    }
+    let repaired = repaired_provider_messages(&system_messages, &kept, conversational.len());
+    let repaired_decision = provider_message_budget_decision(&repaired, model)?;
+    Ok((repaired, repaired_decision, true))
+}
+
+fn repaired_provider_messages(
+    system_messages: &[ChatMessage],
+    kept_reversed: &[ChatMessage],
+    original_conversation_len: usize,
+) -> Vec<ChatMessage> {
+    let mut repaired = system_messages.to_vec();
+    let omitted = original_conversation_len.saturating_sub(kept_reversed.len());
+    if omitted > 0 {
+        repaired.push(ChatMessage {
+            role: "system".to_string(),
+            content: format!(
+                "Earlier conversation history was omitted by Vegvisir before provider send because the active context budget required compaction. Omitted messages: {omitted}."
+            ),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+    }
+    repaired.extend(kept_reversed.iter().rev().cloned());
+    repaired
+}
+
+fn truncate_chat_message_for_provider_budget(
+    message: &ChatMessage,
+    model: &ModelInfo,
+    target_tokens: usize,
+) -> ChatMessage {
+    let marker = "[Message truncated by Vegvisir before provider send to fit the active model context budget.]\n";
+    let approx_chars = target_tokens.saturating_mul(3).clamp(512, 64 * 1024);
+    let marker_chars = marker.chars().count();
+    let available = approx_chars.saturating_sub(marker_chars).max(256);
+    let mut truncated = message.clone();
+    let suffix = message
+        .content
+        .chars()
+        .rev()
+        .take(available)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<String>();
+    truncated.content = format!("{marker}{suffix}");
+    if provider_message_budget_decision(&[truncated.clone()], model)
+        .map(|decision| decision.action == ContextBudgetAction::Block)
+        .unwrap_or(false)
+    {
+        let hard_suffix = message
+            .content
+            .chars()
+            .rev()
+            .take(256)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<String>();
+        truncated.content = format!("{marker}{hard_suffix}");
+    }
+    truncated
+}
+
+fn count_probe_tokens(messages: &[ChatMessage], model: &ModelInfo) -> usize {
+    serde_json::to_string(&provider_budget_probe_payload(messages, model))
+        .map(|serialized| count_text_tokens(&model.name, &serialized) as usize)
+        .unwrap_or(usize::MAX)
 }
 
 fn truncate_utf8(value: &str, max_bytes: usize) -> &str {
@@ -4764,6 +4991,75 @@ fn truncate_utf8(value: &str, max_bytes: usize) -> &str {
         end -= 1;
     }
     &value[..end]
+}
+
+fn compact_model_observation_for_openai_tool_loop(
+    model: &ModelInfo,
+    wire_messages: &[Value],
+    payload_tools: &[Value],
+    tool_call_id: Value,
+    name: &str,
+    observation: &str,
+    stream: bool,
+) -> anyhow::Result<String> {
+    let target_tokens = context_repair_target_tokens(model);
+    let mut max_bytes = TOOL_OBSERVATION_MODEL_MAX_BYTES
+        .min(observation.len())
+        .max(1024);
+    let mut compacted = compact_tool_observation(observation, max_bytes);
+
+    for _ in 0..8 {
+        let mut probe_messages = wire_messages.to_vec();
+        probe_messages.push(json!({
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "name": name,
+            "content": compacted,
+        }));
+        let mut payload = json!({
+            "model": model.name,
+            "messages": probe_messages,
+            "stream": stream,
+            "tools": payload_tools,
+            "tool_choice": "auto",
+            "parallel_tool_calls": true,
+        });
+        apply_chat_reasoning_settings(&mut payload, model);
+        let decision = provider_payload_budget_decision(model, &payload)?;
+        if decision.action != ContextBudgetAction::Block
+            && (target_tokens == 0
+                || count_text_tokens(&model.name, &serde_json::to_string(&payload)?) as usize
+                    <= target_tokens)
+        {
+            return Ok(compacted);
+        }
+        if max_bytes <= 1024 {
+            break;
+        }
+        max_bytes = (max_bytes / 2).max(1024);
+        compacted = compact_tool_observation(observation, max_bytes);
+    }
+
+    let final_budget = 1024.min(observation.len()).max(256);
+    let compacted = compact_tool_observation(observation, final_budget);
+    let mut probe_messages = wire_messages.to_vec();
+    probe_messages.push(json!({
+        "role": "tool",
+        "tool_call_id": tool_call_id,
+        "name": name,
+        "content": compacted,
+    }));
+    let mut payload = json!({
+        "model": model.name,
+        "messages": probe_messages,
+        "stream": stream,
+        "tools": payload_tools,
+        "tool_choice": "auto",
+        "parallel_tool_calls": true,
+    });
+    apply_chat_reasoning_settings(&mut payload, model);
+    enforce_openai_payload_budget(model, &payload)?;
+    Ok(compacted)
 }
 
 fn truncate_model_observation(value: &str) -> String {
@@ -4799,6 +5095,68 @@ fn execute_tool_or_stop_for_approval(
     Ok(output)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ToolBatchDecision {
+    Execute,
+    Defer,
+}
+
+fn read_only_same_round_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "list_files"
+            | "read_file"
+            | "cms_prepare_context"
+            | "cms_prepare_model_request"
+            | "cms_recall"
+            | "cms_recent"
+            | "cms_search_chatgpt_archive"
+            | "eternium_prepare_context"
+            | "msp_client_check_compatibility"
+            | "msp_client_info"
+            | "msp_client_load"
+            | "msp_client_manifest"
+            | "msp_client_search"
+            | "msp_client_verify_trust"
+            | "skiller_eval"
+            | "skiller_load"
+            | "skiller_readiness"
+            | "skiller_route"
+            | "skiller_suspicious_commands"
+            | "skiller_validate"
+            | "subagents_list"
+            | "subagents_show"
+    )
+}
+
+fn same_round_tool_batch_decision(index: usize, name: &str) -> ToolBatchDecision {
+    if index == 0 || read_only_same_round_tool(name) {
+        ToolBatchDecision::Execute
+    } else {
+        ToolBatchDecision::Defer
+    }
+}
+
+fn execute_tool_call_for_model(
+    name: &str,
+    args: Map<String, Value>,
+    index: usize,
+    execute_tool: &mut dyn FnMut(&str, Map<String, Value>) -> String,
+    observations: &mut Vec<(String, String)>,
+    compact: impl FnOnce(&str) -> anyhow::Result<String>,
+) -> anyhow::Result<String> {
+    match same_round_tool_batch_decision(index, name) {
+        ToolBatchDecision::Execute => {
+            let output = execute_tool_or_stop_for_approval(name, args, execute_tool)?;
+            let result = completed_tool_observation(name, &output);
+            let result = compact(&result)?;
+            observations.push((name.to_string(), result.clone()));
+            Ok(result)
+        }
+        ToolBatchDecision::Defer => Ok(deferred_tool_observation(name)),
+    }
+}
+
 fn completed_tool_observation(name: &str, content: &str) -> String {
     let trimmed = content.trim_end();
     let status = if trimmed
@@ -4827,7 +5185,7 @@ fn completed_tool_observation(name: &str, content: &str) -> String {
 
 fn deferred_tool_observation(name: &str) -> String {
     format!(
-        "[Vegvisir tool deferred]\nname: {name}\nstatus: deferred\nreason: Vegvisir executes one native tool call at a time. Wait for the preceding [Vegvisir tool completed] observation before requesting another tool."
+        "[Vegvisir tool deferred]\nname: {name}\nstatus: deferred\nreason: Vegvisir only executes same-round sibling calls for tools classified as read-only. Risky, unknown, or side-effecting sibling calls are deferred until the model can review prior completed observations."
     )
 }
 
@@ -4933,6 +5291,12 @@ pub enum ProviderRunEvent {
         name: String,
         args: String,
     },
+    ToolOutput {
+        name: String,
+        stream: String,
+        chunk: String,
+        truncated: bool,
+    },
     ToolEnd {
         name: String,
         ok: bool,
@@ -4969,6 +5333,20 @@ impl serde::Serialize for ProviderRunEvent {
                 map.serialize_entry("kind", "tool_start")?;
                 map.serialize_entry("name", name)?;
                 map.serialize_entry("args", args)?;
+                map.end()
+            }
+            ProviderRunEvent::ToolOutput {
+                name,
+                stream,
+                chunk,
+                truncated,
+            } => {
+                let mut map = serializer.serialize_map(Some(5))?;
+                map.serialize_entry("kind", "tool_output")?;
+                map.serialize_entry("name", name)?;
+                map.serialize_entry("stream", stream)?;
+                map.serialize_entry("chunk", chunk)?;
+                map.serialize_entry("truncated", truncated)?;
                 map.end()
             }
             ProviderRunEvent::ToolEnd {
@@ -5371,6 +5749,28 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
                 },
             );
         }
+        let (repaired_messages, budget_decision, repaired) =
+            trim_chat_messages_to_provider_budget(provider_messages, model)?;
+        provider_messages = repaired_messages;
+        if repaired {
+            session.activity = "compacted provider context before send".to_string();
+            self.emit_event(ProviderRunEvent::Activity(format!(
+                "compacted provider context before send: action={} usage={:.1}% remaining={}",
+                budget_decision.action.as_str(),
+                budget_decision.percentage,
+                budget_decision
+                    .remaining_tokens
+                    .map(|tokens| tokens.to_string())
+                    .unwrap_or_else(|| "unknown".to_string())
+            )));
+        }
+        if budget_decision.action == ContextBudgetAction::Block {
+            anyhow::bail!(
+                "Vegvisir blocked provider send after context repair: estimated context usage remains {:.1}% of the active model budget. {}",
+                budget_decision.percentage,
+                budget_decision.warnings.join(" ")
+            );
+        }
         let started = Instant::now();
         let event_sink = self.event_sink.clone();
         let provider_response = if self
@@ -5392,10 +5792,14 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
             let mut approval_required = None::<String>;
             let mut execute_tool = |name: &str, args: Map<String, Value>| -> String {
                 session.activity = format!("using tool {name}");
-                let mut observation = executor.execute(ToolCall {
-                    name: name.to_string(),
-                    args: args.clone(),
-                });
+                let tool_output_sink = command_output_provider_sink(&event_sink, name);
+                let mut observation =
+                    with_command_output_sink(Some(tool_output_sink.clone()), || {
+                        executor.execute(ToolCall {
+                            name: name.to_string(),
+                            args: args.clone(),
+                        })
+                    });
                 if approval_required_observation(&observation) {
                     approval_required = Some(observation.content.clone());
                     if let Some(approval_id) = approval_id_from_observation(&observation)
@@ -5421,10 +5825,15 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
                         ) {
                             Ok(()) => {
                                 session.activity = format!("using approved tool {name}");
-                                observation = executor.execute(ToolCall {
-                                    name: name.to_string(),
-                                    args,
-                                });
+                                observation = with_command_output_sink(
+                                    Some(tool_output_sink.clone()),
+                                    || {
+                                        executor.execute(ToolCall {
+                                            name: name.to_string(),
+                                            args,
+                                        })
+                                    },
+                                );
                                 approval_required = None;
                             }
                             Err(error) => {
@@ -5543,6 +5952,28 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
                 created_at: chrono::Utc::now(),
             },
         );
+        let (repaired_messages, budget_decision, repaired) =
+            trim_chat_messages_to_provider_budget(provider_messages, model)?;
+        provider_messages = repaired_messages;
+        if repaired {
+            session.activity = "compacted provider context before send".to_string();
+            self.emit_event(ProviderRunEvent::Activity(format!(
+                "compacted provider context before send: action={} usage={:.1}% remaining={}",
+                budget_decision.action.as_str(),
+                budget_decision.percentage,
+                budget_decision
+                    .remaining_tokens
+                    .map(|tokens| tokens.to_string())
+                    .unwrap_or_else(|| "unknown".to_string())
+            )));
+        }
+        if budget_decision.action == ContextBudgetAction::Block {
+            anyhow::bail!(
+                "Vegvisir blocked provider send after context repair: estimated context usage remains {:.1}% of the active model budget. {}",
+                budget_decision.percentage,
+                budget_decision.warnings.join(" ")
+            );
+        }
         let started = Instant::now();
         let provider_response = if self
             .provider
@@ -5575,10 +6006,14 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
                         args: summarize_tool_args(&args),
                     },
                 );
-                let mut observation = executor.execute(ToolCall {
-                    name: name.to_string(),
-                    args: args.clone(),
-                });
+                let tool_output_sink = command_output_provider_sink(&event_sink, name);
+                let mut observation =
+                    with_command_output_sink(Some(tool_output_sink.clone()), || {
+                        executor.execute(ToolCall {
+                            name: name.to_string(),
+                            args: args.clone(),
+                        })
+                    });
                 if approval_required_observation(&observation) {
                     approval_required = Some(observation.content.clone());
                     if let Some(approval_id) = approval_id_from_observation(&observation)
@@ -5616,10 +6051,15 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
                                         "using approved tool {name}"
                                     )),
                                 );
-                                observation = executor.execute(ToolCall {
-                                    name: name.to_string(),
-                                    args,
-                                });
+                                observation = with_command_output_sink(
+                                    Some(tool_output_sink.clone()),
+                                    || {
+                                        executor.execute(ToolCall {
+                                            name: name.to_string(),
+                                            args,
+                                        })
+                                    },
+                                );
                                 approval_required = None;
                             }
                             Err(error) => {
@@ -5733,6 +6173,25 @@ fn emit_provider_event(
     if let Some(sink) = sink {
         sink(event);
     }
+}
+
+fn command_output_provider_sink(
+    event_sink: &Option<Arc<dyn Fn(ProviderRunEvent) + Send + Sync>>,
+    tool_name: &str,
+) -> CommandOutputSink {
+    let event_sink = event_sink.clone();
+    let tool_name = tool_name.to_string();
+    Arc::new(move |chunk| {
+        emit_provider_event(
+            &event_sink,
+            ProviderRunEvent::ToolOutput {
+                name: tool_name.clone(),
+                stream: chunk.stream,
+                chunk: chunk.chunk,
+                truncated: chunk.truncated,
+            },
+        );
+    })
 }
 
 fn summarize_tool_args(args: &Map<String, Value>) -> String {
@@ -5905,6 +6364,93 @@ mod tests {
     static TOOL_ROUND_LIMIT_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
+    fn provider_payload_budget_blocks_oversized_request() {
+        let model = ModelInfo {
+            name: "gpt-4o".to_string(),
+            provider: "openai".to_string(),
+            display_name: None,
+            context_window: Some(256),
+            supports_streaming: true,
+            enabled: true,
+            metadata: Default::default(),
+        };
+        let payload = json!({
+            "model": model.name,
+            "messages": [{"role": "user", "content": "large context ".repeat(800)}],
+            "stream": false,
+        });
+
+        let error = enforce_provider_payload_budget(&model, &payload)
+            .expect_err("oversized prompt should be blocked before provider send");
+
+        assert!(
+            error
+                .to_string()
+                .contains("blocked an oversized model request before provider send")
+        );
+    }
+
+    #[test]
+    fn provider_message_budget_repair_keeps_recent_context() -> anyhow::Result<()> {
+        let model = ModelInfo {
+            name: "gpt-4o".to_string(),
+            provider: "openai".to_string(),
+            display_name: None,
+            context_window: Some(1024),
+            supports_streaming: true,
+            enabled: true,
+            metadata: Default::default(),
+        };
+        let messages = vec![
+            ChatMessage {
+                role: "system".to_string(),
+                content: "stable system prompt".to_string(),
+                attachments: Vec::new(),
+                created_at: chrono::Utc::now(),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: "old context ".repeat(400),
+                attachments: Vec::new(),
+                created_at: chrono::Utc::now(),
+            },
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: "old answer ".repeat(400),
+                attachments: Vec::new(),
+                created_at: chrono::Utc::now(),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: "latest request: keep me".to_string(),
+                attachments: Vec::new(),
+                created_at: chrono::Utc::now(),
+            },
+        ];
+
+        let (repaired, decision, changed) =
+            trim_chat_messages_to_provider_budget(messages, &model)?;
+
+        assert!(changed);
+        assert_ne!(decision.action, ContextBudgetAction::Block);
+        assert!(
+            repaired
+                .iter()
+                .any(|message| message.content.contains("Omitted messages"))
+        );
+        assert_eq!(
+            repaired.last().map(|message| message.content.as_str()),
+            Some("latest request: keep me")
+        );
+        assert!(
+            repaired
+                .iter()
+                .all(|message| !message.content.contains("old context old context"))
+        );
+        Ok(())
+    }
+
+    #[test]
     fn default_tool_round_limit_is_unlimited() {
         let _guard = TOOL_ROUND_LIMIT_TEST_LOCK.lock().unwrap();
         let previous = RUNTIME_MAX_TOOL_ROUNDS.swap(0, Ordering::Relaxed);
@@ -5926,6 +6472,105 @@ mod tests {
     fn completed_tool_observation_marks_tool_errors_failed() {
         let observation = completed_tool_observation("run_tests", "TestsFailed: one test failed");
         assert!(observation.contains("status: failed"));
+    }
+
+    #[test]
+    fn same_round_batch_decision_executes_read_only_siblings_only() {
+        assert_eq!(
+            same_round_tool_batch_decision(0, "write_file"),
+            ToolBatchDecision::Execute
+        );
+        assert_eq!(
+            same_round_tool_batch_decision(1, "read_file"),
+            ToolBatchDecision::Execute
+        );
+        assert_eq!(
+            same_round_tool_batch_decision(1, "list_files"),
+            ToolBatchDecision::Execute
+        );
+        assert_eq!(
+            same_round_tool_batch_decision(1, "cms_recall"),
+            ToolBatchDecision::Execute
+        );
+        assert_eq!(
+            same_round_tool_batch_decision(1, "write_file"),
+            ToolBatchDecision::Defer
+        );
+        assert_eq!(
+            same_round_tool_batch_decision(1, "run_command"),
+            ToolBatchDecision::Defer
+        );
+    }
+
+    #[test]
+    fn openai_tool_loop_executes_read_only_sibling_same_round_and_defers_write()
+    -> anyhow::Result<()> {
+        let model = ModelInfo {
+            name: "gpt-test".to_string(),
+            provider: "openai".to_string(),
+            display_name: None,
+            context_window: Some(200000),
+            supports_streaming: false,
+            enabled: true,
+            metadata: Default::default(),
+        };
+        let messages = vec![ChatMessage {
+            role: "user".to_string(),
+            content: "inspect files".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        }];
+        let tools = vec![
+            json!({
+                "name": "read_file",
+                "description": "read",
+                "parameters": {"type": "object", "properties": {}},
+            }),
+            json!({
+                "name": "list_files",
+                "description": "list",
+                "parameters": {"type": "object", "properties": {}},
+            }),
+            json!({
+                "name": "write_file",
+                "description": "write",
+                "parameters": {"type": "object", "properties": {}},
+            }),
+        ];
+        let mut post_calls = 0usize;
+        let mut payload_parallel = None;
+        let mut post = |payload: Value| -> anyhow::Result<Value> {
+            post_calls += 1;
+            if post_calls == 1 {
+                payload_parallel = payload.get("parallel_tool_calls").and_then(Value::as_bool);
+                Ok(json!({
+                    "choices": [{
+                        "message": {
+                            "content": "",
+                            "tool_calls": [
+                                {"id": "call_1", "type": "function", "function": {"name": "read_file", "arguments": "{\"path\":\"a.rs\"}"}},
+                                {"id": "call_2", "type": "function", "function": {"name": "list_files", "arguments": "{\"path\":\"src\"}"}},
+                                {"id": "call_3", "type": "function", "function": {"name": "write_file", "arguments": "{\"path\":\"x\",\"content\":\"y\"}"}}
+                            ]
+                        }
+                    }]
+                }))
+            } else {
+                Ok(json!({"choices": [{"message": {"content": "done"}}]}))
+            }
+        };
+        let mut executed = Vec::<String>::new();
+        let mut execute_tool = |name: &str, _args: Map<String, Value>| -> String {
+            executed.push(name.to_string());
+            format!("ok from {name}")
+        };
+
+        let answer = openai_tool_loop(&model, &messages, &tools, &mut execute_tool, &mut post, 3)?;
+
+        assert_eq!(answer, "done");
+        assert_eq!(payload_parallel, Some(true));
+        assert_eq!(executed, vec!["read_file", "list_files"]);
+        Ok(())
     }
 
     #[test]

@@ -41,7 +41,7 @@ use crate::{
     observability::EventLogger,
     parallelism::ParallelismConfig,
     persona::{KA_PROMPT_HEADING, get_persona_with_root, render_persona_prompt_section},
-    policy::RuntimePolicy,
+    policy::{RuntimePolicy, RuntimeToolMetadata},
     profile::{UserProfile, UserProfileStore},
     provider::{
         ConversationRunner, ProviderRouter, ProviderRunEvent, configured_max_tool_rounds_label,
@@ -237,6 +237,12 @@ enum StreamEvent {
     ToolStart {
         name: String,
         args: String,
+    },
+    ToolOutput {
+        name: String,
+        stream: String,
+        chunk: String,
+        truncated: bool,
     },
     ToolEnd {
         name: String,

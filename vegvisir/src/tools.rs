@@ -1,12 +1,13 @@
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, HashMap, hash_map::DefaultHasher},
     fs::File,
     hash::{Hash, Hasher},
     io::Read,
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
     sync::Arc,
-    thread,
+    thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 
@@ -31,7 +32,7 @@ use crate::{
     guardrails::GuardrailEngine,
     memory::{ContextPrepareOptions, VegvisirCms, VegvisirCmsConfig},
     observability::EventLogger,
-    policy::RuntimePolicy,
+    policy::{RuntimePolicy, RuntimeToolMetadata},
     privilege,
     sandbox::WorkspaceSandbox,
     subagents::{
@@ -47,6 +48,43 @@ const LIST_FILES_MAX_LIMIT: usize = 2_000;
 const CHATGPT_ARCHIVE_EXCERPT_CHARS: usize = 1_800;
 const SUBAGENT_DIFF_TEXT_MAX_BYTES: u64 = 1024 * 1024;
 pub const DEFAULT_ACTIVE_SUBAGENT_LIMIT: usize = 3;
+
+const COMMAND_STREAM_READ_CHUNK_BYTES: usize = 8 * 1024;
+const COMMAND_STREAM_LIVE_MAX_BYTES_PER_STREAM: usize = 128 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommandOutputChunk {
+    pub stream: String,
+    pub chunk: String,
+    pub truncated: bool,
+}
+
+pub type CommandOutputSink = Arc<dyn Fn(CommandOutputChunk) + Send + Sync>;
+
+thread_local! {
+    static COMMAND_OUTPUT_SINK: RefCell<Option<CommandOutputSink>> = RefCell::new(None);
+}
+
+pub fn with_command_output_sink<T>(sink: Option<CommandOutputSink>, f: impl FnOnce() -> T) -> T {
+    struct SinkGuard(Option<CommandOutputSink>);
+
+    impl Drop for SinkGuard {
+        fn drop(&mut self) {
+            let previous = self.0.take();
+            COMMAND_OUTPUT_SINK.with(|slot| {
+                *slot.borrow_mut() = previous;
+            });
+        }
+    }
+
+    let previous = COMMAND_OUTPUT_SINK.with(|slot| slot.replace(sink));
+    let _guard = SinkGuard(previous);
+    f()
+}
+
+fn current_command_output_sink() -> Option<CommandOutputSink> {
+    COMMAND_OUTPUT_SINK.with(|slot| slot.borrow().clone())
+}
 
 fn parse_skiller_forge_pass(value: Option<&str>) -> anyhow::Result<ForgePassType> {
     let raw = value.unwrap_or("skill_expansion").trim();
@@ -390,48 +428,7 @@ impl Tool {
     }
 
     pub fn validate_args(&self, args: &Map<String, Value>) -> anyhow::Result<()> {
-        let required = self
-            .schema
-            .get("required")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let properties = self
-            .schema
-            .get("properties")
-            .unwrap_or(&self.schema)
-            .as_object()
-            .cloned()
-            .unwrap_or_default();
-        for key in required {
-            let Some(key) = key.as_str() else { continue };
-            if !args.contains_key(key) {
-                anyhow::bail!("Missing required argument for {}: {key}", self.name);
-            }
-        }
-        for (key, value) in args {
-            let expected = properties.get(key).and_then(|spec| {
-                spec.as_str()
-                    .map(str::to_string)
-                    .or_else(|| spec.get("type").and_then(Value::as_str).map(str::to_string))
-            });
-            match expected.as_deref() {
-                Some("string") if !value.is_string() => {
-                    anyhow::bail!("{}.{key} must be a string", self.name)
-                }
-                Some("integer") if !value.is_i64() && !value.is_u64() => {
-                    anyhow::bail!("{}.{key} must be an integer", self.name)
-                }
-                Some("array") if !value.is_array() => {
-                    anyhow::bail!("{}.{key} must be an array", self.name)
-                }
-                Some("object") if !value.is_object() => {
-                    anyhow::bail!("{}.{key} must be an object", self.name)
-                }
-                _ => {}
-            }
-        }
-        Ok(())
+        validate_tool_arguments(&self.name, args, &self.schema)
     }
 
     pub fn normalize_args(&self, args: Map<String, Value>) -> Map<String, Value> {
@@ -478,6 +475,413 @@ impl Tool {
             })
             .collect()
     }
+}
+
+fn validate_tool_arguments(
+    tool_name: &str,
+    args: &Map<String, Value>,
+    schema: &Value,
+) -> anyhow::Result<()> {
+    let value = Value::Object(args.clone());
+    validate_json_schema_value(tool_name, tool_name.to_string(), &value, schema)
+}
+
+fn validate_json_schema_value(
+    tool_name: &str,
+    path: String,
+    value: &Value,
+    schema: &Value,
+) -> anyhow::Result<()> {
+    if schema.is_null() || schema == &json!(true) {
+        return Ok(());
+    }
+    if schema == &json!(false) {
+        anyhow::bail!("{path} is not allowed by schema for {tool_name}");
+    }
+    if let Some(expected) = schema.as_str() {
+        return validate_schema_type(tool_name, &path, value, expected);
+    }
+    let Some(object) = schema.as_object() else {
+        return Ok(());
+    };
+
+    validate_schema_combinators(tool_name, &path, value, schema, object)?;
+    validate_schema_enum(tool_name, &path, value, object)?;
+    validate_schema_type_constraints(tool_name, &path, value, object)?;
+    validate_schema_object_constraints(tool_name, &path, value, object)?;
+    validate_schema_array_constraints(tool_name, &path, value, object)?;
+    validate_schema_string_constraints(tool_name, &path, value, object)?;
+    validate_schema_number_constraints(tool_name, &path, value, object)?;
+    Ok(())
+}
+
+fn validate_schema_combinators(
+    tool_name: &str,
+    path: &str,
+    value: &Value,
+    schema: &Value,
+    object: &Map<String, Value>,
+) -> anyhow::Result<()> {
+    if let Some(all_of) = object.get("allOf").and_then(Value::as_array) {
+        for branch in all_of {
+            validate_json_schema_value(tool_name, path.to_string(), value, branch)?;
+        }
+    }
+    if let Some(any_of) = object.get("anyOf").and_then(Value::as_array) {
+        let mut errors = Vec::new();
+        for branch in any_of {
+            match validate_json_schema_value(tool_name, path.to_string(), value, branch) {
+                Ok(()) => return Ok(()),
+                Err(error) => errors.push(error.to_string()),
+            }
+        }
+        anyhow::bail!(
+            "{path} must match at least one anyOf schema for {tool_name}: {}",
+            errors.join("; ")
+        );
+    }
+    if let Some(one_of) = object.get("oneOf").and_then(Value::as_array) {
+        let matches = one_of
+            .iter()
+            .filter(|branch| {
+                validate_json_schema_value(tool_name, path.to_string(), value, branch).is_ok()
+            })
+            .count();
+        if matches != 1 {
+            anyhow::bail!(
+                "{path} must match exactly one oneOf schema for {tool_name}; matched {matches}"
+            );
+        }
+    }
+
+    // If this schema is only a combinator wrapper, the branch validation above is complete.
+    let non_combinator_keys = object.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "allOf" | "anyOf" | "oneOf" | "description" | "title"
+        )
+    });
+    if !non_combinator_keys
+        && (object.contains_key("allOf")
+            || object.contains_key("anyOf")
+            || object.contains_key("oneOf"))
+    {
+        validate_json_schema_value(tool_name, path.to_string(), value, &json!({}))?;
+    }
+    let _ = schema;
+    Ok(())
+}
+
+fn validate_schema_enum(
+    tool_name: &str,
+    path: &str,
+    value: &Value,
+    object: &Map<String, Value>,
+) -> anyhow::Result<()> {
+    let Some(allowed) = object.get("enum").and_then(Value::as_array) else {
+        return Ok(());
+    };
+    if allowed.iter().any(|candidate| candidate == value) {
+        return Ok(());
+    }
+    let allowed = allowed
+        .iter()
+        .map(|value| serde_json::to_string(value).unwrap_or_else(|_| value.to_string()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    anyhow::bail!("{path} must be one of [{allowed}] for {tool_name}")
+}
+
+fn validate_schema_type_constraints(
+    tool_name: &str,
+    path: &str,
+    value: &Value,
+    object: &Map<String, Value>,
+) -> anyhow::Result<()> {
+    let Some(type_spec) = object.get("type") else {
+        return Ok(());
+    };
+    if let Some(expected) = type_spec.as_str() {
+        return validate_schema_type(tool_name, path, value, expected);
+    }
+    if let Some(types) = type_spec.as_array() {
+        if types
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|expected| validate_schema_type(tool_name, path, value, expected).is_ok())
+        {
+            return Ok(());
+        }
+        let labels = types
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join(" or ");
+        anyhow::bail!("{path} must be {labels} for {tool_name}");
+    }
+    Ok(())
+}
+
+fn validate_schema_type(
+    tool_name: &str,
+    path: &str,
+    value: &Value,
+    expected: &str,
+) -> anyhow::Result<()> {
+    let ok = match expected {
+        "string" => value.is_string(),
+        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+        "number" => value.is_number(),
+        "boolean" | "bool" => value.is_boolean(),
+        "array" => value.is_array(),
+        "object" => value.is_object(),
+        "null" => value.is_null(),
+        _ => true,
+    };
+    if ok {
+        Ok(())
+    } else {
+        let article = if matches!(expected, "array" | "object" | "integer") {
+            "an"
+        } else {
+            "a"
+        };
+        anyhow::bail!("{path} must be {article} {expected} for {tool_name}")
+    }
+}
+
+fn validate_schema_object_constraints(
+    tool_name: &str,
+    path: &str,
+    value: &Value,
+    object: &Map<String, Value>,
+) -> anyhow::Result<()> {
+    let properties = object
+        .get("properties")
+        .and_then(Value::as_object)
+        .or_else(|| shorthand_properties(object));
+    let required = object
+        .get("required")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+
+    if properties.is_none() && required.is_empty() && !object.contains_key("additionalProperties") {
+        return Ok(());
+    }
+
+    let Some(actual) = value.as_object() else {
+        // A type constraint, if present, already emitted the precise error. Without type=object,
+        // properties/required imply an object.
+        anyhow::bail!("{path} must be an object for {tool_name}");
+    };
+
+    for key in required {
+        if !actual.contains_key(key) {
+            if path == tool_name {
+                anyhow::bail!("Missing required argument for {tool_name}: {key}");
+            }
+            anyhow::bail!("{path}.{key} is required for {tool_name}");
+        }
+    }
+
+    if let Some(properties) = properties {
+        for (key, child_value) in actual {
+            if let Some(child_schema) = properties.get(key) {
+                validate_json_schema_value(
+                    tool_name,
+                    format!("{path}.{key}"),
+                    child_value,
+                    child_schema,
+                )?;
+                continue;
+            }
+
+            match object.get("additionalProperties") {
+                Some(Value::Bool(false)) => {
+                    anyhow::bail!("{path}.{key} is not an allowed argument for {tool_name}")
+                }
+                Some(Value::Object(_)) => validate_json_schema_value(
+                    tool_name,
+                    format!("{path}.{key}"),
+                    child_value,
+                    object.get("additionalProperties").expect("checked above"),
+                )?,
+                _ => {}
+            }
+        }
+    }
+
+    if let Some(min) = object.get("minProperties").and_then(Value::as_u64)
+        && actual.len() < min as usize
+    {
+        anyhow::bail!("{path} must have at least {min} properties for {tool_name}");
+    }
+    if let Some(max) = object.get("maxProperties").and_then(Value::as_u64)
+        && actual.len() > max as usize
+    {
+        anyhow::bail!("{path} must have at most {max} properties for {tool_name}");
+    }
+    Ok(())
+}
+
+fn shorthand_properties(object: &Map<String, Value>) -> Option<&Map<String, Value>> {
+    let schema_keywords = [
+        "type",
+        "required",
+        "properties",
+        "additionalProperties",
+        "items",
+        "enum",
+        "oneOf",
+        "anyOf",
+        "allOf",
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "minLength",
+        "maxLength",
+        "minItems",
+        "maxItems",
+        "minProperties",
+        "maxProperties",
+        "description",
+        "title",
+    ];
+    let has_schema_keyword = object
+        .keys()
+        .any(|key| schema_keywords.contains(&key.as_str()));
+    if has_schema_keyword {
+        None
+    } else {
+        Some(object)
+    }
+}
+
+fn validate_schema_array_constraints(
+    tool_name: &str,
+    path: &str,
+    value: &Value,
+    object: &Map<String, Value>,
+) -> anyhow::Result<()> {
+    if !object.contains_key("items")
+        && !object.contains_key("minItems")
+        && !object.contains_key("maxItems")
+    {
+        return Ok(());
+    }
+    let Some(items) = value.as_array() else {
+        anyhow::bail!("{path} must be an array for {tool_name}");
+    };
+    if let Some(min) = object.get("minItems").and_then(Value::as_u64)
+        && items.len() < min as usize
+    {
+        anyhow::bail!("{path} must contain at least {min} item(s) for {tool_name}");
+    }
+    if let Some(max) = object.get("maxItems").and_then(Value::as_u64)
+        && items.len() > max as usize
+    {
+        anyhow::bail!("{path} must contain at most {max} item(s) for {tool_name}");
+    }
+    let Some(item_schema) = object.get("items") else {
+        return Ok(());
+    };
+    if let Some(tuple_schemas) = item_schema.as_array() {
+        for (index, child_schema) in tuple_schemas.iter().enumerate() {
+            if let Some(child_value) = items.get(index) {
+                validate_json_schema_value(
+                    tool_name,
+                    format!("{path}[{index}]"),
+                    child_value,
+                    child_schema,
+                )?;
+            }
+        }
+        return Ok(());
+    }
+    for (index, child_value) in items.iter().enumerate() {
+        validate_json_schema_value(
+            tool_name,
+            format!("{path}[{index}]"),
+            child_value,
+            item_schema,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_schema_string_constraints(
+    tool_name: &str,
+    path: &str,
+    value: &Value,
+    object: &Map<String, Value>,
+) -> anyhow::Result<()> {
+    if !object.contains_key("minLength")
+        && !object.contains_key("maxLength")
+        && !object.contains_key("pattern")
+    {
+        return Ok(());
+    }
+    let Some(text) = value.as_str() else {
+        anyhow::bail!("{path} must be a string for {tool_name}");
+    };
+    let chars = text.chars().count() as u64;
+    if let Some(min) = object.get("minLength").and_then(Value::as_u64)
+        && chars < min
+    {
+        anyhow::bail!("{path} must be at least {min} character(s) for {tool_name}");
+    }
+    if let Some(max) = object.get("maxLength").and_then(Value::as_u64)
+        && chars > max
+    {
+        anyhow::bail!("{path} must be at most {max} character(s) for {tool_name}");
+    }
+    // Deliberately do not implement JSON Schema regex patterns here. Tool handlers still perform
+    // domain/path validation; this local subset focuses on structural validation without adding a
+    // regex dependency or changing provider-visible schema contracts.
+    Ok(())
+}
+
+fn validate_schema_number_constraints(
+    tool_name: &str,
+    path: &str,
+    value: &Value,
+    object: &Map<String, Value>,
+) -> anyhow::Result<()> {
+    if !object.contains_key("minimum")
+        && !object.contains_key("maximum")
+        && !object.contains_key("exclusiveMinimum")
+        && !object.contains_key("exclusiveMaximum")
+    {
+        return Ok(());
+    }
+    let Some(number) = value.as_f64() else {
+        anyhow::bail!("{path} must be a number for {tool_name}");
+    };
+    if let Some(min) = object.get("minimum").and_then(Value::as_f64)
+        && number < min
+    {
+        anyhow::bail!("{path} must be >= {min} for {tool_name}");
+    }
+    if let Some(max) = object.get("maximum").and_then(Value::as_f64)
+        && number > max
+    {
+        anyhow::bail!("{path} must be <= {max} for {tool_name}");
+    }
+    if let Some(min) = object.get("exclusiveMinimum").and_then(Value::as_f64)
+        && number <= min
+    {
+        anyhow::bail!("{path} must be > {min} for {tool_name}");
+    }
+    if let Some(max) = object.get("exclusiveMaximum").and_then(Value::as_f64)
+        && number >= max
+    {
+        anyhow::bail!("{path} must be < {max} for {tool_name}");
+    }
+    Ok(())
 }
 
 #[derive(Default, Clone)]
@@ -565,7 +969,15 @@ impl ToolExecutor {
             self.guardrails.authorize_tool(tool, &args)?;
             if !self.guardrails.policy.bypass_approvals_and_sandbox {
                 self.runtime_policy
-                    .authorize_tool(&tool.name, &args, &self.logger)
+                    .authorize_tool_with_metadata(
+                        &tool.name,
+                        &args,
+                        RuntimeToolMetadata {
+                            risky: tool.risky,
+                            safety_labels: Vec::new(),
+                        },
+                        &self.logger,
+                    )
                     .map_err(anyhow::Error::msg)?;
             }
             self.logger
@@ -717,6 +1129,146 @@ fn reject_sudo_misuse(parts: &[&str], privileged: bool) -> Option<Observation> {
     })
 }
 
+#[derive(Debug, Default)]
+struct CommandStreamCapture {
+    bytes: Vec<u8>,
+    read_error: Option<String>,
+}
+
+fn spawn_command_stream_reader<R>(
+    mut reader: R,
+    stream_name: &'static str,
+    output_sink: Option<CommandOutputSink>,
+) -> JoinHandle<CommandStreamCapture>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut emitted_live_bytes = 0usize;
+        let mut emitted_truncation_notice = false;
+        let mut buffer = [0u8; COMMAND_STREAM_READ_CHUNK_BYTES];
+        let read_error = loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => break None,
+                Ok(n) => {
+                    bytes.extend_from_slice(&buffer[..n]);
+                    if let Some(sink) = &output_sink {
+                        let remaining = COMMAND_STREAM_LIVE_MAX_BYTES_PER_STREAM
+                            .saturating_sub(emitted_live_bytes);
+                        if remaining > 0 {
+                            let emit_len = n.min(remaining);
+                            emitted_live_bytes = emitted_live_bytes.saturating_add(emit_len);
+                            sink(CommandOutputChunk {
+                                stream: stream_name.to_string(),
+                                chunk: String::from_utf8_lossy(&buffer[..emit_len]).to_string(),
+                                truncated: emit_len < n,
+                            });
+                        } else if !emitted_truncation_notice {
+                            emitted_truncation_notice = true;
+                            sink(CommandOutputChunk {
+                                stream: stream_name.to_string(),
+                                chunk: format!(
+                                    "\n[Vegvisir live {stream_name} stream truncated after {} bytes; full captured output remains available in the final tool observation/artifacts.]\n",
+                                    COMMAND_STREAM_LIVE_MAX_BYTES_PER_STREAM
+                                ),
+                                truncated: true,
+                            });
+                        }
+                    }
+                }
+                Err(error) => break Some(error.to_string()),
+            }
+        };
+        CommandStreamCapture { bytes, read_error }
+    })
+}
+
+fn join_command_stream_reader(
+    handle: Option<JoinHandle<CommandStreamCapture>>,
+    stream_name: &str,
+) -> CommandStreamCapture {
+    handle
+        .map(|handle| {
+            handle.join().unwrap_or_else(|_| CommandStreamCapture {
+                bytes: Vec::new(),
+                read_error: Some(format!("{stream_name} reader thread panicked")),
+            })
+        })
+        .unwrap_or_else(|| CommandStreamCapture {
+            bytes: Vec::new(),
+            read_error: Some(format!("{stream_name} pipe was unavailable")),
+        })
+}
+
+fn command_stream_read_errors(
+    stdout: &CommandStreamCapture,
+    stderr: &CommandStreamCapture,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    if let Some(error) = &stdout.read_error {
+        errors.push(format!("stdout: {error}"));
+    }
+    if let Some(error) = &stderr.read_error {
+        errors.push(format!("stderr: {error}"));
+    }
+    errors
+}
+
+#[allow(clippy::too_many_arguments)]
+fn command_observation_data(
+    parts: &[&str],
+    sandboxed_command: &crate::command_sandbox::SandboxedCommand,
+    include_command_in_data: bool,
+    returncode: i32,
+    timed_out: bool,
+    timeout: u64,
+    truncated: bool,
+    privileged: bool,
+    stdout_len: usize,
+    stderr_len: usize,
+    stream_read_errors: &[String],
+) -> Map<String, Value> {
+    let mut data = Map::new();
+    if include_command_in_data {
+        data.insert("command".to_string(), json!(parts));
+    }
+    data.insert(
+        "command_sandboxed".to_string(),
+        json!(sandboxed_command.sandboxed),
+    );
+    data.insert(
+        "command_sandbox".to_string(),
+        json!(sandboxed_command.sandbox_kind),
+    );
+    data.insert(
+        "command_network_policy".to_string(),
+        json!(sandboxed_command.network_policy),
+    );
+    data.insert("returncode".to_string(), json!(returncode));
+    data.insert("timed_out".to_string(), json!(timed_out));
+    data.insert("timeout_seconds".to_string(), json!(timeout));
+    data.insert("output_truncated".to_string(), json!(truncated));
+    data.insert("privileged".to_string(), json!(privileged));
+    data.insert("stdout_bytes".to_string(), json!(stdout_len));
+    data.insert("stderr_bytes".to_string(), json!(stderr_len));
+    data.insert("streaming_capture".to_string(), json!(true));
+    data.insert(
+        "stream_capture_mode".to_string(),
+        json!("incremental_pipe_drainers"),
+    );
+    data.insert("stream_read_errors".to_string(), json!(stream_read_errors));
+    data.insert(
+        "sudo_password_visibility".to_string(),
+        json!(if privileged {
+            "not-collected; sudo -n uses existing timestamp only"
+        } else {
+            "not-applicable"
+        }),
+    );
+    data
+}
+
 fn execute_bounded_command(
     parts: &[&str],
     sandbox_config: &CommandSandboxConfig,
@@ -767,11 +1319,25 @@ fn execute_bounded_command(
         Ok(child) => child,
         Err(error) => return Observation::err(error.to_string(), "CommandError"),
     };
+
+    let output_sink = current_command_output_sink();
+    let stdout_reader = child
+        .stdout
+        .take()
+        .map(|reader| spawn_command_stream_reader(reader, "stdout", output_sink.clone()));
+    let stderr_reader = child
+        .stderr
+        .take()
+        .map(|reader| spawn_command_stream_reader(reader, "stderr", output_sink.clone()));
     let started = Instant::now();
     let mut timed_out = false;
+    let mut status: Option<ExitStatus> = None;
     loop {
         match child.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(exit_status)) => {
+                status = Some(exit_status);
+                break;
+            }
             Ok(None) => {
                 if started.elapsed() >= Duration::from_secs(timeout) {
                     timed_out = true;
@@ -783,59 +1349,51 @@ fn execute_bounded_command(
             Err(error) => return Observation::err(error.to_string(), "CommandError"),
         }
     }
-    match child.wait_with_output() {
-        Ok(output) => {
+
+    let status = match status {
+        Some(status) => Ok(status),
+        None => child.wait(),
+    };
+    let stdout_capture = join_command_stream_reader(stdout_reader, "stdout");
+    let stderr_capture = join_command_stream_reader(stderr_reader, "stderr");
+
+    match status {
+        Ok(status) => {
             let mut content = String::new();
-            content.push_str(&String::from_utf8_lossy(&output.stdout));
-            content.push_str(&String::from_utf8_lossy(&output.stderr));
+            content.push_str(&String::from_utf8_lossy(&stdout_capture.bytes));
+            content.push_str(&String::from_utf8_lossy(&stderr_capture.bytes));
             let truncated = content.len() > output_limit;
             if truncated {
                 content = compact_text_middle(&content, output_limit, "output");
             }
-            let mut data = Map::new();
-            if include_command_in_data {
-                data.insert("command".to_string(), json!(parts));
-            }
-            data.insert(
-                "command_sandboxed".to_string(),
-                json!(sandboxed_command.sandboxed),
-            );
-            data.insert(
-                "command_sandbox".to_string(),
-                json!(sandboxed_command.sandbox_kind),
-            );
-            data.insert(
-                "command_network_policy".to_string(),
-                json!(sandboxed_command.network_policy),
-            );
-            data.insert(
-                "returncode".to_string(),
-                json!(if timed_out {
+            let stream_read_errors = command_stream_read_errors(&stdout_capture, &stderr_capture);
+            let data = command_observation_data(
+                parts,
+                &sandboxed_command,
+                include_command_in_data,
+                if timed_out {
                     -1
                 } else {
-                    output.status.code().unwrap_or(-1)
-                }),
-            );
-            data.insert("timed_out".to_string(), json!(timed_out));
-            data.insert("timeout_seconds".to_string(), json!(timeout));
-            data.insert("output_truncated".to_string(), json!(truncated));
-            data.insert("privileged".to_string(), json!(privileged));
-            data.insert(
-                "sudo_password_visibility".to_string(),
-                json!(if privileged {
-                    "not-collected; sudo -n uses existing timestamp only"
-                } else {
-                    "not-applicable"
-                }),
+                    status.code().unwrap_or(-1)
+                },
+                timed_out,
+                timeout,
+                truncated,
+                privileged,
+                stdout_capture.bytes.len(),
+                stderr_capture.bytes.len(),
+                &stream_read_errors,
             );
             Observation {
-                ok: !timed_out && output.status.success(),
+                ok: !timed_out && status.success() && stream_read_errors.is_empty(),
                 content,
                 data,
                 error: if timed_out {
                     Some("CommandTimeout".to_string())
+                } else if !stream_read_errors.is_empty() {
+                    Some("CommandStreamReadError".to_string())
                 } else {
-                    (!output.status.success()).then(|| failure_error.to_string())
+                    (!status.success()).then(|| failure_error.to_string())
                 },
             }
         }
@@ -3974,6 +4532,220 @@ mod skiller_tool_tests {
         LOCK.get_or_init(|| Mutex::new(()))
             .lock()
             .expect("env var test lock poisoned")
+    }
+
+    fn test_tool(schema: Value) -> Tool {
+        Tool::new(
+            "test_tool",
+            "test tool",
+            Arc::new(|_| Observation::ok("ok")),
+            schema,
+            false,
+        )
+    }
+
+    #[test]
+    fn bounded_command_drains_stdout_and_stderr_incrementally() -> anyhow::Result<()> {
+        let workspace = TempDir::new()?;
+        let sandbox = CommandSandboxConfig::path_only(workspace.path());
+        let script = "import sys\nsys.stdout.write('O' * 131072)\nsys.stdout.flush()\nsys.stderr.write('ERR-LINE\\n')\nsys.stderr.flush()\n";
+
+        let obs = execute_bounded_command(
+            &["python3", "-c", script],
+            &sandbox,
+            10,
+            1_000_000,
+            "CommandFailed",
+            true,
+            false,
+        );
+
+        assert!(obs.ok, "{} {:?}", obs.content, obs.error);
+        assert_eq!(obs.data.get("streaming_capture"), Some(&json!(true)));
+        assert_eq!(
+            obs.data.get("stream_capture_mode"),
+            Some(&json!("incremental_pipe_drainers"))
+        );
+        assert_eq!(obs.data.get("stdout_bytes"), Some(&json!(131072)));
+        assert_eq!(obs.data.get("stderr_bytes"), Some(&json!(9)));
+        assert_eq!(obs.data.get("stream_read_errors"), Some(&json!([])));
+        assert_eq!(obs.data.get("returncode"), Some(&json!(0)));
+        assert_eq!(obs.data.get("timed_out"), Some(&json!(false)));
+        assert!(obs.content.starts_with("OOO"));
+        assert!(obs.content.ends_with("ERR-LINE\n"));
+        Ok(())
+    }
+
+    #[test]
+    fn bounded_command_stream_capture_preserves_timeout_metadata() -> anyhow::Result<()> {
+        let workspace = TempDir::new()?;
+        let sandbox = CommandSandboxConfig::path_only(workspace.path());
+        let script = "import sys, time\nsys.stdout.write('before-timeout\\n')\nsys.stdout.flush()\ntime.sleep(5)\n";
+
+        let obs = execute_bounded_command(
+            &["python3", "-c", script],
+            &sandbox,
+            1,
+            100_000,
+            "CommandFailed",
+            false,
+            false,
+        );
+
+        assert!(!obs.ok);
+        assert_eq!(obs.error.as_deref(), Some("CommandTimeout"));
+        assert_eq!(obs.data.get("streaming_capture"), Some(&json!(true)));
+        assert_eq!(obs.data.get("timed_out"), Some(&json!(true)));
+        assert_eq!(obs.data.get("returncode"), Some(&json!(-1)));
+        assert_eq!(obs.data.get("stream_read_errors"), Some(&json!([])));
+        assert!(obs.content.contains("before-timeout"));
+        Ok(())
+    }
+
+    #[test]
+    fn bounded_command_emits_live_output_chunks_through_scoped_sink() -> anyhow::Result<()> {
+        let workspace = TempDir::new()?;
+        let sandbox = CommandSandboxConfig::path_only(workspace.path());
+        let chunks = std::sync::Arc::new(Mutex::new(Vec::<CommandOutputChunk>::new()));
+        let sink_chunks = std::sync::Arc::clone(&chunks);
+        let sink: CommandOutputSink = std::sync::Arc::new(move |chunk| {
+            sink_chunks.lock().expect("chunks lock").push(chunk);
+        });
+
+        let obs = with_command_output_sink(Some(sink), || {
+            execute_bounded_command(
+                &[
+                    "python3",
+                    "-c",
+                    "import sys\nsys.stdout.write('live-out\\n')\nsys.stdout.flush()\nsys.stderr.write('live-err\\n')\nsys.stderr.flush()\n",
+                ],
+                &sandbox,
+                5,
+                4096,
+                "CommandFailed",
+                false,
+                false,
+            )
+        });
+
+        assert!(obs.ok, "{obs:?}");
+        let chunks = chunks.lock().expect("chunks lock").clone();
+        assert!(
+            chunks
+                .iter()
+                .any(|chunk| chunk.stream == "stdout" && chunk.chunk.contains("live-out"))
+        );
+        assert!(
+            chunks
+                .iter()
+                .any(|chunk| chunk.stream == "stderr" && chunk.chunk.contains("live-err"))
+        );
+        assert!(chunks.iter().all(|chunk| !chunk.truncated));
+        Ok(())
+    }
+
+    #[test]
+    fn tool_validator_preserves_shorthand_schema_compatibility() -> anyhow::Result<()> {
+        let tool = test_tool(
+            json!({"required": ["path"], "properties": {"path": "string", "limit": "integer"}}),
+        );
+        let args = tool.normalize_args(serde_json::from_value(json!({"path": 123, "limit": "5"}))?);
+        tool.validate_args(&args)?;
+        assert_eq!(args.get("path"), Some(&json!("123")));
+        assert_eq!(args.get("limit"), Some(&json!(5)));
+        Ok(())
+    }
+
+    #[test]
+    fn tool_validator_rejects_unknown_properties_when_schema_is_closed() -> anyhow::Result<()> {
+        let tool = test_tool(json!({
+            "type": "object",
+            "required": ["path"],
+            "additionalProperties": false,
+            "properties": {"path": {"type": "string"}}
+        }));
+        let args = serde_json::from_value(json!({"path": "README.md", "extra": true}))?;
+        let error = tool.validate_args(&args).unwrap_err().to_string();
+        assert!(
+            error.contains("test_tool.extra is not an allowed argument"),
+            "{error}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tool_validator_checks_nested_objects_arrays_and_enums() -> anyhow::Result<()> {
+        let tool = test_tool(json!({
+            "type": "object",
+            "required": ["request"],
+            "additionalProperties": false,
+            "properties": {
+                "request": {
+                    "type": "object",
+                    "required": ["mode", "items"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "mode": {"type": "string", "enum": ["fast", "thorough"]},
+                        "items": {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["path"], "properties": {"path": {"type": "string"}}}}
+                    }
+                }
+            }
+        }));
+        let valid = serde_json::from_value(
+            json!({"request": {"mode": "fast", "items": [{"path": "src/lib.rs"}]}}),
+        )?;
+        tool.validate_args(&valid)?;
+
+        let invalid_enum = serde_json::from_value(
+            json!({"request": {"mode": "slow", "items": [{"path": "src/lib.rs"}]}}),
+        )?;
+        let error = tool.validate_args(&invalid_enum).unwrap_err().to_string();
+        assert!(
+            error.contains("test_tool.request.mode must be one of"),
+            "{error}"
+        );
+
+        let invalid_item =
+            serde_json::from_value(json!({"request": {"mode": "fast", "items": [{"path": 42}]}}))?;
+        let error = tool.validate_args(&invalid_item).unwrap_err().to_string();
+        assert!(
+            error.contains("test_tool.request.items[0].path must be a string"),
+            "{error}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tool_validator_checks_string_numeric_and_array_bounds() -> anyhow::Result<()> {
+        let tool = test_tool(json!({
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "minLength": 2, "maxLength": 4},
+                "count": {"type": "integer", "minimum": 1, "maximum": 3},
+                "tags": {"type": "array", "minItems": 1, "maxItems": 2, "items": {"type": "string"}}
+            }
+        }));
+        let valid = serde_json::from_value(json!({"name": "abc", "count": 2, "tags": ["x", "y"]}))?;
+        tool.validate_args(&valid)?;
+
+        let too_short = serde_json::from_value(json!({"name": "a"}))?;
+        let error = tool.validate_args(&too_short).unwrap_err().to_string();
+        assert!(
+            error.contains("test_tool.name must be at least 2 character"),
+            "{error}"
+        );
+
+        let too_large = serde_json::from_value(json!({"count": 4}))?;
+        let error = tool.validate_args(&too_large).unwrap_err().to_string();
+        assert!(error.contains("test_tool.count must be <= 3"), "{error}");
+
+        let too_many = serde_json::from_value(json!({"tags": ["x", "y", "z"]}))?;
+        let error = tool.validate_args(&too_many).unwrap_err().to_string();
+        assert!(
+            error.contains("test_tool.tags must contain at most 2 item"),
+            "{error}"
+        );
+        Ok(())
     }
 
     struct EnvVarGuard {

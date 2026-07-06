@@ -336,6 +336,24 @@ fn bwrap_available() -> bool {
         .unwrap_or(false)
 }
 
+fn execute_after_one_approval(executor: &mut ToolExecutor, call: ToolCall) -> Observation {
+    let first = executor.execute(call.clone());
+    if first.ok {
+        return first;
+    }
+    if !first.content.contains("approval_id=") {
+        return first;
+    }
+    let Some(approval_id) = executor.guardrails.approvals.pending_ids().first().cloned() else {
+        return first;
+    };
+    if executor.guardrails.approvals.approve_once(&approval_id) {
+        executor.execute(call)
+    } else {
+        first
+    }
+}
+
 fn unsigned_jwt(claims: Value) -> String {
     format!(
         "{}.{}.",
@@ -1115,6 +1133,8 @@ fn command_allow_list_can_be_managed_and_approved_from_tui() -> anyhow::Result<(
 
 #[test]
 fn startup_dangerous_bypass_authorizes_tools_commands_and_sandbox_escape() -> anyhow::Result<()> {
+    let _env_guard = env_lock().lock().unwrap();
+    let _network_env = EnvVarGuard::set(COMMAND_SANDBOX_NETWORK_ENV, "inherit");
     let tmp = tempdir()?;
     let workspace = tmp.path().join("workspace");
     let outside = tmp.path().join("outside.txt");
@@ -1671,7 +1691,7 @@ fn bubblewrap_unsets_secret_env_but_keeps_nonsecret_env() -> anyhow::Result<()> 
         logger: vegvisir_rust::observability::EventLogger::default(),
     };
 
-    let observed = executor.execute(vegvisir_rust::types::ToolCall {
+    let observed = execute_after_one_approval(&mut executor, vegvisir_rust::types::ToolCall {
         name: "run_command".to_string(),
         args: json!({
             "command": [
@@ -1838,13 +1858,16 @@ fn bubblewrap_hidden_paths_env_hides_host_file() -> anyhow::Result<()> {
         "test ! -s '{}' && printf hidden-ok",
         hidden_file.path().display()
     );
-    let observed = executor.execute(vegvisir_rust::types::ToolCall {
-        name: "run_command".to_string(),
-        args: json!({"command": ["sh", "-c", script], "timeout": 1})
-            .as_object()
-            .unwrap()
-            .clone(),
-    });
+    let observed = execute_after_one_approval(
+        &mut executor,
+        vegvisir_rust::types::ToolCall {
+            name: "run_command".to_string(),
+            args: json!({"command": ["sh", "-c", script], "timeout": 1})
+                .as_object()
+                .unwrap()
+                .clone(),
+        },
+    );
 
     assert!(observed.ok, "{}", observed.content);
     assert!(observed.content.contains("hidden-ok"));
@@ -1918,13 +1941,16 @@ fn strict_bubblewrap_allows_workspace_write_and_hides_host_tmp() -> anyhow::Resu
         "test \"$HOME\" = /home/vegvisir && test -z \"${{VEGVISIR_TEST_STRICT_SECRET+x}}\" && test ! -e '{}' && printf strict-ok > strict.txt && printf strict-ran",
         host_tmp_marker_path
     );
-    let observed = executor.execute(vegvisir_rust::types::ToolCall {
-        name: "run_command".to_string(),
-        args: json!({"command": ["sh", "-c", script], "timeout": 1})
-            .as_object()
-            .unwrap()
-            .clone(),
-    });
+    let observed = execute_after_one_approval(
+        &mut executor,
+        vegvisir_rust::types::ToolCall {
+            name: "run_command".to_string(),
+            args: json!({"command": ["sh", "-c", script], "timeout": 1})
+                .as_object()
+                .unwrap()
+                .clone(),
+        },
+    );
 
     assert!(observed.ok, "{}", observed.content);
     assert!(observed.content.contains("strict-ran"));
@@ -4106,6 +4132,9 @@ fn production_mode_blocks_direct_provider_auth() -> anyhow::Result<()> {
 
 #[test]
 fn verify_command_reports_auth_mcp_agent_and_memory_readiness() -> anyhow::Result<()> {
+    let _env_guard = env_lock().lock().unwrap();
+    let _sandbox_env = EnvVarGuard::set(COMMAND_SANDBOX_ENV, "path-only");
+    let _network_env = EnvVarGuard::set(COMMAND_SANDBOX_NETWORK_ENV, "inherit");
     let tmp = tempdir()?;
     let home = tmp.path().join("home");
     fs::create_dir_all(&home)?;
@@ -5393,6 +5422,9 @@ fn memory_import_chatgpt_uses_explicit_archive_database() -> anyhow::Result<()> 
 
 #[test]
 fn application_runs_builtin_eval_harness() -> anyhow::Result<()> {
+    let _env_guard = env_lock().lock().unwrap();
+    let _sandbox_env = EnvVarGuard::set(COMMAND_SANDBOX_ENV, "path-only");
+    let _network_env = EnvVarGuard::set(COMMAND_SANDBOX_NETWORK_ENV, "inherit");
     let tmp = tempdir()?;
     let home = tmp.path().join("home");
     let mut app = TuiApplication::with_data_root(tmp.path(), &home)?;
@@ -6229,6 +6261,7 @@ fn runtime_usrl_gate_enforces_stage_and_evidence_requirements() -> anyhow::Resul
         operation: "run_command".to_string(),
         target: "run_command".to_string(),
         args_summary: json!({"command": ["pwd"]}),
+        tool_metadata: None,
     });
     assert!(!missing_stage.allowed);
     assert!(missing_stage.reason.contains("stage evidence is required"));
@@ -6237,6 +6270,7 @@ fn runtime_usrl_gate_enforces_stage_and_evidence_requirements() -> anyhow::Resul
         operation: "run_command".to_string(),
         target: "run_command".to_string(),
         args_summary: json!({"command": ["pwd"], "usrl_stage": "deploy", "evidence": "manual check"}),
+        tool_metadata: None,
     });
     assert!(!bad_stage.allowed);
     assert!(bad_stage.reason.contains("not in contract stages"));
@@ -6245,6 +6279,7 @@ fn runtime_usrl_gate_enforces_stage_and_evidence_requirements() -> anyhow::Resul
         operation: "run_command".to_string(),
         target: "run_command".to_string(),
         args_summary: json!({"command": ["pwd"], "usrl_stage": "verify"}),
+        tool_metadata: None,
     });
     assert!(!missing_evidence.allowed);
     assert!(
@@ -6257,6 +6292,7 @@ fn runtime_usrl_gate_enforces_stage_and_evidence_requirements() -> anyhow::Resul
         operation: "run_command".to_string(),
         target: "run_command".to_string(),
         args_summary: json!({"command": ["pwd"], "usrl_stage": "verify", "evidence": "test run observed"}),
+        tool_metadata: None,
     });
     assert!(allowed.allowed, "{}", allowed.reason);
     Ok(())
@@ -8891,7 +8927,7 @@ fn openai_tool_loop_returns_last_observations_on_round_limit() -> anyhow::Result
 }
 
 #[test]
-fn openai_tool_loop_defers_sibling_tool_calls_until_completion_is_observed() -> anyhow::Result<()> {
+fn openai_tool_loop_executes_read_only_sibling_tool_calls_same_round() -> anyhow::Result<()> {
     let payloads = Arc::new(Mutex::new(Vec::<Value>::new()));
     let payloads_for_post = Arc::clone(&payloads);
     let mut posts = 0;
@@ -8946,7 +8982,99 @@ fn openai_tool_loop_defers_sibling_tool_calls_until_completion_is_observed() -> 
     let mut executed = Vec::<String>::new();
     let mut execute_tool = |name: &str, _: Map<String, Value>| {
         executed.push(name.to_string());
-        "file contents".to_string()
+        format!("{name} output")
+    };
+
+    let model = ModelInfo {
+        name: "gpt-test".to_string(),
+        provider: "openai".to_string(),
+        display_name: None,
+        context_window: Some(8192),
+        supports_streaming: true,
+        enabled: true,
+        metadata: Default::default(),
+    };
+    let result = openai_tool_loop(&model, &messages, &tools, &mut execute_tool, &mut post, 4)?;
+
+    assert_eq!(result, "done");
+    assert_eq!(
+        executed,
+        vec!["read_file".to_string(), "list_files".to_string()]
+    );
+    let payloads = payloads.lock().unwrap();
+    assert_eq!(payloads[0]["parallel_tool_calls"], true);
+    let followup_messages = payloads[1]
+        .get("messages")
+        .and_then(Value::as_array)
+        .unwrap();
+    let read_result = followup_messages
+        .iter()
+        .find(|message| message["tool_call_id"] == "call-read")
+        .and_then(|message| message["content"].as_str())
+        .unwrap_or("");
+    let list_result = followup_messages
+        .iter()
+        .find(|message| message["tool_call_id"] == "call-list")
+        .and_then(|message| message["content"].as_str())
+        .unwrap_or("");
+    assert!(read_result.contains("[Vegvisir tool completed]"));
+    assert!(read_result.contains("read_file output"));
+    assert!(list_result.contains("[Vegvisir tool completed]"));
+    assert!(list_result.contains("list_files output"));
+    Ok(())
+}
+
+#[test]
+fn openai_tool_loop_defers_risky_sibling_tool_calls() -> anyhow::Result<()> {
+    let payloads = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let payloads_for_post = Arc::clone(&payloads);
+    let mut posts = 0;
+    let mut post = move |payload: Value| -> anyhow::Result<Value> {
+        posts += 1;
+        payloads_for_post.lock().unwrap().push(payload);
+        if posts == 1 {
+            return Ok(json!({
+                "choices": [{
+                    "message": {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call-read",
+                                "type": "function",
+                                "function": {
+                                    "name": "read_file",
+                                    "arguments": "{\"path\":\"src/lib.rs\"}"
+                                }
+                            },
+                            {
+                                "id": "call-run",
+                                "type": "function",
+                                "function": {
+                                    "name": "run_command",
+                                    "arguments": "{\"command\":[\"git\",\"status\"]}"
+                                }
+                            }
+                        ]
+                    }
+                }]
+            }));
+        }
+        Ok(json!({"choices": [{"message": {"content": "done"}}]}))
+    };
+    let messages = vec![ChatMessage {
+        role: "user".to_string(),
+        content: "inspect and run".to_string(),
+        attachments: Vec::new(),
+        created_at: Utc::now(),
+    }];
+    let tools = vec![
+        json!({"name": "read_file", "description": "Read file.", "parameters": {}}),
+        json!({"name": "run_command", "description": "Run command.", "parameters": {}, "risky": true}),
+    ];
+    let mut executed = Vec::<String>::new();
+    let mut execute_tool = |name: &str, _: Map<String, Value>| {
+        executed.push(name.to_string());
+        format!("{name} output")
     };
 
     let model = ModelInfo {
@@ -8967,19 +9095,13 @@ fn openai_tool_loop_defers_sibling_tool_calls_until_completion_is_observed() -> 
         .get("messages")
         .and_then(Value::as_array)
         .unwrap();
-    let read_result = followup_messages
-        .iter()
-        .find(|message| message["tool_call_id"] == "call-read")
-        .and_then(|message| message["content"].as_str())
-        .unwrap_or("");
     let deferred_result = followup_messages
         .iter()
-        .find(|message| message["tool_call_id"] == "call-list")
+        .find(|message| message["tool_call_id"] == "call-run")
         .and_then(|message| message["content"].as_str())
         .unwrap_or("");
-    assert!(read_result.contains("[Vegvisir tool completed]"));
-    assert!(read_result.contains("file contents"));
     assert!(deferred_result.contains("[Vegvisir tool deferred]"));
+    assert!(deferred_result.contains("read-only"));
     Ok(())
 }
 

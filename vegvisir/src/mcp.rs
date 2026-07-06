@@ -13,7 +13,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     core::{McpConfigStore, McpServerConfig, McpToolConfig, McpTransport},
-    policy::{RuntimeGateRequest, RuntimePolicy},
+    policy::{RuntimeGateRequest, RuntimePolicy, RuntimeToolMetadata},
     tools::{Tool, ToolRegistry},
     types::Observation,
 };
@@ -85,6 +85,10 @@ pub fn register_mcp_tools(
                         operation: "mcp_tool_call".to_string(),
                         target: format!("{}::{}", server.id, tool_name),
                         args_summary: Value::Object(args.clone()),
+                        tool_metadata: Some(RuntimeToolMetadata {
+                            risky: true,
+                            safety_labels: vec!["external_tool".to_string(), "mcp".to_string()],
+                        }),
                     });
                     if !decision.allowed {
                         return Observation::err(decision.reason, "RuntimePolicyDenied");

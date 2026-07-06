@@ -21,6 +21,7 @@ components/t3code-overlay/
 # Ignore ad-hoc Markdown notes/idea files outside documentation.
 *.md
 !README.md
+!AI_REPO_MAP.md
 !docs/*.md
 !docs/**/*.md
 # Track first-class component metadata/docs despite the broad Markdown ignore.

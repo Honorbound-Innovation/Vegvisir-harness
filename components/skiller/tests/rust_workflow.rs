@@ -328,6 +328,191 @@ stderr={}",
 }
 
 #[test]
+fn import_skill_cli_preserves_authored_markdown_skill_without_deterministic_narrowing() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("SKILL.md");
+    let markdown = r#"---
+name: playwright-cli
+description: Automate browser interactions, test web pages and work with Playwright tests.
+allowed-tools: Bash(playwright-cli:*) Bash(npx:*) Bash(npm:*)
+---
+
+# Browser Automation with playwright-cli
+
+## Quick start
+
+```bash
+# open new browser
+playwright-cli open
+# navigate to a page
+playwright-cli goto https://playwright.dev
+# interact with the page using refs from the snapshot
+playwright-cli click e15
+```
+
+## Commands
+
+### Core
+
+```bash
+playwright-cli open
+playwright-cli goto https://playwright.dev
+playwright-cli type "search query"
+playwright-cli click e3
+playwright-cli snapshot
+playwright-cli close
+```
+
+## Raw output
+
+The global `--raw` option strips page status, generated code, and snapshot sections from the output.
+
+## Safety Boundary
+Do not enter plaintext secrets into untrusted pages. Do not navigate to external targets without user authorization.
+"#;
+    std::fs::write(&input, markdown).unwrap();
+    let out = temp.path().join("imported-md-bundle");
+
+    let import = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "import-skill",
+            input.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--name",
+            "playwright-md",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        import.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&import.stdout),
+        String::from_utf8_lossy(&import.stderr)
+    );
+
+    let validate = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args(["validate", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        validate.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&validate.stdout),
+        String::from_utf8_lossy(&validate.stderr)
+    );
+
+    let skill_text = std::fs::read_to_string(out.join("skills/playwright-cli.yaml")).unwrap();
+    assert!(
+        skill_text.contains("source_format: markdown_skill"),
+        "{skill_text}"
+    );
+    assert!(
+        skill_text.contains("deterministic_generation: skipped"),
+        "{skill_text}"
+    );
+    assert!(
+        skill_text.contains("Browser Automation with playwright-cli"),
+        "{skill_text}"
+    );
+    assert!(
+        skill_text.contains("playwright-cli goto https://playwright.dev"),
+        "{skill_text}"
+    );
+    assert!(skill_text.contains("Raw output"), "{skill_text}");
+    assert!(
+        !skill_text.contains("title: Run `playwright-cli open`"),
+        "{skill_text}"
+    );
+
+    let skills_dir_entries = std::fs::read_dir(out.join("skills")).unwrap().count();
+    assert_eq!(
+        skills_dir_entries, 1,
+        "markdown skill import should preserve one authored skill, not explode into narrow command skills"
+    );
+
+    let package_text = std::fs::read_to_string(out.join("package.yaml")).unwrap();
+    assert!(
+        package_text.contains("import_mode: pre_existing_skill"),
+        "{package_text}"
+    );
+}
+
+#[test]
+fn compile_path_auto_imports_authored_markdown_skill_instead_of_deterministic_compile() {
+    let temp = tempdir().unwrap();
+    let input = temp.path().join("my-skill.md");
+    std::fs::write(
+        &input,
+        r#"# Skill: release.audit
+
+## Purpose
+Perform a complete release audit while preserving the authored workflow.
+
+## Inputs
+- Release candidate path
+- Test evidence directory
+
+## Procedure
+1. Inspect release notes and version metadata.
+2. Verify test, lint, package, and migration evidence.
+3. Record blockers and exact follow-up actions.
+
+## Output Contract
+- readiness decision
+- blockers
+- verification evidence
+
+## Safety Boundary
+Do not publish or mutate external systems without explicit approval.
+"#,
+    )
+    .unwrap();
+    let out = temp.path().join("compiled-md-bundle");
+
+    let compile = Command::new(env!("CARGO_BIN_EXE_skiller"))
+        .args([
+            "compile",
+            input.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--name",
+            "release-md",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        compile.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let skill_text = std::fs::read_to_string(out.join("skills/release.audit.yaml")).unwrap();
+    assert!(
+        skill_text.contains("source_format: markdown_skill"),
+        "{skill_text}"
+    );
+    assert!(
+        skill_text.contains("deterministic_generation: skipped"),
+        "{skill_text}"
+    );
+    assert!(
+        skill_text.contains("Perform a complete release audit"),
+        "{skill_text}"
+    );
+    assert!(
+        skill_text.contains("Verify test, lint, package, and migration evidence"),
+        "{skill_text}"
+    );
+    assert!(
+        !skill_text.contains("Apply Inspect release notes"),
+        "{skill_text}"
+    );
+    assert_eq!(std::fs::read_dir(out.join("skills")).unwrap().count(), 1);
+}
+
+#[test]
 #[cfg(unix)]
 fn vegvisir_forge_provider_uses_configured_strict_envelope_adapter() {
     let temp = tempdir().unwrap();

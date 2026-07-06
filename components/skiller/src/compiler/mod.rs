@@ -8,8 +8,9 @@ use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
+use walkdir::WalkDir;
 
 #[derive(Debug, Deserialize, Default)]
 struct LooseSkillDocument {
@@ -221,17 +222,7 @@ pub fn import_skill_path(input: &Path, name: &str, domain: Option<&str>) -> Resu
 
     let mut skills = Vec::new();
     if input.is_dir() {
-        let mut files = std::fs::read_dir(input)
-            .with_context(|| format!("read import directory {}", input.display()))?
-            .filter_map(std::result::Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| {
-                matches!(
-                    path.extension().and_then(|s| s.to_str()),
-                    Some("yaml") | Some("yml") | Some("json")
-                )
-            })
-            .collect::<Vec<_>>();
+        let mut files = collect_importable_skill_files(input)?;
         files.sort();
         for file in files {
             skills.extend(read_loose_skill_file(&file)?);
@@ -242,7 +233,7 @@ pub fn import_skill_path(input: &Path, name: &str, domain: Option<&str>) -> Resu
 
     if skills.is_empty() {
         bail!(
-            "no importable skills found in {}; expected a Skiller bundle directory, a skill YAML/JSON file, a document with `skill:`, a document with `skills:`, or a directory of *.yaml/*.yml/*.json skill files",
+            "no importable skills found in {}; expected a Skiller bundle directory, skill YAML/JSON, authored Markdown skill file (SKILL.md/front matter/# Skill:), or a directory containing those files",
             input.display()
         );
     }
@@ -280,6 +271,15 @@ pub fn import_skill_path(input: &Path, name: &str, domain: Option<&str>) -> Resu
 fn read_loose_skill_file(path: &Path) -> Result<Vec<Skill>> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("read imported skill file {}", path.display()))?;
+    if is_markdown_path(path) {
+        if is_markdown_skill_document(&text, path) {
+            return Ok(vec![markdown_skill_to_skill(&text, path)]);
+        }
+        bail!(
+            "markdown import {} does not look like an authored skill; expected SKILL.md, YAML front matter with name/description, or a '# Skill:' heading",
+            path.display()
+        );
+    }
     if let Ok(bundle) = serde_yaml::from_str::<SkillBundle>(&text) {
         return Ok(bundle.skills);
     }
@@ -295,6 +295,12 @@ fn read_loose_skill_file(path: &Path) -> Result<Vec<Skill>> {
     if loose.is_empty() {
         let skill: LooseSkill = serde_yaml::from_str(&text)
             .with_context(|| format!("parse imported loose skill {}", path.display()))?;
+        if !loose_skill_has_content(&skill) {
+            bail!(
+                "{} does not contain an importable skill document",
+                path.display()
+            );
+        }
         loose.push(skill);
     }
     Ok(loose
@@ -302,6 +308,558 @@ fn read_loose_skill_file(path: &Path) -> Result<Vec<Skill>> {
         .enumerate()
         .map(|(index, skill)| loose_skill_to_skill(skill, path, index))
         .collect())
+}
+
+fn loose_skill_has_content(skill: &LooseSkill) -> bool {
+    skill.id.as_deref().is_some_and(|v| !v.trim().is_empty())
+        || skill.title.as_deref().is_some_and(|v| !v.trim().is_empty())
+        || skill
+            .summary
+            .as_deref()
+            .is_some_and(|v| !v.trim().is_empty())
+        || !skill.procedure.is_empty()
+        || !skill.inputs.is_empty()
+        || !skill.outputs.is_empty()
+        || !skill.guardrails.is_empty()
+        || !skill.anti_patterns.is_empty()
+        || !skill.evals.is_empty()
+        || !skill.scripts.is_empty()
+        || !skill.citations.is_empty()
+        || !skill.metadata.is_empty()
+}
+
+fn collect_importable_skill_files(input: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for entry in WalkDir::new(input)
+        .into_iter()
+        .filter_entry(|entry| !is_skipped_import_path(entry.path()))
+        .filter_map(std::result::Result::ok)
+    {
+        let path = entry.path();
+        if !entry.file_type().is_file() || !is_importable_skill_file(path) {
+            continue;
+        }
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("read skill candidate {}", path.display()))?;
+        if is_markdown_path(path) {
+            if is_markdown_skill_document(&text, path) {
+                files.push(path.to_path_buf());
+            }
+        } else if is_yaml_json_skill_document(&text) {
+            files.push(path.to_path_buf());
+        }
+    }
+    Ok(files)
+}
+
+fn is_skipped_import_path(path: &Path) -> bool {
+    let s = path.to_string_lossy();
+    s.contains("/.git/")
+        || s.contains("/target/")
+        || s.contains("/node_modules/")
+        || s.ends_with("/.git")
+        || s.ends_with("/target")
+        || s.ends_with("/node_modules")
+}
+
+fn is_importable_skill_file(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_ascii_lowercase())
+            .as_deref(),
+        Some("yaml") | Some("yml") | Some("json") | Some("md") | Some("markdown")
+    )
+}
+
+fn is_yaml_json_skill_document(text: &str) -> bool {
+    if let Ok(bundle) = serde_yaml::from_str::<SkillBundle>(text) {
+        return !bundle.skills.is_empty();
+    }
+    if let Ok(skill) = serde_yaml::from_str::<Skill>(text) {
+        return !skill.id.trim().is_empty()
+            || !skill.title.trim().is_empty()
+            || !skill.summary.trim().is_empty()
+            || !skill.procedure.is_empty()
+            || !skill.guardrails.is_empty();
+    }
+    if let Ok(doc) = serde_yaml::from_str::<LooseSkillDocument>(text) {
+        if doc.skill.as_ref().is_some_and(loose_skill_has_content) {
+            return true;
+        }
+        if doc.skills.iter().any(loose_skill_has_content) {
+            return true;
+        }
+    }
+    serde_yaml::from_str::<LooseSkill>(text)
+        .map(|skill| loose_skill_has_content(&skill))
+        .unwrap_or(false)
+}
+
+fn is_markdown_path(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_ascii_lowercase())
+            .as_deref(),
+        Some("md") | Some("markdown")
+    )
+}
+
+fn contains_markdown_skill_artifact(input: &Path) -> Result<bool> {
+    if input.is_dir() && input.join("package.yaml").exists() {
+        return Ok(true);
+    }
+    if input.is_file() {
+        if !is_markdown_path(input) {
+            return Ok(false);
+        }
+        let text = std::fs::read_to_string(input)
+            .with_context(|| format!("read markdown skill candidate {}", input.display()))?;
+        return Ok(is_markdown_skill_document(&text, input));
+    }
+    if input.is_dir() {
+        for file in collect_importable_skill_files(input)? {
+            if is_markdown_path(&file) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+#[derive(Debug, Default)]
+struct MarkdownFrontMatter {
+    values: BTreeMap<String, String>,
+    body: String,
+}
+
+fn split_markdown_front_matter(text: &str) -> MarkdownFrontMatter {
+    let normalized = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let Some(rest) = normalized.strip_prefix("---\n") else {
+        return MarkdownFrontMatter {
+            values: BTreeMap::new(),
+            body: normalized.to_string(),
+        };
+    };
+    let Some(end) = rest.find("\n---") else {
+        return MarkdownFrontMatter {
+            values: BTreeMap::new(),
+            body: normalized.to_string(),
+        };
+    };
+    let yaml = &rest[..end];
+    let after = &rest[end + "\n---".len()..];
+    let body = after.strip_prefix('\n').unwrap_or(after).to_string();
+    let values = serde_yaml::from_str::<BTreeMap<String, serde_yaml::Value>>(yaml)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(key, value)| yaml_scalar_to_string(value).map(|value| (key, value)))
+        .collect();
+    MarkdownFrontMatter { values, body }
+}
+
+fn yaml_scalar_to_string(value: serde_yaml::Value) -> Option<String> {
+    match value {
+        serde_yaml::Value::String(value) => Some(value),
+        serde_yaml::Value::Bool(value) => Some(value.to_string()),
+        serde_yaml::Value::Number(value) => Some(value.to_string()),
+        serde_yaml::Value::Sequence(items) => Some(
+            items
+                .into_iter()
+                .filter_map(yaml_scalar_to_string)
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
+        _ => None,
+    }
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty())
+}
+
+fn is_markdown_skill_document(text: &str, path: &Path) -> bool {
+    let front = split_markdown_front_matter(text);
+    let file_name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if file_name == "skill.md" || file_name == "skill.markdown" {
+        return true;
+    }
+    if front.values.contains_key("name")
+        && (front.values.contains_key("description") || front.values.contains_key("allowed-tools"))
+    {
+        return true;
+    }
+    let heading = first_markdown_heading(&front.body).unwrap_or_default();
+    if heading.to_ascii_lowercase().starts_with("skill:") || heading.eq_ignore_ascii_case("skill") {
+        return true;
+    }
+    let lower = front.body.to_ascii_lowercase();
+    let authored_skill_markers = [
+        "## purpose",
+        "## use when",
+        "## inputs",
+        "## procedure",
+        "## output contract",
+        "## safety boundary",
+    ];
+    path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_str()
+            .is_some_and(|part| part.eq_ignore_ascii_case("skills"))
+    }) && authored_skill_markers
+        .iter()
+        .filter(|marker| lower.contains(**marker))
+        .count()
+        >= 3
+}
+
+fn markdown_skill_to_skill(text: &str, origin: &Path) -> Skill {
+    let front = split_markdown_front_matter(text);
+    let heading = first_markdown_heading(&front.body);
+    let front_name = front.values.get("name").cloned();
+    let title_raw = front_name
+        .clone()
+        .or_else(|| heading.clone())
+        .unwrap_or_else(|| {
+            origin
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("imported-markdown-skill")
+                .replace(['_', '-'], " ")
+        });
+    let title = title_raw
+        .trim()
+        .strip_prefix("Skill:")
+        .map(str::trim)
+        .unwrap_or(title_raw.trim())
+        .to_string();
+    let summary = front
+        .values
+        .get("description")
+        .cloned()
+        .or_else(|| {
+            first_non_empty_section_paragraph(&front.body, &["Purpose", "Description", "Summary"])
+        })
+        .or_else(|| first_body_paragraph(&front.body))
+        .unwrap_or_else(|| {
+            format!(
+                "Imported authored Markdown skill from {}.",
+                origin.display()
+            )
+        });
+    let allowed_tools = front
+        .values
+        .get("allowed-tools")
+        .cloned()
+        .unwrap_or_default();
+    let mut metadata = BTreeMap::new();
+    metadata.insert("import_mode".into(), "pre_existing_skill".into());
+    metadata.insert("deterministic_generation".into(), "skipped".into());
+    metadata.insert("import_origin".into(), origin.display().to_string());
+    metadata.insert("source_format".into(), "markdown_skill".into());
+    metadata.insert(
+        "raw_markdown_sha256".into(),
+        ingest::hex_hash(text.as_bytes()),
+    );
+    if !allowed_tools.is_empty() {
+        metadata.insert("allowed_tools".into(), allowed_tools.clone());
+    }
+    for (key, value) in &front.values {
+        metadata.insert(format!("frontmatter_{key}"), value.clone());
+    }
+
+    let mut guardrails = extract_markdown_list_sections(
+        &front.body,
+        &[
+            "Guardrails",
+            "Quality Bar",
+            "Safety Boundary",
+            "Safety",
+            "Do Not",
+        ],
+    );
+    if guardrails.is_empty() {
+        guardrails.push("Preserve the imported Markdown skill as authored; do not narrow it through deterministic raw-source extraction.".into());
+        guardrails.push("Respect user authorization, tool permissions, and secret-handling boundaries while applying this skill.".into());
+    }
+
+    Skill {
+        id: slugify_skill_id(&front_name.unwrap_or_else(|| title.clone()), origin),
+        title,
+        summary,
+        skill_type: if !allowed_tools.is_empty()
+            || front.body.to_ascii_lowercase().contains("## commands")
+        {
+            SkillType::ToolUse
+        } else {
+            SkillType::Procedure
+        },
+        scope: SkillScope::WorkflowLevel,
+        status: SkillStatus::Candidate,
+        maturity: SkillMaturity::Level1StructuredCandidate,
+        domain: None,
+        source_section_ids: Vec::new(),
+        procedure: markdown_body_blocks(&front.body),
+        inputs: extract_markdown_list_sections(&front.body, &["Inputs", "Input"])
+            .into_iter()
+            .take(32)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .chain(std::iter::once(
+                "Authored Markdown skill invocation context".into(),
+            ))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect(),
+        outputs: extract_markdown_list_sections(
+            &front.body,
+            &["Output Contract", "Outputs", "Output"],
+        )
+        .into_iter()
+        .take(32)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .chain(std::iter::once(
+            "Skill-guided response, plan, or tool-use workflow".into(),
+        ))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect(),
+        guardrails,
+        anti_patterns: extract_markdown_list_sections(
+            &front.body,
+            &["Anti Patterns", "Anti-Patterns", "Avoid"],
+        ),
+        evals: Vec::new(),
+        scripts: Vec::new(),
+        citations: Vec::new(),
+        confidence: ConfidenceBreakdown {
+            raw: 0.9,
+            extraction: 0.95,
+            inference: 0.0,
+            procedure: 0.9,
+            guardrail: 0.75,
+            eval: 0.4,
+            routing: 0.75,
+            source_quality: 0.7,
+            human_review: 0.0,
+            runtime: 0.0,
+        },
+        evidence_breakdown: EvidenceBreakdown::default(),
+        inference_records: Vec::new(),
+        role_suitability: Vec::new(),
+        tool_requirements: tool_requirements_from_allowed_tools(&allowed_tools),
+        runtime_policy: RuntimePolicy {
+            conceptual_answer: true,
+            recommend_commands: true,
+            run_read_only_commands: !allowed_tools.is_empty(),
+            modify_files: false,
+            modify_external_systems: false,
+            requires_user_approval: true,
+            requires_backup_or_rollback: false,
+            handles_secrets: front.body.to_ascii_lowercase().contains("secret"),
+            handles_licensed_source: false,
+        },
+        version_applicability: VersionApplicability::default(),
+        metadata,
+    }
+}
+
+fn first_markdown_heading(text: &str) -> Option<String> {
+    text.lines().find_map(|line| {
+        let trimmed = line.trim();
+        trimmed
+            .strip_prefix('#')
+            .map(|_| trimmed.trim_start_matches('#').trim().to_string())
+            .filter(|heading| !heading.is_empty())
+    })
+}
+
+fn first_body_paragraph(text: &str) -> Option<String> {
+    let mut lines = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            if !lines.is_empty() {
+                break;
+            }
+            continue;
+        }
+        if trimmed.starts_with('#') || trimmed.starts_with("```") || trimmed.starts_with("---") {
+            continue;
+        }
+        lines.push(trimmed.trim_start_matches(['-', '*']).trim());
+    }
+    (!lines.is_empty()).then(|| short_label(&lines.join(" "), 360))
+}
+
+fn first_non_empty_section_paragraph(text: &str, headings: &[&str]) -> Option<String> {
+    let section = markdown_section(text, headings)?;
+    first_body_paragraph(&section)
+}
+
+fn markdown_section(text: &str, headings: &[&str]) -> Option<String> {
+    let mut in_section = false;
+    let mut lines = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') {
+            let heading = trimmed.trim_start_matches('#').trim();
+            if in_section {
+                break;
+            }
+            in_section = headings
+                .iter()
+                .any(|candidate| heading.eq_ignore_ascii_case(candidate));
+            continue;
+        }
+        if in_section {
+            lines.push(line);
+        }
+    }
+    in_section.then(|| lines.join("\n"))
+}
+
+fn extract_markdown_list_sections(text: &str, headings: &[&str]) -> Vec<String> {
+    let Some(section) = markdown_section(text, headings) else {
+        return Vec::new();
+    };
+    section
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            let item = trimmed
+                .strip_prefix("- ")
+                .or_else(|| trimmed.strip_prefix("* "))
+                .or_else(|| trimmed.strip_prefix("+ "))
+                .or_else(|| {
+                    let (number, rest) = trimmed.split_once(". ")?;
+                    number.chars().all(|ch| ch.is_ascii_digit()).then_some(rest)
+                })
+                .unwrap_or(trimmed)
+                .trim();
+            (!item.is_empty() && !item.starts_with('#') && !item.starts_with("```"))
+                .then(|| item.to_string())
+        })
+        .collect()
+}
+
+fn markdown_body_blocks(text: &str) -> Vec<String> {
+    let mut blocks = Vec::new();
+    let mut current = Vec::new();
+    let mut in_code = false;
+    for line in text.lines() {
+        let trimmed = line.trim_end();
+        if trimmed.trim_start().starts_with("```") {
+            in_code = !in_code;
+            current.push(trimmed.to_string());
+            if !in_code {
+                push_markdown_block(&mut blocks, &mut current);
+            }
+            continue;
+        }
+        if trimmed.trim().is_empty() && !in_code {
+            push_markdown_block(&mut blocks, &mut current);
+        } else {
+            current.push(trimmed.to_string());
+        }
+    }
+    push_markdown_block(&mut blocks, &mut current);
+    if blocks.is_empty() {
+        blocks.push("Review and apply the imported Markdown skill as authored.".into());
+    }
+    blocks
+}
+
+fn push_markdown_block(blocks: &mut Vec<String>, current: &mut Vec<String>) {
+    if current.is_empty() {
+        return;
+    }
+    let block = current.join("\n").trim().to_string();
+    current.clear();
+    if block.is_empty() {
+        return;
+    }
+    const MAX_BLOCK_CHARS: usize = 1800;
+    if block.chars().count() <= MAX_BLOCK_CHARS {
+        blocks.push(block);
+        return;
+    }
+    let mut chunk = String::new();
+    for line in block.lines() {
+        if chunk.chars().count() + line.chars().count() + 1 > MAX_BLOCK_CHARS && !chunk.is_empty() {
+            blocks.push(chunk.trim().to_string());
+            chunk.clear();
+        }
+        chunk.push_str(line);
+        chunk.push('\n');
+    }
+    if !chunk.trim().is_empty() {
+        blocks.push(chunk.trim().to_string());
+    }
+}
+
+fn tool_requirements_from_allowed_tools(allowed_tools: &str) -> Vec<ToolRequirement> {
+    let mut tools = BTreeSet::new();
+    for token in allowed_tools.split([',', ' ', '\n', '\t']).map(str::trim) {
+        if token.is_empty() {
+            continue;
+        }
+        if let Some(inner) = token
+            .strip_prefix("Bash(")
+            .and_then(|value| value.strip_suffix(')'))
+        {
+            let tool = inner
+                .split([':', ' ', '*'])
+                .next()
+                .unwrap_or("")
+                .trim()
+                .trim_start_matches("./");
+            if !tool.is_empty() {
+                tools.insert(tool.to_string());
+            }
+        } else if !token.contains('(') && !token.contains(')') {
+            tools.insert(token.trim_matches('*').to_string());
+        }
+    }
+    tools
+        .into_iter()
+        .map(|name| ToolRequirement {
+            name,
+            requirement_type: ToolRequirementType::Optional,
+            permission_level: PermissionLevel::RecommendOnly,
+            dry_run_available: None,
+            rollback_required: false,
+        })
+        .collect()
+}
+
+fn slugify_skill_id(raw: &str, origin: &Path) -> String {
+    let mut slug = raw
+        .trim()
+        .trim_start_matches("Skill:")
+        .trim()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    while slug.contains("--") {
+        slug = slug.replace("--", "-");
+    }
+    slug = slug.trim_matches(['-', '.', '_']).to_string();
+    if slug.is_empty() {
+        slug = ingest::stable_id("skill", &format!("markdown:{}", origin.display()));
+    }
+    slug
 }
 
 fn loose_skill_to_skill(loose: LooseSkill, origin: &Path, index: usize) -> Skill {
@@ -674,6 +1232,9 @@ pub fn compile_repo(input: &Path, name: &str, domain: Option<&str>) -> Result<Sk
 }
 
 pub fn compile_path(input: &Path, name: &str, domain: Option<&str>) -> Result<SkillBundle> {
+    if contains_markdown_skill_artifact(input)? {
+        return import_skill_path(input, name, domain);
+    }
     let (sources, sections) = ingest::ingest_path(input)?;
     Ok(compile_from_parts(
         sources,
