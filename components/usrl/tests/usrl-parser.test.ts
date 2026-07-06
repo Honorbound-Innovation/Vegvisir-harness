@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { parseUsrl, validateProgram } from "../src/index.js";
 
-test("parses canonical top-level declarations", () => {
+ test("parses canonical top-level declarations", () => {
   const program = parseUsrl(`
     using HarnessOS.CMS;
     import "business_logic.usrl" as biz;
@@ -26,6 +26,8 @@ test("parses canonical top-level declarations", () => {
   assert.equal(program.declarations.length, 4);
   assert.equal(program.declarations[0].kind, "using");
   assert.equal(program.declarations[1].kind, "import");
+  assert.equal(program.declarations[1].importSpec?.sourcePath, "business_logic.usrl");
+  assert.equal(program.declarations[1].importSpec?.alias, "biz");
   assert.equal(program.declarations[2].kind, "namespace");
   assert.equal(program.declarations[3].kind, "contract");
   assert.ok(program.declarations[2].declarations);
@@ -106,6 +108,7 @@ test("builds expression AST with precedence and postfix", () => {
   assert.equal(fact?.kind, "fact");
   assert.equal(fact?.expr?.kind, "coalesce");
   assert.equal(fact?.expr?.left?.kind, "member");
+  assert.equal(fact?.expr?.left?.object?.kind, "safe_member");
   assert.equal(fact?.expr?.right?.kind, "call");
 });
 
@@ -172,6 +175,45 @@ test("parses let patterns, foreach patterns, match, and comprehensions", () => {
   assert.equal(compFact?.kind, "fact");
   assert.equal(compFact?.expr?.kind, "comprehension");
   assert.equal(compFact?.expr?.pattern?.kind, "identifier");
+  assert.equal(compFact?.expr?.iterable?.kind, "binary");
+  assert.equal(compFact?.expr?.iterable?.operator, "..");
+});
+
+test("retains downstream metadata for enums, inheritance, templates, and expands", () => {
+  const program = parseUsrl(`
+    enum Color { Red = "r", Green, Blue; }
+    template Pair(string left, right: "fallback") {
+      fact Left = left;
+    }
+    expand Pair("a", right: "b");
+    contract Child extends Parent { section S { fact X = 1; } }
+    contract Derived derives Base { section S { fact X = 2; } }
+  `);
+
+  const enumDecl = program.declarations[0];
+  assert.equal(enumDecl.kind, "enum");
+  assert.deepEqual(enumDecl.enumMembers?.map((member) => member.name), ["Red", "Green", "Blue"]);
+  assert.equal(enumDecl.enumMembers?.[0]?.value?.kind, "literal");
+
+  const templateDecl = program.declarations[1];
+  assert.equal(templateDecl.kind, "template");
+  assert.equal(templateDecl.params?.[0]?.type, "string");
+  assert.equal(templateDecl.params?.[0]?.name, "left");
+  assert.equal(templateDecl.params?.[1]?.name, "right");
+  assert.equal(templateDecl.params?.[1]?.defaultValue?.kind, "literal");
+
+  const expandDecl = program.declarations[2];
+  assert.equal(expandDecl.kind, "expand");
+  assert.equal(expandDecl.args?.length, 2);
+  assert.equal(expandDecl.args?.[1]?.kind, "literal");
+
+  const childDecl = program.declarations[3];
+  assert.equal(childDecl.inheritance?.relation, "extends");
+  assert.equal(childDecl.inheritance?.target, "Parent");
+
+  const derivedDecl = program.declarations[4];
+  assert.equal(derivedDecl.inheritance?.relation, "derives");
+  assert.equal(derivedDecl.inheritance?.target, "Base");
 });
 
 test("parses type aliases and ADT unions", () => {

@@ -47,10 +47,14 @@ function parseImportSpec(name: string): ImportSpec | undefined {
 function extractImports(decls: TopDecl[]): string[] {
   const out: string[] = [];
   for (const decl of decls) {
-    if (decl.kind === "import" && decl.name) {
-      const spec = parseImportSpec(decl.name);
-      if (spec) {
-        out.push(spec.sourcePath);
+    if (decl.kind === "import") {
+      if (decl.importSpec) {
+        out.push(decl.importSpec.sourcePath);
+      } else if (decl.name) {
+        const spec = parseImportSpec(decl.name);
+        if (spec) {
+          out.push(spec.sourcePath);
+        }
       }
     }
     if (decl.declarations) {
@@ -102,7 +106,7 @@ export function resolveProject(entryFile: string): ProjectResolutionResult {
 
     if (!existsSync(abs)) {
       loaderIssues.push({
-        code: "UNBOUND_VARIABLE",
+        code: "IMPORT_NOT_FOUND",
         message: `Import file not found: ${abs}`,
         line: 1,
         column: 1,

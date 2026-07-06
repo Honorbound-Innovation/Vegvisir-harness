@@ -405,7 +405,25 @@ function evalExpr(expr: Expr | undefined, scope: Map<string, unknown>, ctx: Eval
         case "and": return truthy(left) && truthy(right);
         case "or": return truthy(left) || truthy(right);
         case "in": return Array.isArray(right) ? right.some((item) => valuesEqual(item, left)) : false;
-        case "contains": return Array.isArray(left) ? left.some((item) => valuesEqual(item, right)) : false;
+        case "contains": {
+          if (Array.isArray(left)) return left.some((item) => valuesEqual(item, right));
+          if (typeof left === "string") return left.includes(String(right ?? ""));
+          return false;
+        }
+        case "matches": {
+          if (typeof left !== "string") return false;
+          try {
+            return new RegExp(String(right ?? "")).test(left);
+          } catch {
+            ctx.issues.push({
+              code: "SEMANTIC_ERROR",
+              message: `Invalid regular expression in matches operator: ${String(right ?? "")}`,
+              line: 1,
+              column: 1,
+            });
+            return false;
+          }
+        }
         default: return undefined;
       }
     }
@@ -434,7 +452,15 @@ function evalExpr(expr: Expr | undefined, scope: Map<string, unknown>, ctx: Eval
 
     case "member": {
       const obj = evalExpr(expr.object, scope, ctx);
-      if (!obj || typeof obj !== "object") return undefined;
+      if (!obj || typeof obj !== "object") {
+        ctx.issues.push({
+          code: "EXECUTION_ERROR",
+          message: `Cannot access member '${expr.property ?? ""}' on non-object value`,
+          line: 1,
+          column: 1,
+        });
+        return undefined;
+      }
       return (obj as Record<string, unknown>)[expr.property ?? ""];
     }
 

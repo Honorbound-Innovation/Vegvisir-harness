@@ -1,4 +1,4 @@
-import { CallArg, Expr, MatchCase, Pattern, Program, QuerySpec, Statement, TopDecl, TypeExpr } from "./ast.js";
+import { CallArg, EnumMember, Expr, MatchCase, ParamSpec, Pattern, Program, QuerySpec, Statement, TopDecl, TypeExpr } from "./ast.js";
 import { lex, Token, TokenStream } from "./lexer.js";
 import { UsrlError } from "./errors.js";
 
@@ -49,19 +49,6 @@ function expectBlockStart(stream: TokenStream, context: string): void {
   stream.expectValue("{", `Expected '{' ${context}`);
 }
 
-function skipBlock(stream: TokenStream): void {
-  expectBlockStart(stream, "for block");
-  let depth = 1;
-  while (!stream.atEnd() && depth > 0) {
-    const token = stream.next();
-    if (token.value === "{") depth += 1;
-    if (token.value === "}") depth -= 1;
-  }
-  if (depth !== 0) {
-    const t = stream.peek();
-    throw new UsrlError("SYNTAX_ERROR", "Unterminated block", t.line, t.column);
-  }
-}
 
 function isExpressionStop(stream: TokenStream, stop: Set<string>): boolean {
   const token = stream.peek();
@@ -495,7 +482,8 @@ function parsePostfix(stream: TokenStream, stop: Set<string>): Expr {
       continue;
     }
 
-    if (stream.matchValue(".")) {
+    if (stream.peek().value === "." && stream.peek(1).value !== ".") {
+      stream.next();
       const property = stream.expectIdentifier("Expected property name after '.'").value;
       expr = { kind: "member", object: expr, property };
       continue;
@@ -545,8 +533,8 @@ function parseQuery(stream: TokenStream, startLine: number, startCol: number): S
   return { kind: "query", query, loc: { line: startLine, column: startCol } };
 }
 
-function parseParamList(stream: TokenStream): Array<{ type?: string; name: string; defaultValue?: Expr }> {
-  const params: Array<{ type?: string; name: string; defaultValue?: Expr }> = [];
+function parseParamList(stream: TokenStream): ParamSpec[] {
+  const params: ParamSpec[] = [];
   stream.expectValue("(", "Expected '(' for parameter list");
   if (stream.matchValue(")")) {
     return params;
@@ -831,7 +819,7 @@ function parseStatementsBlock(stream: TokenStream): Statement[] {
     if (token.value === "rule" || token.value === "constraint" || token.value === "stage" || token.value === "trigger") {
       const start = stream.next();
       const name = stream.expectIdentifier(`Expected ${start.value} identifier`).value;
-      let params: Array<{ type?: string; name: string; defaultValue?: Expr }> | undefined;
+      let params: ParamSpec[] | undefined;
       let hints: Expr[] | undefined;
       if (start.value === "rule") {
         if (stream.peek().value === "(") {
@@ -860,12 +848,46 @@ function parseStatementsBlock(stream: TokenStream): Statement[] {
   return out;
 }
 
+
+function parseEnumMembers(stream: TokenStream): EnumMember[] {
+  expectBlockStart(stream, "for enum body");
+  const members: EnumMember[] = [];
+
+  while (!stream.matchValue("}")) {
+    const token = stream.peek();
+    if (token.type === "eof") {
+      throw new UsrlError("SYNTAX_ERROR", "Unterminated enum block", token.line, token.column);
+    }
+
+    const name = stream.expectIdentifier("Expected enum member name").value;
+    let value: Expr | undefined;
+    if (stream.matchValue("=")) {
+      value = parseExpression(stream, new Set([",", ";", "}"]));
+    }
+    members.push({ name, value });
+
+    if (stream.matchValue(",") || stream.matchValue(";")) {
+      continue;
+    }
+    stream.expectValue("}", "Expected ',', ';', or '}' after enum member");
+    break;
+  }
+
+  return members;
+}
+
 function parseImportDecl(stream: TokenStream, start: Token): TopDecl {
   let name = "";
+  let importSpec: TopDecl["importSpec"];
+
   if (stream.peek().type === "string") {
-    name = stream.next().value;
+    const sourcePath = stream.next().value;
+    name = sourcePath;
+    importSpec = { sourcePath };
     if (stream.matchValue("as")) {
-      name += ` as ${stream.expectIdentifier("Expected alias").value}`;
+      const alias = stream.expectIdentifier("Expected alias").value;
+      name += ` as ${alias}`;
+      importSpec.alias = alias;
     }
   } else if (stream.matchValue("{")) {
     const names: string[] = [];
@@ -878,13 +900,16 @@ function parseImportDecl(stream: TokenStream, start: Token): TopDecl {
     if (from.type !== "string") {
       throw new UsrlError("SYNTAX_ERROR", "Expected import path string", from.line, from.column);
     }
-    name = `{${names.join(",")}} from ${stream.next().value}`;
+    const sourcePath = stream.next().value;
+    name = `{${names.join(",")}} from ${sourcePath}`;
+    importSpec = { sourcePath, names };
   } else {
     const bad = stream.peek();
     throw new UsrlError("SYNTAX_ERROR", "Invalid import declaration", bad.line, bad.column);
   }
+
   stream.expectValue(";", "Expected ';' after import");
-  return { kind: "import", name, loc: { line: start.line, column: start.column } };
+  return { kind: "import", name, importSpec, loc: { line: start.line, column: start.column } };
 }
 
 function parseTopDecl(stream: TokenStream): TopDecl {
@@ -920,11 +945,12 @@ function parseTopDecl(stream: TokenStream): TopDecl {
   }
 
   if (start.value === "expand") {
-    const name = stream.expectIdentifier("Expected template name after expand").value;
+    const name = readQualifiedName(stream);
     stream.expectValue("(", "Expected '(' after expand name");
-    parseDelimitedExpressions(stream, ")");
+    const callArgs = parseCallArgs(stream);
+    const args = callArgs.map((arg) => arg.value);
     stream.expectValue(";", "Expected ';' after expand");
-    return { kind: "expand", name, loc: { line: start.line, column: start.column } };
+    return { kind: "expand", name, args, callArgs, loc: { line: start.line, column: start.column } };
   }
 
   const name = stream.expectIdentifier(`Expected ${start.value} name`).value;
@@ -937,18 +963,20 @@ function parseTopDecl(stream: TokenStream): TopDecl {
     return { kind: "type", name, typeParams, typeExpr, loc: { line: start.line, column: start.column } };
   }
 
+  let inheritance: TopDecl["inheritance"];
   if (start.value === "contract" && (stream.peek().value === "extends" || stream.peek().value === "derives")) {
-    stream.next();
-    readQualifiedName(stream);
+    const relation = stream.next().value as "extends" | "derives";
+    inheritance = { relation, target: readQualifiedName(stream) };
   }
 
+  let params: ParamSpec[] | undefined;
   if (start.value === "template") {
-    parseParamList(stream);
+    params = parseParamList(stream);
   }
 
   if (start.value === "enum") {
-    skipBlock(stream);
-    return { kind: "enum", name, loc: { line: start.line, column: start.column } };
+    const enumMembers = parseEnumMembers(stream);
+    return { kind: "enum", name, enumMembers, loc: { line: start.line, column: start.column } };
   }
 
   if (start.value === "struct") {
@@ -957,7 +985,7 @@ function parseTopDecl(stream: TokenStream): TopDecl {
   }
 
   const body = parseStatementsBlock(stream);
-  return { kind: start.value as TopDecl["kind"], name, body, loc: { line: start.line, column: start.column } };
+  return { kind: start.value as TopDecl["kind"], name, body, inheritance, params, loc: { line: start.line, column: start.column } };
 }
 
 export function parseUsrl(source: string): Program {
