@@ -1,0 +1,7 @@
+[
+  "--registry",
+  "examples/registry",
+  "packs",
+  "verify-trust",
+  "pack.rust.engineering.v1"
+]

@@ -8,6 +8,7 @@ Start here if you need the real system picture rather than only command help:
 - [Runtime architecture](runtime-architecture.md) — Rust harness internals, CLI surfaces, TUI/headless/app-server flow, tools, memory, skills, subagents, verification.
 - [New runtime features](new-runtime-features.md) — recent autonomy, sandboxing, subagent, provider-streaming, MCP, and runtime-status features.
 - [Command sandboxing and approvals](command-sandboxing-and-approvals.md) — workspace file hardening, command allow-lists, approval queue, Bubblewrap modes, and dangerous bypass.
+- [Privileged command workflow](privileged-command-workflow.md) — sudo-safe command authentication using OS prompt handoff and non-interactive privileged execution.
 - [Subagent delegation](subagent-delegation.md) — bounded child-agent tasks, board records, file scopes, work budgets, and cancellation.
 - [Desktop app](desktop-app.md) — graphical shell architecture, bridge boundary, feature parity contract, and implementation plan.
 - [Skiller system](skiller-system.md) — governed skill compiler, Forge envelopes, lifecycle artifacts, registry, Agent Builder handoffs.

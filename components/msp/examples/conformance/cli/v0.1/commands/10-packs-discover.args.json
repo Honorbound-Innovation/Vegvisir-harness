@@ -1,0 +1,10 @@
+[
+  "--registry",
+  "examples/registry",
+  "packs",
+  "discover",
+  "--task",
+  "rust engineering",
+  "--max-risk",
+  "medium"
+]

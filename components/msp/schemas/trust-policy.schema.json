@@ -1,0 +1,288 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "msp://schemas/trust-policy.schema.json",
+  "title": "MSP Skill Trust Policy",
+  "description": "Host or registry policy controlling whether a skill, pack, dependency, or registry artifact may be trusted and loaded.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "msp_version",
+    "policy_version",
+    "kind",
+    "id",
+    "name",
+    "default_action",
+    "rules"
+  ],
+  "properties": {
+    "msp_version": {
+      "$ref": "#/$defs/semver"
+    },
+    "policy_version": {
+      "$ref": "#/$defs/semver"
+    },
+    "kind": {
+      "const": "SkillTrustPolicy"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^trust(\\.[a-z0-9][a-z0-9_-]*)+\\.v[0-9]+$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "default_action": {
+      "type": "string",
+      "enum": [
+        "allow",
+        "deny",
+        "require_review",
+        "require_approval"
+      ]
+    },
+    "trusted_registries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/trusted_registry"
+      },
+      "default": []
+    },
+    "trusted_issuers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/trusted_issuer"
+      },
+      "default": []
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "require_signed_skills": {
+          "type": "boolean",
+          "default": true
+        },
+        "require_signed_packs": {
+          "type": "boolean",
+          "default": true
+        },
+        "allowed_algorithms": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "ed25519",
+              "ecdsa-p256",
+              "rsa-pss-sha256"
+            ]
+          },
+          "uniqueItems": true,
+          "default": [
+            "ed25519"
+          ]
+        }
+      }
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_auto_load_risk": {
+          "$ref": "#/$defs/risk_level"
+        },
+        "require_review_for": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/risk_level"
+          },
+          "uniqueItems": true,
+          "default": [
+            "high",
+            "critical"
+          ]
+        },
+        "deny_risk_levels": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/risk_level"
+          },
+          "uniqueItems": true,
+          "default": []
+        }
+      }
+    },
+    "rules": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/rule"
+      },
+      "default": []
+    },
+    "forbidden_behaviors": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 300
+      },
+      "default": [
+        "override_host_policy",
+        "override_user_policy",
+        "grant_tool_permissions",
+        "silently_load_dependencies",
+        "alter_memory_policy",
+        "alter_identity_policy"
+      ]
+    },
+    "dependency_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allow_transitive_dependencies": {
+          "type": "boolean",
+          "default": true
+        },
+        "require_explicit_dependency_graph": {
+          "type": "boolean",
+          "default": true
+        },
+        "deny_cycles": {
+          "type": "boolean",
+          "default": true
+        },
+        "require_dependency_trust_verification": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "telemetry_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allow_execution_reports": {
+          "type": "boolean",
+          "default": true
+        },
+        "allow_failure_reports": {
+          "type": "boolean",
+          "default": true
+        },
+        "allow_content_upload": {
+          "type": "boolean",
+          "default": false
+        },
+        "redact_paths": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    }
+  },
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+    },
+    "risk_level": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ]
+    },
+    "trusted_registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "uri"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "uri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "trust_anchor": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "Reference to a registry trust anchor. Local v0.1 accepts ed25519:<base64-public-key> or sha256:<hex-public-key-digest> for key-style anchors."
+        }
+      }
+    },
+    "trusted_issuer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "public_key_ref": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "Trusted public key for this issuer. Local v0.1 accepts ed25519:<base64-public-key> or sha256:<hex-public-key-digest>.",
+          "pattern": "^(ed25519:[A-Za-z0-9+/]+={0,2}|sha256:[A-Fa-f0-9]{64})$"
+        },
+        "allowed_risk_levels": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/risk_level"
+          },
+          "uniqueItems": true,
+          "default": [
+            "low",
+            "medium"
+          ]
+        }
+      }
+    },
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "effect",
+        "match"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"
+        },
+        "effect": {
+          "type": "string",
+          "enum": [
+            "allow",
+            "deny",
+            "require_review",
+            "require_approval"
+          ]
+        },
+        "match": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Implementation-defined structured matcher over skill id, issuer, registry, risk, category, permissions, and dependencies."
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      }
+    }
+  }
+}

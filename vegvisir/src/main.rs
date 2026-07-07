@@ -154,6 +154,11 @@ enum Command {
         #[arg(last = true)]
         args: Vec<std::ffi::OsString>,
     },
+    /// Run the integrated MSP client component. Use `vegvisir msp -- <args>`.
+    Msp {
+        #[arg(last = true)]
+        args: Vec<std::ffi::OsString>,
+    },
 }
 
 fn current_workspace() -> PathBuf {
@@ -292,6 +297,7 @@ fn main() -> anyhow::Result<()> {
                 cli.json,
             ),
             Some(Command::Skiller { args }) => run_skiller(args),
+            Some(Command::Msp { args }) => run_msp(args),
             Some(Command::Tui) | None => {
                 run_tui_with_dangerous_bypass(cli.dangerously_bypass_approvals_and_sandbox)
             }
@@ -302,6 +308,11 @@ fn main() -> anyhow::Result<()> {
 fn run_skiller(args: Vec<std::ffi::OsString>) -> anyhow::Result<()> {
     let argv = std::iter::once(std::ffi::OsString::from("skiller")).chain(args);
     skiller::run_cli_from(argv)
+}
+
+fn run_msp(args: Vec<std::ffi::OsString>) -> anyhow::Result<()> {
+    let argv = std::iter::once(std::ffi::OsString::from("msp-client")).chain(args);
+    msp_client::run_cli_from(argv)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

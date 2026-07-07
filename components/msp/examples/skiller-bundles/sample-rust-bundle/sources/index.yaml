@@ -1,0 +1,15 @@
+- source_id: src-1
+  title: Sample Rust Refactor Guide
+  source_type: Markdown
+  origin: docs/sample-rust-refactor.md
+  version: null
+  license: MIT
+  owner: null
+  visibility: Public
+  ingested_at: "2026-01-01T00:00:00Z"
+  hash: sha256:abcd
+  retention_policy: ExcerptsOnly
+  export_policy: PublicAllowed
+  secret_scan_status: Clean
+  permission_status: Allowed
+  citation_policy: ShortExcerpts

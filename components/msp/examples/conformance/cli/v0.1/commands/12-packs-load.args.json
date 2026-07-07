@@ -1,0 +1,7 @@
+[
+  "--registry",
+  "examples/registry",
+  "packs",
+  "load",
+  "pack.rust.engineering.v1"
+]

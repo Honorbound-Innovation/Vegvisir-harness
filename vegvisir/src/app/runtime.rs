@@ -13,6 +13,31 @@ use serde_json::json;
 use super::*;
 
 impl TuiApplication {
+    pub(crate) fn show_ephemeral_notice(
+        &mut self,
+        text: impl Into<String>,
+        kind: EphemeralNoticeKind,
+        ttl: Duration,
+    ) {
+        self.ephemeral_notice = Some(EphemeralNotice::new(text, kind, ttl));
+        self.redraw_requested = true;
+    }
+
+    pub(crate) fn show_approval_notice(&mut self, text: impl Into<String>) {
+        self.show_ephemeral_notice(text, EphemeralNoticeKind::Approval, Duration::from_secs(5));
+    }
+
+    pub(crate) fn expire_ephemeral_notice(&mut self) {
+        if self
+            .ephemeral_notice
+            .as_ref()
+            .is_some_and(EphemeralNotice::is_expired)
+        {
+            self.ephemeral_notice = None;
+            self.redraw_requested = true;
+        }
+    }
+
     pub(crate) fn start_background_send(
         &mut self,
         content: String,
@@ -103,6 +128,17 @@ impl TuiApplication {
                             ProviderRunEvent::ToolStart { name, args } => {
                                 StreamEvent::ToolStart { name, args }
                             }
+                            ProviderRunEvent::ToolOutput {
+                                name,
+                                stream,
+                                chunk,
+                                truncated,
+                            } => StreamEvent::ToolOutput {
+                                name,
+                                stream,
+                                chunk,
+                                truncated,
+                            },
                             ProviderRunEvent::ToolEnd {
                                 name,
                                 ok,
@@ -1274,7 +1310,15 @@ Steering: {display_content}{attachment_note}"
         {
             self.tool_executor
                 .runtime_policy
-                .authorize_tool("run_command", &args, &self.logger)
+                .authorize_tool_with_metadata(
+                    "run_command",
+                    &args,
+                    RuntimeToolMetadata {
+                        risky: tool.risky,
+                        safety_labels: Vec::new(),
+                    },
+                    &self.logger,
+                )
                 .map_err(anyhow::Error::msg)?;
         }
         Ok(())
@@ -1562,6 +1606,25 @@ Steering: {display_content}{attachment_note}"
                     self.session.activity = format!("using tool {name}");
                     self.pending_assistant_paragraph_break = true;
                     self.push_live_tool_message(format!("Running tool: {name} {args}"));
+                }
+                StreamEvent::ToolOutput {
+                    name,
+                    stream,
+                    chunk,
+                    truncated,
+                } => {
+                    self.append_tui_turn_provider_event(&ProviderRunEvent::ToolOutput {
+                        name: name.clone(),
+                        stream: stream.clone(),
+                        chunk: chunk.clone(),
+                        truncated,
+                    });
+                    let suffix = if truncated { " [live truncated]" } else { "" };
+                    self.session.activity = format!("{name} {stream} output{suffix}");
+                    self.pending_assistant_paragraph_break = true;
+                    self.push_live_tool_message(format!(
+                        "Tool output: {name} {stream}{suffix}\n{chunk}"
+                    ));
                 }
                 StreamEvent::ToolEnd {
                     name,

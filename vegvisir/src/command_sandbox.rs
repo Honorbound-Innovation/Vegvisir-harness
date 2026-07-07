@@ -9,6 +9,18 @@ pub const COMMAND_SANDBOX_WRITABLE_PATHS_ENV: &str = "VEGVISIR_COMMAND_WRITABLE_
 pub const COMMAND_SANDBOX_READONLY_PATHS_ENV: &str = "VEGVISIR_COMMAND_READONLY_PATHS";
 pub const COMMAND_SANDBOX_HIDDEN_PATHS_ENV: &str = "VEGVISIR_COMMAND_HIDDEN_PATHS";
 
+#[cfg(test)]
+static COMMAND_SANDBOX_TEST_ENV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
+    std::sync::OnceLock::new();
+
+#[cfg(test)]
+pub(crate) fn command_sandbox_test_env_lock() -> std::sync::MutexGuard<'static, ()> {
+    COMMAND_SANDBOX_TEST_ENV_LOCK
+        .get_or_init(std::sync::Mutex::default)
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CommandSandboxMode {
     None,
@@ -554,10 +566,7 @@ mod tests {
 
     #[test]
     fn bubblewrap_network_disable_env_adds_unshare_net() -> anyhow::Result<()> {
-        let _guard = TEST_ENV_LOCK
-            .get_or_init(std::sync::Mutex::default)
-            .lock()
-            .unwrap();
+        let _guard = command_sandbox_test_env_lock();
         let _sandbox_env = TestEnvGuard::set(COMMAND_SANDBOX_ENV, "bwrap");
         let _network_env = TestEnvGuard::set(COMMAND_SANDBOX_NETWORK_ENV, "disable");
         let dir = tempdir()?;
@@ -574,10 +583,7 @@ mod tests {
 
     #[test]
     fn strict_bubblewrap_ignores_network_inherit_override() -> anyhow::Result<()> {
-        let _guard = TEST_ENV_LOCK
-            .get_or_init(std::sync::Mutex::default)
-            .lock()
-            .unwrap();
+        let _guard = command_sandbox_test_env_lock();
         let _sandbox_env = TestEnvGuard::set(COMMAND_SANDBOX_ENV, "strict-bwrap");
         let _network_env = TestEnvGuard::set(COMMAND_SANDBOX_NETWORK_ENV, "inherit");
         let dir = tempdir()?;
@@ -594,10 +600,7 @@ mod tests {
 
     #[test]
     fn network_approval_policy_identifies_likely_network_commands() -> anyhow::Result<()> {
-        let _guard = TEST_ENV_LOCK
-            .get_or_init(std::sync::Mutex::default)
-            .lock()
-            .unwrap();
+        let _guard = command_sandbox_test_env_lock();
         let _network_env = TestEnvGuard::set(COMMAND_SANDBOX_NETWORK_ENV, "require-approval");
         assert!(command_requires_network_approval(&["git", "fetch"])?);
         assert!(command_requires_network_approval(&["npm", "install"])?);
@@ -611,10 +614,7 @@ mod tests {
 
     #[test]
     fn strict_mode_does_not_request_network_approval() -> anyhow::Result<()> {
-        let _guard = TEST_ENV_LOCK
-            .get_or_init(std::sync::Mutex::default)
-            .lock()
-            .unwrap();
+        let _guard = command_sandbox_test_env_lock();
         let _sandbox_env = TestEnvGuard::set(COMMAND_SANDBOX_ENV, "strict-bwrap");
         let _network_env = TestEnvGuard::set(COMMAND_SANDBOX_NETWORK_ENV, "require-approval");
         assert!(!command_requires_network_approval(&["git", "fetch"])?);
@@ -623,10 +623,7 @@ mod tests {
 
     #[test]
     fn mount_path_env_configures_bubblewrap_mounts() -> anyhow::Result<()> {
-        let _guard = TEST_ENV_LOCK
-            .get_or_init(std::sync::Mutex::default)
-            .lock()
-            .unwrap();
+        let _guard = command_sandbox_test_env_lock();
         let dir = tempdir()?;
         let writable = dir.path().join("writable");
         let readonly = dir.path().join("readonly");
@@ -666,10 +663,7 @@ mod tests {
 
     #[test]
     fn mount_path_env_rejects_relative_paths() -> anyhow::Result<()> {
-        let _guard = TEST_ENV_LOCK
-            .get_or_init(std::sync::Mutex::default)
-            .lock()
-            .unwrap();
+        let _guard = command_sandbox_test_env_lock();
         let _sandbox_env = TestEnvGuard::set(COMMAND_SANDBOX_ENV, "bwrap");
         let _hidden_env = TestEnvGuard::set(COMMAND_SANDBOX_HIDDEN_PATHS_ENV, "relative");
         let dir = tempdir()?;
@@ -713,10 +707,7 @@ mod tests {
 
     #[test]
     fn bubblewrap_unsets_secret_like_environment_names() -> anyhow::Result<()> {
-        let _guard = TEST_ENV_LOCK
-            .get_or_init(std::sync::Mutex::default)
-            .lock()
-            .unwrap();
+        let _guard = command_sandbox_test_env_lock();
         let _visible_env = TestEnvGuard::set("VEGVISIR_TEST_VISIBLE_SETTING", "keep");
         let _api_key_env = TestEnvGuard::set("VEGVISIR_TEST_API_KEY", "secret");
         let _hbse_env = TestEnvGuard::set("HBSE_BROKER_SOCKET", "/tmp/hbse.sock");
@@ -745,8 +736,6 @@ mod tests {
             "missing sequence {expected:?} in {args:?}"
         );
     }
-
-    static TEST_ENV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
 
     struct TestEnvGuard {
         key: &'static str,

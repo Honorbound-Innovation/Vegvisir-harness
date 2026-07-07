@@ -401,6 +401,52 @@ function resolveIdentifier(
   });
 }
 
+
+function resolveSymbolReference(
+  text: string,
+  refKind: "symbol" | "type_ref",
+  ownerNodeId: string,
+  namespace: string,
+  usingNamespaces: string[],
+  table: SymbolTable,
+  references: ResolvedReference[],
+  issues: ResolutionIssue[],
+  line: number,
+  column: number,
+): void {
+  const resolved = resolveSymbolByName(text, namespace, usingNamespaces, table);
+  if (resolved.ambiguous) {
+    issues.push({
+      code: "AMBIGUOUS",
+      message: `Ambiguous reference '${text}' matches: ${resolved.ambiguous.map((sym) => sym.qname).join(", ")}`,
+      line,
+      column,
+    });
+    references.push({ fromNodeId: ownerNodeId, kind: "unbound", text, line, column });
+    return;
+  }
+
+  if (resolved.symbol) {
+    references.push({
+      fromNodeId: ownerNodeId,
+      kind: refKind,
+      text,
+      targetSymbolId: resolved.symbol.id,
+      line,
+      column,
+    });
+    return;
+  }
+
+  references.push({ fromNodeId: ownerNodeId, kind: "unbound", text, line, column });
+  issues.push({
+    code: "UNBOUND_VARIABLE",
+    message: `Unresolved reference '${text}'`,
+    line,
+    column,
+  });
+}
+
 function collectExprReferences(
   expr: Expr | undefined,
   ownerNodeId: string,
@@ -473,6 +519,17 @@ function collectExprReferences(
     for (const arg of expr.callArgs ?? []) {
       collectExprReferences(arg.value, ownerNodeId, namespace, scope, table, usingNamespaces, references, issues, line, column);
     }
+    return;
+  }
+
+  if (expr.kind === "comprehension") {
+    collectExprReferences(expr.iterable, ownerNodeId, namespace, scope, table, usingNamespaces, references, issues, line, column);
+    const itemScope = new Set(scope);
+    for (const name of collectPatternNames(expr.pattern)) {
+      itemScope.add(name);
+    }
+    collectExprReferences(expr.itemExpr, ownerNodeId, namespace, itemScope, table, usingNamespaces, references, issues, line, column);
+    collectExprReferences(expr.filter, ownerNodeId, namespace, itemScope, table, usingNamespaces, references, issues, line, column);
     return;
   }
 
@@ -708,9 +765,65 @@ export function resolveProgram(program: Program): ResolutionResult {
       const symbolNodeId = decl.name && !["using", "import", "expand"].includes(decl.kind)
         ? makeSymbolId(qname, decl.kind)
         : undefined;
+      const declNodeId = symbolNodeId ?? (decl.kind === "expand" ? `decl:expand:${qname}:${decl.loc.line}:${decl.loc.column}` : undefined);
 
-      if (parentNodeId && symbolNodeId) {
-        edges.push({ from: parentNodeId, to: symbolNodeId, kind: "contains" });
+      if (declNodeId && !nodes.some((node) => node.id === declNodeId)) {
+        nodes.push({
+          id: declNodeId,
+          kind: "decl",
+          label: `${decl.kind} ${qname}`,
+          line: decl.loc.line,
+          column: decl.loc.column,
+        });
+      }
+
+      if (parentNodeId && declNodeId) {
+        edges.push({ from: parentNodeId, to: declNodeId, kind: "contains" });
+      }
+
+      if (decl.inheritance && symbolNodeId) {
+        resolveSymbolReference(
+          decl.inheritance.target,
+          "symbol",
+          symbolNodeId,
+          namespace,
+          usingNamespaces,
+          table,
+          references,
+          issues,
+          decl.loc.line,
+          decl.loc.column,
+        );
+      }
+
+      if (decl.kind === "expand" && declNodeId && decl.name) {
+        resolveSymbolReference(
+          decl.name,
+          "symbol",
+          declNodeId,
+          namespace,
+          usingNamespaces,
+          table,
+          references,
+          issues,
+          decl.loc.line,
+          decl.loc.column,
+        );
+        for (const arg of decl.args ?? []) {
+          collectExprReferences(arg, declNodeId, namespace, new Set(), table, usingNamespaces, references, issues, decl.loc.line, decl.loc.column);
+        }
+      }
+
+      for (const param of decl.params ?? []) {
+        if (declNodeId) {
+          collectExprReferences(param.defaultValue, declNodeId, namespace, new Set(), table, usingNamespaces, references, issues, decl.loc.line, decl.loc.column);
+        }
+      }
+
+      for (const member of decl.enumMembers ?? []) {
+        if (declNodeId) {
+          collectExprReferences(member.value, declNodeId, namespace, new Set(), table, usingNamespaces, references, issues, decl.loc.line, decl.loc.column);
+        }
       }
 
       if (decl.kind === "type" && symbolNodeId) {
@@ -746,11 +859,15 @@ export function resolveProgram(program: Program): ResolutionResult {
       }
 
       if (symbolNodeId) {
-        walkStatements(decl.body, namespace, symbolNodeId, new Set());
+        const declScope = new Set<string>();
+        for (const param of decl.params ?? []) {
+          declScope.add(param.name);
+        }
+        walkStatements(decl.body, namespace, symbolNodeId, declScope);
       }
 
       if (decl.declarations) {
-        walkDecls(decl.declarations, namespace, symbolNodeId ?? parentNodeId);
+        walkDecls(decl.declarations, namespace, declNodeId ?? parentNodeId);
       }
     }
   };

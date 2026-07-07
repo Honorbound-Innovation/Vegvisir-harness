@@ -5,4 +5,5 @@ members = [
     "components/cms-v2",
     "components/HBSE/hbse",
     "components/skiller",
+    "components/msp-client",
 ]

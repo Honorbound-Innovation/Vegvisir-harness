@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","result":[{"category":"software_engineering/rust/refactoring","id":"skill.rust.refactor.module.v1","name":"Rust Module Refactor","required_tools":["read_file","write_file"],"risk_level":"medium","score":69,"summary":"Guides safe refactoring of Rust modules using small edits and verification loops.","version":"0.1.0"}],"id":3}

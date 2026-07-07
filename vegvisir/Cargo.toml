@@ -11,6 +11,7 @@ base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 libc = "0.2"
+msp-client = { path = "../components/msp-client" }
 cms-v2 = { path = "../components/cms-v2" }
 crossterm = "0.28"
 inkjet = { version = "0.11.1", default-features = false, features = [

@@ -132,3 +132,36 @@ test("supports triggers, temporal calls, and deontic conflicts", () => {
   assert.ok(result.decisions.length >= 2);
   assert.ok(result.issues.some((i) => i.message.includes("Conflicting permit/deny decision")));
 });
+
+test("supports range, matches, string contains, and distinguishes safe member", () => {
+  const program = parseUsrl(`
+    contract Runtime {
+      section S {
+        fact Range = 1..3;
+        fact RegexOk = "abc123" matches "^[a-z]+[0-9]+$";
+        fact ContainsOk = "abc123" contains "bc";
+        fact SafeMissing = Missing?.field;
+      }
+    }
+  `);
+
+  const result = evaluateProgram(program);
+  assert.deepEqual(result.facts.Range, [1, 2, 3]);
+  assert.equal(result.facts.RegexOk, true);
+  assert.equal(result.facts.ContainsOk, true);
+  assert.equal(result.facts.SafeMissing, undefined);
+  assert.equal(result.issues.length, 0);
+});
+
+test("regular member access on non-objects reports an execution issue", () => {
+  const program = parseUsrl(`
+    contract Runtime {
+      section S {
+        fact Bad = Missing.field;
+      }
+    }
+  `);
+
+  const result = evaluateProgram(program);
+  assert.ok(result.issues.some((issue) => issue.code === "EXECUTION_ERROR" && issue.message.includes("Cannot access member")));
+});

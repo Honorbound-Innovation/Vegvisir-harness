@@ -59,3 +59,34 @@ test("resolves lexical locals and reports unbound identifiers", () => {
   assert.ok(resolution.references.some((r) => r.kind === "local" && r.text === "item"));
   assert.ok(resolution.issues.some((i) => i.code === "UNBOUND_VARIABLE" && i.message.includes("missingVar")));
 });
+
+test("resolves retained inheritance and expand references", () => {
+  const program = parseUsrl(`
+    template Pair(left: "a") { fact Left = left; }
+    contract Parent { section S { fact X = 1; } }
+    contract Child extends Parent { section S { fact Y = 2; } }
+    expand Pair("b");
+  `);
+
+  const resolution = resolveProgram(program);
+  assert.equal(resolution.issues.length, 0);
+  assert.ok(resolution.references.some((r) => r.kind === "symbol" && r.text === "Parent"));
+  assert.ok(resolution.references.some((r) => r.kind === "symbol" && r.text === "Pair"));
+  assert.ok(resolution.graph.edges.some((e) => e.detail === "symbol:Parent"));
+  assert.ok(resolution.graph.edges.some((e) => e.detail === "symbol:Pair"));
+});
+
+test("comprehension pattern bindings are scoped in resolver", () => {
+  const program = parseUsrl(`
+    contract C {
+      section S {
+        fact Numbers = [1, 2, 3];
+        fact Doubled = [x * 2 for x in Numbers];
+      }
+    }
+  `);
+
+  const resolution = resolveProgram(program);
+  assert.ok(resolution.references.some((r) => r.kind === "local" && r.text === "x"));
+  assert.ok(!resolution.issues.some((i) => i.message.includes("Unresolved identifier 'x'")));
+});

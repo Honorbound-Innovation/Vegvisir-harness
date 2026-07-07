@@ -1,0 +1,25 @@
+{
+  "name": "msp-reference",
+  "version": "0.1.0",
+  "msp_version": "0.1.0",
+  "methods": [
+    "msp.info",
+    "registry.search",
+    "skills.discover",
+    "skills.get_manifest",
+    "skills.load",
+    "skills.resolve_dependencies",
+    "skills.verify_result",
+    "skills.check_compatibility",
+    "packs.discover",
+    "packs.get_manifest",
+    "packs.load",
+    "packs.verify_trust",
+    "packs.evaluate_trust",
+    "packs.validate_members",
+    "packs.evaluate_dependencies",
+    "trust.verify",
+    "trust.evaluate",
+    "trust.evaluate_dependencies"
+  ]
+}

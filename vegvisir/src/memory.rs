@@ -440,7 +440,29 @@ impl VegvisirCms {
         title: impl Into<String>,
         body: impl Into<String>,
     ) -> anyhow::Result<CommitResult> {
-        self.remember_with_project(memory_type, title, body, self.config.project_id.clone())
+        self.remember_with_project_and_metadata(
+            memory_type,
+            title,
+            body,
+            self.config.project_id.clone(),
+            Metadata::new(),
+        )
+    }
+
+    pub fn remember_with_metadata(
+        &mut self,
+        memory_type: impl Into<String>,
+        title: impl Into<String>,
+        body: impl Into<String>,
+        metadata: Metadata,
+    ) -> anyhow::Result<CommitResult> {
+        self.remember_with_project_and_metadata(
+            memory_type,
+            title,
+            body,
+            self.config.project_id.clone(),
+            metadata,
+        )
     }
 
     pub fn remember_global(
@@ -449,21 +471,28 @@ impl VegvisirCms {
         title: impl Into<String>,
         body: impl Into<String>,
     ) -> anyhow::Result<CommitResult> {
-        self.remember_with_project(memory_type, title, body, None)
+        self.remember_with_project_and_metadata(memory_type, title, body, None, Metadata::new())
     }
 
-    fn remember_with_project(
+    fn remember_with_project_and_metadata(
         &mut self,
         memory_type: impl Into<String>,
         title: impl Into<String>,
         body: impl Into<String>,
         project_id: Option<String>,
+        extra_metadata: Metadata,
     ) -> anyhow::Result<CommitResult> {
         let title = title.into();
         let body = body.into();
         let id = deterministic_memory_id(&self.config.user_id, &title, &body);
         let mut memory = MemoryObject::new(MemoryId::new(id), memory_type, title, body.clone());
         memory.summary = summarize(&body, 280);
+        for (key, value) in extra_metadata {
+            if matches!(key.as_str(), "user_id" | "visibility" | "project_id") {
+                continue;
+            }
+            memory.metadata.insert(key, value);
+        }
         memory.metadata.insert(
             "user_id".to_string(),
             Value::String(self.config.user_id.clone()),

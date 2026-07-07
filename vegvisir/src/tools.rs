@@ -1,21 +1,26 @@
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, HashMap, hash_map::DefaultHasher},
     fs::File,
     hash::{Hash, Hasher},
     io::Read,
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
     sync::Arc,
-    thread,
+    thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 
 use chrono::Utc;
+use msp_client::{
+    ImportSkillerBundleRequest as MspImportSkillerBundleRequest, LoadMode as MspLoadMode,
+    MspClient, SearchRequest as MspSearchRequest,
+};
 use serde_json::{Map, Value, json};
 use skiller::{
     compiler, forge as skiller_forge,
     models::{ForgePassType, ForgeRequestEnvelope, ForgeResponseEnvelope},
-    registry as skiller_registry, runtime as skiller_runtime,
+    registry as skiller_registry, runtime as skiller_runtime, semantic as skiller_semantic,
 };
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -27,7 +32,8 @@ use crate::{
     guardrails::GuardrailEngine,
     memory::{ContextPrepareOptions, VegvisirCms, VegvisirCmsConfig},
     observability::EventLogger,
-    policy::RuntimePolicy,
+    policy::{RuntimePolicy, RuntimeToolMetadata},
+    privilege,
     sandbox::WorkspaceSandbox,
     subagents::{
         SubAgentFileChange, SubAgentFileChangeKind, SubAgentFileOwnership, SubAgentObservability,
@@ -42,6 +48,43 @@ const LIST_FILES_MAX_LIMIT: usize = 2_000;
 const CHATGPT_ARCHIVE_EXCERPT_CHARS: usize = 1_800;
 const SUBAGENT_DIFF_TEXT_MAX_BYTES: u64 = 1024 * 1024;
 pub const DEFAULT_ACTIVE_SUBAGENT_LIMIT: usize = 3;
+
+const COMMAND_STREAM_READ_CHUNK_BYTES: usize = 8 * 1024;
+const COMMAND_STREAM_LIVE_MAX_BYTES_PER_STREAM: usize = 128 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommandOutputChunk {
+    pub stream: String,
+    pub chunk: String,
+    pub truncated: bool,
+}
+
+pub type CommandOutputSink = Arc<dyn Fn(CommandOutputChunk) + Send + Sync>;
+
+thread_local! {
+    static COMMAND_OUTPUT_SINK: RefCell<Option<CommandOutputSink>> = RefCell::new(None);
+}
+
+pub fn with_command_output_sink<T>(sink: Option<CommandOutputSink>, f: impl FnOnce() -> T) -> T {
+    struct SinkGuard(Option<CommandOutputSink>);
+
+    impl Drop for SinkGuard {
+        fn drop(&mut self) {
+            let previous = self.0.take();
+            COMMAND_OUTPUT_SINK.with(|slot| {
+                *slot.borrow_mut() = previous;
+            });
+        }
+    }
+
+    let previous = COMMAND_OUTPUT_SINK.with(|slot| slot.replace(sink));
+    let _guard = SinkGuard(previous);
+    f()
+}
+
+fn current_command_output_sink() -> Option<CommandOutputSink> {
+    COMMAND_OUTPUT_SINK.with(|slot| slot.borrow().clone())
+}
 
 fn parse_skiller_forge_pass(value: Option<&str>) -> anyhow::Result<ForgePassType> {
     let raw = value.unwrap_or("skill_expansion").trim();
@@ -71,6 +114,9 @@ fn parse_skiller_forge_pass(value: Option<&str>) -> anyhow::Result<ForgePassType
         }
         "deduplication_and_scope" | "deduplication-and-scope" | "DeduplicationAndScope" => {
             Ok(ForgePassType::DeduplicationAndScope)
+        }
+        "script_generation" | "script-generation" | "ScriptGeneration" => {
+            Ok(ForgePassType::ScriptGeneration)
         }
         other => anyhow::bail!("Unsupported Skiller Forge pass: {other}"),
     }
@@ -116,6 +162,77 @@ fn extract_fenced_yaml(text: &str) -> Option<String> {
     None
 }
 
+fn skiller_bundle_handoff_observation_data(
+    bundle: &skiller::models::SkillBundle,
+    pass: ForgePassType,
+    domain: Option<&str>,
+    target: &ResolvedSkillerForgeModelTarget,
+) -> (ForgeRequestEnvelope, String, String, Value) {
+    let skill_count = bundle.skills.len();
+    let mut forge_request =
+        skiller_forge::build_vegvisir_handoff(bundle, pass, domain, skill_count.clamp(1, 100));
+    apply_skiller_forge_model_target(&mut forge_request, target);
+    let forge_system_prompt =
+        skiller_forge::skiller_specialized_vegvisir_system_prompt().to_string();
+    let forge_prompt = skiller_forge::vegvisir_prompt_markdown(&forge_request);
+    let response_template =
+        serde_json::to_value(skiller_forge::response_template_for(&forge_request))
+            .unwrap_or(Value::Null);
+    (
+        forge_request,
+        forge_system_prompt,
+        forge_prompt,
+        response_template,
+    )
+}
+
+fn add_skiller_forge_observation_data(
+    data: &mut Map<String, Value>,
+    forge_request: &ForgeRequestEnvelope,
+    forge_system_prompt: String,
+    forge_prompt: String,
+    response_template: Value,
+    target: &ResolvedSkillerForgeModelTarget,
+) {
+    data.insert("forge_required_by_default".to_string(), json!(true));
+    data.insert("forge_requires_provider_model".to_string(), json!(true));
+    data.insert(
+        "default_forge_model_provider".to_string(),
+        json!(target.provider),
+    );
+    data.insert("default_forge_model".to_string(), json!(target.model));
+    data.insert(
+        "forge_model_target_source".to_string(),
+        json!(target.source),
+    );
+    data.insert(
+        "default_forge_pass".to_string(),
+        json!(format!("{:?}", forge_request.pass_type)),
+    );
+    data.insert(
+        "forge_request_id".to_string(),
+        json!(forge_request.request_id),
+    );
+    data.insert(
+        "forge_default_objective".to_string(),
+        json!(skiller_forge::skiller_default_forge_objective()),
+    );
+    data.insert(
+        "forge_system_prompt".to_string(),
+        json!(forge_system_prompt),
+    );
+    data.insert(
+        "forge_request".to_string(),
+        serde_json::to_value(forge_request).unwrap_or(Value::Null),
+    );
+    data.insert("forge_response_template".to_string(), response_template);
+    data.insert("forge_prompt".to_string(), json!(forge_prompt));
+    data.insert(
+        "recommended_apply_tool".to_string(),
+        json!("skiller_forge_apply"),
+    );
+}
+
 fn compact_excerpt(text: &str, max_chars: usize) -> String {
     let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if compact.chars().count() <= max_chars {
@@ -128,6 +245,156 @@ fn compact_excerpt(text: &str, max_chars: usize) -> String {
         excerpt.push('…');
         excerpt
     }
+}
+
+fn vegvisir_data_root_from_cms_config(config: &VegvisirCmsConfig) -> PathBuf {
+    config
+        .db_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(crate::memory::default_vegvisir_data_root)
+}
+
+fn default_msp_registry_path(data_root: &Path) -> PathBuf {
+    get_env("VEGVISIR_MSP_REGISTRY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| data_root.join("msp").join("registry"))
+}
+
+fn default_skiller_bundle_root(data_root: &Path) -> PathBuf {
+    get_env("VEGVISIR_SKILLER_BUNDLE_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| data_root.join("skiller").join("bundles"))
+}
+
+fn msp_registry_path(args: &Map<String, Value>, data_root: &Path) -> PathBuf {
+    args.get("registry")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| default_msp_registry_path(data_root))
+}
+
+fn looks_like_explicit_local_path(path: &str) -> bool {
+    path == "."
+        || path == ".."
+        || path.starts_with("./")
+        || path.starts_with("../")
+        || path.starts_with('/')
+        || path.starts_with('~')
+        || path.contains(std::path::MAIN_SEPARATOR)
+        || (std::path::MAIN_SEPARATOR != '/' && path.contains('/'))
+}
+
+fn skiller_bundle_output_path(
+    args: &Map<String, Value>,
+    data_root: &Path,
+    default_name: &str,
+) -> PathBuf {
+    let raw = args
+        .get("out")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(default_name);
+    if looks_like_explicit_local_path(raw) {
+        PathBuf::from(raw)
+    } else {
+        default_skiller_bundle_root(data_root).join(raw)
+    }
+}
+
+fn skiller_bundle_reference_path(raw: &str, data_root: &Path) -> PathBuf {
+    if looks_like_explicit_local_path(raw) {
+        PathBuf::from(raw)
+    } else {
+        default_skiller_bundle_root(data_root).join(raw)
+    }
+}
+
+fn resolve_workspace_or_global_path(
+    sandbox: &WorkspaceSandbox,
+    path: impl AsRef<Path>,
+    allowed_global_roots: &[PathBuf],
+) -> anyhow::Result<PathBuf> {
+    match sandbox.resolve(path.as_ref()) {
+        Ok(resolved) => Ok(resolved),
+        Err(workspace_error) => {
+            if !path.as_ref().is_absolute() {
+                return Err(workspace_error);
+            }
+            let resolved = resolve_existing_or_missing(path.as_ref())?;
+            for root in allowed_global_roots {
+                let root = resolve_existing_or_missing(root)?;
+                if resolved == root || resolved.starts_with(&root) {
+                    return Ok(resolved);
+                }
+            }
+            Err(workspace_error)
+        }
+    }
+}
+
+fn resolve_existing_or_missing(path: &Path) -> anyhow::Result<PathBuf> {
+    if path.exists() {
+        return Ok(path.canonicalize()?);
+    }
+    let mut existing = path;
+    let mut missing_components = Vec::new();
+    while !existing.exists() {
+        let Some(parent) = existing.parent() else {
+            anyhow::bail!("Path has no existing ancestor: {}", path.display());
+        };
+        if let Some(name) = existing.file_name() {
+            missing_components.push(name.to_os_string());
+        }
+        existing = parent;
+    }
+    let mut resolved = existing.canonicalize()?;
+    for component in missing_components.into_iter().rev() {
+        resolved.push(component);
+    }
+    Ok(resolved)
+}
+
+fn msp_json_observation(value: impl serde::Serialize) -> Observation {
+    match serde_json::to_value(value) {
+        Ok(Value::Object(data)) => {
+            let content = serde_json::to_string_pretty(&data).unwrap_or_default();
+            Observation {
+                ok: true,
+                content,
+                data,
+                error: None,
+            }
+        }
+        Ok(value) => {
+            let content = serde_json::to_string_pretty(&value).unwrap_or_default();
+            let mut data = Map::new();
+            data.insert("value".to_string(), value);
+            Observation {
+                ok: true,
+                content,
+                data,
+                error: None,
+            }
+        }
+        Err(error) => Observation::err(error.to_string(), "MspSerializationError"),
+    }
+}
+
+fn json_string_array(args: &Map<String, Value>, key: &str) -> Vec<String> {
+    args.get(key)
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 pub type ToolHandler = Arc<dyn Fn(Map<String, Value>) -> Observation + Send + Sync>;
@@ -161,48 +428,7 @@ impl Tool {
     }
 
     pub fn validate_args(&self, args: &Map<String, Value>) -> anyhow::Result<()> {
-        let required = self
-            .schema
-            .get("required")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let properties = self
-            .schema
-            .get("properties")
-            .unwrap_or(&self.schema)
-            .as_object()
-            .cloned()
-            .unwrap_or_default();
-        for key in required {
-            let Some(key) = key.as_str() else { continue };
-            if !args.contains_key(key) {
-                anyhow::bail!("Missing required argument for {}: {key}", self.name);
-            }
-        }
-        for (key, value) in args {
-            let expected = properties.get(key).and_then(|spec| {
-                spec.as_str()
-                    .map(str::to_string)
-                    .or_else(|| spec.get("type").and_then(Value::as_str).map(str::to_string))
-            });
-            match expected.as_deref() {
-                Some("string") if !value.is_string() => {
-                    anyhow::bail!("{}.{key} must be a string", self.name)
-                }
-                Some("integer") if !value.is_i64() && !value.is_u64() => {
-                    anyhow::bail!("{}.{key} must be an integer", self.name)
-                }
-                Some("array") if !value.is_array() => {
-                    anyhow::bail!("{}.{key} must be an array", self.name)
-                }
-                Some("object") if !value.is_object() => {
-                    anyhow::bail!("{}.{key} must be an object", self.name)
-                }
-                _ => {}
-            }
-        }
-        Ok(())
+        validate_tool_arguments(&self.name, args, &self.schema)
     }
 
     pub fn normalize_args(&self, args: Map<String, Value>) -> Map<String, Value> {
@@ -249,6 +475,413 @@ impl Tool {
             })
             .collect()
     }
+}
+
+fn validate_tool_arguments(
+    tool_name: &str,
+    args: &Map<String, Value>,
+    schema: &Value,
+) -> anyhow::Result<()> {
+    let value = Value::Object(args.clone());
+    validate_json_schema_value(tool_name, tool_name.to_string(), &value, schema)
+}
+
+fn validate_json_schema_value(
+    tool_name: &str,
+    path: String,
+    value: &Value,
+    schema: &Value,
+) -> anyhow::Result<()> {
+    if schema.is_null() || schema == &json!(true) {
+        return Ok(());
+    }
+    if schema == &json!(false) {
+        anyhow::bail!("{path} is not allowed by schema for {tool_name}");
+    }
+    if let Some(expected) = schema.as_str() {
+        return validate_schema_type(tool_name, &path, value, expected);
+    }
+    let Some(object) = schema.as_object() else {
+        return Ok(());
+    };
+
+    validate_schema_combinators(tool_name, &path, value, schema, object)?;
+    validate_schema_enum(tool_name, &path, value, object)?;
+    validate_schema_type_constraints(tool_name, &path, value, object)?;
+    validate_schema_object_constraints(tool_name, &path, value, object)?;
+    validate_schema_array_constraints(tool_name, &path, value, object)?;
+    validate_schema_string_constraints(tool_name, &path, value, object)?;
+    validate_schema_number_constraints(tool_name, &path, value, object)?;
+    Ok(())
+}
+
+fn validate_schema_combinators(
+    tool_name: &str,
+    path: &str,
+    value: &Value,
+    schema: &Value,
+    object: &Map<String, Value>,
+) -> anyhow::Result<()> {
+    if let Some(all_of) = object.get("allOf").and_then(Value::as_array) {
+        for branch in all_of {
+            validate_json_schema_value(tool_name, path.to_string(), value, branch)?;
+        }
+    }
+    if let Some(any_of) = object.get("anyOf").and_then(Value::as_array) {
+        let mut errors = Vec::new();
+        for branch in any_of {
+            match validate_json_schema_value(tool_name, path.to_string(), value, branch) {
+                Ok(()) => return Ok(()),
+                Err(error) => errors.push(error.to_string()),
+            }
+        }
+        anyhow::bail!(
+            "{path} must match at least one anyOf schema for {tool_name}: {}",
+            errors.join("; ")
+        );
+    }
+    if let Some(one_of) = object.get("oneOf").and_then(Value::as_array) {
+        let matches = one_of
+            .iter()
+            .filter(|branch| {
+                validate_json_schema_value(tool_name, path.to_string(), value, branch).is_ok()
+            })
+            .count();
+        if matches != 1 {
+            anyhow::bail!(
+                "{path} must match exactly one oneOf schema for {tool_name}; matched {matches}"
+            );
+        }
+    }
+
+    // If this schema is only a combinator wrapper, the branch validation above is complete.
+    let non_combinator_keys = object.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "allOf" | "anyOf" | "oneOf" | "description" | "title"
+        )
+    });
+    if !non_combinator_keys
+        && (object.contains_key("allOf")
+            || object.contains_key("anyOf")
+            || object.contains_key("oneOf"))
+    {
+        validate_json_schema_value(tool_name, path.to_string(), value, &json!({}))?;
+    }
+    let _ = schema;
+    Ok(())
+}
+
+fn validate_schema_enum(
+    tool_name: &str,
+    path: &str,
+    value: &Value,
+    object: &Map<String, Value>,
+) -> anyhow::Result<()> {
+    let Some(allowed) = object.get("enum").and_then(Value::as_array) else {
+        return Ok(());
+    };
+    if allowed.iter().any(|candidate| candidate == value) {
+        return Ok(());
+    }
+    let allowed = allowed
+        .iter()
+        .map(|value| serde_json::to_string(value).unwrap_or_else(|_| value.to_string()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    anyhow::bail!("{path} must be one of [{allowed}] for {tool_name}")
+}
+
+fn validate_schema_type_constraints(
+    tool_name: &str,
+    path: &str,
+    value: &Value,
+    object: &Map<String, Value>,
+) -> anyhow::Result<()> {
+    let Some(type_spec) = object.get("type") else {
+        return Ok(());
+    };
+    if let Some(expected) = type_spec.as_str() {
+        return validate_schema_type(tool_name, path, value, expected);
+    }
+    if let Some(types) = type_spec.as_array() {
+        if types
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|expected| validate_schema_type(tool_name, path, value, expected).is_ok())
+        {
+            return Ok(());
+        }
+        let labels = types
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join(" or ");
+        anyhow::bail!("{path} must be {labels} for {tool_name}");
+    }
+    Ok(())
+}
+
+fn validate_schema_type(
+    tool_name: &str,
+    path: &str,
+    value: &Value,
+    expected: &str,
+) -> anyhow::Result<()> {
+    let ok = match expected {
+        "string" => value.is_string(),
+        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+        "number" => value.is_number(),
+        "boolean" | "bool" => value.is_boolean(),
+        "array" => value.is_array(),
+        "object" => value.is_object(),
+        "null" => value.is_null(),
+        _ => true,
+    };
+    if ok {
+        Ok(())
+    } else {
+        let article = if matches!(expected, "array" | "object" | "integer") {
+            "an"
+        } else {
+            "a"
+        };
+        anyhow::bail!("{path} must be {article} {expected} for {tool_name}")
+    }
+}
+
+fn validate_schema_object_constraints(
+    tool_name: &str,
+    path: &str,
+    value: &Value,
+    object: &Map<String, Value>,
+) -> anyhow::Result<()> {
+    let properties = object
+        .get("properties")
+        .and_then(Value::as_object)
+        .or_else(|| shorthand_properties(object));
+    let required = object
+        .get("required")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+
+    if properties.is_none() && required.is_empty() && !object.contains_key("additionalProperties") {
+        return Ok(());
+    }
+
+    let Some(actual) = value.as_object() else {
+        // A type constraint, if present, already emitted the precise error. Without type=object,
+        // properties/required imply an object.
+        anyhow::bail!("{path} must be an object for {tool_name}");
+    };
+
+    for key in required {
+        if !actual.contains_key(key) {
+            if path == tool_name {
+                anyhow::bail!("Missing required argument for {tool_name}: {key}");
+            }
+            anyhow::bail!("{path}.{key} is required for {tool_name}");
+        }
+    }
+
+    if let Some(properties) = properties {
+        for (key, child_value) in actual {
+            if let Some(child_schema) = properties.get(key) {
+                validate_json_schema_value(
+                    tool_name,
+                    format!("{path}.{key}"),
+                    child_value,
+                    child_schema,
+                )?;
+                continue;
+            }
+
+            match object.get("additionalProperties") {
+                Some(Value::Bool(false)) => {
+                    anyhow::bail!("{path}.{key} is not an allowed argument for {tool_name}")
+                }
+                Some(Value::Object(_)) => validate_json_schema_value(
+                    tool_name,
+                    format!("{path}.{key}"),
+                    child_value,
+                    object.get("additionalProperties").expect("checked above"),
+                )?,
+                _ => {}
+            }
+        }
+    }
+
+    if let Some(min) = object.get("minProperties").and_then(Value::as_u64)
+        && actual.len() < min as usize
+    {
+        anyhow::bail!("{path} must have at least {min} properties for {tool_name}");
+    }
+    if let Some(max) = object.get("maxProperties").and_then(Value::as_u64)
+        && actual.len() > max as usize
+    {
+        anyhow::bail!("{path} must have at most {max} properties for {tool_name}");
+    }
+    Ok(())
+}
+
+fn shorthand_properties(object: &Map<String, Value>) -> Option<&Map<String, Value>> {
+    let schema_keywords = [
+        "type",
+        "required",
+        "properties",
+        "additionalProperties",
+        "items",
+        "enum",
+        "oneOf",
+        "anyOf",
+        "allOf",
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "minLength",
+        "maxLength",
+        "minItems",
+        "maxItems",
+        "minProperties",
+        "maxProperties",
+        "description",
+        "title",
+    ];
+    let has_schema_keyword = object
+        .keys()
+        .any(|key| schema_keywords.contains(&key.as_str()));
+    if has_schema_keyword {
+        None
+    } else {
+        Some(object)
+    }
+}
+
+fn validate_schema_array_constraints(
+    tool_name: &str,
+    path: &str,
+    value: &Value,
+    object: &Map<String, Value>,
+) -> anyhow::Result<()> {
+    if !object.contains_key("items")
+        && !object.contains_key("minItems")
+        && !object.contains_key("maxItems")
+    {
+        return Ok(());
+    }
+    let Some(items) = value.as_array() else {
+        anyhow::bail!("{path} must be an array for {tool_name}");
+    };
+    if let Some(min) = object.get("minItems").and_then(Value::as_u64)
+        && items.len() < min as usize
+    {
+        anyhow::bail!("{path} must contain at least {min} item(s) for {tool_name}");
+    }
+    if let Some(max) = object.get("maxItems").and_then(Value::as_u64)
+        && items.len() > max as usize
+    {
+        anyhow::bail!("{path} must contain at most {max} item(s) for {tool_name}");
+    }
+    let Some(item_schema) = object.get("items") else {
+        return Ok(());
+    };
+    if let Some(tuple_schemas) = item_schema.as_array() {
+        for (index, child_schema) in tuple_schemas.iter().enumerate() {
+            if let Some(child_value) = items.get(index) {
+                validate_json_schema_value(
+                    tool_name,
+                    format!("{path}[{index}]"),
+                    child_value,
+                    child_schema,
+                )?;
+            }
+        }
+        return Ok(());
+    }
+    for (index, child_value) in items.iter().enumerate() {
+        validate_json_schema_value(
+            tool_name,
+            format!("{path}[{index}]"),
+            child_value,
+            item_schema,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_schema_string_constraints(
+    tool_name: &str,
+    path: &str,
+    value: &Value,
+    object: &Map<String, Value>,
+) -> anyhow::Result<()> {
+    if !object.contains_key("minLength")
+        && !object.contains_key("maxLength")
+        && !object.contains_key("pattern")
+    {
+        return Ok(());
+    }
+    let Some(text) = value.as_str() else {
+        anyhow::bail!("{path} must be a string for {tool_name}");
+    };
+    let chars = text.chars().count() as u64;
+    if let Some(min) = object.get("minLength").and_then(Value::as_u64)
+        && chars < min
+    {
+        anyhow::bail!("{path} must be at least {min} character(s) for {tool_name}");
+    }
+    if let Some(max) = object.get("maxLength").and_then(Value::as_u64)
+        && chars > max
+    {
+        anyhow::bail!("{path} must be at most {max} character(s) for {tool_name}");
+    }
+    // Deliberately do not implement JSON Schema regex patterns here. Tool handlers still perform
+    // domain/path validation; this local subset focuses on structural validation without adding a
+    // regex dependency or changing provider-visible schema contracts.
+    Ok(())
+}
+
+fn validate_schema_number_constraints(
+    tool_name: &str,
+    path: &str,
+    value: &Value,
+    object: &Map<String, Value>,
+) -> anyhow::Result<()> {
+    if !object.contains_key("minimum")
+        && !object.contains_key("maximum")
+        && !object.contains_key("exclusiveMinimum")
+        && !object.contains_key("exclusiveMaximum")
+    {
+        return Ok(());
+    }
+    let Some(number) = value.as_f64() else {
+        anyhow::bail!("{path} must be a number for {tool_name}");
+    };
+    if let Some(min) = object.get("minimum").and_then(Value::as_f64)
+        && number < min
+    {
+        anyhow::bail!("{path} must be >= {min} for {tool_name}");
+    }
+    if let Some(max) = object.get("maximum").and_then(Value::as_f64)
+        && number > max
+    {
+        anyhow::bail!("{path} must be <= {max} for {tool_name}");
+    }
+    if let Some(min) = object.get("exclusiveMinimum").and_then(Value::as_f64)
+        && number <= min
+    {
+        anyhow::bail!("{path} must be > {min} for {tool_name}");
+    }
+    if let Some(max) = object.get("exclusiveMaximum").and_then(Value::as_f64)
+        && number >= max
+    {
+        anyhow::bail!("{path} must be < {max} for {tool_name}");
+    }
+    Ok(())
 }
 
 #[derive(Default, Clone)]
@@ -336,7 +969,15 @@ impl ToolExecutor {
             self.guardrails.authorize_tool(tool, &args)?;
             if !self.guardrails.policy.bypass_approvals_and_sandbox {
                 self.runtime_policy
-                    .authorize_tool(&tool.name, &args, &self.logger)
+                    .authorize_tool_with_metadata(
+                        &tool.name,
+                        &args,
+                        RuntimeToolMetadata {
+                            risky: tool.risky,
+                            safety_labels: Vec::new(),
+                        },
+                        &self.logger,
+                    )
                     .map_err(anyhow::Error::msg)?;
             }
             self.logger
@@ -428,6 +1069,206 @@ fn terminate_child_process_group(child: &mut Child) {
     let _ = child.kill();
 }
 
+const NORMAL_SUDO_REJECTION: &str = "Direct sudo through normal command tools is disabled so sudo passwords cannot enter chat/session/trace history. Run /sudo auth, then use run_privileged_command.";
+const PRIVILEGED_SUDO_REJECTION: &str = "Do not include sudo in run_privileged_command arguments. Run /sudo auth, then provide the underlying command; Vegvisir adds sudo -n internally.";
+
+fn command_mentions_sudo_invocation(parts: &[&str]) -> bool {
+    let Some((program, args)) = parts.split_first() else {
+        return false;
+    };
+    if token_is_sudo_invocation(program.trim()) {
+        return true;
+    }
+
+    if command_uses_shell_program(program) {
+        return args
+            .iter()
+            .any(|arg| shell_snippet_mentions_sudo_invocation(arg));
+    }
+
+    false
+}
+
+fn command_uses_shell_program(program: &str) -> bool {
+    let trimmed = program.trim();
+    let basename = trimmed.rsplit('/').next().unwrap_or(trimmed);
+    matches!(
+        basename,
+        "sh" | "bash" | "zsh" | "fish" | "dash" | "ksh" | "mksh" | "csh" | "tcsh"
+    )
+}
+
+fn shell_snippet_mentions_sudo_invocation(snippet: &str) -> bool {
+    let mut token = String::new();
+    for ch in snippet.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '/' | '.') {
+            token.push(ch);
+        } else {
+            if token_is_sudo_invocation(&token) {
+                return true;
+            }
+            token.clear();
+        }
+    }
+    token_is_sudo_invocation(&token)
+}
+
+fn token_is_sudo_invocation(token: &str) -> bool {
+    let trimmed = token.trim();
+    trimmed == "sudo" || trimmed.ends_with("/sudo")
+}
+
+fn reject_sudo_misuse(parts: &[&str], privileged: bool) -> Option<Observation> {
+    if !command_mentions_sudo_invocation(parts) {
+        return None;
+    }
+    Some(if privileged {
+        Observation::err(PRIVILEGED_SUDO_REJECTION, "SudoInvocationRejected")
+    } else {
+        Observation::err(NORMAL_SUDO_REJECTION, "SudoInvocationRejected")
+    })
+}
+
+#[derive(Debug, Default)]
+struct CommandStreamCapture {
+    bytes: Vec<u8>,
+    read_error: Option<String>,
+}
+
+fn spawn_command_stream_reader<R>(
+    mut reader: R,
+    stream_name: &'static str,
+    output_sink: Option<CommandOutputSink>,
+) -> JoinHandle<CommandStreamCapture>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut emitted_live_bytes = 0usize;
+        let mut emitted_truncation_notice = false;
+        let mut buffer = [0u8; COMMAND_STREAM_READ_CHUNK_BYTES];
+        let read_error = loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => break None,
+                Ok(n) => {
+                    bytes.extend_from_slice(&buffer[..n]);
+                    if let Some(sink) = &output_sink {
+                        let remaining = COMMAND_STREAM_LIVE_MAX_BYTES_PER_STREAM
+                            .saturating_sub(emitted_live_bytes);
+                        if remaining > 0 {
+                            let emit_len = n.min(remaining);
+                            emitted_live_bytes = emitted_live_bytes.saturating_add(emit_len);
+                            sink(CommandOutputChunk {
+                                stream: stream_name.to_string(),
+                                chunk: String::from_utf8_lossy(&buffer[..emit_len]).to_string(),
+                                truncated: emit_len < n,
+                            });
+                        } else if !emitted_truncation_notice {
+                            emitted_truncation_notice = true;
+                            sink(CommandOutputChunk {
+                                stream: stream_name.to_string(),
+                                chunk: format!(
+                                    "\n[Vegvisir live {stream_name} stream truncated after {} bytes; full captured output remains available in the final tool observation/artifacts.]\n",
+                                    COMMAND_STREAM_LIVE_MAX_BYTES_PER_STREAM
+                                ),
+                                truncated: true,
+                            });
+                        }
+                    }
+                }
+                Err(error) => break Some(error.to_string()),
+            }
+        };
+        CommandStreamCapture { bytes, read_error }
+    })
+}
+
+fn join_command_stream_reader(
+    handle: Option<JoinHandle<CommandStreamCapture>>,
+    stream_name: &str,
+) -> CommandStreamCapture {
+    handle
+        .map(|handle| {
+            handle.join().unwrap_or_else(|_| CommandStreamCapture {
+                bytes: Vec::new(),
+                read_error: Some(format!("{stream_name} reader thread panicked")),
+            })
+        })
+        .unwrap_or_else(|| CommandStreamCapture {
+            bytes: Vec::new(),
+            read_error: Some(format!("{stream_name} pipe was unavailable")),
+        })
+}
+
+fn command_stream_read_errors(
+    stdout: &CommandStreamCapture,
+    stderr: &CommandStreamCapture,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    if let Some(error) = &stdout.read_error {
+        errors.push(format!("stdout: {error}"));
+    }
+    if let Some(error) = &stderr.read_error {
+        errors.push(format!("stderr: {error}"));
+    }
+    errors
+}
+
+#[allow(clippy::too_many_arguments)]
+fn command_observation_data(
+    parts: &[&str],
+    sandboxed_command: &crate::command_sandbox::SandboxedCommand,
+    include_command_in_data: bool,
+    returncode: i32,
+    timed_out: bool,
+    timeout: u64,
+    truncated: bool,
+    privileged: bool,
+    stdout_len: usize,
+    stderr_len: usize,
+    stream_read_errors: &[String],
+) -> Map<String, Value> {
+    let mut data = Map::new();
+    if include_command_in_data {
+        data.insert("command".to_string(), json!(parts));
+    }
+    data.insert(
+        "command_sandboxed".to_string(),
+        json!(sandboxed_command.sandboxed),
+    );
+    data.insert(
+        "command_sandbox".to_string(),
+        json!(sandboxed_command.sandbox_kind),
+    );
+    data.insert(
+        "command_network_policy".to_string(),
+        json!(sandboxed_command.network_policy),
+    );
+    data.insert("returncode".to_string(), json!(returncode));
+    data.insert("timed_out".to_string(), json!(timed_out));
+    data.insert("timeout_seconds".to_string(), json!(timeout));
+    data.insert("output_truncated".to_string(), json!(truncated));
+    data.insert("privileged".to_string(), json!(privileged));
+    data.insert("stdout_bytes".to_string(), json!(stdout_len));
+    data.insert("stderr_bytes".to_string(), json!(stderr_len));
+    data.insert("streaming_capture".to_string(), json!(true));
+    data.insert(
+        "stream_capture_mode".to_string(),
+        json!("incremental_pipe_drainers"),
+    );
+    data.insert("stream_read_errors".to_string(), json!(stream_read_errors));
+    data.insert(
+        "sudo_password_visibility".to_string(),
+        json!(if privileged {
+            "not-collected; sudo -n uses existing timestamp only"
+        } else {
+            "not-applicable"
+        }),
+    );
+    data
+}
+
 fn execute_bounded_command(
     parts: &[&str],
     sandbox_config: &CommandSandboxConfig,
@@ -435,8 +1276,35 @@ fn execute_bounded_command(
     output_limit: usize,
     failure_error: &str,
     include_command_in_data: bool,
+    privileged: bool,
 ) -> Observation {
-    let sandboxed_command = match build_sandboxed_command(parts, sandbox_config) {
+    if parts.is_empty() {
+        return Observation::err("Empty command", "ValueError");
+    }
+    if let Some(rejection) = reject_sudo_misuse(parts, privileged) {
+        return rejection;
+    }
+
+    let effective_parts = if privileged {
+        let sudo_status = privilege::sudo_status();
+        if !sudo_status.authenticated {
+            return Observation::err(
+                format!(
+                    "Privileged command requires an active sudo timestamp. {}",
+                    sudo_status.message
+                ),
+                "SudoAuthenticationRequired",
+            );
+        }
+        let mut prefixed = Vec::with_capacity(parts.len() + 2);
+        prefixed.push("sudo");
+        prefixed.push("-n");
+        prefixed.extend_from_slice(parts);
+        prefixed
+    } else {
+        parts.to_vec()
+    };
+    let sandboxed_command = match build_sandboxed_command(&effective_parts, sandbox_config) {
         Ok(command) => command,
         Err(error) => return Observation::err(error.to_string(), "CommandError"),
     };
@@ -444,17 +1312,32 @@ fn execute_bounded_command(
     command
         .args(&sandboxed_command.args)
         .current_dir(&sandboxed_command.current_dir)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = match spawn_command_in_own_process_group(&mut command) {
         Ok(child) => child,
         Err(error) => return Observation::err(error.to_string(), "CommandError"),
     };
+
+    let output_sink = current_command_output_sink();
+    let stdout_reader = child
+        .stdout
+        .take()
+        .map(|reader| spawn_command_stream_reader(reader, "stdout", output_sink.clone()));
+    let stderr_reader = child
+        .stderr
+        .take()
+        .map(|reader| spawn_command_stream_reader(reader, "stderr", output_sink.clone()));
     let started = Instant::now();
     let mut timed_out = false;
+    let mut status: Option<ExitStatus> = None;
     loop {
         match child.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(exit_status)) => {
+                status = Some(exit_status);
+                break;
+            }
             Ok(None) => {
                 if started.elapsed() >= Duration::from_secs(timeout) {
                     timed_out = true;
@@ -466,50 +1349,51 @@ fn execute_bounded_command(
             Err(error) => return Observation::err(error.to_string(), "CommandError"),
         }
     }
-    match child.wait_with_output() {
-        Ok(output) => {
+
+    let status = match status {
+        Some(status) => Ok(status),
+        None => child.wait(),
+    };
+    let stdout_capture = join_command_stream_reader(stdout_reader, "stdout");
+    let stderr_capture = join_command_stream_reader(stderr_reader, "stderr");
+
+    match status {
+        Ok(status) => {
             let mut content = String::new();
-            content.push_str(&String::from_utf8_lossy(&output.stdout));
-            content.push_str(&String::from_utf8_lossy(&output.stderr));
+            content.push_str(&String::from_utf8_lossy(&stdout_capture.bytes));
+            content.push_str(&String::from_utf8_lossy(&stderr_capture.bytes));
             let truncated = content.len() > output_limit;
             if truncated {
                 content = compact_text_middle(&content, output_limit, "output");
             }
-            let mut data = Map::new();
-            if include_command_in_data {
-                data.insert("command".to_string(), json!(parts));
-            }
-            data.insert(
-                "command_sandboxed".to_string(),
-                json!(sandboxed_command.sandboxed),
-            );
-            data.insert(
-                "command_sandbox".to_string(),
-                json!(sandboxed_command.sandbox_kind),
-            );
-            data.insert(
-                "command_network_policy".to_string(),
-                json!(sandboxed_command.network_policy),
-            );
-            data.insert(
-                "returncode".to_string(),
-                json!(if timed_out {
+            let stream_read_errors = command_stream_read_errors(&stdout_capture, &stderr_capture);
+            let data = command_observation_data(
+                parts,
+                &sandboxed_command,
+                include_command_in_data,
+                if timed_out {
                     -1
                 } else {
-                    output.status.code().unwrap_or(-1)
-                }),
+                    status.code().unwrap_or(-1)
+                },
+                timed_out,
+                timeout,
+                truncated,
+                privileged,
+                stdout_capture.bytes.len(),
+                stderr_capture.bytes.len(),
+                &stream_read_errors,
             );
-            data.insert("timed_out".to_string(), json!(timed_out));
-            data.insert("timeout_seconds".to_string(), json!(timeout));
-            data.insert("output_truncated".to_string(), json!(truncated));
             Observation {
-                ok: !timed_out && output.status.success(),
+                ok: !timed_out && status.success() && stream_read_errors.is_empty(),
                 content,
                 data,
                 error: if timed_out {
                     Some("CommandTimeout".to_string())
+                } else if !stream_read_errors.is_empty() {
+                    Some("CommandStreamReadError".to_string())
                 } else {
-                    (!output.status.success()).then(|| failure_error.to_string())
+                    (!status.success()).then(|| failure_error.to_string())
                 },
             }
         }
@@ -521,6 +1405,8 @@ fn execute_bounded_command(
 pub struct SubagentProviderDefaults {
     pub provider: String,
     pub model: String,
+    current_provider: Option<String>,
+    current_model: Option<String>,
 }
 
 impl SubagentProviderDefaults {
@@ -532,7 +1418,253 @@ impl SubagentProviderDefaults {
         Self {
             provider: provider.to_string(),
             model,
+            current_provider: None,
+            current_model: None,
         }
+    }
+
+    pub fn with_current_session(
+        mut self,
+        provider: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Self {
+        let provider = provider.into();
+        let model = model.into();
+        self.current_provider = nonempty_subagent_provider_value(&provider);
+        self.current_model = nonempty_subagent_provider_value(&model);
+        self
+    }
+
+    pub fn materialized_defaults(&self) -> anyhow::Result<Self> {
+        let (provider, model) = self.resolve_for_spawn_request(None, None)?;
+        Ok(Self::new(provider, model))
+    }
+
+    pub fn resolve_for_spawn_request(
+        &self,
+        requested_provider: Option<String>,
+        requested_model: Option<String>,
+    ) -> anyhow::Result<(String, String)> {
+        let requested_provider_current = requested_provider
+            .as_deref()
+            .is_some_and(is_current_provider_model_sentinel);
+        let requested_model_current = requested_model
+            .as_deref()
+            .is_some_and(is_current_provider_model_sentinel);
+        let default_provider_current = is_current_provider_model_sentinel(&self.provider);
+        let default_model_current = is_current_provider_model_sentinel(&self.model);
+
+        let needs_current_provider = requested_provider_current
+            || default_provider_current
+            || (requested_provider.is_none() && requested_model_current);
+        let needs_current_model = requested_model_current
+            || default_model_current
+            || requested_provider_current
+            || (requested_provider.is_none() && requested_model_current)
+            || (requested_provider.is_none() && default_provider_current);
+
+        let current_provider = if needs_current_provider || needs_current_model {
+            Some(self.current_provider.as_deref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "spawn_subagent provider/model value `current` requires the parent session provider/model context, but this tool registry was built without it"
+                )
+            })?)
+        } else {
+            self.current_provider.as_deref()
+        };
+        let current_model = if needs_current_model
+            || requested_model_current
+            || default_model_current
+        {
+            Some(self.current_model.as_deref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "spawn_subagent model value `current` requires the parent session model context, but this tool registry was built without it"
+                )
+            })?)
+        } else {
+            self.current_model.as_deref()
+        };
+
+        let provider = match requested_provider.as_deref() {
+            Some(value) if is_current_provider_model_sentinel(value) => {
+                current_provider.unwrap_or_default().to_string()
+            }
+            Some(value) => value.trim().to_string(),
+            None if requested_model_current || default_provider_current => {
+                current_provider.unwrap_or_default().to_string()
+            }
+            None => self.provider.clone(),
+        };
+
+        let model = match requested_model.as_deref() {
+            Some(value) if is_current_provider_model_sentinel(value) => {
+                if let Some(current_provider) = current_provider
+                    && !provider.trim().is_empty()
+                    && provider != current_provider
+                {
+                    anyhow::bail!(
+                        "spawn_subagent model `current` belongs to provider `{current_provider}`, but requested provider was `{provider}`"
+                    );
+                }
+                current_model.unwrap_or_default().to_string()
+            }
+            Some(value) => value.trim().to_string(),
+            None if requested_provider_current
+                || requested_model_current
+                || default_provider_current =>
+            {
+                current_model.unwrap_or_default().to_string()
+            }
+            None if default_model_current => current_model.unwrap_or_default().to_string(),
+            None => self.model.clone(),
+        };
+
+        if is_current_provider_model_sentinel(&provider)
+            || is_current_provider_model_sentinel(&model)
+        {
+            anyhow::bail!(
+                "spawn_subagent provider/model resolved to literal `current`; this is a sentinel and must be materialized before launch"
+            );
+        }
+
+        let model = repair_model_for_provider(&provider, &model);
+        Ok((provider, model))
+    }
+}
+
+fn is_current_provider_model_sentinel(value: &str) -> bool {
+    value.trim().eq_ignore_ascii_case("current")
+}
+
+fn nonempty_subagent_provider_value(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SkillerForgeModelTargetDefaults {
+    pub provider: String,
+    pub model: String,
+    current_provider: Option<String>,
+    current_model: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedSkillerForgeModelTarget {
+    pub provider: String,
+    pub model: String,
+    pub source: String,
+}
+
+impl SkillerForgeModelTargetDefaults {
+    pub fn new(provider: impl Into<String>, model: impl Into<String>) -> Self {
+        let provider = normalize_skiller_forge_target_value(&provider.into())
+            .unwrap_or_else(|| "current".to_string());
+        let mut model = normalize_skiller_forge_target_value(&model.into())
+            .unwrap_or_else(|| "current".to_string());
+        if !is_current_provider_model_sentinel(&provider)
+            && !is_current_provider_model_sentinel(&model)
+        {
+            model = repair_model_for_provider(&provider, &model);
+        }
+        Self {
+            provider,
+            model,
+            current_provider: None,
+            current_model: None,
+        }
+    }
+
+    pub fn with_current_session(
+        mut self,
+        provider: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Self {
+        self.current_provider = nonempty_subagent_provider_value(&provider.into());
+        self.current_model = nonempty_subagent_provider_value(&model.into());
+        self
+    }
+
+    pub fn resolve(&self) -> anyhow::Result<ResolvedSkillerForgeModelTarget> {
+        let provider_is_current = is_current_provider_model_sentinel(&self.provider);
+        let model_is_current = is_current_provider_model_sentinel(&self.model);
+
+        let provider = if provider_is_current {
+            self.current_provider
+                .clone()
+                .unwrap_or_else(|| skiller_forge::DEFAULT_FORGE_MODEL_PROVIDER.to_string())
+        } else {
+            self.provider.clone()
+        };
+
+        let model = if model_is_current {
+            if provider_is_current {
+                self.current_model
+                    .clone()
+                    .unwrap_or_else(|| skiller_forge::DEFAULT_FORGE_MODEL.to_string())
+            } else if self.current_provider.as_deref() == Some(provider.as_str()) {
+                self.current_model
+                    .clone()
+                    .unwrap_or_else(|| skiller_forge::DEFAULT_FORGE_MODEL.to_string())
+            } else {
+                anyhow::bail!(
+                    "Skiller Forge model target is `current` but Skiller provider is fixed to `{provider}`; set /smodel explicitly or reset /sprovider current"
+                );
+            }
+        } else {
+            repair_model_for_provider(&provider, &self.model)
+        };
+
+        let source = match (
+            provider_is_current,
+            model_is_current,
+            self.current_provider.is_some(),
+            self.current_model.is_some(),
+        ) {
+            (true, true, true, true) => "main-session-current".to_string(),
+            (true, true, _, _) => "legacy-default-no-session".to_string(),
+            (false, false, _, _) => "skiller-explicit-override".to_string(),
+            (false, true, _, _) => "skiller-provider-override-current-model".to_string(),
+            (true, false, true, _) => "skiller-model-override-current-provider".to_string(),
+            (true, false, false, _) => "skiller-model-override-legacy-provider".to_string(),
+        };
+
+        Ok(ResolvedSkillerForgeModelTarget {
+            provider,
+            model,
+            source,
+        })
+    }
+}
+
+impl Default for SkillerForgeModelTargetDefaults {
+    fn default() -> Self {
+        Self::new("current", "current")
+    }
+}
+
+fn normalize_skiller_forge_target_value(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() || matches!(value, "default" | "clear" | "reset" | "unset") {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn apply_skiller_forge_model_target(
+    request: &mut ForgeRequestEnvelope,
+    target: &ResolvedSkillerForgeModelTarget,
+) {
+    request.model_provider = Some(target.provider.clone());
+    request.model = Some(target.model.clone());
+    if let Some(provenance) = request.provider_provenance.as_mut() {
+        provenance.model_provider = Some(target.provider.clone());
+        provenance.model = Some(target.model.clone());
+        provenance.caveats.push(format!(
+            "Vegvisir resolved Skiller Forge model target from {}.",
+            target.source
+        ));
     }
 }
 
@@ -640,6 +1772,7 @@ pub fn build_builtin_registry_with_cms_mode_and_subagent_limit(
         bypass_sandbox,
         active_subagent_limit,
         SubagentProviderDefaults::default(),
+        SkillerForgeModelTargetDefaults::default(),
     )
 }
 
@@ -649,6 +1782,7 @@ pub fn build_builtin_registry_with_cms_mode_subagent_limit_and_provider_defaults
     bypass_sandbox: bool,
     active_subagent_limit: usize,
     subagent_provider_defaults: SubagentProviderDefaults,
+    skiller_forge_model_target_defaults: SkillerForgeModelTargetDefaults,
 ) -> anyhow::Result<ToolRegistry> {
     build_builtin_registry_with_cms_mode_subagent_config(
         workspace,
@@ -657,6 +1791,7 @@ pub fn build_builtin_registry_with_cms_mode_subagent_limit_and_provider_defaults
         active_subagent_limit,
         subagent_provider_defaults,
         SubagentSpawnDefaults::default(),
+        skiller_forge_model_target_defaults,
     )
 }
 
@@ -667,17 +1802,23 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
     active_subagent_limit: usize,
     subagent_provider_defaults: SubagentProviderDefaults,
     subagent_spawn_defaults: SubagentSpawnDefaults,
+    skiller_forge_model_target_defaults: SkillerForgeModelTargetDefaults,
 ) -> anyhow::Result<ToolRegistry> {
     let sandbox = if bypass_sandbox {
         WorkspaceSandbox::new_unrestricted(workspace)?
     } else {
         WorkspaceSandbox::new(workspace)?
     };
-    let subagent_data_root = cms_config
-        .db_path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| sandbox.root.join(".vegvisir"));
+    let data_root = vegvisir_data_root_from_cms_config(&cms_config);
+    let default_msp_registry_root = default_msp_registry_path(&data_root);
+    let default_skiller_bundle_root = default_skiller_bundle_root(&data_root);
+    let global_skill_roots = vec![
+        data_root.join("msp"),
+        data_root.join("skiller"),
+        default_msp_registry_root.clone(),
+        default_skiller_bundle_root.clone(),
+    ];
+    let subagent_data_root = data_root.clone();
     let active_subagent_limit = active_subagent_limit.max(1);
     let subagent_spawn_defaults = subagent_spawn_defaults.normalized();
     let mut registry = ToolRegistry::default();
@@ -824,6 +1965,303 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
         true,
     ))?;
 
+    let msp_client_info_sandbox = sandbox.clone();
+    let msp_client_info_data_root = data_root.clone();
+    let msp_client_info_global_roots = global_skill_roots.clone();
+    registry.register(Tool::new(
+        "msp_client_info",
+        "Inspect the native MSP client component and local registry summary.",
+        Arc::new(move |args| {
+            let registry_path = msp_registry_path(&args, &msp_client_info_data_root);
+            let registry_path = match resolve_workspace_or_global_path(
+                &msp_client_info_sandbox,
+                &registry_path,
+                &msp_client_info_global_roots,
+            ) {
+                Ok(path) => path,
+                Err(error) => return Observation::err(error.to_string(), "SandboxViolation"),
+            };
+            match MspClient::open(&registry_path) {
+                Ok(client) => msp_json_observation(json!({
+                    "info": client.info(),
+                    "registry": client.summary(),
+                })),
+                Err(error) => Observation::err(error.to_string(), "MspClientError"),
+            }
+        }),
+        json!({"properties": {"registry": "string"}}),
+        false,
+    ))?;
+
+    let msp_client_search_sandbox = sandbox.clone();
+    let msp_client_search_data_root = data_root.clone();
+    let msp_client_search_global_roots = global_skill_roots.clone();
+    registry.register(Tool::new(
+        "msp_client_search",
+        "Search skills in a local MSP registry through Vegvisir's native MSP client component.",
+        Arc::new(move |args| {
+            let registry_path = msp_registry_path(&args, &msp_client_search_data_root);
+            let registry_path = match resolve_workspace_or_global_path(&msp_client_search_sandbox, &registry_path, &msp_client_search_global_roots) {
+                Ok(path) => path,
+                Err(error) => return Observation::err(error.to_string(), "SandboxViolation"),
+            };
+            let max_risk = match args.get("max_risk").and_then(Value::as_str) {
+                Some(value) => match msp_client::parse_risk_level(value) {
+                    Ok(risk) => Some(risk),
+                    Err(error) => return Observation::err(error.to_string(), "ValueError"),
+                },
+                None => None,
+            };
+            let request = MspSearchRequest {
+                task: args.get("task").and_then(Value::as_str).map(str::to_string),
+                category: args.get("category").and_then(Value::as_str).map(str::to_string),
+                domain: args.get("domain").and_then(Value::as_str).map(str::to_string),
+                language: args.get("language").and_then(Value::as_str).map(str::to_string),
+                available_tools: json_string_array(&args, "available_tools"),
+                max_risk,
+                limit: args.get("limit").and_then(Value::as_u64).map(|value| value as usize),
+            };
+            match MspClient::open(&registry_path) {
+                Ok(client) => msp_json_observation(client.search(request)),
+                Err(error) => Observation::err(error.to_string(), "MspClientError"),
+            }
+        }),
+        json!({"properties": {"registry": "string", "task": "string", "category": "string", "domain": "string", "language": "string", "available_tools": "array", "max_risk": "string", "limit": "integer"}}),
+        false,
+    ))?;
+
+    let msp_import_skiller_sandbox = sandbox.clone();
+    let msp_import_skiller_data_root = data_root.clone();
+    let msp_import_skiller_global_roots = global_skill_roots.clone();
+    registry.register(Tool::new(
+        "msp_client_import_skiller",
+        "Import a current Skiller bundle into a local MSP registry through Vegvisir's native MSP client component.",
+        Arc::new(move |args| {
+            let Some(bundle) = args.get("bundle").and_then(Value::as_str) else {
+                return Observation::err("Missing bundle", "ValueError");
+            };
+            let Some(issuer) = args.get("issuer").and_then(Value::as_str) else {
+                return Observation::err("Missing issuer", "ValueError");
+            };
+            let registry_path = msp_registry_path(&args, &msp_import_skiller_data_root);
+            let registry_path = match resolve_workspace_or_global_path(&msp_import_skiller_sandbox, &registry_path, &msp_import_skiller_global_roots) {
+                Ok(path) => path,
+                Err(error) => return Observation::err(error.to_string(), "SandboxViolation"),
+            };
+            let bundle_path = match resolve_workspace_or_global_path(&msp_import_skiller_sandbox, bundle, &msp_import_skiller_global_roots) {
+                Ok(path) => path,
+                Err(error) => return Observation::err(error.to_string(), "SandboxViolation"),
+            };
+            let signing_key = match args.get("signing_key").and_then(Value::as_str) {
+                Some(path) if !path.trim().is_empty() => match msp_import_skiller_sandbox.resolve(path) {
+                    Ok(path) => Some(path),
+                    Err(error) => return Observation::err(error.to_string(), "SandboxViolation"),
+                },
+                _ => None,
+            };
+            let request = MspImportSkillerBundleRequest {
+                bundle: bundle_path,
+                issuer: issuer.to_string(),
+                force: args.get("force").and_then(Value::as_bool).unwrap_or(false),
+                allow_mutable_version: args
+                    .get("allow_mutable_version")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                signing_key,
+                deprecation: msp_client::msp_publisher::PublicationDeprecation {
+                    deprecated: args.get("deprecated").and_then(Value::as_bool).unwrap_or(false),
+                    reason: args
+                        .get("deprecation_reason")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    skill_replacement: args
+                        .get("replacement_skill")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    pack_replacement: args
+                        .get("replacement_pack")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    sunset_at: args
+                        .get("sunset_at")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                },
+            };
+            match MspClient::open(&registry_path)
+                .and_then(|client| client.import_skiller_bundle(request))
+            {
+                Ok(response) => msp_json_observation(response),
+                Err(error) => Observation::err(error.to_string(), "MspImportSkillerError"),
+            }
+        }),
+        json!({
+            "required": ["bundle", "issuer"],
+            "properties": {
+                "registry": "string",
+                "bundle": "string",
+                "issuer": "string",
+                "force": "boolean",
+                "allow_mutable_version": "boolean",
+                "signing_key": "string",
+                "deprecated": "boolean",
+                "deprecation_reason": "string",
+                "replacement_skill": "string",
+                "replacement_pack": "string",
+                "sunset_at": "string"
+            }
+        }),
+        true,
+    ))?;
+
+    let msp_client_load_sandbox = sandbox.clone();
+    let msp_client_load_data_root = data_root.clone();
+    let msp_client_load_global_roots = global_skill_roots.clone();
+    registry.register(Tool::new(
+        "msp_client_load",
+        "Load MSP skill context from a local registry using mode card, body, extended, or raw.",
+        Arc::new(move |args| {
+            let Some(id) = args.get("id").and_then(Value::as_str) else {
+                return Observation::err("Missing id", "ValueError");
+            };
+            let mode = match args
+                .get("mode")
+                .and_then(Value::as_str)
+                .unwrap_or("body")
+                .parse::<MspLoadMode>()
+            {
+                Ok(mode) => mode,
+                Err(error) => return Observation::err(error.to_string(), "ValueError"),
+            };
+            let registry_path = msp_registry_path(&args, &msp_client_load_data_root);
+            let registry_path = match resolve_workspace_or_global_path(&msp_client_load_sandbox, &registry_path, &msp_client_load_global_roots) {
+                Ok(path) => path,
+                Err(error) => return Observation::err(error.to_string(), "SandboxViolation"),
+            };
+            match MspClient::open(&registry_path).and_then(|client| client.load_skill(id, mode)) {
+                Ok(loaded) => {
+                    let mut data = Map::new();
+                    data.insert("id".to_string(), json!(loaded.id));
+                    data.insert("mode".to_string(), json!(loaded.mode));
+                    data.insert("manifest".to_string(), serde_json::to_value(&loaded.raw.manifest).unwrap_or(Value::Null));
+                    data.insert("body_hash_valid".to_string(), json!(loaded.raw.body_hash_valid));
+                    data.insert("dependency_ids".to_string(), json!(loaded.raw.dependency_ids));
+                    Observation {
+                        ok: true,
+                        content: loaded.content,
+                        data,
+                        error: None,
+                    }
+                }
+                Err(error) => Observation::err(error.to_string(), "MspLoadError"),
+            }
+        }),
+        json!({"required": ["id"], "properties": {"registry": "string", "id": "string", "mode": "string"}}),
+        false,
+    ))?;
+
+    let msp_client_manifest_sandbox = sandbox.clone();
+    let msp_client_manifest_data_root = data_root.clone();
+    let msp_client_manifest_global_roots = global_skill_roots.clone();
+    registry.register(Tool::new(
+        "msp_client_manifest",
+        "Get an MSP skill manifest from a local registry.",
+        Arc::new(move |args| {
+            let Some(id) = args.get("id").and_then(Value::as_str) else {
+                return Observation::err("Missing id", "ValueError");
+            };
+            let registry_path = msp_registry_path(&args, &msp_client_manifest_data_root);
+            let registry_path = match resolve_workspace_or_global_path(
+                &msp_client_manifest_sandbox,
+                &registry_path,
+                &msp_client_manifest_global_roots,
+            ) {
+                Ok(path) => path,
+                Err(error) => return Observation::err(error.to_string(), "SandboxViolation"),
+            };
+            match MspClient::open(&registry_path).and_then(|client| client.get_manifest(id)) {
+                Ok(manifest) => msp_json_observation(manifest),
+                Err(error) => Observation::err(error.to_string(), "MspManifestError"),
+            }
+        }),
+        json!({"required": ["id"], "properties": {"registry": "string", "id": "string"}}),
+        false,
+    ))?;
+
+    let msp_verify_sandbox = sandbox.clone();
+    let msp_verify_data_root = data_root.clone();
+    let msp_verify_global_roots = global_skill_roots.clone();
+    registry.register(Tool::new(
+        "msp_client_verify_trust",
+        "Verify the MSP trust hash/signature envelope for a skill body artifact.",
+        Arc::new(move |args| {
+            let Some(id) = args.get("id").and_then(Value::as_str) else {
+                return Observation::err("Missing id", "ValueError");
+            };
+            let registry_path = msp_registry_path(&args, &msp_verify_data_root);
+            let registry_path = match resolve_workspace_or_global_path(
+                &msp_verify_sandbox,
+                &registry_path,
+                &msp_verify_global_roots,
+            ) {
+                Ok(path) => path,
+                Err(error) => return Observation::err(error.to_string(), "SandboxViolation"),
+            };
+            match MspClient::open(&registry_path).and_then(|client| client.verify_trust(id)) {
+                Ok(result) => msp_json_observation(result),
+                Err(error) => Observation::err(error.to_string(), "MspTrustError"),
+            }
+        }),
+        json!({"required": ["id"], "properties": {"registry": "string", "id": "string"}}),
+        false,
+    ))?;
+
+    let msp_compat_sandbox = sandbox.clone();
+    let msp_compat_data_root = data_root.clone();
+    let msp_compat_global_roots = global_skill_roots.clone();
+    registry.register(Tool::new(
+        "msp_client_check_compatibility",
+        "Check whether an MSP skill is compatible with a Vegvisir runtime/tool/model capability envelope.",
+        Arc::new(move |args| {
+            let Some(id) = args.get("id").and_then(Value::as_str) else {
+                return Observation::err("Missing id", "ValueError");
+            };
+            let registry_path = msp_registry_path(&args, &msp_compat_data_root);
+            let registry_path = match resolve_workspace_or_global_path(&msp_compat_sandbox, &registry_path, &msp_compat_global_roots) {
+                Ok(path) => path,
+                Err(error) => return Observation::err(error.to_string(), "SandboxViolation"),
+            };
+            let query = msp_client::msp_core::RuntimeCompatibilityQuery {
+                msp_version: args.get("msp_version").and_then(Value::as_str).map(str::to_string),
+                supported_manifest_versions: json_string_array(&args, "supported_manifest_versions"),
+                runtime_name: args
+                    .get("runtime_name")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or_else(|| Some("vegvisir".to_string())),
+                runtime_version: args.get("runtime_version").and_then(Value::as_str).map(str::to_string),
+                supported_formats: json_string_array(&args, "supported_formats"),
+                runtime_capabilities: json_string_array(&args, "runtime_capabilities"),
+                model_capabilities: json_string_array(&args, "model_capabilities"),
+                available_tools: json_string_array(&args, "available_tools"),
+                tool_versions: BTreeMap::new(),
+                permissions: json_string_array(&args, "permissions"),
+                context_window: args.get("context_window").and_then(Value::as_u64),
+                platform: args.get("platform").and_then(Value::as_str).map(str::to_string),
+            };
+            let request = msp_client::CompatibilityRequest {
+                skill_id: id.to_string(),
+                query,
+            };
+            match MspClient::open(&registry_path).and_then(|client| client.check_compatibility(request)) {
+                Ok(result) => msp_json_observation(result),
+                Err(error) => Observation::err(error.to_string(), "MspCompatibilityError"),
+            }
+        }),
+        json!({"required": ["id"], "properties": {"registry": "string", "id": "string", "msp_version": "string", "supported_manifest_versions": "array", "runtime_name": "string", "runtime_version": "string", "supported_formats": "array", "runtime_capabilities": "array", "model_capabilities": "array", "available_tools": "array", "permissions": "array", "context_window": "integer", "platform": "string"}}),
+        false,
+    ))?;
+
     let command_sandbox_config =
         CommandSandboxConfig::from_env(sandbox.root.clone(), bypass_sandbox)?;
     let run_sandbox_config = command_sandbox_config.clone();
@@ -855,6 +2293,43 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
                 output_limit,
                 "CommandFailed",
                 false,
+                false,
+            )
+        }),
+        json!({"required": ["command"], "properties": {"command": "array", "timeout": "integer", "output_limit": "integer"}}),
+        true,
+    ))?;
+
+    let privileged_sandbox_config = command_sandbox_config.clone();
+    registry.register(Tool::new(
+        "run_privileged_command",
+        "Run an allow-listed privileged command via sudo -n using an existing sudo timestamp; Vegvisir never reads or logs the sudo password.",
+        Arc::new(move |args| {
+            let Some(command) = args.get("command").and_then(Value::as_array) else {
+                return Observation::err("Missing command", "ValueError");
+            };
+            let parts = command.iter().filter_map(Value::as_str).collect::<Vec<_>>();
+            if parts.is_empty() {
+                return Observation::err("Empty command", "ValueError");
+            }
+            let timeout = args
+                .get("timeout")
+                .and_then(Value::as_u64)
+                .unwrap_or(30)
+                .clamp(1, 3600);
+            let output_limit = args
+                .get("output_limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(20000)
+                .clamp(1024, 1_000_000) as usize;
+            execute_bounded_command(
+                &parts,
+                &privileged_sandbox_config,
+                timeout,
+                output_limit,
+                "PrivilegedCommandFailed",
+                false,
+                true,
             )
         }),
         json!({"required": ["command"], "properties": {"command": "array", "timeout": "integer", "output_limit": "integer"}}),
@@ -904,6 +2379,7 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
                 output_limit,
                 "TestsFailed",
                 true,
+                false,
             )
         }),
         json!({"properties": {"command": "array", "timeout": "integer", "output_limit": "integer"}}),
@@ -911,106 +2387,143 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
     ))?;
 
     let skiller_compile_sandbox = sandbox.clone();
+    let skiller_compile_data_root = data_root.clone();
+    let skiller_compile_global_roots = global_skill_roots.clone();
+    let skiller_compile_model_target_defaults = skiller_forge_model_target_defaults.clone();
     registry.register(Tool::new(
         "skiller_compile",
         "Compile local source files/directories into a deterministic Skiller draft bundle and return a Vegvisir Forge request/prompt for default model refinement before final use.",
         Arc::new(move |args| {
             let Some(input) = args.get("input").and_then(Value::as_str) else { return Observation::err("Missing input", "ValueError"); };
-            let Some(out) = args.get("out").and_then(Value::as_str) else { return Observation::err("Missing out", "ValueError"); };
             let name = args.get("name").and_then(Value::as_str).unwrap_or("skiller-bundle");
+            let out_path_raw = skiller_bundle_output_path(&args, &skiller_compile_data_root, name);
+            let out_display = out_path_raw.display().to_string();
             let domain = args.get("domain").and_then(Value::as_str);
+            let forge_model_target = match skiller_compile_model_target_defaults.resolve() { Ok(target) => target, Err(error) => return Observation::err(error.to_string(), "SkillerForgeModelTargetError") };
             let input_path = match skiller_compile_sandbox.resolve(input) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
-            let out_path = match skiller_compile_sandbox.resolve(out) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
+            let out_path = match resolve_workspace_or_global_path(&skiller_compile_sandbox, &out_path_raw, &skiller_compile_global_roots) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
             match compiler::compile_path(&input_path, name, domain).and_then(|bundle| {
                 let bundle_id = bundle.package.bundle_id.clone();
                 let skill_count = bundle.skills.len();
                 let source_count = bundle.sources.len();
-                let forge_request = skiller_forge::build_vegvisir_handoff(
-                    &bundle,
-                    ForgePassType::SkillExpansion,
-                    domain,
-                    skill_count.clamp(1, 100),
-                );
-                let forge_prompt = skiller_forge::vegvisir_prompt_markdown(&forge_request);
-                let response_template = skiller_forge::response_template_for(&forge_request);
+                let (forge_request, forge_system_prompt, forge_prompt, response_template) =
+                    skiller_bundle_handoff_observation_data(&bundle, ForgePassType::SkillExpansion, domain, &forge_model_target);
                 skiller_registry::write_bundle(&bundle, &out_path)?;
-                Ok((bundle_id, skill_count, source_count, forge_request, forge_prompt, response_template))
+                Ok((bundle_id, skill_count, source_count, forge_request, forge_system_prompt, forge_prompt, response_template))
             }) {
-                Ok((bundle_id, skill_count, source_count, forge_request, forge_prompt, response_template)) => {
+                Ok((bundle_id, skill_count, source_count, forge_request, forge_system_prompt, forge_prompt, response_template)) => {
                     let request_id = forge_request.request_id.clone();
                     let mut data = Map::new();
                     data.insert("bundle_id".to_string(), json!(bundle_id));
                     data.insert("skill_count".to_string(), json!(skill_count));
                     data.insert("source_count".to_string(), json!(source_count));
-                    data.insert("out".to_string(), json!(out));
+                    data.insert("out".to_string(), json!(out_display));
+                    data.insert("global_install_root".to_string(), json!(skiller_compile_data_root.join("skiller").join("bundles")));
                     data.insert("deterministic_stage".to_string(), json!(true));
-                    data.insert("forge_required_by_default".to_string(), json!(true));
-                    data.insert("default_forge_pass".to_string(), json!("SkillExpansion"));
-                    data.insert("forge_request_id".to_string(), json!(request_id));
-                    data.insert("forge_request".to_string(), serde_json::to_value(&forge_request).unwrap_or(Value::Null));
-                    data.insert("forge_response_template".to_string(), serde_json::to_value(&response_template).unwrap_or(Value::Null));
-                    data.insert("forge_prompt".to_string(), json!(forge_prompt));
-                    data.insert("recommended_apply_tool".to_string(), json!("skiller_forge_apply"));
-                    Observation { ok: true, content: format!("Compiled deterministic Skiller draft bundle {bundle_id} to {out} ({skill_count} skills, {source_count} sources). Forge refinement is required by default before treating this as agent-ready: use the included ForgeRequestEnvelope ({request_id}) as model context, then apply the model's ForgeResponseEnvelope with skiller_forge_apply."), data, error: None }
+                    add_skiller_forge_observation_data(&mut data, &forge_request, forge_system_prompt, forge_prompt, response_template, &forge_model_target);
+                    Observation { ok: true, content: format!("Compiled deterministic Skiller draft bundle {bundle_id} to {out_display} ({skill_count} skills, {source_count} sources). Forge refinement is required by default before treating this as agent-ready: use the included ForgeRequestEnvelope ({request_id}) as model context, then apply the model's ForgeResponseEnvelope with skiller_forge_apply."), data, error: None }
                 }
                 Err(error) => Observation::err(error.to_string(), "SkillerCompileError"),
             }
         }),
-        json!({"required": ["input", "out"], "properties": {"input": "string", "out": "string", "name": "string", "domain": "string"}}),
+        json!({"required": ["input"], "properties": {"input": "string", "out": "string", "name": "string", "domain": "string"}}),
         true,
     ))?;
 
     let skiller_compile_cli_help_sandbox = sandbox.clone();
+    let skiller_compile_cli_help_data_root = data_root.clone();
+    let skiller_compile_cli_help_global_roots = global_skill_roots.clone();
+    let skiller_compile_cli_help_model_target_defaults =
+        skiller_forge_model_target_defaults.clone();
     registry.register(Tool::new(
         "skiller_compile_cli_help",
         "Compile captured CLI help/manpage text into a deterministic Skiller CLI draft bundle and return a Vegvisir Forge request/prompt for default model refinement before final use.",
         Arc::new(move |args| {
             let Some(input) = args.get("input").and_then(Value::as_str) else { return Observation::err("Missing input", "ValueError"); };
-            let Some(out) = args.get("out").and_then(Value::as_str) else { return Observation::err("Missing out", "ValueError"); };
             let name = args.get("name").and_then(Value::as_str).unwrap_or("skiller-cli-help-bundle");
+            let out_path_raw = skiller_bundle_output_path(&args, &skiller_compile_cli_help_data_root, name);
+            let out_display = out_path_raw.display().to_string();
             let domain = args.get("domain").and_then(Value::as_str);
+            let forge_model_target = match skiller_compile_cli_help_model_target_defaults.resolve() { Ok(target) => target, Err(error) => return Observation::err(error.to_string(), "SkillerForgeModelTargetError") };
             let input_path = match skiller_compile_cli_help_sandbox.resolve(input) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
-            let out_path = match skiller_compile_cli_help_sandbox.resolve(out) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
+            let out_path = match resolve_workspace_or_global_path(&skiller_compile_cli_help_sandbox, &out_path_raw, &skiller_compile_cli_help_global_roots) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
             match compiler::compile_cli_help(&input_path, name, domain).and_then(|bundle| {
                 let bundle_id = bundle.package.bundle_id.clone();
                 let skill_count = bundle.skills.len();
                 let source_count = bundle.sources.len();
-                let forge_request = skiller_forge::build_vegvisir_handoff(
-                    &bundle,
-                    ForgePassType::SkillExpansion,
-                    domain,
-                    skill_count.clamp(1, 100),
-                );
-                let forge_prompt = skiller_forge::vegvisir_prompt_markdown(&forge_request);
-                let response_template = skiller_forge::response_template_for(&forge_request);
+                let (forge_request, forge_system_prompt, forge_prompt, response_template) =
+                    skiller_bundle_handoff_observation_data(&bundle, ForgePassType::SkillExpansion, domain, &forge_model_target);
                 skiller_registry::write_bundle(&bundle, &out_path)?;
-                Ok((bundle_id, skill_count, source_count, forge_request, forge_prompt, response_template))
+                Ok((bundle_id, skill_count, source_count, forge_request, forge_system_prompt, forge_prompt, response_template))
             }) {
-                Ok((bundle_id, skill_count, source_count, forge_request, forge_prompt, response_template)) => {
+                Ok((bundle_id, skill_count, source_count, forge_request, forge_system_prompt, forge_prompt, response_template)) => {
                     let request_id = forge_request.request_id.clone();
                     let mut data = Map::new();
                     data.insert("bundle_id".to_string(), json!(bundle_id));
                     data.insert("skill_count".to_string(), json!(skill_count));
                     data.insert("source_count".to_string(), json!(source_count));
-                    data.insert("out".to_string(), json!(out));
+                    data.insert("out".to_string(), json!(out_display));
+                    data.insert("global_install_root".to_string(), json!(skiller_compile_cli_help_data_root.join("skiller").join("bundles")));
                     data.insert("deterministic_stage".to_string(), json!(true));
-                    data.insert("forge_required_by_default".to_string(), json!(true));
-                    data.insert("default_forge_pass".to_string(), json!("SkillExpansion"));
-                    data.insert("forge_request_id".to_string(), json!(request_id));
-                    data.insert("forge_request".to_string(), serde_json::to_value(&forge_request).unwrap_or(Value::Null));
-                    data.insert("forge_response_template".to_string(), serde_json::to_value(&response_template).unwrap_or(Value::Null));
-                    data.insert("forge_prompt".to_string(), json!(forge_prompt));
-                    data.insert("recommended_apply_tool".to_string(), json!("skiller_forge_apply"));
-                    Observation { ok: true, content: format!("Compiled deterministic Skiller CLI help draft bundle {bundle_id} to {out} ({skill_count} skills, {source_count} sources). Forge refinement is required by default before treating this as agent-ready: use the included ForgeRequestEnvelope ({request_id}) as model context, then apply the model's ForgeResponseEnvelope with skiller_forge_apply."), data, error: None }
+                    add_skiller_forge_observation_data(&mut data, &forge_request, forge_system_prompt, forge_prompt, response_template, &forge_model_target);
+                    Observation { ok: true, content: format!("Compiled deterministic Skiller CLI help draft bundle {bundle_id} to {out_display} ({skill_count} skills, {source_count} sources). Forge refinement is required by default before treating this as agent-ready: use the included ForgeRequestEnvelope ({request_id}) as model context, then apply the model's ForgeResponseEnvelope with skiller_forge_apply."), data, error: None }
                 }
                 Err(error) => Observation::err(error.to_string(), "SkillerCompileError"),
             }
         }),
-        json!({"required": ["input", "out"], "properties": {"input": "string", "out": "string", "name": "string", "domain": "string"}}),
+        json!({"required": ["input"], "properties": {"input": "string", "out": "string", "name": "string", "domain": "string"}}),
+        true,
+    ))?;
+
+    let skiller_import_skill_sandbox = sandbox.clone();
+    let skiller_import_skill_data_root = data_root.clone();
+    let skiller_import_skill_global_roots = global_skill_roots.clone();
+    let skiller_import_skill_model_target_defaults = skiller_forge_model_target_defaults.clone();
+    registry.register(Tool::new(
+        "skiller_import_skill",
+        "Import pre-existing skill YAML/JSON or an existing Skiller bundle without deterministic raw-source generation, then prepare a ScriptGeneration Forge handoff for cleanup, helper scripts, validation, and review.",
+        Arc::new(move |args| {
+            let Some(input) = args.get("input").and_then(Value::as_str) else { return Observation::err("Missing input", "ValueError"); };
+            let name = args.get("name").and_then(Value::as_str).unwrap_or("skiller-imported-bundle");
+            let out_path_raw = skiller_bundle_output_path(&args, &skiller_import_skill_data_root, name);
+            let out_display = out_path_raw.display().to_string();
+            let domain = args.get("domain").and_then(Value::as_str);
+            let forge_model_target = match skiller_import_skill_model_target_defaults.resolve() { Ok(target) => target, Err(error) => return Observation::err(error.to_string(), "SkillerForgeModelTargetError") };
+            let input_path = match skiller_import_skill_sandbox.resolve(input) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
+            let out_path = match resolve_workspace_or_global_path(&skiller_import_skill_sandbox, &out_path_raw, &skiller_import_skill_global_roots) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
+            match compiler::import_skill_path(&input_path, name, domain).and_then(|bundle| {
+                let bundle_id = bundle.package.bundle_id.clone();
+                let skill_count = bundle.skills.len();
+                let source_count = bundle.sources.len();
+                let (forge_request, forge_system_prompt, forge_prompt, response_template) =
+                    skiller_bundle_handoff_observation_data(&bundle, ForgePassType::ScriptGeneration, domain, &forge_model_target);
+                skiller_registry::write_bundle(&bundle, &out_path)?;
+                Ok((bundle_id, skill_count, source_count, forge_request, forge_system_prompt, forge_prompt, response_template))
+            }) {
+                Ok((bundle_id, skill_count, source_count, forge_request, forge_system_prompt, forge_prompt, response_template)) => {
+                    let request_id = forge_request.request_id.clone();
+                    let mut data = Map::new();
+                    data.insert("bundle_id".to_string(), json!(bundle_id));
+                    data.insert("skill_count".to_string(), json!(skill_count));
+                    data.insert("source_count".to_string(), json!(source_count));
+                    data.insert("out".to_string(), json!(out_display));
+                    data.insert("global_install_root".to_string(), json!(skiller_import_skill_data_root.join("skiller").join("bundles")));
+                    data.insert("import_mode".to_string(), json!("pre_existing_skill"));
+                    data.insert("deterministic_stage".to_string(), json!(false));
+                    data.insert("deterministic_generation".to_string(), json!("skipped"));
+                    add_skiller_forge_observation_data(&mut data, &forge_request, forge_system_prompt, forge_prompt, response_template, &forge_model_target);
+                    Observation { ok: true, content: format!("Imported pre-existing Skiller skill bundle {bundle_id} to {out_display} ({skill_count} skills, {source_count} sources). Deterministic raw-source generation was skipped. ScriptGeneration Forge refinement is required by default before treating this as agent-ready: use the included ForgeRequestEnvelope ({request_id}) as model context, then apply the model's ForgeResponseEnvelope with skiller_forge_apply."), data, error: None }
+                }
+                Err(error) => Observation::err(error.to_string(), "SkillerImportSkillError"),
+            }
+        }),
+        json!({"required": ["input"], "properties": {"input": "string", "out": "string", "name": "string", "domain": "string"}}),
         true,
     ))?;
 
     let skiller_validate_sandbox = sandbox.clone();
+    let skiller_validate_data_root = data_root.clone();
+    let skiller_validate_global_roots = global_skill_roots.clone();
     registry.register(Tool::new(
         "skiller_validate",
         "Validate a Skiller skill bundle from inside Vegvisir.",
@@ -1018,7 +2531,12 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
             let Some(bundle) = args.get("bundle").and_then(Value::as_str) else {
                 return Observation::err("Missing bundle", "ValueError");
             };
-            let bundle_path = match skiller_validate_sandbox.resolve(bundle) {
+            let bundle_ref = skiller_bundle_reference_path(bundle, &skiller_validate_data_root);
+            let bundle_path = match resolve_workspace_or_global_path(
+                &skiller_validate_sandbox,
+                &bundle_ref,
+                &skiller_validate_global_roots,
+            ) {
                 Ok(path) => path,
                 Err(error) => return Observation::err(error.to_string(), "SandboxViolation"),
             };
@@ -1048,6 +2566,8 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
     ))?;
 
     let skiller_route_sandbox = sandbox.clone();
+    let skiller_route_data_root = data_root.clone();
+    let skiller_route_global_roots = global_skill_roots.clone();
     registry.register(Tool::new(
         "skiller_route",
         "Route a user task/query to matching skills in a Skiller bundle.",
@@ -1055,7 +2575,8 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
             let Some(bundle) = args.get("bundle").and_then(Value::as_str) else { return Observation::err("Missing bundle", "ValueError"); };
             let Some(query) = args.get("query").and_then(Value::as_str) else { return Observation::err("Missing query", "ValueError"); };
             let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(5).clamp(1, 50) as usize;
-            let bundle_path = match skiller_route_sandbox.resolve(bundle) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
+            let bundle_ref = skiller_bundle_reference_path(bundle, &skiller_route_data_root);
+            let bundle_path = match resolve_workspace_or_global_path(&skiller_route_sandbox, &bundle_ref, &skiller_route_global_roots) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
             match skiller_registry::read_bundle(&bundle_path) {
                 Ok(bundle_data) => {
                     let hits = skiller_runtime::route(&bundle_data, query, limit);
@@ -1072,6 +2593,8 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
     ))?;
 
     let skiller_load_sandbox = sandbox.clone();
+    let skiller_load_data_root = data_root.clone();
+    let skiller_load_global_roots = global_skill_roots.clone();
     registry.register(Tool::new(
         "skiller_load",
         "Materialize a Skiller skill card/body/extended context from inside Vegvisir.",
@@ -1084,7 +2607,8 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
                 "extended" => skiller_runtime::LoadMode::Extended,
                 other => return Observation::err(format!("Unknown mode: {other}"), "ValueError"),
             };
-            let bundle_path = match skiller_load_sandbox.resolve(bundle) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
+            let bundle_ref = skiller_bundle_reference_path(bundle, &skiller_load_data_root);
+            let bundle_path = match resolve_workspace_or_global_path(&skiller_load_sandbox, &bundle_ref, &skiller_load_global_roots) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
             match skiller_registry::read_bundle(&bundle_path).and_then(|bundle_data| skiller_runtime::load_skill(&bundle_data, skill_id, mode)) {
                 Ok(content) => Observation::ok(content),
                 Err(error) => Observation::err(error.to_string(), "SkillerLoadError"),
@@ -1094,7 +2618,101 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
         false,
     ))?;
 
+    let skiller_suspicious_sandbox = sandbox.clone();
+    let skiller_suspicious_data_root = data_root.clone();
+    let skiller_suspicious_global_roots = global_skill_roots.clone();
+    registry.register(Tool::new(
+        "skiller_suspicious_commands",
+        "Summarize suspicious Skiller CliOperation targets, weak titles, and fallback-only Forge state without dumping full bundle YAML.",
+        Arc::new(move |args| {
+            let Some(bundle) = args.get("bundle").and_then(Value::as_str) else {
+                return Observation::err("Missing bundle", "ValueError");
+            };
+            let bundle_ref = skiller_bundle_reference_path(bundle, &skiller_suspicious_data_root);
+            let bundle_path = match resolve_workspace_or_global_path(&skiller_suspicious_sandbox, &bundle_ref, &skiller_suspicious_global_roots) {
+                Ok(path) => path,
+                Err(error) => return Observation::err(error.to_string(), "SandboxViolation"),
+            };
+            match skiller_registry::read_bundle(&bundle_path) {
+                Ok(bundle_data) => {
+                    let mut findings = Vec::new();
+                    let mut suspicious_cli_operation_count = 0usize;
+                    let mut weak_title_count = 0usize;
+                    for skill in &bundle_data.skills {
+                        if matches!(skill.skill_type, skiller::models::SkillType::CliOperation) {
+                            match skill.metadata.get("target_command") {
+                                Some(command) => {
+                                    if let Some(reason) = skiller_semantic::suspicious_cli_command_reason(command) {
+                                        suspicious_cli_operation_count += 1;
+                                        findings.push(json!({
+                                            "kind": "suspicious_cli_operation",
+                                            "skill_id": skill.id,
+                                            "title": skill.title,
+                                            "target_command": command,
+                                            "reason": reason,
+                                        }));
+                                    }
+                                }
+                                None => {
+                                    suspicious_cli_operation_count += 1;
+                                    findings.push(json!({
+                                        "kind": "suspicious_cli_operation",
+                                        "skill_id": skill.id,
+                                        "title": skill.title,
+                                        "reason": "CliOperation has no target_command metadata",
+                                    }));
+                                }
+                            }
+                        }
+                        if skiller_semantic::looks_like_weak_title(&skill.title) {
+                            weak_title_count += 1;
+                            findings.push(json!({
+                                "kind": "weak_title",
+                                "skill_id": skill.id,
+                                "title": skill.title,
+                                "target_command": skill.metadata.get("target_command"),
+                                "reason": "title looks like a markdown/list/table/source fragment",
+                            }));
+                        }
+                    }
+                    let fallback_only_forge = bundle_data.forge_requests.iter().any(|request| {
+                        request
+                            .provider_provenance
+                            .as_ref()
+                            .map(|provenance| !provenance.live_reasoning)
+                            .unwrap_or_else(|| request.provider.eq_ignore_ascii_case("vegvisir"))
+                    });
+                    if fallback_only_forge {
+                        findings.push(json!({
+                            "kind": "forge_provider_review",
+                            "reason": "provider semantic review was not performed; Forge history lacks live provider-backed provenance",
+                        }));
+                    }
+                    let report = json!({
+                        "suspicious_cli_operation_count": suspicious_cli_operation_count,
+                        "weak_title_count": weak_title_count,
+                        "fallback_only_forge": fallback_only_forge,
+                        "provider_reviewed": !fallback_only_forge,
+                        "findings": findings,
+                    });
+                    let content = serde_json::to_string_pretty(&report).unwrap_or_else(|_| report.to_string());
+                    let mut data = Map::new();
+                    data.insert("report".into(), report.clone());
+                    data.insert("suspicious_cli_operation_count".into(), json!(suspicious_cli_operation_count));
+                    data.insert("weak_title_count".into(), json!(weak_title_count));
+                    data.insert("fallback_only_forge".into(), json!(fallback_only_forge));
+                    Observation { ok: true, content, data, error: None }
+                }
+                Err(error) => Observation::err(error.to_string(), "SkillerSuspiciousCommandsError"),
+            }
+        }),
+        json!({"required": ["bundle"], "properties": {"bundle": "string"}}),
+        false,
+    ))?;
+
     let skiller_eval_sandbox = sandbox.clone();
+    let skiller_eval_data_root = data_root.clone();
+    let skiller_eval_global_roots = global_skill_roots.clone();
     registry.register(Tool::new(
         "skiller_eval",
         "Run deterministic structural evals for a Skiller bundle from inside Vegvisir.",
@@ -1102,7 +2720,12 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
             let Some(bundle) = args.get("bundle").and_then(Value::as_str) else {
                 return Observation::err("Missing bundle", "ValueError");
             };
-            let bundle_path = match skiller_eval_sandbox.resolve(bundle) {
+            let bundle_ref = skiller_bundle_reference_path(bundle, &skiller_eval_data_root);
+            let bundle_path = match resolve_workspace_or_global_path(
+                &skiller_eval_sandbox,
+                &bundle_ref,
+                &skiller_eval_global_roots,
+            ) {
                 Ok(path) => path,
                 Err(error) => return Observation::err(error.to_string(), "SandboxViolation"),
             };
@@ -1133,6 +2756,8 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
     ))?;
 
     let skiller_readiness_sandbox = sandbox.clone();
+    let skiller_readiness_data_root = data_root.clone();
+    let skiller_readiness_global_roots = global_skill_roots.clone();
     registry.register(Tool::new(
         "skiller_readiness",
         "Assess Skiller bundle registry publication readiness from inside Vegvisir.",
@@ -1140,7 +2765,12 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
             let Some(bundle) = args.get("bundle").and_then(Value::as_str) else {
                 return Observation::err("Missing bundle", "ValueError");
             };
-            let bundle_path = match skiller_readiness_sandbox.resolve(bundle) {
+            let bundle_ref = skiller_bundle_reference_path(bundle, &skiller_readiness_data_root);
+            let bundle_path = match resolve_workspace_or_global_path(
+                &skiller_readiness_sandbox,
+                &bundle_ref,
+                &skiller_readiness_global_roots,
+            ) {
                 Ok(path) => path,
                 Err(error) => return Observation::err(error.to_string(), "SandboxViolation"),
             };
@@ -1256,6 +2886,9 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
     ))?;
 
     let skiller_forge_request_sandbox = sandbox.clone();
+    let skiller_forge_request_data_root = data_root.clone();
+    let skiller_forge_request_global_roots = global_skill_roots.clone();
+    let skiller_forge_request_model_target_defaults = skiller_forge_model_target_defaults.clone();
     registry.register(Tool::new(
         "skiller_forge_request",
         "Build a strict Vegvisir-provider Skiller Forge request envelope and model prompt for native agent/provider execution.",
@@ -1264,20 +2897,32 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
             let pass = match parse_skiller_forge_pass(args.get("pass").and_then(Value::as_str)) { Ok(pass) => pass, Err(error) => return Observation::err(error.to_string(), "ValueError") };
             let domain_profile = args.get("domain_profile").and_then(Value::as_str);
             let max_skills = args.get("max_skills").and_then(Value::as_u64).unwrap_or(8).clamp(1, 100) as usize;
-            let bundle_path = match skiller_forge_request_sandbox.resolve(bundle) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
-            match skiller_registry::read_bundle(&bundle_path).map(|bundle_data| skiller_forge::build_vegvisir_handoff(&bundle_data, pass, domain_profile, max_skills)) {
+            let forge_model_target = match skiller_forge_request_model_target_defaults.resolve() { Ok(target) => target, Err(error) => return Observation::err(error.to_string(), "SkillerForgeModelTargetError") };
+            let bundle_ref = skiller_bundle_reference_path(bundle, &skiller_forge_request_data_root);
+            let bundle_path = match resolve_workspace_or_global_path(&skiller_forge_request_sandbox, &bundle_ref, &skiller_forge_request_global_roots) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
+            match skiller_registry::read_bundle(&bundle_path).map(|bundle_data| {
+                let mut request = skiller_forge::build_vegvisir_handoff(&bundle_data, pass, domain_profile, max_skills);
+                apply_skiller_forge_model_target(&mut request, &forge_model_target);
+                request
+            }) {
                 Ok(request) => {
+                    let system_prompt = skiller_forge::skiller_specialized_vegvisir_system_prompt().to_string();
                     let prompt = skiller_forge::vegvisir_prompt_markdown(&request);
                     let template = skiller_forge::response_template_for(&request);
                     let mut data = Map::new();
                     data.insert("request_id".to_string(), json!(request.request_id));
                     data.insert("provider".to_string(), json!(request.provider));
+                    data.insert("model_provider".to_string(), json!(forge_model_target.provider));
+                    data.insert("model".to_string(), json!(forge_model_target.model));
+                    data.insert("forge_model_target_source".to_string(), json!(forge_model_target.source));
                     data.insert("pass_type".to_string(), json!(format!("{:?}", request.pass_type)));
                     data.insert("selected_skill_count".to_string(), json!(request.candidate_skills.len()));
+                    data.insert("default_objective".to_string(), json!(skiller_forge::skiller_default_forge_objective()));
+                    data.insert("system_prompt".to_string(), json!(system_prompt));
                     data.insert("request".to_string(), serde_json::to_value(&request).unwrap_or(Value::Null));
                     data.insert("response_template".to_string(), serde_json::to_value(&template).unwrap_or(Value::Null));
                     data.insert("prompt".to_string(), json!(prompt));
-                    Observation { ok: true, content: prompt, data, error: None }
+                    Observation { ok: true, content: format!("Default Forge model target: {}:{} ({})\n\n{}", forge_model_target.provider, forge_model_target.model, forge_model_target.source, prompt), data, error: None }
                 }
                 Err(error) => Observation::err(error.to_string(), "SkillerForgeRequestError"),
             }
@@ -1287,17 +2932,22 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
     ))?;
 
     let skiller_forge_apply_sandbox = sandbox.clone();
+    let skiller_forge_apply_data_root = data_root.clone();
+    let skiller_forge_apply_global_roots = global_skill_roots.clone();
     registry.register(Tool::new(
         "skiller_forge_apply",
-        "Validate and apply a Vegvisir-generated Skiller Forge response envelope to a bundle, writing the reviewed output bundle inside the workspace.",
+        "Validate and apply a Vegvisir-generated Skiller Forge response envelope to a bundle, writing simple output names to the user-global Skiller bundle store.",
         Arc::new(move |args| {
             let Some(bundle) = args.get("bundle").and_then(Value::as_str) else { return Observation::err("Missing bundle", "ValueError"); };
             let Some(out) = args.get("out").and_then(Value::as_str) else { return Observation::err("Missing out", "ValueError"); };
+            let out_path_raw = skiller_bundle_output_path(&args, &skiller_forge_apply_data_root, out);
+            let out_display = out_path_raw.display().to_string();
             let request_value = match args.get("request") { Some(value) => value.clone(), None => return Observation::err("Missing request", "ValueError") };
             let response_text = args.get("response").and_then(Value::as_str);
             let response_value = args.get("response_envelope").cloned();
-            let bundle_path = match skiller_forge_apply_sandbox.resolve(bundle) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
-            let out_path = match skiller_forge_apply_sandbox.resolve(out) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
+            let bundle_ref = skiller_bundle_reference_path(bundle, &skiller_forge_apply_data_root);
+            let bundle_path = match resolve_workspace_or_global_path(&skiller_forge_apply_sandbox, &bundle_ref, &skiller_forge_apply_global_roots) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
+            let out_path = match resolve_workspace_or_global_path(&skiller_forge_apply_sandbox, &out_path_raw, &skiller_forge_apply_global_roots) { Ok(path) => path, Err(error) => return Observation::err(error.to_string(), "SandboxViolation") };
             let request = match serde_json::from_value(request_value).or_else(|json_err| serde_yaml::from_str::<ForgeRequestEnvelope>(args.get("request").and_then(Value::as_str).unwrap_or("")) .map_err(|yaml_err| anyhow::anyhow!("failed to parse Forge request as JSON ({json_err}) or YAML ({yaml_err})"))) {
                 Ok(request) => request,
                 Err(error) => return Observation::err(error.to_string(), "ValueError"),
@@ -1325,9 +2975,9 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
                 Ok((bundle_data, report)) => {
                     let mut data = Map::new();
                     data.insert("bundle_id".to_string(), json!(bundle_data.package.bundle_id));
-                    data.insert("out".to_string(), json!(out));
+                    data.insert("out".to_string(), json!(out_display));
                     data.insert("apply_report".to_string(), serde_json::to_value(&report).unwrap_or(Value::Null));
-                    Observation { ok: true, content: format!("Applied Vegvisir Skiller Forge response {} to {out} (skills: {} -> {}, human_review_required={}).", report.request_id, report.before_skill_count, report.after_skill_count, report.required_human_review), data, error: None }
+                    Observation { ok: true, content: format!("Applied Vegvisir Skiller Forge response {} to {out_display} (skills: {} -> {}, human_review_required={}).", report.request_id, report.before_skill_count, report.after_skill_count, report.required_human_review), data, error: None }
                 }
                 Err(error) => Observation::err(error.to_string(), "SkillerForgeApplyError"),
             }
@@ -1660,11 +3310,14 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
             let requested_max_steps = args.get("max_steps").and_then(Value::as_u64);
             let effective_max_steps = spawn_subagent_defaults.effective_max_steps(requested_max_steps);
             let max_steps = effective_max_steps.to_string();
-            let provider = optional_nonempty_string(args.get("provider"))
-                .unwrap_or_else(|| spawn_subagent_provider_defaults.provider.clone());
-            let model = optional_nonempty_string(args.get("model"))
-                .unwrap_or_else(|| spawn_subagent_provider_defaults.model.clone());
-            let model = repair_model_for_provider(&provider, &model);
+            let requested_provider = optional_nonempty_string(args.get("provider"));
+            let requested_model = optional_nonempty_string(args.get("model"));
+            let (provider, model) = match spawn_subagent_provider_defaults
+                .resolve_for_spawn_request(requested_provider, requested_model)
+            {
+                Ok(resolved) => resolved,
+                Err(error) => return Observation::err(error.to_string(), "SubagentProviderModelError"),
+            };
             let agent = optional_nonempty_string(args.get("agent"));
             let work_budget = parse_subagent_work_budget(
                 args.get("work_budget"),
@@ -1731,7 +3384,10 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
                 checkpoint: None,
                 final_answer: None,
                 error: None,
-                observability: SubAgentObservability::default(),
+                observability: SubAgentObservability {
+                    launch_env_keys: vec!["VEGVISIR_SUBAGENT_RUN".to_string()],
+                    ..SubAgentObservability::default()
+                },
             };
             if let Err(error) = upsert_subagent_record(&board_path, record.clone()) {
                 return Observation::err(error.to_string(), "SubagentBoardError");
@@ -2172,7 +3828,7 @@ struct SubagentChildLaunch {
 }
 
 fn subagent_child_env(launch: &SubagentChildLaunch) -> Vec<(String, String)> {
-    let mut env = Vec::new();
+    let mut env = vec![("VEGVISIR_SUBAGENT_RUN".to_string(), "1".to_string())];
     if let Some(limit) = launch
         .work_budget
         .max_tool_calls
@@ -2878,6 +4534,220 @@ mod skiller_tool_tests {
             .expect("env var test lock poisoned")
     }
 
+    fn test_tool(schema: Value) -> Tool {
+        Tool::new(
+            "test_tool",
+            "test tool",
+            Arc::new(|_| Observation::ok("ok")),
+            schema,
+            false,
+        )
+    }
+
+    #[test]
+    fn bounded_command_drains_stdout_and_stderr_incrementally() -> anyhow::Result<()> {
+        let workspace = TempDir::new()?;
+        let sandbox = CommandSandboxConfig::path_only(workspace.path());
+        let script = "import sys\nsys.stdout.write('O' * 131072)\nsys.stdout.flush()\nsys.stderr.write('ERR-LINE\\n')\nsys.stderr.flush()\n";
+
+        let obs = execute_bounded_command(
+            &["python3", "-c", script],
+            &sandbox,
+            10,
+            1_000_000,
+            "CommandFailed",
+            true,
+            false,
+        );
+
+        assert!(obs.ok, "{} {:?}", obs.content, obs.error);
+        assert_eq!(obs.data.get("streaming_capture"), Some(&json!(true)));
+        assert_eq!(
+            obs.data.get("stream_capture_mode"),
+            Some(&json!("incremental_pipe_drainers"))
+        );
+        assert_eq!(obs.data.get("stdout_bytes"), Some(&json!(131072)));
+        assert_eq!(obs.data.get("stderr_bytes"), Some(&json!(9)));
+        assert_eq!(obs.data.get("stream_read_errors"), Some(&json!([])));
+        assert_eq!(obs.data.get("returncode"), Some(&json!(0)));
+        assert_eq!(obs.data.get("timed_out"), Some(&json!(false)));
+        assert!(obs.content.starts_with("OOO"));
+        assert!(obs.content.ends_with("ERR-LINE\n"));
+        Ok(())
+    }
+
+    #[test]
+    fn bounded_command_stream_capture_preserves_timeout_metadata() -> anyhow::Result<()> {
+        let workspace = TempDir::new()?;
+        let sandbox = CommandSandboxConfig::path_only(workspace.path());
+        let script = "import sys, time\nsys.stdout.write('before-timeout\\n')\nsys.stdout.flush()\ntime.sleep(5)\n";
+
+        let obs = execute_bounded_command(
+            &["python3", "-c", script],
+            &sandbox,
+            1,
+            100_000,
+            "CommandFailed",
+            false,
+            false,
+        );
+
+        assert!(!obs.ok);
+        assert_eq!(obs.error.as_deref(), Some("CommandTimeout"));
+        assert_eq!(obs.data.get("streaming_capture"), Some(&json!(true)));
+        assert_eq!(obs.data.get("timed_out"), Some(&json!(true)));
+        assert_eq!(obs.data.get("returncode"), Some(&json!(-1)));
+        assert_eq!(obs.data.get("stream_read_errors"), Some(&json!([])));
+        assert!(obs.content.contains("before-timeout"));
+        Ok(())
+    }
+
+    #[test]
+    fn bounded_command_emits_live_output_chunks_through_scoped_sink() -> anyhow::Result<()> {
+        let workspace = TempDir::new()?;
+        let sandbox = CommandSandboxConfig::path_only(workspace.path());
+        let chunks = std::sync::Arc::new(Mutex::new(Vec::<CommandOutputChunk>::new()));
+        let sink_chunks = std::sync::Arc::clone(&chunks);
+        let sink: CommandOutputSink = std::sync::Arc::new(move |chunk| {
+            sink_chunks.lock().expect("chunks lock").push(chunk);
+        });
+
+        let obs = with_command_output_sink(Some(sink), || {
+            execute_bounded_command(
+                &[
+                    "python3",
+                    "-c",
+                    "import sys\nsys.stdout.write('live-out\\n')\nsys.stdout.flush()\nsys.stderr.write('live-err\\n')\nsys.stderr.flush()\n",
+                ],
+                &sandbox,
+                5,
+                4096,
+                "CommandFailed",
+                false,
+                false,
+            )
+        });
+
+        assert!(obs.ok, "{obs:?}");
+        let chunks = chunks.lock().expect("chunks lock").clone();
+        assert!(
+            chunks
+                .iter()
+                .any(|chunk| chunk.stream == "stdout" && chunk.chunk.contains("live-out"))
+        );
+        assert!(
+            chunks
+                .iter()
+                .any(|chunk| chunk.stream == "stderr" && chunk.chunk.contains("live-err"))
+        );
+        assert!(chunks.iter().all(|chunk| !chunk.truncated));
+        Ok(())
+    }
+
+    #[test]
+    fn tool_validator_preserves_shorthand_schema_compatibility() -> anyhow::Result<()> {
+        let tool = test_tool(
+            json!({"required": ["path"], "properties": {"path": "string", "limit": "integer"}}),
+        );
+        let args = tool.normalize_args(serde_json::from_value(json!({"path": 123, "limit": "5"}))?);
+        tool.validate_args(&args)?;
+        assert_eq!(args.get("path"), Some(&json!("123")));
+        assert_eq!(args.get("limit"), Some(&json!(5)));
+        Ok(())
+    }
+
+    #[test]
+    fn tool_validator_rejects_unknown_properties_when_schema_is_closed() -> anyhow::Result<()> {
+        let tool = test_tool(json!({
+            "type": "object",
+            "required": ["path"],
+            "additionalProperties": false,
+            "properties": {"path": {"type": "string"}}
+        }));
+        let args = serde_json::from_value(json!({"path": "README.md", "extra": true}))?;
+        let error = tool.validate_args(&args).unwrap_err().to_string();
+        assert!(
+            error.contains("test_tool.extra is not an allowed argument"),
+            "{error}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tool_validator_checks_nested_objects_arrays_and_enums() -> anyhow::Result<()> {
+        let tool = test_tool(json!({
+            "type": "object",
+            "required": ["request"],
+            "additionalProperties": false,
+            "properties": {
+                "request": {
+                    "type": "object",
+                    "required": ["mode", "items"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "mode": {"type": "string", "enum": ["fast", "thorough"]},
+                        "items": {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["path"], "properties": {"path": {"type": "string"}}}}
+                    }
+                }
+            }
+        }));
+        let valid = serde_json::from_value(
+            json!({"request": {"mode": "fast", "items": [{"path": "src/lib.rs"}]}}),
+        )?;
+        tool.validate_args(&valid)?;
+
+        let invalid_enum = serde_json::from_value(
+            json!({"request": {"mode": "slow", "items": [{"path": "src/lib.rs"}]}}),
+        )?;
+        let error = tool.validate_args(&invalid_enum).unwrap_err().to_string();
+        assert!(
+            error.contains("test_tool.request.mode must be one of"),
+            "{error}"
+        );
+
+        let invalid_item =
+            serde_json::from_value(json!({"request": {"mode": "fast", "items": [{"path": 42}]}}))?;
+        let error = tool.validate_args(&invalid_item).unwrap_err().to_string();
+        assert!(
+            error.contains("test_tool.request.items[0].path must be a string"),
+            "{error}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tool_validator_checks_string_numeric_and_array_bounds() -> anyhow::Result<()> {
+        let tool = test_tool(json!({
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "minLength": 2, "maxLength": 4},
+                "count": {"type": "integer", "minimum": 1, "maximum": 3},
+                "tags": {"type": "array", "minItems": 1, "maxItems": 2, "items": {"type": "string"}}
+            }
+        }));
+        let valid = serde_json::from_value(json!({"name": "abc", "count": 2, "tags": ["x", "y"]}))?;
+        tool.validate_args(&valid)?;
+
+        let too_short = serde_json::from_value(json!({"name": "a"}))?;
+        let error = tool.validate_args(&too_short).unwrap_err().to_string();
+        assert!(
+            error.contains("test_tool.name must be at least 2 character"),
+            "{error}"
+        );
+
+        let too_large = serde_json::from_value(json!({"count": 4}))?;
+        let error = tool.validate_args(&too_large).unwrap_err().to_string();
+        assert!(error.contains("test_tool.count must be <= 3"), "{error}");
+
+        let too_many = serde_json::from_value(json!({"tags": ["x", "y", "z"]}))?;
+        let error = tool.validate_args(&too_many).unwrap_err().to_string();
+        assert!(
+            error.contains("test_tool.tags must contain at most 2 item"),
+            "{error}"
+        );
+        Ok(())
+    }
+
     struct EnvVarGuard {
         key: &'static str,
         previous: Option<OsString>,
@@ -2911,6 +4781,237 @@ mod skiller_tool_tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn command_execution_boundary_rejects_direct_sudo_before_spawn() {
+        let parts = ["sudo", "-n", "true"];
+        let rejection = reject_sudo_misuse(&parts, false).expect("sudo must be rejected");
+
+        assert!(!rejection.ok);
+        assert_eq!(rejection.error.as_deref(), Some("SudoInvocationRejected"));
+        assert!(
+            rejection
+                .content
+                .contains("Direct sudo through normal command tools")
+        );
+    }
+
+    #[test]
+    fn command_execution_boundary_rejects_nested_sudo_before_spawn() {
+        let parts = ["bash", "-lc", "printf x | sudo -S id"];
+        let rejection = reject_sudo_misuse(&parts, false).expect("nested sudo must be rejected");
+
+        assert!(!rejection.ok);
+        assert_eq!(rejection.error.as_deref(), Some("SudoInvocationRejected"));
+        assert!(
+            rejection
+                .content
+                .contains("Direct sudo through normal command tools")
+        );
+    }
+
+    #[test]
+    fn command_execution_boundary_rejects_privileged_tool_sudo_before_auth_check() {
+        let parts = ["sudo", "id"];
+        let rejection = reject_sudo_misuse(&parts, true).expect("privileged sudo must be rejected");
+
+        assert!(!rejection.ok);
+        assert_eq!(rejection.error.as_deref(), Some("SudoInvocationRejected"));
+        assert!(rejection.content.contains("Do not include sudo"));
+    }
+
+    #[test]
+    fn command_execution_boundary_allows_non_shell_text_arguments_mentioning_sudo() {
+        let parts = ["rg", "sudo", "vegvisir/src"];
+        assert!(reject_sudo_misuse(&parts, false).is_none());
+
+        let script = format!("print('contains word {} but is not shell')", "sudo");
+        let parts = ["python", "-c", script.as_str()];
+        assert!(reject_sudo_misuse(&parts, false).is_none());
+    }
+
+    #[test]
+    fn command_execution_boundary_allows_words_containing_sudo() {
+        let parts = ["bash", "-lc", "printf pseudocode"];
+        assert!(reject_sudo_misuse(&parts, false).is_none());
+    }
+
+    #[test]
+    fn skiller_tools_default_to_user_global_bundle_store() -> anyhow::Result<()> {
+        let workspace_one = TempDir::new()?;
+        let workspace_two = TempDir::new()?;
+        let data_root = TempDir::new()?;
+        std::fs::write(
+            workspace_one.path().join("global-help.txt"),
+            "globaltool - reusable utility\n\nUsage:\n  globaltool inspect <path>\n\n$ globaltool inspect ./src\n",
+        )?;
+        let cms_config = VegvisirCmsConfig {
+            db_path: data_root.path().join("cms-v2.sqlite3"),
+            user_id: "test-user".to_string(),
+            project_id: Some("test-project".to_string()),
+            context_mode: cms_v2::ecm::ContextMode::Project,
+            commit_writebacks: true,
+        };
+        let mut executor_one = ToolExecutor {
+            registry: build_builtin_registry_with_cms_and_mode(
+                workspace_one.path(),
+                cms_config.clone(),
+                false,
+            )?,
+            guardrails: GuardrailEngine {
+                policy: crate::guardrails::PermissionPolicy {
+                    allow_risky_tools: true,
+                    require_human_approval: false,
+                    ..crate::guardrails::PermissionPolicy::default()
+                },
+                approvals: crate::guardrails::ApprovalLedger::default(),
+            },
+            runtime_policy: RuntimePolicy::default(),
+            logger: EventLogger::new(None),
+        };
+
+        let compile = executor_one.execute(ToolCall {
+            name: "skiller_compile_cli_help".to_string(),
+            args: serde_json::from_value(json!({
+                "input": "global-help.txt",
+                "name": "global-help"
+            }))?,
+        });
+        assert!(compile.ok, "{}", compile.content);
+        let global_bundle = data_root.path().join("skiller/bundles/global-help");
+        assert!(global_bundle.join("package.yaml").exists());
+        assert_eq!(
+            compile.data.get("out"),
+            Some(&json!(global_bundle.display().to_string()))
+        );
+
+        let mut executor_two = ToolExecutor {
+            registry: build_builtin_registry_with_cms_and_mode(
+                workspace_two.path(),
+                cms_config,
+                false,
+            )?,
+            guardrails: GuardrailEngine {
+                policy: crate::guardrails::PermissionPolicy {
+                    allow_risky_tools: true,
+                    require_human_approval: false,
+                    ..crate::guardrails::PermissionPolicy::default()
+                },
+                approvals: crate::guardrails::ApprovalLedger::default(),
+            },
+            runtime_policy: RuntimePolicy::default(),
+            logger: EventLogger::new(None),
+        };
+        let route = executor_two.execute(ToolCall {
+            name: "skiller_route".to_string(),
+            args: serde_json::from_value(json!({
+                "bundle": "global-help",
+                "query": "inspect path"
+            }))?,
+        });
+        assert!(route.ok, "{}", route.content);
+        assert!(route.content.contains("globaltool"), "{}", route.content);
+        Ok(())
+    }
+
+    #[test]
+    fn skiller_forge_handoff_uses_current_session_model_target() -> anyhow::Result<()> {
+        let workspace = TempDir::new()?;
+        std::fs::write(
+            workspace.path().join("deployctl-help.txt"),
+            "deployctl - deployment utility\n\nUsage:\n  deployctl status --json\n",
+        )?;
+        let cms_config = VegvisirCmsConfig {
+            db_path: workspace.path().join("cms-v2.sqlite3"),
+            user_id: "test-user".to_string(),
+            project_id: Some("test-project".to_string()),
+            context_mode: cms_v2::ecm::ContextMode::Project,
+            commit_writebacks: true,
+        };
+        let registry = build_builtin_registry_with_cms_mode_subagent_limit_and_provider_defaults(
+            workspace.path(),
+            cms_config,
+            false,
+            3,
+            SubagentProviderDefaults::default(),
+            SkillerForgeModelTargetDefaults::default()
+                .with_current_session("anthropic-hbse", "claude-sonnet-4.5"),
+        )?;
+        let mut executor = ToolExecutor {
+            registry,
+            guardrails: GuardrailEngine {
+                policy: crate::guardrails::PermissionPolicy {
+                    allow_risky_tools: true,
+                    require_human_approval: false,
+                    ..crate::guardrails::PermissionPolicy::default()
+                },
+                approvals: crate::guardrails::ApprovalLedger::default(),
+            },
+            runtime_policy: RuntimePolicy::default(),
+            logger: EventLogger::new(None),
+        };
+
+        let compile = executor.execute(ToolCall {
+            name: "skiller_compile_cli_help".to_string(),
+            args: serde_json::from_value(json!({
+                "input": "deployctl-help.txt",
+                "out": "./bundle",
+                "name": "deployctl"
+            }))?,
+        });
+        assert!(compile.ok, "{}", compile.content);
+        assert_eq!(
+            compile.data.get("default_forge_model_provider"),
+            Some(&json!("anthropic-hbse"))
+        );
+        assert_eq!(
+            compile.data.get("default_forge_model"),
+            Some(&json!("claude-sonnet-4.5"))
+        );
+        assert_eq!(
+            compile.data.get("forge_model_target_source"),
+            Some(&json!("main-session-current"))
+        );
+        assert_eq!(
+            compile
+                .data
+                .get("forge_request")
+                .and_then(|request| request.get("model_provider")),
+            Some(&json!("anthropic-hbse"))
+        );
+        assert_eq!(
+            compile
+                .data
+                .get("forge_request")
+                .and_then(|request| request.get("model")),
+            Some(&json!("claude-sonnet-4.5"))
+        );
+
+        let request_obs = executor.execute(ToolCall {
+            name: "skiller_forge_request".to_string(),
+            args: serde_json::from_value(json!({
+                "bundle": "./bundle",
+                "pass": "skill_expansion"
+            }))?,
+        });
+        assert!(request_obs.ok, "{}", request_obs.content);
+        assert!(
+            request_obs
+                .content
+                .contains("Default Forge model target: anthropic-hbse:claude-sonnet-4.5 (main-session-current)"),
+            "{}",
+            request_obs.content
+        );
+        assert_eq!(
+            request_obs.data.get("model_provider"),
+            Some(&json!("anthropic-hbse"))
+        );
+        assert_eq!(
+            request_obs.data.get("model"),
+            Some(&json!("claude-sonnet-4.5"))
+        );
+        Ok(())
     }
 
     #[test]
@@ -2949,7 +5050,7 @@ mod skiller_tool_tests {
             name: "skiller_compile_cli_help".to_string(),
             args: serde_json::from_value(json!({
                 "input": "safebackup-help.txt",
-                "out": "bundle",
+                "out": "./bundle",
                 "name": "safebackup",
                 "domain": "cli-safety"
             }))?,
@@ -2972,7 +5073,35 @@ mod skiller_tool_tests {
             compile.data.get("recommended_apply_tool"),
             Some(&json!("skiller_forge_apply"))
         );
+        assert_eq!(
+            compile.data.get("forge_default_objective"),
+            Some(&json!(skiller_forge::skiller_default_forge_objective()))
+        );
+        assert!(
+            compile
+                .data
+                .get("forge_system_prompt")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("Skiller Skill Forge mode")
+        );
         assert!(compile.data.get("forge_request").is_some());
+        assert_eq!(
+            compile
+                .data
+                .get("forge_request")
+                .and_then(|request| request.get("default_objective")),
+            Some(&json!(skiller_forge::skiller_default_forge_objective()))
+        );
+        assert!(
+            compile
+                .data
+                .get("forge_request")
+                .and_then(|request| request.get("system_prompt"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("Skiller Skill Forge mode")
+        );
         assert!(compile.data.get("forge_response_template").is_some());
         assert!(
             compile
@@ -2980,20 +5109,20 @@ mod skiller_tool_tests {
                 .get("forge_prompt")
                 .and_then(Value::as_str)
                 .unwrap_or_default()
-                .contains("Vegvisir Skiller Forge Request")
+                .contains("enhancement, expansion, cleanup, validation, and verification")
         );
         assert!(workspace.path().join("bundle/package.yaml").exists());
 
         let validate = executor.execute(ToolCall {
             name: "skiller_validate".to_string(),
-            args: serde_json::from_value(json!({"bundle": "bundle"}))?,
+            args: serde_json::from_value(json!({"bundle": "./bundle"}))?,
         });
         assert!(validate.ok, "{}", validate.content);
 
         let route = executor.execute(ToolCall {
             name: "skiller_route".to_string(),
             args: serde_json::from_value(
-                json!({"bundle": "bundle", "query": "cli workflow overview", "limit": 3}),
+                json!({"bundle": "./bundle", "query": "cli workflow overview", "limit": 3}),
             )?,
         });
         assert!(route.ok, "{}", route.content);
@@ -3013,7 +5142,7 @@ mod skiller_tool_tests {
         let load = executor.execute(ToolCall {
             name: "skiller_load".to_string(),
             args: serde_json::from_value(
-                json!({"bundle": "bundle", "skill_id": skill_id, "mode": "extended"}),
+                json!({"bundle": "./bundle", "skill_id": skill_id, "mode": "extended"}),
             )?,
         });
         assert!(load.ok, "{}", load.content);
@@ -3138,6 +5267,7 @@ mod skiller_tool_tests {
             },
         });
 
+        assert!(env.contains(&("VEGVISIR_SUBAGENT_RUN".to_string(), "1".to_string())));
         assert!(env.contains(&("VEGVISIR_MAX_TOOL_ROUNDS".to_string(), "7".to_string())));
         assert!(env.contains(&(
             "VEGVISIR_SUBAGENT_MAX_READ_BYTES".to_string(),
@@ -3481,6 +5611,7 @@ echo '{"events":[]}'; exit 0
                     notes: "custom defaults for deep review".to_string(),
                 },
             },
+            SkillerForgeModelTargetDefaults::default(),
         )?;
         let mut executor = ToolExecutor {
             registry,
@@ -3575,6 +5706,7 @@ echo '{"events":[]}'; exit 0
             true,
             3,
             SubagentProviderDefaults::new("openai-sso", "gpt-5.1-codex-mini"),
+            SkillerForgeModelTargetDefaults::default(),
         )?;
         let mut executor = ToolExecutor {
             registry,
@@ -3647,6 +5779,161 @@ echo '{"events":[]}'; exit 0
     }
 
     #[test]
+    fn spawn_subagent_materializes_current_provider_model_sentinel() -> anyhow::Result<()> {
+        let _env_lock = env_var_test_lock();
+        let workspace = TempDir::new()?;
+        let fake_bin = workspace.path().join("fake-vegvisir");
+        std::fs::write(
+            &fake_bin,
+            r#"#!/bin/sh
+echo '{"events":[]}'; exit 0
+"#,
+        )?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&fake_bin)?.permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&fake_bin, permissions)?;
+        }
+        let _bin_guard = EnvVarGuard::set("VEGVISIR_BIN", &fake_bin);
+        let mut cms_config = VegvisirCmsConfig::for_workspace(workspace.path());
+        cms_config.db_path = workspace.path().join(".vegvisir/cms-v2.sqlite3");
+        let board_path = cms_config
+            .db_path
+            .parent()
+            .expect("cms db parent")
+            .join("subagents.json");
+        let registry = build_builtin_registry_with_cms_mode_subagent_limit_and_provider_defaults(
+            workspace.path(),
+            cms_config,
+            true,
+            3,
+            SubagentProviderDefaults::new("openai-sso", "gpt-5.4-mini")
+                .with_current_session("anthropic-hbse", "claude-sonnet-4.5"),
+            SkillerForgeModelTargetDefaults::default(),
+        )?;
+        let mut executor = ToolExecutor {
+            registry,
+            guardrails: GuardrailEngine {
+                policy: crate::guardrails::PermissionPolicy {
+                    allow_risky_tools: true,
+                    require_human_approval: false,
+                    bypass_approvals_and_sandbox: true,
+                    ..crate::guardrails::PermissionPolicy::default()
+                },
+                approvals: crate::guardrails::ApprovalLedger::default(),
+            },
+            runtime_policy: RuntimePolicy::default(),
+            logger: EventLogger::new(None),
+        };
+
+        let observation = executor.execute(ToolCall {
+            name: "spawn_subagent".to_string(),
+            args: serde_json::from_value(json!({
+                "goal": "inspect current sentinel",
+                "name": "current-sentinel-check",
+                "provider": "current",
+                "model": "current",
+                "file_scope": ["."]
+            }))?,
+        });
+
+        assert!(observation.ok, "{}", observation.content);
+        assert_eq!(
+            observation.data.get("provider"),
+            Some(&json!("anthropic-hbse"))
+        );
+        assert_eq!(
+            observation.data.get("model"),
+            Some(&json!("claude-sonnet-4.5"))
+        );
+        let mut records = load_subagent_board_records(&board_path)?;
+        for _ in 0..20 {
+            let finished = records.iter().any(|record| {
+                record.name == "current-sentinel-check"
+                    && !matches!(
+                        record.status,
+                        SubAgentStatus::Queued | SubAgentStatus::Running
+                    )
+            });
+            if finished {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+            records = load_subagent_board_records(&board_path)?;
+        }
+        let record = records
+            .iter()
+            .find(|record| record.name == "current-sentinel-check")
+            .expect("spawned current-sentinel-check record");
+        assert_eq!(record.provider.as_deref(), Some("anthropic-hbse"));
+        assert_eq!(record.model.as_deref(), Some("claude-sonnet-4.5"));
+        assert!(
+            !record
+                .observability
+                .launch_argv
+                .iter()
+                .any(|arg| arg == "current"),
+            "current sentinel must not leak into child argv: {:?}",
+            record.observability.launch_argv
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn spawn_subagent_rejects_current_sentinel_without_parent_context() -> anyhow::Result<()> {
+        let workspace = TempDir::new()?;
+        let registry = build_builtin_registry_with_cms_mode_subagent_limit_and_provider_defaults(
+            workspace.path(),
+            VegvisirCmsConfig::for_workspace(workspace.path()),
+            true,
+            3,
+            SubagentProviderDefaults::new("openai-sso", "gpt-5.4-mini"),
+            SkillerForgeModelTargetDefaults::default(),
+        )?;
+        let mut executor = ToolExecutor {
+            registry,
+            guardrails: GuardrailEngine {
+                policy: crate::guardrails::PermissionPolicy {
+                    allow_risky_tools: true,
+                    require_human_approval: false,
+                    bypass_approvals_and_sandbox: true,
+                    ..crate::guardrails::PermissionPolicy::default()
+                },
+                approvals: crate::guardrails::ApprovalLedger::default(),
+            },
+            runtime_policy: RuntimePolicy::default(),
+            logger: EventLogger::new(None),
+        };
+
+        let observation = executor.execute(ToolCall {
+            name: "spawn_subagent".to_string(),
+            args: serde_json::from_value(json!({
+                "goal": "inspect current sentinel without context",
+                "name": "current-sentinel-missing-context",
+                "provider": "current",
+                "model": "current",
+                "file_scope": ["."]
+            }))?,
+        });
+
+        assert!(!observation.ok);
+        assert_eq!(
+            observation.error.as_deref(),
+            Some("SubagentProviderModelError")
+        );
+        assert!(
+            observation
+                .content
+                .contains("requires the parent session provider/model context"),
+            "{}",
+            observation.content
+        );
+        Ok(())
+    }
+
+    #[test]
     fn spawn_subagent_materializes_default_provider_and_model() -> anyhow::Result<()> {
         let _env_lock = env_var_test_lock();
         let workspace = TempDir::new()?;
@@ -3687,6 +5974,7 @@ echo '{"events":[]}'; exit 0
             true,
             3,
             SubagentProviderDefaults::new(provider, model),
+            SkillerForgeModelTargetDefaults::default(),
         )?;
         let mut executor = ToolExecutor {
             registry,
@@ -3722,6 +6010,15 @@ echo '{"events":[]}'; exit 0
             .expect("spawned defaults-check record");
         assert_eq!(record.provider.as_deref(), Some(provider));
         assert_eq!(record.model.as_deref(), Some(model));
+        assert!(
+            record
+                .observability
+                .launch_env_keys
+                .iter()
+                .any(|key| key == "VEGVISIR_SUBAGENT_RUN"),
+            "subagent child launches must be marked so they cannot write provider/model back to the main session config: {:?}",
+            record.observability.launch_env_keys
+        );
         Ok(())
     }
 
@@ -3806,6 +6103,110 @@ TRAILING_GARBAGE",
     }
 
     #[test]
+    fn skiller_import_skill_tool_uses_script_generation_handoff() -> anyhow::Result<()> {
+        let workspace = TempDir::new()?;
+        std::fs::write(
+            workspace.path().join("skill.yaml"),
+            r#"skill:
+  id: imported-maintenance-check
+  title: Imported Maintenance Check
+  summary: Inspect service maintenance readiness.
+  procedure:
+    - Review the maintenance window.
+    - Gather read-only health evidence.
+  guardrails:
+    - Do not mutate production systems.
+  runtime_policy:
+    conceptual_answer: true
+    recommend_commands: true
+    run_read_only_commands: true
+    modify_files: false
+    modify_external_systems: false
+    requires_user_approval: true
+    requires_backup_or_rollback: false
+    handles_secrets: false
+    handles_licensed_source: false
+"#,
+        )?;
+        let registry = build_builtin_registry_with_cms_and_mode(
+            workspace.path(),
+            VegvisirCmsConfig::for_workspace(workspace.path()),
+            true,
+        )?;
+        let mut executor = ToolExecutor {
+            registry,
+            guardrails: GuardrailEngine {
+                policy: crate::guardrails::PermissionPolicy {
+                    allow_risky_tools: true,
+                    require_human_approval: false,
+                    ..crate::guardrails::PermissionPolicy::default()
+                },
+                approvals: crate::guardrails::ApprovalLedger::default(),
+            },
+            runtime_policy: RuntimePolicy::default(),
+            logger: EventLogger::new(None),
+        };
+
+        let import = executor.execute(ToolCall {
+            name: "skiller_import_skill".to_string(),
+            args: serde_json::from_value(json!({
+                "input": "skill.yaml",
+                "out": "./imported-bundle",
+                "name": "maintenance",
+                "domain": "operations"
+            }))?,
+        });
+        assert!(import.ok, "{}", import.content);
+        assert!(
+            import
+                .content
+                .contains("Deterministic raw-source generation was skipped")
+        );
+        assert_eq!(
+            import.data.get("import_mode"),
+            Some(&json!("pre_existing_skill"))
+        );
+        assert_eq!(import.data.get("deterministic_stage"), Some(&json!(false)));
+        assert_eq!(
+            import.data.get("deterministic_generation"),
+            Some(&json!("skipped"))
+        );
+        assert_eq!(
+            import.data.get("forge_required_by_default"),
+            Some(&json!(true))
+        );
+        assert_eq!(
+            import.data.get("default_forge_pass"),
+            Some(&json!("ScriptGeneration"))
+        );
+        assert_eq!(
+            import.data.get("recommended_apply_tool"),
+            Some(&json!("skiller_forge_apply"))
+        );
+        assert!(
+            import
+                .data
+                .get("forge_prompt")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("ScriptGeneration")
+        );
+        assert!(
+            workspace
+                .path()
+                .join("imported-bundle/package.yaml")
+                .exists()
+        );
+
+        let validate = executor.execute(ToolCall {
+            name: "skiller_validate".to_string(),
+            args: serde_json::from_value(json!({"bundle": "./imported-bundle"}))?,
+        });
+        assert!(validate.ok, "{}", validate.content);
+        Ok(())
+    }
+
+    #[test]
     fn skiller_tools_build_and_apply_vegvisir_forge_envelope() -> anyhow::Result<()> {
         let workspace = TempDir::new()?;
         std::fs::write(
@@ -3835,7 +6236,7 @@ TRAILING_GARBAGE",
             name: "skiller_compile".to_string(),
             args: serde_json::from_value(json!({
                 "input": "release.md",
-                "out": "bundle",
+                "out": "./bundle",
                 "name": "release",
                 "domain": "release-management"
             }))?,
@@ -3850,20 +6251,81 @@ TRAILING_GARBAGE",
             compile.data.get("forge_required_by_default"),
             Some(&json!(true))
         );
+        assert_eq!(
+            compile.data.get("forge_default_objective"),
+            Some(&json!(skiller_forge::skiller_default_forge_objective()))
+        );
+        assert!(
+            compile
+                .data
+                .get("forge_system_prompt")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("Skiller Skill Forge mode")
+        );
         assert!(compile.data.get("forge_request").is_some());
+        assert_eq!(
+            compile
+                .data
+                .get("forge_request")
+                .and_then(|request| request.get("default_objective")),
+            Some(&json!(skiller_forge::skiller_default_forge_objective()))
+        );
+        assert!(
+            compile
+                .data
+                .get("forge_request")
+                .and_then(|request| request.get("system_prompt"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("Skiller Skill Forge mode")
+        );
         assert!(compile.data.get("forge_response_template").is_some());
 
         let request_obs = executor.execute(ToolCall {
             name: "skiller_forge_request".to_string(),
             args: serde_json::from_value(json!({
-                "bundle": "bundle",
+                "bundle": "./bundle",
                 "pass": "skill_expansion",
                 "max_skills": 2
             }))?,
         });
         assert!(request_obs.ok, "{}", request_obs.content);
         assert!(request_obs.content.contains("ForgeResponseEnvelope"));
+        assert!(
+            request_obs
+                .content
+                .contains("Skiller-specialized Vegvisir system prompt")
+        );
         assert_eq!(request_obs.data.get("provider"), Some(&json!("vegvisir")));
+        assert_eq!(
+            request_obs.data.get("default_objective"),
+            Some(&json!(skiller_forge::skiller_default_forge_objective()))
+        );
+        assert!(
+            request_obs
+                .data
+                .get("system_prompt")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("Skiller Skill Forge mode")
+        );
+        assert_eq!(
+            request_obs
+                .data
+                .get("request")
+                .and_then(|request| request.get("default_objective")),
+            Some(&json!(skiller_forge::skiller_default_forge_objective()))
+        );
+        assert!(
+            request_obs
+                .data
+                .get("request")
+                .and_then(|request| request.get("system_prompt"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("Skiller Skill Forge mode")
+        );
         let request = request_obs
             .data
             .get("request")
@@ -3878,8 +6340,8 @@ TRAILING_GARBAGE",
         let apply = executor.execute(ToolCall {
             name: "skiller_forge_apply".to_string(),
             args: serde_json::from_value(json!({
-                "bundle": "bundle",
-                "out": "forged-bundle",
+                "bundle": "./bundle",
+                "out": "./forged-bundle",
                 "request": request,
                 "response_envelope": response_template
             }))?,
@@ -3887,6 +6349,72 @@ TRAILING_GARBAGE",
         assert!(apply.ok, "{}", apply.content);
         assert!(workspace.path().join("forged-bundle/package.yaml").exists());
         assert!(apply.data.get("apply_report").is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn skiller_suspicious_commands_tool_reports_compact_diagnostics() -> anyhow::Result<()> {
+        let workspace = TempDir::new()?;
+        std::fs::write(
+            workspace.path().join("tool-help.txt"),
+            "Usage: tool <command>\n\ntool status --json\n",
+        )?;
+        let registry = build_builtin_registry_with_cms_and_mode(
+            workspace.path(),
+            VegvisirCmsConfig::for_workspace(workspace.path()),
+            true,
+        )?;
+        let mut executor = ToolExecutor {
+            registry,
+            guardrails: GuardrailEngine {
+                policy: crate::guardrails::PermissionPolicy {
+                    allow_risky_tools: true,
+                    require_human_approval: false,
+                    ..crate::guardrails::PermissionPolicy::default()
+                },
+                approvals: crate::guardrails::ApprovalLedger::default(),
+            },
+            runtime_policy: RuntimePolicy::default(),
+            logger: EventLogger::new(None),
+        };
+
+        let compile = executor.execute(ToolCall {
+            name: "skiller_compile_cli_help".to_string(),
+            args: serde_json::from_value(json!({
+                "input": "tool-help.txt",
+                "out": "./bundle",
+                "name": "tool-cli"
+            }))?,
+        });
+        assert!(compile.ok, "{}", compile.content);
+
+        let skill_path = std::fs::read_dir(workspace.path().join("bundle/skills"))?
+            .next()
+            .expect("skill file")?
+            .path();
+        let skill_yaml = std::fs::read_to_string(&skill_path)?
+            .replace("Run `tool status --json`", "Run `try {`")
+            .replace(
+                "target_command: tool status --json",
+                "target_command: try {",
+            )
+            .replace("tool_name: tool", "tool_name: try");
+        std::fs::write(&skill_path, skill_yaml)?;
+
+        let report = executor.execute(ToolCall {
+            name: "skiller_suspicious_commands".to_string(),
+            args: serde_json::from_value(json!({"bundle": "./bundle"}))?,
+        });
+        assert!(report.ok, "{}", report.content);
+        assert_eq!(
+            report.data.get("suspicious_cli_operation_count"),
+            Some(&json!(1))
+        );
+        assert!(
+            report.content.contains("programming_syntax"),
+            "{}",
+            report.content
+        );
         Ok(())
     }
 }

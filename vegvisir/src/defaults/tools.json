@@ -1,18 +1,123 @@
 {
   "tools": [
-    {"name": "read_file", "category": "filesystem", "description": "Read a UTF-8 file from the active workspace."},
-    {"name": "write_file", "category": "filesystem", "description": "Write a UTF-8 file after policy checks.", "risky": true},
-    {"name": "list_files", "category": "filesystem", "description": "List files under a workspace path."},
-    {"name": "run_command", "category": "execution", "description": "Run an allow-listed command in the workspace.", "risky": true},
-    {"name": "run_tests", "category": "verification", "description": "Run configured project tests."},
-    {"name": "audit_log", "category": "observability", "description": "Append structured audit events."},
-    {"name": "save_session", "category": "storage", "description": "Persist active session state."},
-    {"name": "cms_recall", "category": "memory", "description": "Search CMS memories for the local session user."},
-    {"name": "cms_recent", "category": "memory", "description": "Return recent CMS memories for the local session user."},
-    {"name": "cms_search_chatgpt_archive", "category": "memory", "description": "Explicitly search the separate imported ChatGPT archive/reference corpus."},
-    {"name": "cms_remember", "category": "memory", "description": "Store non-secret CMS memory for future recall."},
-    {"name": "cms_prepare_context", "category": "context", "description": "Prepare CMS-v2 ECM context using recall and budgeting."},
-    {"name": "cms_prepare_model_request", "category": "context", "description": "Prepare a provider-cacheable CMS-v2 model request envelope."},
-    {"name": "spawn_subagent", "category": "delegation", "description": "Delegate a bounded task to a child agent."}
+    {
+      "name": "read_file",
+      "category": "filesystem",
+      "description": "Read a UTF-8 file from the active workspace."
+    },
+    {
+      "name": "write_file",
+      "category": "filesystem",
+      "description": "Write a UTF-8 file after policy checks.",
+      "risky": true
+    },
+    {
+      "name": "list_files",
+      "category": "filesystem",
+      "description": "List files under a workspace path."
+    },
+    {
+      "name": "run_command",
+      "category": "execution",
+      "description": "Run an allow-listed command in the workspace.",
+      "risky": true
+    },
+    {
+      "name": "run_privileged_command",
+      "category": "execution",
+      "description": "Run an allow-listed privileged command via sudo -n after /sudo auth; Vegvisir never reads or logs the sudo password.",
+      "risky": true
+    },
+    {
+      "name": "run_tests",
+      "category": "verification",
+      "description": "Run configured project tests."
+    },
+    {
+      "name": "audit_log",
+      "category": "observability",
+      "description": "Append structured audit events."
+    },
+    {
+      "name": "save_session",
+      "category": "storage",
+      "description": "Persist active session state."
+    },
+    {
+      "name": "cms_recall",
+      "category": "memory",
+      "description": "Search CMS memories for the local session user."
+    },
+    {
+      "name": "cms_recent",
+      "category": "memory",
+      "description": "Return recent CMS memories for the local session user."
+    },
+    {
+      "name": "cms_search_chatgpt_archive",
+      "category": "memory",
+      "description": "Explicitly search the separate imported ChatGPT archive/reference corpus."
+    },
+    {
+      "name": "cms_remember",
+      "category": "memory",
+      "description": "Store non-secret CMS memory for future recall."
+    },
+    {
+      "name": "cms_prepare_context",
+      "category": "context",
+      "description": "Prepare CMS-v2 ECM context using recall and budgeting."
+    },
+    {
+      "name": "cms_prepare_model_request",
+      "category": "context",
+      "description": "Prepare a provider-cacheable CMS-v2 model request envelope."
+    },
+    {
+      "name": "spawn_subagent",
+      "category": "delegation",
+      "description": "Delegate a bounded task to a child agent."
+    },
+    {
+      "name": "msp_client_info",
+      "category": "skills",
+      "description": "Inspect the native MSP client component and user-global registry summary unless an explicit registry override is supplied."
+    },
+    {
+      "name": "msp_client_search",
+      "category": "skills",
+      "description": "Search skills in Vegvisir's user-global MSP registry unless an explicit registry override is supplied."
+    },
+    {
+      "name": "msp_client_import_skiller",
+      "category": "skills",
+      "description": "Import a Skiller bundle into Vegvisir's user-global MSP registry unless an explicit registry override is supplied.",
+      "risky": true
+    },
+    {
+      "name": "msp_client_load",
+      "category": "skills",
+      "description": "Load MSP skill context from Vegvisir's user-global registry unless an explicit registry override is supplied."
+    },
+    {
+      "name": "msp_client_manifest",
+      "category": "skills",
+      "description": "Get an MSP skill manifest from Vegvisir's user-global registry unless an explicit registry override is supplied."
+    },
+    {
+      "name": "msp_client_verify_trust",
+      "category": "skills",
+      "description": "Verify MSP skill artifact trust hash/signature metadata from Vegvisir's user-global registry unless overridden."
+    },
+    {
+      "name": "msp_client_check_compatibility",
+      "category": "skills",
+      "description": "Check MSP skill runtime compatibility for Vegvisir using the user-global registry unless overridden."
+    },
+    {
+      "name": "skiller_suspicious_commands",
+      "category": "skills",
+      "description": "Summarize suspicious Skiller CLI operations and fallback-only Forge state without dumping full bundle YAML."
+    }
   ]
 }

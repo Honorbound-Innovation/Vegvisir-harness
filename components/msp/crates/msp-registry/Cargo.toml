@@ -1,0 +1,16 @@
+[package]
+name = "msp-registry"
+edition = "2024"
+version = "0.1.0"
+license = "MIT"
+repository = "https://github.com/Honorbound-Innovation/MSP"
+
+[dependencies]
+msp-core = { path = "../msp-core" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+walkdir = "2.5"
+
+[dev-dependencies]
+ed25519-dalek = { version = "2.2", default-features = false, features = ["alloc", "rand_core"] }
+rand = "0.8"

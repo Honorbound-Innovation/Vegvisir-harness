@@ -1,0 +1,84 @@
+{
+  "skill_id": "skill.rust.refactor.module.v1",
+  "passed": true,
+  "score": 1.0,
+  "confidence": 1.0,
+  "failed_checks": [],
+  "warnings": [],
+  "check_results": [
+    {
+      "id": "fmt_passed",
+      "type": "command_result",
+      "required": true,
+      "status": "passed",
+      "passed": true,
+      "score_earned": 0.34,
+      "score_possible": 0.34,
+      "evidence_keys": [
+        "commands"
+      ],
+      "missing_evidence": [],
+      "reasons": [],
+      "warnings": []
+    },
+    {
+      "id": "tests_passed",
+      "type": "command_result",
+      "required": true,
+      "status": "passed",
+      "passed": true,
+      "score_earned": 0.33,
+      "score_possible": 0.33,
+      "evidence_keys": [
+        "commands"
+      ],
+      "missing_evidence": [],
+      "reasons": [],
+      "warnings": []
+    },
+    {
+      "id": "changes_reported",
+      "type": "file_state",
+      "required": true,
+      "status": "passed",
+      "passed": true,
+      "score_earned": 0.33,
+      "score_possible": 0.33,
+      "evidence_keys": [
+        "files_changed"
+      ],
+      "missing_evidence": [],
+      "reasons": [],
+      "warnings": []
+    }
+  ],
+  "evidence_results": [
+    {
+      "key": "commands",
+      "type": "command_log",
+      "required": true,
+      "present": true,
+      "reasons": [],
+      "warnings": []
+    },
+    {
+      "key": "files_changed",
+      "type": "file_list",
+      "required": true,
+      "present": true,
+      "reasons": [],
+      "warnings": []
+    }
+  ],
+  "criteria": {
+    "required_checks_passed": true,
+    "minimum_score": 1.0,
+    "score_passed": true,
+    "confidence": 1.0,
+    "confidence_passed": true,
+    "allowed_warnings": 0,
+    "warning_count": 0,
+    "warnings_passed": true
+  },
+  "failures": []
+}

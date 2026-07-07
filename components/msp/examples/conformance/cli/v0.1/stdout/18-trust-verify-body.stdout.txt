@@ -1,0 +1,7 @@
+{
+  "artifact": "examples/registry/software_engineering/rust/refactor_module/skill.md",
+  "expected_hash": "sha256:1ef70dc4eda7afd2216e2c0bc51f6a6ab7ad15019db9510f15e19bdfe2d221d2",
+  "actual_hash": "sha256:1ef70dc4eda7afd2216e2c0bc51f6a6ab7ad15019db9510f15e19bdfe2d221d2",
+  "hash_passed": true,
+  "passed": true
+}

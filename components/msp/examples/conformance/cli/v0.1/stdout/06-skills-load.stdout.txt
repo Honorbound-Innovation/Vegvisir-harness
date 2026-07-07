@@ -1,0 +1,225 @@
+{
+  "manifest": {
+    "msp_version": "0.1.0",
+    "manifest_version": "0.1.0",
+    "kind": "SkillManifest",
+    "id": "skill.rust.refactor.module.v1",
+    "name": "Rust Module Refactor",
+    "version": "0.1.0",
+    "category": "software_engineering/rust/refactoring",
+    "summary": "Guides safe refactoring of Rust modules using small edits and verification loops.",
+    "description": "A reference MSP skill for behavior-preserving Rust module refactors.",
+    "keywords": [
+      "rust",
+      "refactor",
+      "module",
+      "tests",
+      "format"
+    ],
+    "formats": [
+      "markdown"
+    ],
+    "primary_format": "markdown",
+    "activation": {
+      "task_patterns": [
+        "refactor rust module",
+        "refactor a rust module",
+        "clean up rust module",
+        "split rust module"
+      ],
+      "negative_patterns": [
+        "rewrite from scratch"
+      ],
+      "required_context": [
+        "workspace"
+      ],
+      "optional_context": [
+        "test_command",
+        "module_path"
+      ],
+      "domains": [
+        "software_engineering"
+      ],
+      "languages": [
+        "rust"
+      ]
+    },
+    "requirements": {
+      "model_capabilities": [
+        "code_generation",
+        "tool_use"
+      ],
+      "runtime_capabilities": [
+        "workspace_read",
+        "workspace_write"
+      ],
+      "tools": [
+        {
+          "name": "read_file",
+          "required": true,
+          "purpose": "Inspect current Rust source."
+        },
+        {
+          "name": "write_file",
+          "required": true,
+          "purpose": "Apply source edits."
+        },
+        {
+          "name": "run_command",
+          "required": false,
+          "purpose": "Run formatter and tests."
+        }
+      ],
+      "permissions": [
+        "workspace_read",
+        "workspace_write"
+      ],
+      "min_context_window": 8192,
+      "supported_platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ]
+    },
+    "schemas": {
+      "input": "msp://schemas/rust_refactor_request.v1",
+      "output": "msp://schemas/implementation_report.v1"
+    },
+    "verification": {
+      "contract": "verify.json",
+      "required_checks": [
+        "fmt_passed",
+        "tests_passed",
+        "changes_reported"
+      ],
+      "optional_checks": [],
+      "minimum_evidence": [
+        "commands",
+        "files_changed"
+      ]
+    },
+    "trust": {
+      "hash": "sha256:1ef70dc4eda7afd2216e2c0bc51f6a6ab7ad15019db9510f15e19bdfe2d221d2",
+      "signed": false,
+      "issuer": "msp-reference.local",
+      "license": "MIT",
+      "review_status": "self_reviewed",
+      "risk_level": "medium",
+      "forbidden_behaviors": [
+        "override_host_policy",
+        "override_user_policy",
+        "grant_tool_permissions",
+        "silently_load_dependencies",
+        "alter_memory_policy",
+        "alter_identity_policy"
+      ],
+      "sandbox_profile": "workspace_edit"
+    },
+    "dependencies": [],
+    "artifacts": {
+      "body": {
+        "uri": "skill.md",
+        "media_type": "text/markdown",
+        "hash": "sha256:1ef70dc4eda7afd2216e2c0bc51f6a6ab7ad15019db9510f15e19bdfe2d221d2",
+        "size_bytes": 858
+      },
+      "verification_contract": {
+        "uri": "verify.json",
+        "media_type": "application/json",
+        "hash": "sha256:5552502f3179c4b400336bd8eeaaacd9720e856c2f1a14262a097bd243dd26c6",
+        "size_bytes": 1304
+      },
+      "examples": [],
+      "schemas": []
+    },
+    "provenance": {
+      "author": "Honorbound Innovation",
+      "generator": "Vegvisir",
+      "source_documents": [
+        "spec.md",
+        "plan.md"
+      ],
+      "generated_at": "2026-06-24T00:00:00Z",
+      "published_at": "2026-06-24T00:00:00Z"
+    },
+    "compatibility": {
+      "min_msp_version": "0.1.0",
+      "known_runtimes": [
+        "msp-reference",
+        "vegvisir"
+      ]
+    },
+    "deprecation": {
+      "deprecated": false
+    },
+    "extensions": {}
+  },
+  "body": "# Rust Module Refactor Skill\n\nPurpose: guide safe refactoring of a Rust module without changing observable behavior.\n\nProcedure:\n\n1. Inspect the current module boundaries and public API.\n2. Identify the smallest coherent refactor.\n3. Preserve behavior and existing tests unless the user explicitly requests behavior changes.\n4. Apply edits in small, reviewable steps.\n5. Run formatting and focused tests.\n6. Report files changed, commands run, and verification results.\n\nConstraints:\n\n- Do not silently change public behavior.\n- Do not remove tests to make the build pass.\n- Do not broaden permissions or bypass host policy.\n- Prefer reversible, minimal changes.\n\nVerification expectations:\n\n- Rust formatting should pass.\n- Relevant tests should pass or failures must be reported clearly.\n- The execution report must include changed files and commands run.\n",
+  "body_hash_valid": true,
+  "verification_contract": {
+    "checks": [
+      {
+        "description": "Rust formatting check passed.",
+        "evidence_keys": [
+          "commands"
+        ],
+        "expected": null,
+        "id": "fmt_passed",
+        "required": true,
+        "type": "command_result",
+        "weight": 0.34
+      },
+      {
+        "description": "Relevant tests passed.",
+        "evidence_keys": [
+          "commands"
+        ],
+        "expected": null,
+        "id": "tests_passed",
+        "required": true,
+        "type": "command_result",
+        "weight": 0.33
+      },
+      {
+        "description": "Changed files were reported.",
+        "evidence_keys": [
+          "files_changed"
+        ],
+        "expected": null,
+        "id": "changes_reported",
+        "required": true,
+        "type": "file_state",
+        "weight": 0.33
+      }
+    ],
+    "contract_version": "0.1.0",
+    "evidence_requirements": [
+      {
+        "description": "Commands used to verify the refactor.",
+        "key": "commands",
+        "required": true,
+        "type": "command_log"
+      },
+      {
+        "description": "Files changed by the refactor.",
+        "key": "files_changed",
+        "required": true,
+        "type": "file_list"
+      }
+    ],
+    "failure_taxonomy": [],
+    "id": "verify.rust.refactor.module.v1",
+    "kind": "SkillVerificationContract",
+    "msp_version": "0.1.0",
+    "notes": null,
+    "skill_id": "skill.rust.refactor.module.v1",
+    "skill_version": "0.1.0",
+    "success_criteria": {
+      "allowed_warnings": 0,
+      "minimum_confidence": null,
+      "minimum_score": 1.0,
+      "required_checks_pass": true
+    }
+  },
+  "dependency_ids": []
+}

@@ -1,0 +1,19 @@
+{
+  "skill_id": "skill.rust.refactor.module.v1",
+  "compatible": true,
+  "score": 1.0,
+  "msp_version_compatible": true,
+  "manifest_version_compatible": true,
+  "format_compatible": true,
+  "runtime_capabilities_compatible": true,
+  "model_capabilities_compatible": true,
+  "tools_compatible": true,
+  "permissions_compatible": true,
+  "context_window_compatible": true,
+  "platform_compatible": true,
+  "known_runtime": true,
+  "issues": [],
+  "warnings": [
+    "optional tool run_command is not available"
+  ]
+}

@@ -1191,23 +1191,94 @@ pub fn domain_template(name: &str) -> DomainProfile {
 }
 
 pub fn candidate_from_section(section: &DocumentSection) -> CapabilityCandidate {
-    let candidate_type = if !section.detected_api_operations.is_empty() {
-        SkillType::ApiOperation
-    } else if !section.detected_commands.is_empty() {
-        SkillType::CliOperation
-    } else if section.heading.to_lowercase().contains("diagnos") {
+    candidates_from_section(section)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| generic_candidate_from_section(section))
+}
+
+pub fn candidates_from_section(section: &DocumentSection) -> Vec<CapabilityCandidate> {
+    let mut candidates = Vec::new();
+    for operation in &section.detected_api_operations {
+        candidates.push(CapabilityCandidate {
+            candidate_id: ingest::stable_id(
+                "cand",
+                &format!("{}:api:{}", section.section_id, operation),
+            ),
+            source_section_ids: vec![section.section_id.clone()],
+            candidate_title: format!("Call `{operation}`"),
+            candidate_type: SkillType::ApiOperation,
+            detected_task: format!(
+                "Use documented API operation `{operation}` from '{}'",
+                section.heading
+            ),
+            detected_inputs: vec![
+                "User API goal".into(),
+                "Source-supported request inputs".into(),
+            ],
+            detected_outputs: vec!["Source-grounded API request plan".into()],
+            detected_procedures: section.detected_normative_language.clone(),
+            detected_warnings: section.detected_warnings.clone(),
+            candidate_confidence: 0.72,
+            evidence_strength: 0.78,
+            extraction_type: EvidenceClass::DirectExtraction,
+            related_candidates: vec![],
+        });
+    }
+    for command in &section.detected_commands {
+        candidates.push(CapabilityCandidate {
+            candidate_id: ingest::stable_id(
+                "cand",
+                &format!("{}:cli:{}", section.section_id, command),
+            ),
+            source_section_ids: vec![section.section_id.clone()],
+            candidate_title: format!("Run `{}`", compact_command_label(command, 9)),
+            candidate_type: SkillType::CliOperation,
+            detected_task: format!(
+                "Use documented CLI command `{}` from '{}'",
+                compact_command_label(command, 12),
+                section.heading
+            ),
+            detected_inputs: cli_candidate_inputs(command),
+            detected_outputs: vec![
+                "Source-grounded command recommendation or execution plan".into(),
+            ],
+            detected_procedures: section.detected_normative_language.clone(),
+            detected_warnings: section.detected_warnings.clone(),
+            candidate_confidence: 0.72,
+            evidence_strength: 0.78,
+            extraction_type: EvidenceClass::DirectExtraction,
+            related_candidates: vec![],
+        });
+    }
+    if candidates.is_empty() && !section.detected_normative_language.is_empty() {
+        candidates.push(generic_candidate_from_section(section));
+    }
+    candidates
+}
+
+fn generic_candidate_from_section(section: &DocumentSection) -> CapabilityCandidate {
+    let candidate_type = if section.heading.to_lowercase().contains("diagnos") {
         SkillType::Diagnostic
     } else {
         SkillType::Procedure
     };
+    let focus = section
+        .detected_normative_language
+        .first()
+        .map(|line| compact_command_label(line, 12))
+        .unwrap_or_else(|| section.heading.clone());
     CapabilityCandidate {
         candidate_id: ingest::stable_id("cand", &section.section_id),
         source_section_ids: vec![section.section_id.clone()],
-        candidate_title: section.heading.clone(),
+        candidate_title: focus.clone(),
         candidate_type,
-        detected_task: format!("Apply source section '{}'", section.heading),
+        detected_task: format!(
+            "Apply source-grounded procedure '{}' from '{}'",
+            focus, section.heading
+        ),
         detected_inputs: vec!["User goal".into(), "Target environment/version".into()],
-        detected_outputs: vec!["Source-grounded guidance".into()],
+        detected_outputs: vec!["Source-grounded guidance with caveats and verification".into()],
         detected_procedures: section.detected_normative_language.clone(),
         detected_warnings: section.detected_warnings.clone(),
         candidate_confidence: if section.detected_normative_language.is_empty() {
@@ -1222,5 +1293,25 @@ pub fn candidate_from_section(section: &DocumentSection) -> CapabilityCandidate 
         },
         extraction_type: EvidenceClass::DirectExtraction,
         related_candidates: vec![],
+    }
+}
+
+fn cli_candidate_inputs(command: &str) -> Vec<String> {
+    let mut inputs = vec!["User goal".into()];
+    if command.contains('<') || command.to_ascii_lowercase().contains("input") {
+        inputs.push("Required command input/path/placeholders".into());
+    }
+    if command.contains("--output") || command.contains("-o") {
+        inputs.push("Output path and cleanup/rollback expectation".into());
+    }
+    inputs
+}
+
+fn compact_command_label(text: &str, max_words: usize) -> String {
+    let words = text.split_whitespace().collect::<Vec<_>>();
+    if words.len() <= max_words {
+        text.to_string()
+    } else {
+        format!("{} …", words[..max_words].join(" "))
     }
 }

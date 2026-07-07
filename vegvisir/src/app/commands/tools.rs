@@ -396,10 +396,13 @@ Usage: /tool-limit <rounds>|unlimited",
                     crate::control_requests::ApprovalControlDecisionKind::AllowOnce,
                 );
                 match applied.approval {
-                    Some(request) if self.pending_send.is_some() => format!(
-                        "Approved once: {}. In-flight model run will resume.",
-                        request.tool_name
-                    ),
+                    Some(request) if self.pending_send.is_some() => {
+                        self.show_approval_notice(format!(
+                            "Approved once: {}. In-flight model run will resume.",
+                            request.tool_name
+                        ));
+                        String::new()
+                    }
                     Some(request) => self.execute_approved_request("Approved once", request),
                     None => format!("Unknown pending approval: {id}"),
                 }
@@ -418,10 +421,13 @@ Usage: /tool-limit <rounds>|unlimited",
                     crate::control_requests::ApprovalControlDecisionKind::AllowForSession,
                 );
                 match applied.approval {
-                    Some(request) if self.pending_send.is_some() => format!(
-                        "{}: {}. In-flight model run will resume.",
-                        applied.message, request.tool_name
-                    ),
+                    Some(request) if self.pending_send.is_some() => {
+                        self.show_approval_notice(format!(
+                            "{}: {}. In-flight model run will resume.",
+                            applied.message, request.tool_name
+                        ));
+                        String::new()
+                    }
                     Some(request) => self.execute_approved_request(&applied.message, request),
                     None => format!("Unknown pending approval: {id}"),
                 }
@@ -463,7 +469,8 @@ Usage: /tool-limit <rounds>|unlimited",
                     crate::control_requests::ApprovalControlDecisionKind::Deny,
                 );
                 if applied.applied {
-                    format!("Denied approval {id}.")
+                    self.show_approval_notice(format!("Denied approval {id}."));
+                    String::new()
                 } else {
                     format!("Unknown pending approval: {id}")
                 }
@@ -488,8 +495,9 @@ Usage: /tool-limit <rounds>|unlimited",
         } else {
             observation.content
         };
+        self.show_approval_notice(format!("{approval_message}: {tool_name}"));
         format!(
-            "{approval_message}: {tool_name}\nTool execution {status}.\n{body}\n\nIf this was part of a model task, send `continue` so the agent can inspect the result and proceed."
+            "Tool execution {status}.\n{body}\n\nIf this was part of a model task, send `continue` so the agent can inspect the result and proceed."
         )
     }
 }

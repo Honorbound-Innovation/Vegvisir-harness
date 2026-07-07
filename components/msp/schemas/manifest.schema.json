@@ -1,0 +1,515 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "msp://schemas/manifest.schema.json",
+  "title": "MSP Skill Manifest",
+  "description": "Canonical metadata for one portable, verifiable MSP skill.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "msp_version",
+    "manifest_version",
+    "kind",
+    "id",
+    "name",
+    "version",
+    "category",
+    "summary",
+    "formats",
+    "primary_format",
+    "activation",
+    "requirements",
+    "schemas",
+    "verification",
+    "trust",
+    "artifacts"
+  ],
+  "properties": {
+    "msp_version": {
+      "$ref": "#/$defs/semver"
+    },
+    "manifest_version": {
+      "$ref": "#/$defs/semver"
+    },
+    "kind": {
+      "const": "SkillManifest"
+    },
+    "id": {
+      "$ref": "#/$defs/skill_id"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "version": {
+      "$ref": "#/$defs/semver"
+    },
+    "category": {
+      "$ref": "#/$defs/category"
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 10000
+    },
+    "keywords": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/token"
+      },
+      "uniqueItems": true,
+      "default": []
+    },
+    "formats": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/skill_format"
+      }
+    },
+    "primary_format": {
+      "$ref": "#/$defs/skill_format"
+    },
+    "activation": {
+      "$ref": "#/$defs/activation"
+    },
+    "requirements": {
+      "$ref": "#/$defs/requirements"
+    },
+    "schemas": {
+      "$ref": "#/$defs/schema_refs"
+    },
+    "verification": {
+      "$ref": "#/$defs/verification_summary"
+    },
+    "trust": {
+      "$ref": "#/$defs/trust_metadata"
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "$ref": "dependency.schema.json"
+      },
+      "default": []
+    },
+    "artifacts": {
+      "$ref": "#/$defs/artifacts"
+    },
+    "provenance": {
+      "$ref": "#/$defs/provenance"
+    },
+    "compatibility": {
+      "$ref": "#/$defs/compatibility"
+    },
+    "deprecation": {
+      "$ref": "#/$defs/deprecation"
+    },
+    "extensions": {
+      "type": "object",
+      "description": "Namespaced extension data. Extension keys should be reverse-DNS or msp extension identifiers.",
+      "additionalProperties": true,
+      "propertyNames": {
+        "pattern": "^([a-z0-9][a-z0-9_-]*\\.)+[a-z0-9][a-z0-9_-]*$|^msp:[a-z0-9][a-z0-9_.-]*$"
+      },
+      "default": {}
+    }
+  },
+  "allOf": [
+    {
+      "description": "The declared primary format should also appear in formats. JSON Schema cannot express this portably without implementation-specific extensions, so conforming validators must enforce it as a semantic rule."
+    }
+  ],
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+    },
+    "token": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"
+    },
+    "skill_id": {
+      "type": "string",
+      "pattern": "^skill(\\.[a-z0-9][a-z0-9_-]*)+\\.v[0-9]+$"
+    },
+    "category": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]*(/[a-z0-9][a-z0-9_-]*)*$"
+    },
+    "uri": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^(sha256|sha384|sha512):[A-Fa-f0-9]+$"
+    },
+    "skill_format": {
+      "type": "string",
+      "enum": [
+        "lsl",
+        "markdown",
+        "json",
+        "yaml",
+        "text/msp-lsl",
+        "text/markdown",
+        "application/msp+json",
+        "application/json",
+        "application/yaml"
+      ]
+    },
+    "risk_level": {
+      "type": "string",
+      "enum": ["low", "medium", "high", "critical"]
+    },
+    "activation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task_patterns"],
+      "properties": {
+        "task_patterns": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        },
+        "negative_patterns": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "default": []
+        },
+        "required_context": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/token"
+          },
+          "uniqueItems": true,
+          "default": []
+        },
+        "optional_context": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/token"
+          },
+          "uniqueItems": true,
+          "default": []
+        },
+        "domains": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/token"
+          },
+          "uniqueItems": true,
+          "default": []
+        },
+        "languages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/token"
+          },
+          "uniqueItems": true,
+          "default": []
+        }
+      }
+    },
+    "requirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model_capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/token"
+          },
+          "uniqueItems": true,
+          "default": []
+        },
+        "runtime_capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/token"
+          },
+          "uniqueItems": true,
+          "default": []
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/tool_requirement"
+          },
+          "default": []
+        },
+        "permissions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/token"
+          },
+          "uniqueItems": true,
+          "default": []
+        },
+        "min_context_window": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "supported_platforms": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/token"
+          },
+          "uniqueItems": true,
+          "default": []
+        }
+      }
+    },
+    "tool_requirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "required"],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/token"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "purpose": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "minimum_version": {
+          "$ref": "#/$defs/semver"
+        }
+      }
+    },
+    "schema_refs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input", "output"],
+      "properties": {
+        "input": {
+          "$ref": "#/$defs/uri"
+        },
+        "output": {
+          "$ref": "#/$defs/uri"
+        },
+        "context": {
+          "$ref": "#/$defs/uri"
+        }
+      }
+    },
+    "verification_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required_checks"],
+      "properties": {
+        "contract": {
+          "$ref": "#/$defs/uri"
+        },
+        "required_checks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/token"
+          },
+          "uniqueItems": true
+        },
+        "optional_checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/token"
+          },
+          "uniqueItems": true,
+          "default": []
+        },
+        "minimum_evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/token"
+          },
+          "uniqueItems": true,
+          "default": []
+        }
+      }
+    },
+    "trust_metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hash", "signed", "issuer", "risk_level"],
+      "properties": {
+        "hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "signed": {
+          "type": "boolean"
+        },
+        "signature": {
+          "type": "string",
+          "description": "Detached artifact signature encoded as ed25519:<base64-public-key>:<base64-signature>.",
+          "pattern": "^ed25519:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+$",
+          "maxLength": 512
+        },
+        "issuer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "license": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "review_status": {
+          "type": "string",
+          "enum": ["unreviewed", "self_reviewed", "peer_reviewed", "security_reviewed", "deprecated", "revoked"],
+          "default": "unreviewed"
+        },
+        "risk_level": {
+          "$ref": "#/$defs/risk_level"
+        },
+        "forbidden_behaviors": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "default": []
+        },
+        "sandbox_profile": {
+          "$ref": "#/$defs/token"
+        }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["body"],
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/artifact"
+        },
+        "verification_contract": {
+          "$ref": "#/$defs/artifact"
+        },
+        "examples": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/artifact"
+          },
+          "default": []
+        },
+        "schemas": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/artifact"
+          },
+          "default": []
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uri", "media_type", "hash"],
+      "properties": {
+        "uri": {
+          "$ref": "#/$defs/uri"
+        },
+        "media_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "author": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "generator": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "source_documents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/uri"
+          },
+          "default": []
+        },
+        "generated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "published_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "min_msp_version": {
+          "$ref": "#/$defs/semver"
+        },
+        "max_msp_version": {
+          "$ref": "#/$defs/semver"
+        },
+        "known_runtimes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/token"
+          },
+          "uniqueItems": true,
+          "default": []
+        }
+      }
+    },
+    "deprecation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deprecated"],
+      "properties": {
+        "deprecated": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "replacement": {
+          "$ref": "#/$defs/skill_id"
+        },
+        "sunset_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}

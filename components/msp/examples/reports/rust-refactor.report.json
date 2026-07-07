@@ -1,0 +1,45 @@
+{
+  "msp_version": "0.1.0",
+  "kind": "SkillExecutionReport",
+  "id": "exec.rust.refactor.module.example",
+  "skill_id": "skill.rust.refactor.module.v1",
+  "skill_version": "0.1.0",
+  "verification_contract_id": "verify.rust.refactor.module.v1",
+  "runtime": {
+    "name": "msp-reference-test",
+    "version": "0.1.0",
+    "model": "test",
+    "capabilities": ["workspace_read", "workspace_write"]
+  },
+  "started_at": "2026-06-24T00:00:00Z",
+  "completed_at": "2026-06-24T00:01:00Z",
+  "status": "completed",
+  "files_changed": [
+    {
+      "path": "src/lib.rs",
+      "change_type": "modified"
+    }
+  ],
+  "commands_run": [
+    {
+      "command": ["cargo", "fmt", "--check"],
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "command": ["cargo", "test"],
+      "exit_code": 0,
+      "status": "passed"
+    }
+  ],
+  "evidence": {
+    "commands": ["cargo fmt --check", "cargo test"],
+    "files_changed": ["src/lib.rs"]
+  },
+  "results": {
+    "fmt_passed": "passed",
+    "tests_passed": "passed",
+    "changes_reported": "passed"
+  },
+  "notes": "Reference passing report fixture."
+}

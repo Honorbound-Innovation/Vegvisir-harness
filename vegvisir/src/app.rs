@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    fmt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
@@ -40,7 +41,7 @@ use crate::{
     observability::EventLogger,
     parallelism::ParallelismConfig,
     persona::{KA_PROMPT_HEADING, get_persona_with_root, render_persona_prompt_section},
-    policy::RuntimePolicy,
+    policy::{RuntimePolicy, RuntimeToolMetadata},
     profile::{UserProfile, UserProfileStore},
     provider::{
         ConversationRunner, ProviderRouter, ProviderRunEvent, configured_max_tool_rounds_label,
@@ -51,8 +52,9 @@ use crate::{
     subagents::{SubAgentStatus, SubAgentTaskRecord},
     tasks::{TaskKind, TaskManager, TaskRunRequest, TaskRunner, TaskRunnerEvent, TaskSpawnRequest},
     tools::{
-        DEFAULT_ACTIVE_SUBAGENT_LIMIT, SubagentProviderDefaults, SubagentSpawnDefaults,
-        ToolExecutor, ToolRegistry, build_builtin_registry_with_cms_mode_subagent_config,
+        DEFAULT_ACTIVE_SUBAGENT_LIMIT, SkillerForgeModelTargetDefaults, SubagentProviderDefaults,
+        SubagentSpawnDefaults, ToolExecutor, ToolRegistry,
+        build_builtin_registry_with_cms_mode_subagent_config,
     },
     types::ToolCall,
     ui::{
@@ -110,6 +112,7 @@ pub struct TuiApplication {
     pub active_subagent_limit: usize,
     pub subagent_provider_defaults: SubagentProviderDefaults,
     pub subagent_spawn_defaults: SubagentSpawnDefaults,
+    pub skiller_forge_model_target_defaults: SkillerForgeModelTargetDefaults,
     pub isolated_session: bool,
     pub mcp_servers: Vec<crate::core::McpServerConfig>,
     pub hbse_services: Vec<HbseServiceRef>,
@@ -135,7 +138,9 @@ pub struct TuiApplication {
     pub info_scroll_offset: usize,
     pub sessions_overlay: Option<SessionsOverlay>,
     pub profile_overlay: Option<ProfileOverlay>,
+    pub sudo_password_prompt: Option<SudoPasswordPrompt>,
     pub approval_selected_index: usize,
+    pub ephemeral_notice: Option<EphemeralNotice>,
     pub search_open: bool,
     pub search_query: String,
     pub search_match_index: usize,
@@ -162,6 +167,33 @@ pub struct HeadlessObservedRun {
     pub prompt_envelope: CachedPromptEnvelope,
     pub memory_write_results: Vec<CommitResult>,
     pub memory_write_error: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct EphemeralNotice {
+    pub text: String,
+    pub kind: EphemeralNoticeKind,
+    pub expires_at: Instant,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EphemeralNoticeKind {
+    Approval,
+    Info,
+}
+
+impl EphemeralNotice {
+    pub fn new(text: impl Into<String>, kind: EphemeralNoticeKind, ttl: Duration) -> Self {
+        Self {
+            text: text.into(),
+            kind,
+            expires_at: Instant::now() + ttl,
+        }
+    }
+
+    pub fn is_expired(&self) -> bool {
+        Instant::now() >= self.expires_at
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -205,6 +237,12 @@ enum StreamEvent {
     ToolStart {
         name: String,
         args: String,
+    },
+    ToolOutput {
+        name: String,
+        stream: String,
+        chunk: String,
+        truncated: bool,
     },
     ToolEnd {
         name: String,
@@ -304,6 +342,66 @@ pub struct SessionsOverlayEntry {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub message_count: usize,
     pub current: bool,
+}
+
+/// Local-only sudo authentication prompt state.
+///
+/// The buffer intentionally stores chars outside normal `InputState`, command history,
+/// session messages, provider context, tool args, run artifacts, and traces. Rendering
+/// must use `masked_value` only. `Debug` is redacted to avoid accidental test/log leaks.
+pub struct SudoPasswordPrompt {
+    pub buffer: Vec<char>,
+    pub status: String,
+    pub attempts: usize,
+}
+
+impl SudoPasswordPrompt {
+    pub fn new() -> Self {
+        Self {
+            buffer: Vec::new(),
+            status: "Enter sudo password. Esc cancels. Enter authenticates. Password is never sent to chat/model/tools/logs.".to_string(),
+            attempts: 0,
+        }
+    }
+
+    pub fn push(&mut self, ch: char) {
+        self.buffer.push(ch);
+    }
+
+    pub fn pop(&mut self) {
+        let _ = self.buffer.pop();
+    }
+
+    pub fn clear_secret(&mut self) {
+        for ch in &mut self.buffer {
+            *ch = '\0';
+        }
+        self.buffer.clear();
+    }
+
+    pub fn masked_value(&self) -> String {
+        "•".repeat(self.buffer.len())
+    }
+
+    pub fn len(&self) -> usize {
+        self.buffer.len()
+    }
+}
+
+impl fmt::Debug for SudoPasswordPrompt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SudoPasswordPrompt")
+            .field("buffer", &"<redacted>")
+            .field("status", &self.status)
+            .field("attempts", &self.attempts)
+            .finish()
+    }
+}
+
+impl Drop for SudoPasswordPrompt {
+    fn drop(&mut self) {
+        self.clear_secret();
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -578,6 +676,8 @@ fn command_response_is_chat_suppressed(command: &str) -> bool {
             | "/agents"
             | "/model"
             | "/provider"
+            | "/sprovider"
+            | "/smodel"
             | "/providers"
             | "/permissions"
     )
@@ -600,6 +700,8 @@ fn should_show_info_overlay(command: &str, response: &str) -> bool {
             | "/effort"
             | "/fast"
             | "/provider"
+            | "/sprovider"
+            | "/smodel"
             | "/providers"
             | "/projects"
             | "/approvals"
@@ -826,6 +928,8 @@ impl TuiApplication {
         };
         let subagent_provider_defaults =
             SubagentProviderDefaults::new(subagent_provider, subagent_model);
+        let skiller_forge_model_target_defaults =
+            configured_skiller_forge_model_target_defaults(&defaults);
         let tool_registry = build_builtin_registry_with_cms_mode_subagent_config(
             &cwd,
             cms_config,
@@ -833,6 +937,7 @@ impl TuiApplication {
             active_subagent_limit,
             subagent_provider_defaults.clone(),
             subagent_spawn_defaults.clone(),
+            skiller_forge_model_target_defaults.clone(),
         )?;
         let profile_store = UserProfileStore::new(&data_root);
         let user_profile = profile_store.load()?;
@@ -955,6 +1060,7 @@ impl TuiApplication {
             active_subagent_limit,
             subagent_provider_defaults,
             subagent_spawn_defaults,
+            skiller_forge_model_target_defaults,
             isolated_session,
             mcp_servers,
             hbse_services,
@@ -988,7 +1094,9 @@ impl TuiApplication {
             info_scroll_offset: 0,
             sessions_overlay: None,
             profile_overlay: None,
+            sudo_password_prompt: None,
             approval_selected_index: 0,
+            ephemeral_notice: None,
             search_open: false,
             search_query: String::new(),
             search_match_index: 0,
@@ -1271,8 +1379,19 @@ impl TuiApplication {
             self.cms.config.clone(),
             bypass,
             self.active_subagent_limit,
-            self.subagent_provider_defaults.clone(),
+            self.subagent_provider_defaults
+                .clone()
+                .with_current_session(
+                    self.session.current_provider.clone(),
+                    self.session.current_model.clone(),
+                ),
             self.subagent_spawn_defaults.clone(),
+            self.skiller_forge_model_target_defaults
+                .clone()
+                .with_current_session(
+                    self.session.current_provider.clone(),
+                    self.session.current_model.clone(),
+                ),
         )?;
         let mcp_servers = self.active_mcp_servers();
         register_mcp_tools(
@@ -1466,6 +1585,19 @@ impl TuiApplication {
             .unwrap_or_else(|error| error.to_string())
     }
 
+    pub(crate) fn save_skiller_forge_model_target_defaults(&self) -> anyhow::Result<()> {
+        let mut data = self.config.load().unwrap_or_default();
+        data.insert(
+            "skiller_forge_model_provider".to_string(),
+            json!(self.skiller_forge_model_target_defaults.provider),
+        );
+        data.insert(
+            "skiller_forge_model".to_string(),
+            json!(self.skiller_forge_model_target_defaults.model),
+        );
+        self.config.save(&data)
+    }
+
     fn save_global_model_defaults(&self) -> anyhow::Result<()> {
         self.save_config_defaults()
     }
@@ -1491,6 +1623,14 @@ impl TuiApplication {
             data.remove("current_reasoning_level");
         }
         data.insert("fast_mode".to_string(), json!(self.session.fast_mode));
+        data.insert(
+            "skiller_forge_model_provider".to_string(),
+            json!(self.skiller_forge_model_target_defaults.provider),
+        );
+        data.insert(
+            "skiller_forge_model".to_string(),
+            json!(self.skiller_forge_model_target_defaults.model),
+        );
         data.insert(
             "system_prompt".to_string(),
             json!(strip_persona_from_system_prompt(
@@ -1560,6 +1700,26 @@ pub(crate) fn strip_persona_from_system_prompt(prompt: &str) -> String {
         }
     }
     prompt.to_string()
+}
+
+fn configured_skiller_forge_model_target_defaults(
+    defaults: &BTreeMap<String, Value>,
+) -> SkillerForgeModelTargetDefaults {
+    let provider = defaults
+        .get("skiller_forge_model_provider")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            defaults
+                .get("skiller_model_provider")
+                .and_then(Value::as_str)
+        })
+        .unwrap_or("current");
+    let model = defaults
+        .get("skiller_forge_model")
+        .and_then(Value::as_str)
+        .or_else(|| defaults.get("skiller_model").and_then(Value::as_str))
+        .unwrap_or("current");
+    SkillerForgeModelTargetDefaults::new(provider, model)
 }
 
 fn default_subagent_config_value() -> serde_json::Value {
@@ -1721,13 +1881,52 @@ fn configured_subagent_spawn_defaults(
 
 #[cfg(test)]
 mod tests {
-    use super::{StreamEvent, TuiApplication};
+    use super::{StreamEvent, SudoPasswordPrompt, TuiApplication};
     use crate::core::{ChatMessage, SessionState};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+    use serde_json::Value;
     use std::{
         sync::{Arc, atomic::AtomicBool, mpsc},
         time::Instant,
     };
+
+    #[test]
+    fn sudo_password_prompt_masks_and_redacts_secret() {
+        let mut prompt = SudoPasswordPrompt::new();
+        for ch in "super-secret".chars() {
+            prompt.push(ch);
+        }
+
+        assert_eq!(
+            prompt.masked_value(),
+            "•".repeat("super-secret".chars().count())
+        );
+        assert!(!prompt.masked_value().contains("super-secret"));
+        assert!(!format!("{prompt:?}").contains("super-secret"));
+
+        prompt.clear_secret();
+        assert_eq!(prompt.len(), 0);
+    }
+
+    #[test]
+    fn sudo_auth_opens_secure_prompt_without_command_history() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        let command = format!("/{} auth", "sudo");
+        let response = app.execute_command(&command)?.unwrap_or_default();
+
+        assert!(response.is_empty());
+        assert!(app.sudo_password_prompt.is_some());
+        assert!(app.clear_requested);
+        assert!(app.redraw_requested);
+        assert_eq!(app.session.status, "sudo auth prompt open");
+        assert!(app.session.activity.contains("Secure sudo prompt"));
+        assert!(app.ephemeral_notice.is_some());
+        assert!(app.input.buffer.is_empty());
+        assert!(app.session.input_history.is_empty());
+        assert!(app.session.messages.is_empty());
+        Ok(())
+    }
 
     #[test]
     fn typed_approval_control_response_applies_once_through_ledger() -> anyhow::Result<()> {
@@ -3802,6 +4001,68 @@ mod tests {
         assert_eq!(overlay.title, "model");
         assert!(overlay.body.contains("Current model:"));
         assert_eq!(app.session.messages.len(), message_count_before);
+        Ok(())
+    }
+
+    #[test]
+    fn skiller_provider_model_commands_override_without_mutating_main_provider()
+    -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace)?;
+        let data_root = tmp.path().join("home");
+        let mut app = TuiApplication::with_data_root(&workspace, &data_root)?;
+        app.session.current_provider = "demo".to_string();
+        app.session.current_model = "demo-local".to_string();
+        app.save_global_model_defaults()?;
+        app.rebuild_tooling_for_cms()?;
+
+        let status = app.execute_command("/sprovider status")?.unwrap();
+        assert!(status.contains("configured provider: current"));
+        assert!(status.contains("resolved: demo:demo-local"));
+
+        let provider = app.execute_command("/sprovider openai-sso")?.unwrap();
+        assert!(provider.contains("Skiller Forge provider override set to openai-sso"));
+        assert_eq!(app.session.current_provider, "demo");
+        assert_eq!(app.session.current_model, "demo-local");
+        assert_eq!(
+            app.skiller_forge_model_target_defaults.provider,
+            "openai-sso"
+        );
+
+        let model = app.execute_command("/smodel gpt-5.4-mini")?.unwrap();
+        assert!(model.contains("Skiller Forge model override set to gpt-5.4-mini"));
+        assert_eq!(app.session.current_provider, "demo");
+        assert_eq!(app.session.current_model, "demo-local");
+        assert_eq!(
+            app.skiller_forge_model_target_defaults.model,
+            "gpt-5.4-mini"
+        );
+
+        let config = app.config.load()?;
+        assert_eq!(
+            config.get("current_provider").and_then(Value::as_str),
+            Some("demo")
+        );
+        assert_eq!(
+            config.get("current_model").and_then(Value::as_str),
+            Some("demo-local")
+        );
+        assert_eq!(
+            config
+                .get("skiller_forge_model_provider")
+                .and_then(Value::as_str),
+            Some("openai-sso")
+        );
+        assert_eq!(
+            config.get("skiller_forge_model").and_then(Value::as_str),
+            Some("gpt-5.4-mini")
+        );
+
+        let reset = app.execute_command("/smodel clear")?.unwrap();
+        assert!(reset.contains("configured provider: current"));
+        assert!(reset.contains("configured model: current"));
+        assert!(reset.contains("resolved: demo:demo-local"));
         Ok(())
     }
 

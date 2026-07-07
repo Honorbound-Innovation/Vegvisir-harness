@@ -1,0 +1,7 @@
+[
+  "--registry",
+  "examples/registry",
+  "skills",
+  "manifest",
+  "skill.rust.refactor.module.v1"
+]

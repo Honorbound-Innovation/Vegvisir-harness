@@ -1,0 +1,70 @@
+id: refactor-module
+title: Refactor Rust Module
+summary: Refactor a Rust module safely with incremental checks.
+skill_type: Procedure
+scope: TaskLevel
+status: Reviewed
+maturity: Level3Verified
+domain: software_engineering/rust
+source_section_ids:
+  - sec-1
+procedure:
+  - Inspect current module boundaries and public API.
+  - Make one behavior-preserving change at a time.
+  - Run focused checks after each meaningful edit.
+inputs:
+  - module path
+  - refactor goal
+outputs:
+  - changed files
+  - verification notes
+guardrails:
+  - Preserve public API unless explicitly requested.
+  - Keep changes small and reversible.
+anti_patterns:
+  - rewrite from scratch
+  - skip tests after structural edits
+evals:
+  - id: routing_eval
+    prompt: User asks to refactor a Rust module.
+    expected_behavior: Select this skill and ask for module path if missing.
+    eval_type: Routing
+    safety_notes: []
+citations:
+  - citation_id: cite-1
+    source_id: src-1
+    section_id: sec-1
+    excerpt: Refactor in small steps and verify each step.
+tool_requirements:
+  - name: read_file
+    requirement_type: Required
+    permission_level: ReadOnly
+    dry_run_available: true
+    rollback_required: false
+  - name: write_file
+    requirement_type: Required
+    permission_level: FileMutation
+    dry_run_available: false
+    rollback_required: true
+runtime_policy:
+  conceptual_answer: true
+  recommend_commands: true
+  run_read_only_commands: true
+  modify_files: true
+  modify_external_systems: false
+  requires_user_approval: true
+  requires_backup_or_rollback: true
+  handles_secrets: false
+  handles_licensed_source: false
+role_suitability:
+  - role: rust_engineer
+    suitability: 0.9
+    rationale: Good fit for Rust refactors.
+metadata: {}
+version_applicability:
+  supported_versions: []
+  unsupported_versions: []
+  version_source_refs: []
+  version_confidence: 0.0
+  migration_notes: []
+  deprecated_flags: []

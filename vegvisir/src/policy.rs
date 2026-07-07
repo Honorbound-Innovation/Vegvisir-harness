@@ -25,6 +25,15 @@ pub struct RuntimeGateRequest {
     pub operation: String,
     pub target: String,
     pub args_summary: Value,
+    #[serde(default)]
+    pub tool_metadata: Option<RuntimeToolMetadata>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct RuntimeToolMetadata {
+    pub risky: bool,
+    #[serde(default)]
+    pub safety_labels: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -49,15 +58,17 @@ impl RuntimePolicy {
                     "operation": request.operation,
                     "target": request.target,
                     "args_summary": request.args_summary,
+                    "tool_metadata": request.tool_metadata,
                     "strict_usrl": self.strict_usrl,
                     "allowed_tools": self.allowed_tools,
                 }),
             };
         }
-        let risky = matches!(
-            request.operation.as_str(),
-            "write_file" | "run_command" | "mcp_tool_call" | "spawn_subagent" | "cms_writeback"
-        );
+        let risky = request
+            .tool_metadata
+            .as_ref()
+            .map(|metadata| metadata.risky)
+            .unwrap_or_else(|| legacy_risky_operation(&request.operation));
         if self.strict_usrl && risky && contract_id.is_none() {
             return RuntimeGateDecision {
                 allowed: false,
@@ -124,6 +135,7 @@ impl RuntimePolicy {
             "operation": request.operation,
             "target": request.target,
             "args_summary": request.args_summary,
+            "tool_metadata": request.tool_metadata,
             "strict_usrl": self.strict_usrl,
             "usrl_contracts": self.usrl_contracts,
             "extra": extra,
@@ -181,7 +193,11 @@ impl RuntimePolicy {
                 "USRL contract denied operation: evidence or justification is required".to_string(),
             );
         }
-        if request.operation == "run_command" && has(&["no_command", "no_shell", "no_exec"]) {
+        if matches!(
+            request.operation.as_str(),
+            "run_command" | "run_privileged_command"
+        ) && has(&["no_command", "no_shell", "no_exec"])
+        {
             return Some(
                 "USRL contract denied operation: command execution is forbidden".to_string(),
             );
@@ -203,10 +219,29 @@ impl RuntimePolicy {
         args: &Map<String, Value>,
         logger: &EventLogger,
     ) -> Result<RuntimeGateDecision, String> {
+        self.authorize_tool_with_metadata(
+            tool_name,
+            args,
+            RuntimeToolMetadata {
+                risky: legacy_risky_operation(tool_name),
+                safety_labels: Vec::new(),
+            },
+            logger,
+        )
+    }
+
+    pub fn authorize_tool_with_metadata(
+        &self,
+        tool_name: &str,
+        args: &Map<String, Value>,
+        metadata: RuntimeToolMetadata,
+        logger: &EventLogger,
+    ) -> Result<RuntimeGateDecision, String> {
         let decision = self.gate(RuntimeGateRequest {
             operation: tool_name.to_string(),
             target: tool_name.to_string(),
             args_summary: summarize_args(args),
+            tool_metadata: Some(metadata),
         });
         logger.emit("runtime_gate", json!(decision));
         if decision.allowed {
@@ -215,6 +250,18 @@ impl RuntimePolicy {
             Err(decision.reason.clone())
         }
     }
+}
+
+fn legacy_risky_operation(operation: &str) -> bool {
+    matches!(
+        operation,
+        "write_file"
+            | "run_command"
+            | "run_privileged_command"
+            | "mcp_tool_call"
+            | "spawn_subagent"
+            | "cms_writeback"
+    )
 }
 
 fn string_field<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
@@ -272,4 +319,86 @@ fn summarize_args(args: &Map<String, Value>) -> Value {
         summary.insert(key.clone(), summarized);
     }
     Value::Object(summary)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::observability::EventLogger;
+
+    #[test]
+    fn strict_usrl_uses_tool_metadata_for_unknown_risky_tool_names() {
+        let policy = RuntimePolicy {
+            strict_usrl: true,
+            ..RuntimePolicy::default()
+        };
+        let args = Map::new();
+        let logger = EventLogger::new(None);
+
+        let err = policy
+            .authorize_tool_with_metadata(
+                "plugin_publish_release",
+                &args,
+                RuntimeToolMetadata {
+                    risky: true,
+                    safety_labels: vec!["external_publish".to_string()],
+                },
+                &logger,
+            )
+            .unwrap_err();
+
+        assert_eq!(err, "risky operation requires an active USRL contract");
+        let events = logger.events();
+        let gate = events
+            .iter()
+            .find(|event| event.name == "runtime_gate")
+            .expect("runtime gate event");
+        assert_eq!(gate.payload["allowed"], json!(false));
+        assert_eq!(
+            gate.payload["audit_metadata"]["tool_metadata"]["risky"],
+            json!(true)
+        );
+    }
+
+    #[test]
+    fn strict_usrl_allows_unknown_safe_tool_without_contract() {
+        let policy = RuntimePolicy {
+            strict_usrl: true,
+            ..RuntimePolicy::default()
+        };
+        let args = Map::new();
+        let logger = EventLogger::new(None);
+
+        let decision = policy
+            .authorize_tool_with_metadata(
+                "plugin_read_status",
+                &args,
+                RuntimeToolMetadata {
+                    risky: false,
+                    safety_labels: vec!["read_only".to_string()],
+                },
+                &logger,
+            )
+            .expect("safe plugin tool should pass strict USRL without a contract");
+
+        assert!(decision.allowed);
+        assert_eq!(
+            decision.audit_metadata["tool_metadata"]["risky"],
+            json!(false)
+        );
+    }
+
+    #[test]
+    fn legacy_authorize_tool_wrapper_preserves_existing_risky_names() {
+        let policy = RuntimePolicy {
+            strict_usrl: true,
+            ..RuntimePolicy::default()
+        };
+        let logger = EventLogger::new(None);
+        let err = policy
+            .authorize_tool("run_command", &Map::new(), &logger)
+            .unwrap_err();
+
+        assert_eq!(err, "risky operation requires an active USRL contract");
+    }
 }

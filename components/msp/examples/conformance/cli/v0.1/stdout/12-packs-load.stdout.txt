@@ -1,0 +1,42 @@
+{
+  "msp_version": "0.1.0",
+  "manifest_version": "0.1.0",
+  "kind": "SkillPackManifest",
+  "id": "pack.rust.engineering.v1",
+  "name": "Rust Engineering Pack",
+  "version": "0.1.0",
+  "category": "software_engineering/rust",
+  "summary": "Reference Rust engineering MSP skill pack.",
+  "description": "Initial local pack containing Rust refactoring procedures.",
+  "skills": [
+    {
+      "id": "skill.rust.refactor.module.v1",
+      "version": "0.1.0",
+      "manifest_uri": "software_engineering/rust/refactor_module/skill.manifest.json",
+      "required": true,
+      "role": "module_refactoring"
+    }
+  ],
+  "dependencies": [],
+  "trust": {
+    "hash": "sha256:59bb1fb64de5efe0ab73e3c12fb5fa095e4502c0e8974407d1ef624020e42d25",
+    "signed": false,
+    "issuer": "msp-reference.local",
+    "review_status": "self_reviewed",
+    "risk_level": "medium",
+    "forbidden_behaviors": []
+  },
+  "provenance": {
+    "author": "Honorbound Innovation",
+    "generator": "Vegvisir",
+    "source_documents": [
+      "spec.md",
+      "plan.md"
+    ],
+    "published_at": "2026-06-24T00:00:00Z"
+  },
+  "deprecation": {
+    "deprecated": false
+  },
+  "extensions": {}
+}

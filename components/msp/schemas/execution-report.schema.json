@@ -1,0 +1,267 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "msp://schemas/execution-report.schema.json",
+  "title": "MSP Skill Execution Report",
+  "description": "Runtime-produced report describing how a skill was applied and what evidence was collected.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "msp_version",
+    "kind",
+    "id",
+    "skill_id",
+    "skill_version",
+    "runtime",
+    "started_at",
+    "completed_at",
+    "status",
+    "evidence"
+  ],
+  "properties": {
+    "msp_version": {
+      "$ref": "#/$defs/semver"
+    },
+    "kind": {
+      "const": "SkillExecutionReport"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^exec(\\.[a-z0-9][a-z0-9_-]*)+\\.[A-Za-z0-9_-]+$"
+    },
+    "skill_id": {
+      "type": "string",
+      "pattern": "^skill(\\.[a-z0-9][a-z0-9_-]*)+\\.v[0-9]+$"
+    },
+    "skill_version": {
+      "$ref": "#/$defs/semver"
+    },
+    "verification_contract_id": {
+      "type": "string",
+      "pattern": "^verify(\\.[a-z0-9][a-z0-9_-]*)+\\.v[0-9]+$"
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "model": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"
+          },
+          "uniqueItems": true,
+          "default": []
+        }
+      }
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["completed", "completed_with_warnings", "failed", "aborted", "not_applicable"]
+    },
+    "files_changed": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/file_change"
+      },
+      "default": []
+    },
+    "commands_run": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/command_result"
+      },
+      "default": []
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/artifact"
+      },
+      "default": []
+    },
+    "policy_decisions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/policy_decision"
+      },
+      "default": []
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Evidence keyed by verification contract evidence keys. Values may be structured by check type."
+    },
+    "results": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "enum": ["passed", "failed", "skipped", "warning", "unknown"]
+      },
+      "default": {}
+    },
+    "notes": {
+      "type": "string",
+      "maxLength": 10000
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/report_error"
+      },
+      "default": []
+    }
+  },
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^(sha256|sha384|sha512):[A-Fa-f0-9]+$"
+    },
+    "file_change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "change_type"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "change_type": {
+          "type": "string",
+          "enum": ["created", "modified", "deleted", "renamed", "unchanged_observed"]
+        },
+        "before_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "after_hash": {
+          "$ref": "#/$defs/hash"
+        }
+      }
+    },
+    "command_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "exit_code"],
+      "properties": {
+        "command": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "exit_code": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["passed", "failed", "timeout", "skipped"]
+        },
+        "stdout_excerpt": {
+          "type": "string",
+          "maxLength": 20000
+        },
+        "stderr_excerpt": {
+          "type": "string",
+          "maxLength": 20000
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "completed_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uri", "media_type"],
+      "properties": {
+        "uri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "media_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "hash": {
+          "$ref": "#/$defs/hash"
+        }
+      }
+    },
+    "policy_decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy", "decision"],
+      "properties": {
+        "policy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "decision": {
+          "type": "string",
+          "enum": ["allowed", "denied", "requires_approval", "not_applicable"]
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      }
+    },
+    "report_error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["info", "warning", "error", "fatal"],
+          "default": "error"
+        }
+      }
+    }
+  }
+}

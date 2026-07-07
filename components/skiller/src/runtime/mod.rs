@@ -1,4 +1,5 @@
 use crate::models::*;
+use crate::semantic;
 use anyhow::{Result, bail};
 
 #[derive(Debug)]
@@ -26,6 +27,23 @@ pub fn route(bundle: &SkillBundle, query: &str, limit: usize) -> Vec<RouteHit> {
             );
             if s.title.to_lowercase().contains(&q) {
                 score += 1.0;
+            }
+            if matches!(s.skill_type, SkillType::CliOperation)
+                && s.metadata
+                    .get("target_command")
+                    .and_then(|command| semantic::suspicious_cli_command_reason(command))
+                    .is_some()
+            {
+                score *= 0.1;
+            }
+            if matches!(
+                s.status,
+                SkillStatus::Draft | SkillStatus::Candidate | SkillStatus::NeedsReview
+            ) {
+                score *= 0.85;
+            }
+            if semantic::looks_like_weak_title(&s.title) {
+                score *= 0.8;
             }
             RouteHit {
                 skill_id: s.id.clone(),
@@ -57,8 +75,47 @@ pub fn load_skill(bundle: &SkillBundle, skill_id: &str, mode: LoadMode) -> Resul
         for g in &s.guardrails {
             out.push_str(&format!("- {}\n", g));
         }
+        if !s.scripts.is_empty() {
+            out.push_str("\n## Embedded Scripts\n");
+            for script in &s.scripts {
+                out.push_str(&format!(
+                    "- `{}` ({:?}, {:?}): {} Entrypoint: `{}`. Permission: {:?}. Deterministic: {}. Approval required: {}.\n",
+                    script.id,
+                    script.script_type,
+                    script.language,
+                    script.description,
+                    script.entrypoint,
+                    script.permission_level,
+                    script.deterministic,
+                    script.requires_approval
+                ));
+            }
+        }
     }
     if matches!(mode, LoadMode::Extended) {
+        if !s.scripts.is_empty() {
+            out.push_str("\n## Embedded Script Bodies\n");
+            for script in &s.scripts {
+                out.push_str(&format!(
+                    "### {} (`{}`)\n\n- Type: {:?}\n- Language: {:?}\n- Entrypoint: `{}`\n- Inputs: {}\n- Outputs: {}\n- Source sections: {}\n\nGuardrails:\n{}\n\n```text\n{}\n```\n",
+                    script.title,
+                    script.id,
+                    script.script_type,
+                    script.language,
+                    script.entrypoint,
+                    script.inputs.join(", "),
+                    script.outputs.join(", "),
+                    script.source_section_ids.join(", "),
+                    script
+                        .guardrails
+                        .iter()
+                        .map(|guardrail| format!("- {guardrail}"))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    script.content
+                ));
+            }
+        }
         out.push_str("\n## Citations\n");
         for c in &s.citations {
             out.push_str(&format!("- {}: {}\n", c.citation_id, c.excerpt));

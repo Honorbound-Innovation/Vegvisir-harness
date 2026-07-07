@@ -12,6 +12,7 @@ fn agent_selection_prefix(raw: &str) -> Option<&str> {
 
 impl TuiApplication {
     pub fn render(&mut self) -> String {
+        self.expire_ephemeral_notice();
         let suggestions = self.build_suggestions();
         self.input.update_suggestions(suggestions);
         let pending_approvals = self.pending_approval_requests();
@@ -23,6 +24,9 @@ impl TuiApplication {
             self.input.selected_suggestion,
             self.chat_scroll_offset,
             &pending_approvals,
+            self.ephemeral_notice
+                .as_ref()
+                .map(|notice| notice.text.as_str()),
         )
     }
 
@@ -141,6 +145,41 @@ impl TuiApplication {
                     })
                     .collect();
             }
+        }
+        if raw.starts_with("/sprovider ") || raw == "/sprovider " {
+            let prefix = if trailing_space {
+                ""
+            } else {
+                parts.get(1).copied().unwrap_or("")
+            };
+            let mut suggestions = ["status", "current", "clear"]
+                .into_iter()
+                .filter(|value| value.starts_with(prefix))
+                .map(|value| {
+                    Suggestion::new(
+                        value.to_string(),
+                        "Skiller Forge provider target".to_string(),
+                        Some(format!("/sprovider {value}")),
+                    )
+                })
+                .collect::<Vec<_>>();
+            suggestions.extend(
+                self.provider_registry
+                    .list()
+                    .into_iter()
+                    .filter(|provider| provider.name.starts_with(prefix))
+                    .map(|provider| {
+                        Suggestion::new(
+                            provider.name.clone(),
+                            provider
+                                .display_name
+                                .clone()
+                                .unwrap_or_else(|| provider.name.clone()),
+                            Some(format!("/sprovider {}", provider.name)),
+                        )
+                    }),
+            );
+            return suggestions;
         }
         if raw.starts_with("/runs ") || raw == "/runs " {
             let prefix = if trailing_space {
@@ -346,6 +385,26 @@ impl TuiApplication {
             }
             return self.model_suggestions_for_prefix(prefix, command);
         }
+        if raw.starts_with("/smodel ") || raw == "/smodel " {
+            let prefix = if trailing_space {
+                ""
+            } else {
+                parts.get(1).copied().unwrap_or("")
+            };
+            let mut suggestions = ["status", "current", "clear"]
+                .into_iter()
+                .filter(|value| value.starts_with(prefix))
+                .map(|value| {
+                    Suggestion::new(
+                        value.to_string(),
+                        "Skiller Forge model target".to_string(),
+                        Some(format!("/smodel {value}")),
+                    )
+                })
+                .collect::<Vec<_>>();
+            suggestions.extend(self.model_suggestions_for_prefix(prefix, "/smodel"));
+            return suggestions;
+        }
         self.commands
             .all()
             .into_iter()
@@ -398,11 +457,16 @@ impl TuiApplication {
         let Some((command, args)) = self.commands.parse_with_aliases(raw) else {
             return Ok(None);
         };
+        let logged_args = if command == "/sudo" {
+            json!("<redacted>")
+        } else {
+            json!(args.clone())
+        };
         self.logger.emit(
             "command_start",
             json!({
                 "command": command.clone(),
-                "args": args.clone(),
+                "args": logged_args,
                 "session": self.session.session_id,
                 "workspace": self.cwd.display().to_string(),
             }),
@@ -487,6 +551,8 @@ impl TuiApplication {
             "/effort" => self.effort_command(&args)?,
             "/fast" => self.fast_command(&args)?,
             "/provider" => self.provider_command(&args)?,
+            "/sprovider" => self.skiller_provider_command(&args)?,
+            "/smodel" => self.skiller_model_command(&args)?,
             "/providers" => self.providers_command(),
             "/auth" => self.auth_command(&args),
             "/verify" => self.verify_command(&args),
@@ -496,6 +562,7 @@ impl TuiApplication {
             "/subagents" => self.subagents_command(&args)?,
             "/mcp" => self.mcp_command(&args)?,
             "/hbse" => self.hbse_command(&args),
+            "/sudo" => self.sudo_command(&args),
             "/config" => self.config_command(&args)?,
             "/exit" => {
                 self.running = false;

@@ -18,7 +18,8 @@ use crate::{
     events::{
         ApprovalRequested, ContextPrepared, ControlRequestCreated, EventEnvelope, MemoryRead,
         MemoryWritten, RunCompleted, RunCompletionStatus, RunFailed as RuntimeRunFailed,
-        RunStarted, ToolCompleted, ToolFailed, ToolStarted, VegvisirEvent, to_jsonl_record,
+        RunStarted, ToolCompleted, ToolFailed, ToolOutput, ToolStarted, VegvisirEvent,
+        to_jsonl_record,
     },
     guardrails::ApprovalRequest,
     provider::ProviderRunEvent,
@@ -376,6 +377,11 @@ impl RunArtifactManager {
         }
     }
 
+    pub fn write_artifact_completeness(&self, status: &RunStatus) -> anyhow::Result<()> {
+        let evidence = RunArtifactCompletenessEvidence::evaluate(self, status);
+        self.write_json_file("artifact-completeness.json", &evidence)
+    }
+
     pub fn append_provider_event(&self, event: &ProviderRunEvent) -> anyhow::Result<()> {
         self.append_jsonl_value(
             "provider-events.jsonl",
@@ -416,6 +422,18 @@ impl RunArtifactManager {
                     tool_call_id: legacy_provider_tool_call_id(&self.run_id, name),
                     tool_name: name.clone(),
                     approval_id: None,
+                }))?;
+            }
+            ProviderRunEvent::ToolOutput {
+                name,
+                stream: _,
+                chunk,
+                truncated,
+            } => {
+                self.append_runtime_event(VegvisirEvent::ToolOutput(ToolOutput {
+                    tool_call_id: legacy_provider_tool_call_id(&self.run_id, name),
+                    chunk: chunk.clone(),
+                    truncated: *truncated,
                 }))?;
             }
             ProviderRunEvent::ToolEnd {
@@ -495,6 +513,7 @@ impl RunArtifactManager {
             }
         }
         self.write_verification_if_absent(&status)?;
+        self.write_artifact_completeness(&status)?;
         manifest.status = status;
         manifest.finished_at = Some(Utc::now());
         self.write_manifest(manifest)
@@ -603,6 +622,388 @@ impl RunArtifactManager {
         let path = self.artifact_path("failure.json");
         let text = fs::read_to_string(path).ok()?;
         serde_json::from_str(&text).ok()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunArtifactCompletenessEvidence {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub captured_at: DateTime<Utc>,
+    pub run_status: RunStatus,
+    pub overall: RunArtifactCompletenessOverall,
+    pub requirements: Vec<RunArtifactRequirementEvidence>,
+    pub notes: Vec<String>,
+}
+
+impl RunArtifactCompletenessEvidence {
+    fn evaluate(manager: &RunArtifactManager, status: &RunStatus) -> Self {
+        let mut requirements = Vec::new();
+        requirements.push(status_artifact(
+            manager,
+            "manifest",
+            "manifest.json",
+            "run lifecycle metadata",
+            evidence_file_status::<RunManifest>,
+        ));
+        requirements.push(status_artifact(
+            manager,
+            "runtime_events",
+            "runtime-events.jsonl",
+            "ordered runtime lifecycle evidence",
+            text_file_status,
+        ));
+        requirements.push(status_artifact(
+            manager,
+            "verification",
+            "verification.json",
+            "verification command/test evidence or explicit no-verification record",
+            evidence_file_status::<RunVerificationEvidence>,
+        ));
+        requirements.push(status_artifact(
+            manager,
+            "file_changes",
+            "file-changes.json",
+            "workspace file-change status at finalization",
+            evidence_file_status::<WorkspaceFileChangeEvidence>,
+        ));
+        requirements.push(status_artifact(
+            manager,
+            "diff",
+            "diff.patch",
+            "workspace diff at finalization",
+            text_file_status,
+        ));
+        requirements.push(status_artifact(
+            manager,
+            "approvals",
+            "approvals.json",
+            "approval evidence or explicit unavailable/no-approval record",
+            evidence_file_status::<RunApprovalEvidence>,
+        ));
+        requirements.push(status_artifact(
+            manager,
+            "subagents",
+            "subagents.json",
+            "subagent board evidence or explicit no-subagent record",
+            evidence_file_status::<RunSubagentEvidence>,
+        ));
+
+        match status {
+            RunStatus::Completed => {
+                requirements.push(status_artifact(
+                    manager,
+                    "result",
+                    "result.md",
+                    "assistant final response for completed run",
+                    text_file_status,
+                ));
+                requirements.push(optional_artifact(
+                    manager,
+                    "failure",
+                    "failure.json",
+                    "failure detail is not applicable to completed runs",
+                ));
+            }
+            RunStatus::Failed => {
+                requirements.push(status_artifact(
+                    manager,
+                    "failure",
+                    "failure.json",
+                    "failure detail for failed run",
+                    evidence_file_status::<RunFailure>,
+                ));
+                requirements.push(optional_artifact(
+                    manager,
+                    "result",
+                    "result.md",
+                    "final assistant response may be absent for failed runs",
+                ));
+            }
+            RunStatus::Cancelled => {
+                requirements.push(optional_artifact(
+                    manager,
+                    "failure",
+                    "failure.json",
+                    "failure detail is optional for cancelled runs",
+                ));
+                requirements.push(optional_artifact(
+                    manager,
+                    "result",
+                    "result.md",
+                    "final assistant response may be absent for cancelled runs",
+                ));
+            }
+            RunStatus::Running => {
+                requirements.push(optional_artifact(
+                    manager,
+                    "result",
+                    "result.md",
+                    "final assistant response is not expected while running",
+                ));
+                requirements.push(optional_artifact(
+                    manager,
+                    "failure",
+                    "failure.json",
+                    "failure detail is not expected while running",
+                ));
+            }
+        }
+
+        requirements.push(optional_status_artifact(
+            manager,
+            "memory_used",
+            "memory-used.json",
+            "CMS/ECM context evidence is absent when no CMS prompt envelope was used",
+            evidence_file_status::<Value>,
+        ));
+        requirements.push(status_artifact(
+            manager,
+            "memory_written",
+            "memory-written.json",
+            "completion memory writeback evidence is unavailable in this runtime path unless explicitly recorded",
+            memory_written_artifact_status,
+        ));
+        requirements.push(optional_status_artifact(
+            manager,
+            "provider_events",
+            "provider-events.jsonl",
+            "provider event stream is absent when no provider/tool event was observed",
+            non_empty_file_status,
+        ));
+        requirements.push(optional_status_artifact(
+            manager,
+            "tool_events",
+            "tool-events.jsonl",
+            "tool event stream is absent when no tool call was observed",
+            non_empty_file_status,
+        ));
+        requirements.push(optional_status_artifact(
+            manager,
+            "request",
+            "request.json",
+            "provider request capture is absent when this runtime path does not write request artifacts",
+            evidence_file_status::<Value>,
+        ));
+        requirements.push(optional_status_artifact(
+            manager,
+            "context",
+            "context.md",
+            "context artifact is absent when ECM prompt envelope capture was not used",
+            text_file_status,
+        ));
+        requirements.push(optional_status_artifact(
+            manager,
+            "context_sources",
+            "context-sources.json",
+            "context source artifact is absent when ECM prompt envelope capture was not used",
+            evidence_file_status::<Value>,
+        ));
+
+        let missing_count = requirements
+            .iter()
+            .filter(|requirement| requirement.status == RunArtifactRequirementStatus::Missing)
+            .count();
+        let unavailable_count = requirements
+            .iter()
+            .filter(|requirement| requirement.status == RunArtifactRequirementStatus::Unavailable)
+            .count();
+        let overall = if missing_count > 0 {
+            RunArtifactCompletenessOverall::MissingRequired
+        } else if unavailable_count > 0 {
+            RunArtifactCompletenessOverall::Incomplete
+        } else {
+            RunArtifactCompletenessOverall::Complete
+        };
+        let notes = match overall {
+            RunArtifactCompletenessOverall::Complete => {
+                vec![
+                    "required run artifact evidence is captured or explicitly not applicable"
+                        .to_string(),
+                ]
+            }
+            RunArtifactCompletenessOverall::Incomplete => vec![format!(
+                "{unavailable_count} artifact requirement(s) are explicitly unavailable"
+            )],
+            RunArtifactCompletenessOverall::MissingRequired => vec![format!(
+                "{missing_count} required artifact requirement(s) are missing"
+            )],
+        };
+
+        Self {
+            schema_version: RUN_ARTIFACT_SCHEMA_VERSION,
+            run_id: manager.run_id.clone(),
+            captured_at: Utc::now(),
+            run_status: status.clone(),
+            overall,
+            requirements,
+            notes,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunArtifactCompletenessOverall {
+    Complete,
+    Incomplete,
+    MissingRequired,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunArtifactRequirementEvidence {
+    pub name: String,
+    pub path: PathBuf,
+    pub status: RunArtifactRequirementStatus,
+    pub required: bool,
+    pub reason: String,
+    pub detail: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunArtifactRequirementStatus {
+    Captured,
+    NotApplicable,
+    Unavailable,
+    Missing,
+}
+
+fn optional_artifact(
+    manager: &RunArtifactManager,
+    name: &str,
+    path: &str,
+    reason: &str,
+) -> RunArtifactRequirementEvidence {
+    let mut requirement =
+        status_artifact(manager, name, path, reason, evidence_file_status::<Value>);
+    requirement.required = false;
+    if requirement.status == RunArtifactRequirementStatus::Missing {
+        requirement.status = RunArtifactRequirementStatus::NotApplicable;
+        requirement.detail = Some(reason.to_string());
+    }
+    requirement
+}
+
+fn optional_status_artifact<F>(
+    manager: &RunArtifactManager,
+    name: &str,
+    path: &str,
+    reason: &str,
+    status_fn: F,
+) -> RunArtifactRequirementEvidence
+where
+    F: Fn(&Path) -> (RunArtifactRequirementStatus, Option<String>),
+{
+    let mut requirement = status_artifact(manager, name, path, reason, status_fn);
+    requirement.required = false;
+    if requirement.status == RunArtifactRequirementStatus::Missing {
+        requirement.status = RunArtifactRequirementStatus::NotApplicable;
+        requirement.detail = Some(reason.to_string());
+    }
+    requirement
+}
+
+fn status_artifact<F>(
+    manager: &RunArtifactManager,
+    name: &str,
+    path: &str,
+    reason: &str,
+    status_fn: F,
+) -> RunArtifactRequirementEvidence
+where
+    F: Fn(&Path) -> (RunArtifactRequirementStatus, Option<String>),
+{
+    let artifact_path = manager.artifact_path(path);
+    let (status, detail) = status_fn(&artifact_path);
+    RunArtifactRequirementEvidence {
+        name: name.to_string(),
+        path: PathBuf::from(path),
+        status,
+        required: true,
+        reason: reason.to_string(),
+        detail,
+    }
+}
+
+fn evidence_file_status<T>(path: &Path) -> (RunArtifactRequirementStatus, Option<String>)
+where
+    T: for<'de> Deserialize<'de>,
+{
+    if !path.exists() {
+        return (RunArtifactRequirementStatus::Missing, None);
+    }
+    let Ok(text) = fs::read_to_string(path) else {
+        return (
+            RunArtifactRequirementStatus::Unavailable,
+            Some("artifact exists but could not be read".to_string()),
+        );
+    };
+    if text.trim().is_empty() {
+        return (
+            RunArtifactRequirementStatus::Unavailable,
+            Some("artifact exists but is empty".to_string()),
+        );
+    }
+    match serde_json::from_str::<T>(&text) {
+        Ok(_) => (RunArtifactRequirementStatus::Captured, None),
+        Err(error) => (
+            RunArtifactRequirementStatus::Unavailable,
+            Some(format!(
+                "artifact exists but is not valid JSON evidence: {error}"
+            )),
+        ),
+    }
+}
+
+fn text_file_status(path: &Path) -> (RunArtifactRequirementStatus, Option<String>) {
+    if !path.exists() {
+        return (RunArtifactRequirementStatus::Missing, None);
+    }
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() && metadata.len() > 0 => {
+            (RunArtifactRequirementStatus::Captured, None)
+        }
+        Ok(metadata) if metadata.is_file() => (
+            RunArtifactRequirementStatus::Unavailable,
+            Some("artifact exists but is empty".to_string()),
+        ),
+        Ok(_) => (
+            RunArtifactRequirementStatus::Unavailable,
+            Some("artifact path exists but is not a file".to_string()),
+        ),
+        Err(error) => (
+            RunArtifactRequirementStatus::Unavailable,
+            Some(format!("artifact metadata could not be read: {error}")),
+        ),
+    }
+}
+
+fn non_empty_file_status(path: &Path) -> (RunArtifactRequirementStatus, Option<String>) {
+    if !path.exists() {
+        return (RunArtifactRequirementStatus::NotApplicable, None);
+    }
+    text_file_status(path)
+}
+
+fn memory_written_artifact_status(path: &Path) -> (RunArtifactRequirementStatus, Option<String>) {
+    if !path.exists() {
+        return (RunArtifactRequirementStatus::NotApplicable, None);
+    }
+    let (status, detail) = evidence_file_status::<RunMemoryWriteEvidence>(path);
+    if status != RunArtifactRequirementStatus::Captured {
+        return (status, detail);
+    }
+    match fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<RunMemoryWriteEvidence>(&text).ok())
+        .map(|evidence| evidence.status)
+    {
+        Some(RunMemoryWriteStatus::Unavailable) => (
+            RunArtifactRequirementStatus::Unavailable,
+            Some("memory writeback evidence was explicitly unavailable".to_string()),
+        ),
+        _ => (RunArtifactRequirementStatus::Captured, None),
     }
 }
 
@@ -1485,6 +1886,10 @@ fn default_artifact_paths() -> BTreeMap<String, PathBuf> {
             PathBuf::from("verification.json"),
         ),
         ("failure".to_string(), PathBuf::from("failure.json")),
+        (
+            "artifact_completeness".to_string(),
+            PathBuf::from("artifact-completeness.json"),
+        ),
     ])
 }
 
@@ -1610,6 +2015,19 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn assert_requirement_status(
+        completeness: &RunArtifactCompletenessEvidence,
+        name: &str,
+        status: RunArtifactRequirementStatus,
+    ) {
+        let requirement = completeness
+            .requirements
+            .iter()
+            .find(|requirement| requirement.name == name)
+            .unwrap_or_else(|| panic!("missing requirement {name}"));
+        assert_eq!(requirement.status, status, "requirement {name}");
+    }
+
     #[test]
     fn run_artifacts_creates_manifest_and_result() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
@@ -1706,6 +2124,7 @@ mod tests {
             ("result", "result.md"),
             ("verification", "verification.json"),
             ("failure", "failure.json"),
+            ("artifact_completeness", "artifact-completeness.json"),
         ]);
         assert_eq!(artifact_paths.len(), expected_paths.len());
         for (name, relative_path) in expected_paths {
@@ -1981,6 +2400,115 @@ mod tests {
     }
 
     #[test]
+    fn run_artifacts_writes_completeness_contract_on_finish() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        fs::create_dir_all(&workspace)?;
+        let (manager, mut manifest) = RunArtifactManager::start(
+            &workspace,
+            tmp.path().join("data"),
+            "session-1",
+            "demo",
+            "demo-model",
+            None,
+        )?;
+
+        manager.write_result("completed successfully")?;
+        manager.write_workspace_change_artifacts()?;
+        manager.write_approvals_from_pending(&BTreeMap::new())?;
+        manager.write_subagents_from_records(&[])?;
+        manager.finish(&mut manifest, RunStatus::Completed)?;
+
+        let completeness: RunArtifactCompletenessEvidence = serde_json::from_str(
+            &fs::read_to_string(manager.artifact_path("artifact-completeness.json"))?,
+        )?;
+        assert_eq!(completeness.run_status, RunStatus::Completed);
+        if completeness.overall == RunArtifactCompletenessOverall::MissingRequired {
+            panic!(
+                "unexpected missing requirements: {:?}",
+                completeness
+                    .requirements
+                    .iter()
+                    .filter(
+                        |requirement| requirement.status == RunArtifactRequirementStatus::Missing
+                    )
+                    .collect::<Vec<_>>()
+            );
+        }
+        assert_requirement_status(
+            &completeness,
+            "verification",
+            RunArtifactRequirementStatus::Captured,
+        );
+        assert_requirement_status(
+            &completeness,
+            "result",
+            RunArtifactRequirementStatus::Captured,
+        );
+        assert_requirement_status(
+            &completeness,
+            "failure",
+            RunArtifactRequirementStatus::NotApplicable,
+        );
+        assert_requirement_status(
+            &completeness,
+            "file_changes",
+            RunArtifactRequirementStatus::Captured,
+        );
+        assert_requirement_status(
+            &completeness,
+            "approvals",
+            RunArtifactRequirementStatus::Captured,
+        );
+        assert_requirement_status(
+            &completeness,
+            "subagents",
+            RunArtifactRequirementStatus::Captured,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn run_artifacts_completeness_marks_missing_required_evidence() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        fs::create_dir_all(&workspace)?;
+        let (manager, _manifest) = RunArtifactManager::start(
+            &workspace,
+            tmp.path().join("data"),
+            "session-1",
+            "demo",
+            "demo-model",
+            None,
+        )?;
+
+        manager.write_artifact_completeness(&RunStatus::Completed)?;
+        let completeness: RunArtifactCompletenessEvidence = serde_json::from_str(
+            &fs::read_to_string(manager.artifact_path("artifact-completeness.json"))?,
+        )?;
+        assert_eq!(
+            completeness.overall,
+            RunArtifactCompletenessOverall::MissingRequired
+        );
+        assert_requirement_status(
+            &completeness,
+            "verification",
+            RunArtifactRequirementStatus::Missing,
+        );
+        assert_requirement_status(
+            &completeness,
+            "result",
+            RunArtifactRequirementStatus::Missing,
+        );
+        assert_requirement_status(
+            &completeness,
+            "file_changes",
+            RunArtifactRequirementStatus::Missing,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn run_artifacts_writes_default_verification_on_finish() -> anyhow::Result<()> {
         let tmp = tempfile::tempdir()?;
         let workspace = tmp.path().join("workspace");
@@ -2083,6 +2611,42 @@ mod tests {
         assert!(lines[1].contains(r#""type":"tool_started""#));
         assert!(lines[2].contains(r#""type":"tool_completed""#));
         assert!(lines[3].contains(r#""type":"run_completed""#));
+        Ok(())
+    }
+
+    #[test]
+    fn run_artifacts_writes_runtime_tool_output_events() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let workspace = tmp.path().join("workspace");
+        fs::create_dir_all(&workspace)?;
+        let (manager, _manifest) = RunArtifactManager::start_with_run_id(
+            &workspace,
+            tmp.path().join("data"),
+            "run-tool-output-events",
+            Option::<&Path>::None,
+            "session-1",
+            "demo",
+            "demo-model",
+            None,
+        )?;
+
+        manager.append_observed_provider_event(&ProviderRunEvent::ToolOutput {
+            name: "run_command".to_string(),
+            stream: "stdout".to_string(),
+            chunk: "building crate\n".to_string(),
+            truncated: false,
+        })?;
+
+        let runtime_events = fs::read_to_string(manager.artifact_path("runtime-events.jsonl"))?;
+        assert!(runtime_events.contains(r#""type":"tool_output""#));
+        assert!(
+            runtime_events
+                .contains(r#""tool_call_id":"legacy-provider:run-tool-output-events:run_command""#)
+        );
+        assert!(runtime_events.contains("building crate"));
+        let provider_events = fs::read_to_string(manager.artifact_path("provider-events.jsonl"))?;
+        assert!(provider_events.contains(r#""kind":"tool_output""#));
+        assert!(provider_events.contains(r#""stream":"stdout""#));
         Ok(())
     }
 

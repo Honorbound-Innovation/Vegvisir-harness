@@ -1,0 +1,10 @@
+bundle_id: sample-rust-bundle
+name: Sample Rust Skiller Bundle
+version: 0.1.0
+domain: software_engineering/rust
+source_corpus:
+  - docs/sample-rust-refactor.md
+review_status: Reviewed
+publish_status: Staged
+compatibility: {}
+created_at: "2026-01-01T00:00:00Z"

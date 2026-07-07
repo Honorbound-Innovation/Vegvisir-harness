@@ -199,6 +199,28 @@ pub fn validate_bundle(bundle: &SkillBundle) -> ValidationReport {
         ) {
             errors.push(format!("{} contains secret-like content", skill.id));
         }
+        if matches!(skill.skill_type, SkillType::CliOperation) {
+            match skill.metadata.get("target_command") {
+                Some(command) => {
+                    if let Some(reason) = crate::semantic::suspicious_cli_command_reason(command) {
+                        errors.push(format!(
+                            "{} has suspicious CliOperation target_command `{}`: {}",
+                            skill.id, command, reason
+                        ));
+                    }
+                }
+                None => errors.push(format!(
+                    "{} is CliOperation but has no target_command metadata",
+                    skill.id
+                )),
+            }
+        }
+        if crate::semantic::looks_like_weak_title(&skill.title) {
+            warnings.push(format!(
+                "{} has weak or source-fragment-like title `{}`",
+                skill.id, skill.title
+            ));
+        }
         for sid in &skill.source_section_ids {
             if !section_ids.contains(sid.as_str()) {
                 errors.push(format!("{} references missing section {}", skill.id, sid));
@@ -239,6 +261,7 @@ pub fn validate_bundle(bundle: &SkillBundle) -> ValidationReport {
         ) {
             errors.push(err.to_string());
         }
+        crate::forge::collect_skill_script_validation_errors(skill, &section_ids, &mut errors);
         for role in &skill.role_suitability {
             if let Err(err) = crate::forge::validate_probability(
                 &format!("{} role_suitability {}", skill.id, role.role),
@@ -579,6 +602,17 @@ pub fn readiness_report(bundle: &SkillBundle) -> ReadinessReport {
             ));
         }
     }
+    if bundle.forge_requests.iter().any(|request| {
+        request
+            .provider_provenance
+            .as_ref()
+            .map(|provenance| !provenance.live_reasoning)
+            .unwrap_or_else(|| request.provider.eq_ignore_ascii_case("vegvisir"))
+    }) {
+        blockers.push(
+            "provider semantic review not performed; Forge history lacks live provider-backed provenance".into(),
+        );
+    }
     for s in &bundle.skills {
         match s.status {
             SkillStatus::Draft | SkillStatus::Candidate | SkillStatus::NeedsReview => {
@@ -617,6 +651,23 @@ pub fn readiness_report(bundle: &SkillBundle) -> ReadinessReport {
         if s.runtime_policy.modify_files && !s.runtime_policy.requires_backup_or_rollback {
             blockers.push(format!(
                 "{} can modify files without backup or rollback requirement",
+                s.id
+            ));
+        }
+
+        if (high_risk_runtime || high_risk_tool || s.runtime_policy.modify_files)
+            && s.scripts.is_empty()
+        {
+            blockers.push(format!(
+                "{} is operational/high-risk but lacks embedded Skill.scripts for deterministic preflight, planning, validation, or safety gating",
+                s.id
+            ));
+        }
+        if s.scripts.iter().any(|script| script.requires_approval)
+            && !s.runtime_policy.requires_user_approval
+        {
+            blockers.push(format!(
+                "{} has approval-gated scripts but runtime_policy does not require user approval",
                 s.id
             ));
         }

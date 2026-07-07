@@ -27,6 +27,7 @@ pub mod persona;
 pub mod planning;
 pub mod policy;
 pub mod policy_explain;
+pub mod privilege;
 pub mod profile;
 pub mod prompts;
 pub mod provider;

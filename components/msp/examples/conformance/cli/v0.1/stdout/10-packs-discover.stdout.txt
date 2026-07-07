@@ -1,0 +1,14 @@
+[
+  {
+    "id": "pack.rust.engineering.v1",
+    "name": "Rust Engineering Pack",
+    "version": "0.1.0",
+    "category": "software_engineering/rust",
+    "summary": "Reference Rust engineering MSP skill pack.",
+    "risk_level": "medium",
+    "score": 43,
+    "skill_count": 1,
+    "required_skill_count": 1,
+    "issuer": "msp-reference.local"
+  }
+]

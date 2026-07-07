@@ -1,0 +1,5 @@
+{
+  "packs": 1,
+  "root": "examples/registry",
+  "skills": 1
+}

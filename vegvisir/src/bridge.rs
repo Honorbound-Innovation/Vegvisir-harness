@@ -3417,15 +3417,32 @@ mod tests {
     }
 
     fn test_app() -> anyhow::Result<(tempfile::TempDir, TuiApplication)> {
-        let _sandbox_mode = EnvVarGuard::set(crate::command_sandbox::COMMAND_SANDBOX_ENV, "path");
-        let _writable =
-            EnvVarGuard::remove(crate::command_sandbox::COMMAND_SANDBOX_WRITABLE_PATHS_ENV);
-        let _readonly =
-            EnvVarGuard::remove(crate::command_sandbox::COMMAND_SANDBOX_READONLY_PATHS_ENV);
-        let _hidden = EnvVarGuard::remove(crate::command_sandbox::COMMAND_SANDBOX_HIDDEN_PATHS_ENV);
         let tmp = tempdir()?;
-        let app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
-        Ok((tmp, app))
+        for attempt in 0..20 {
+            let _command_sandbox_env_guard =
+                crate::command_sandbox::command_sandbox_test_env_lock();
+            let _sandbox_mode =
+                EnvVarGuard::set(crate::command_sandbox::COMMAND_SANDBOX_ENV, "path");
+            let _writable =
+                EnvVarGuard::remove(crate::command_sandbox::COMMAND_SANDBOX_WRITABLE_PATHS_ENV);
+            let _readonly =
+                EnvVarGuard::remove(crate::command_sandbox::COMMAND_SANDBOX_READONLY_PATHS_ENV);
+            let _hidden =
+                EnvVarGuard::remove(crate::command_sandbox::COMMAND_SANDBOX_HIDDEN_PATHS_ENV);
+            match TuiApplication::with_data_root(tmp.path(), tmp.path().join("home")) {
+                Ok(app) => return Ok((tmp, app)),
+                Err(error)
+                    if attempt < 19
+                        && error.to_string().contains(
+                            "VEGVISIR_COMMAND_HIDDEN_PATHS entries must be absolute paths",
+                        ) =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!("bridge test app construction loop always returns")
     }
 
     fn execute_sh(app: &mut TuiApplication, text: &str) -> crate::types::Observation {

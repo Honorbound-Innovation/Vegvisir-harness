@@ -102,6 +102,10 @@ impl TuiApplication {
             let suggestions = self.build_suggestions();
             self.input.update_suggestions(suggestions);
         }
+        if self.handle_sudo_password_prompt_key(key) {
+            self.redraw_requested = true;
+            return;
+        }
         if self.handle_profile_overlay_key(key) {
             self.redraw_requested = true;
             return;
@@ -372,6 +376,103 @@ impl TuiApplication {
         }
     }
 
+    pub(crate) fn handle_sudo_password_prompt_key(&mut self, key: KeyEvent) -> bool {
+        if self.sudo_password_prompt.is_none() {
+            return false;
+        }
+        match key.code {
+            KeyCode::Esc => {
+                if let Some(mut prompt) = self.sudo_password_prompt.take() {
+                    prompt.clear_secret();
+                }
+                self.session.status = "ready".to_string();
+                self.session.activity.clear();
+                self.push_system_message(
+                    "Sudo authentication cancelled. No password was stored or logged.",
+                );
+                self.autosave_session();
+                true
+            }
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(mut prompt) = self.sudo_password_prompt.take() {
+                    prompt.clear_secret();
+                }
+                self.session.status = "ready".to_string();
+                self.session.activity.clear();
+                self.push_system_message(
+                    "Sudo authentication cancelled. No password was stored or logged.",
+                );
+                self.autosave_session();
+                true
+            }
+            KeyCode::Enter => {
+                let Some(mut prompt) = self.sudo_password_prompt.take() else {
+                    return true;
+                };
+                prompt.attempts += 1;
+                let result = crate::privilege::sudo_refresh_with_tui_password(&mut prompt.buffer);
+                prompt.clear_secret();
+                match result {
+                    Ok(()) => {
+                        self.logger.emit(
+                            "sudo_auth_refreshed",
+                            json!({
+                                "session": self.session.session_id,
+                                "workspace": self.cwd.display().to_string(),
+                                "password_visibility": "local-tui-secure-prompt; redacted; not logged",
+                            }),
+                        );
+                        self.session.status = "ready".to_string();
+                        self.session.activity.clear();
+                        self.push_system_message("Sudo authentication refreshed. Password was accepted through Vegvisir's local secure prompt and was not sent to chat/model/tools/logs/traces.");
+                    }
+                    Err(error) => {
+                        if prompt.attempts < 3 {
+                            let mut retry = SudoPasswordPrompt::new();
+                            retry.attempts = prompt.attempts;
+                            retry.status = format!(
+                                "Sudo authentication failed: {error}. Try again, or Esc to cancel. Password is not logged."
+                            );
+                            self.sudo_password_prompt = Some(retry);
+                        } else {
+                            self.session.status = "ready".to_string();
+                            self.session.activity.clear();
+                            self.push_system_message(format!(
+                                "Sudo authentication failed after {} attempts: {error}. No password was stored or logged.",
+                                prompt.attempts
+                            ));
+                            self.autosave_session();
+                        }
+                    }
+                }
+                true
+            }
+            KeyCode::Backspace => {
+                if let Some(prompt) = self.sudo_password_prompt.as_mut() {
+                    prompt.pop();
+                }
+                true
+            }
+            KeyCode::Delete | KeyCode::Char('u')
+                if key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                if let Some(prompt) = self.sudo_password_prompt.as_mut() {
+                    prompt.clear_secret();
+                }
+                true
+            }
+            KeyCode::Char(ch)
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+            {
+                if let Some(prompt) = self.sudo_password_prompt.as_mut() {
+                    prompt.push(ch);
+                }
+                true
+            }
+            _ => true,
+        }
+    }
+
     pub(crate) fn handle_profile_overlay_key(&mut self, key: KeyEvent) -> bool {
         let Some(overlay) = self.profile_overlay.as_mut() else {
             return false;
@@ -580,7 +681,7 @@ impl TuiApplication {
             .approval_selected_index
             .min(pending_ids.len().saturating_sub(1));
         let id = pending_ids[self.approval_selected_index].clone();
-        let message = match key.code {
+        let transcript_message = match key.code {
             KeyCode::Up => {
                 self.approval_selected_index = self.approval_selected_index.saturating_sub(1);
                 return true;
@@ -601,12 +702,15 @@ impl TuiApplication {
                     crate::control_requests::ApprovalControlDecisionKind::AllowOnce,
                 );
                 match applied.approval {
-                    Some(request) if self.pending_send.is_some() => format!(
-                        "Approved once: {}. In-flight model run will resume.",
-                        request.tool_name
-                    ),
-                    Some(request) => self.execute_approved_request("Approved once", request),
-                    None => format!("Unknown pending approval: {id}"),
+                    Some(request) if self.pending_send.is_some() => {
+                        self.show_approval_notice(format!(
+                            "Approved once: {}. In-flight model run will resume.",
+                            request.tool_name
+                        ));
+                        None
+                    }
+                    Some(request) => Some(self.execute_approved_request("Approved once", request)),
+                    None => Some(format!("Unknown pending approval: {id}")),
                 }
             }
             KeyCode::Char('2') | KeyCode::Char('s') | KeyCode::Char('S') => {
@@ -616,12 +720,15 @@ impl TuiApplication {
                     crate::control_requests::ApprovalControlDecisionKind::AllowForSession,
                 );
                 match applied.approval {
-                    Some(request) if self.pending_send.is_some() => format!(
-                        "{}: {}. In-flight model run will resume.",
-                        applied.message, request.tool_name
-                    ),
-                    Some(request) => self.execute_approved_request(&applied.message, request),
-                    None => format!("Unknown pending approval: {id}"),
+                    Some(request) if self.pending_send.is_some() => {
+                        self.show_approval_notice(format!(
+                            "{}: {}. In-flight model run will resume.",
+                            applied.message, request.tool_name
+                        ));
+                        None
+                    }
+                    Some(request) => Some(self.execute_approved_request(&applied.message, request)),
+                    None => Some(format!("Unknown pending approval: {id}")),
                 }
             }
             KeyCode::Char('3') | KeyCode::Char('d') | KeyCode::Char('D') => {
@@ -631,9 +738,10 @@ impl TuiApplication {
                     crate::control_requests::ApprovalControlDecisionKind::Deny,
                 );
                 if applied.applied {
-                    format!("Denied approval {id}.")
+                    self.show_approval_notice(format!("Denied approval {id}."));
+                    None
                 } else {
-                    format!("Unknown pending approval: {id}")
+                    Some(format!("Unknown pending approval: {id}"))
                 }
             }
             _ => return false,
@@ -646,9 +754,11 @@ impl TuiApplication {
         }
         self.session.status = "ready".to_string();
         self.session.activity.clear();
-        self.push_system_message(message);
-        self.autosave_session();
-        self.chat_scroll_offset = 0;
+        if let Some(message) = transcript_message {
+            self.push_system_message(message);
+            self.autosave_session();
+            self.chat_scroll_offset = 0;
+        }
         true
     }
 
@@ -767,6 +877,7 @@ impl TuiApplication {
             && self.diff_overlay.is_none()
             && self.info_overlay.is_none()
             && self.sessions_overlay.is_none()
+            && self.sudo_password_prompt.is_none()
             && !self.search_open
             && !self.command_palette_open
             && self.tool_executor.guardrails.approvals.pending_len() == 0

@@ -3,6 +3,26 @@
 This directory contains first-class component systems that are packaged with the
 Vegvisir monorepo.
 
+## Skill-protocol components
+
+The following skill-protocol component source trees are packaged with the
+monorepo:
+
+- `components/msp` — vendored local-first MSP v0.1 reference crates, schemas,
+  examples, and local registry implementation used as the protocol backend for
+  Vegvisir's native MSP client.
+- `components/msp-client` — native Vegvisir client component for consuming MSP
+  local registries directly without MCP. It exposes a Rust library,
+  `msp-client`, `vegvisir msp -- ...`, and built-in model-callable tools:
+  `msp_client_info`, `msp_client_search`, `msp_client_load`,
+  `msp_client_manifest`, `msp_client_verify_trust`, and
+  `msp_client_check_compatibility`.
+
+The default local MSP registry for development is
+`components/msp/examples/registry`. Operators can point Vegvisir at another
+local registry with `VEGVISIR_MSP_REGISTRY` or with each MSP tool's `registry`
+argument.
+
 ## Binary-intelligence components
 
 The following binary-intelligence component source trees are packaged with the
@@ -40,6 +60,7 @@ The component copies were imported from:
 
 ```text
 /mnt/storage/Vegvisir-Projects
+/mnt/storage/Projects/MSP
 ```
 
 Excluded from the vendored source copies:
@@ -50,6 +71,7 @@ Excluded from the vendored source copies:
 - `.venv/`
 - `.gradle/`
 - `build/`
+- `target/`
 - dependency caches
 - per-project `.vegvisir/` runtime state
 - Python bytecode caches such as `__pycache__/` and `*.pyc`

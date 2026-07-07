@@ -1,10 +1,18 @@
+use std::collections::BTreeMap;
+
 use crate::types::{Message, Role};
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ContextManager {
     pub max_messages: usize,
+    /// Legacy/plain text active summary. New compactions rebuild this from structured summaries, but
+    /// old checkpoints that only have this field remain readable.
     pub summary: String,
     pub messages: Vec<Message>,
+    #[serde(default)]
+    pub compacted_summaries: Vec<ContextCompactionSummary>,
+    #[serde(default, skip)]
+    pending_compactions: Vec<ContextCompactionSummary>,
 }
 
 impl Default for ContextManager {
@@ -19,6 +27,8 @@ impl ContextManager {
             max_messages,
             summary: String::new(),
             messages: Vec::new(),
+            compacted_summaries: Vec::new(),
+            pending_compactions: Vec::new(),
         }
     }
 
@@ -28,50 +38,210 @@ impl ContextManager {
     }
 
     pub fn visible_messages(&self) -> Vec<Message> {
-        if self.summary.is_empty() {
+        let summary = self.visible_summary();
+        if summary.trim().is_empty() {
             return self.messages.clone();
         }
         let mut visible = vec![Message::named(
             Role::System,
-            format!("Prior context summary:\n{}", self.summary),
+            format!("Prior context summary:\n{summary}"),
             "context_summary",
         )];
         visible.extend(self.messages.clone());
         visible
     }
 
+    pub fn take_pending_compactions(&mut self) -> Vec<ContextCompactionSummary> {
+        std::mem::take(&mut self.pending_compactions)
+    }
+
+    pub fn mark_compaction_persisted(&mut self, sequence: usize, memory_id: impl Into<String>) {
+        let memory_id = memory_id.into();
+        for summary in &mut self.compacted_summaries {
+            if summary.sequence == sequence {
+                summary.cms_memory_id = Some(memory_id.clone());
+            }
+        }
+        self.rebuild_summary_text();
+    }
+
+    fn visible_summary(&self) -> String {
+        if self.compacted_summaries.is_empty() {
+            return self.summary.clone();
+        }
+        self.compacted_summaries
+            .iter()
+            .map(ContextCompactionSummary::render)
+            .filter(|summary| !summary.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+
     fn compact_if_needed(&mut self) {
         if self.messages.len() <= self.max_messages {
             return;
         }
-        let keep = self.max_messages / 2;
+        let keep = (self.max_messages / 2).max(1);
         let stale: Vec<_> = self.messages.drain(..self.messages.len() - keep).collect();
-        let mut lines = Vec::new();
-        if !self.summary.is_empty() {
-            lines.push(self.summary.clone());
-        }
-        for message in stale {
-            let role = match message.role {
-                Role::System => "system",
-                Role::User => "user",
-                Role::Assistant => "assistant",
-                Role::Tool => "tool",
-            };
-            lines.push(format!("{role}: {}", truncate_chars(&message.content, 500)));
-        }
-        self.summary = lines
-            .into_iter()
-            .filter(|line| !line.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n");
+        let sequence = self.compacted_summaries.len() + 1;
+        let summary = ContextCompactionSummary::from_messages(sequence, &stale);
+        self.pending_compactions.push(summary.clone());
+        self.compacted_summaries.push(summary);
+        self.rebuild_summary_text();
+    }
+
+    fn rebuild_summary_text(&mut self) {
+        self.summary = self.visible_summary();
     }
 }
 
-/// Default policy for reporting active-context pressure.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ContextCompactionSummary {
+    pub sequence: usize,
+    pub message_count: usize,
+    pub role_counts: BTreeMap<String, usize>,
+    pub decisions: Vec<String>,
+    pub files_touched: Vec<String>,
+    pub commands_run: Vec<String>,
+    pub failures: Vec<String>,
+    pub open_questions: Vec<String>,
+    pub verification: Vec<String>,
+    pub follow_up: Vec<String>,
+    pub digest: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cms_memory_id: Option<String>,
+}
+
+impl ContextCompactionSummary {
+    pub fn from_messages(sequence: usize, messages: &[Message]) -> Self {
+        let mut role_counts = BTreeMap::new();
+        let mut decisions = Vec::new();
+        let mut files_touched = Vec::new();
+        let mut commands_run = Vec::new();
+        let mut failures = Vec::new();
+        let mut open_questions = Vec::new();
+        let mut verification = Vec::new();
+        let mut follow_up = Vec::new();
+        let mut digest = Vec::new();
+
+        for message in messages {
+            let role = role_label(&message.role).to_string();
+            *role_counts.entry(role.clone()).or_insert(0) += 1;
+            let clean = compact_whitespace(&message.content);
+            if clean.is_empty() {
+                continue;
+            }
+
+            push_unique_limited(
+                &mut digest,
+                format!("{role}: {}", truncate_chars(&clean, 260)),
+                20,
+            );
+            collect_path_like_tokens(&clean, &mut files_touched);
+            collect_command_lines(&clean, message.name.as_deref(), &mut commands_run);
+
+            let lower = clean.to_ascii_lowercase();
+            if matches!(message.role, Role::Assistant)
+                && contains_any(
+                    &lower,
+                    &[
+                        "decided",
+                        "decision",
+                        "implemented",
+                        "changed",
+                        "fixed",
+                        "chose",
+                    ],
+                )
+            {
+                push_unique_limited(&mut decisions, truncate_chars(&clean, 220), 10);
+            }
+            if contains_any(
+                &lower,
+                &[
+                    "error", "failed", "failure", "panic", "timeout", "denied", "nonzero",
+                    "blocked",
+                ],
+            ) {
+                push_unique_limited(&mut failures, truncate_chars(&clean, 220), 10);
+            }
+            if contains_any(
+                &lower,
+                &[
+                    "cargo test",
+                    "cargo check",
+                    "pytest",
+                    "npm test",
+                    "verification",
+                    "passed",
+                    "failing test",
+                    "test failure",
+                ],
+            ) {
+                push_unique_limited(&mut verification, truncate_chars(&clean, 220), 10);
+            }
+            if contains_any(
+                &lower,
+                &["todo", "follow-up", "follow up", "next step", "remaining"],
+            ) {
+                push_unique_limited(&mut follow_up, truncate_chars(&clean, 220), 10);
+            }
+            if clean.contains('?') || contains_any(&lower, &["open question", "unclear", "unknown"])
+            {
+                push_unique_limited(&mut open_questions, truncate_chars(&clean, 220), 10);
+            }
+        }
+
+        Self {
+            sequence,
+            message_count: messages.len(),
+            role_counts,
+            decisions,
+            files_touched,
+            commands_run,
+            failures,
+            open_questions,
+            verification,
+            follow_up,
+            digest,
+            cms_memory_id: None,
+        }
+    }
+
+    pub fn render(&self) -> String {
+        let mut out = Vec::new();
+        out.push(format!("# Compacted context summary {}", self.sequence));
+        out.push(format!("Messages compacted: {}", self.message_count));
+        if !self.role_counts.is_empty() {
+            out.push(format!(
+                "Role counts: {}",
+                self.role_counts
+                    .iter()
+                    .map(|(role, count)| format!("{role}={count}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        if let Some(memory_id) = &self.cms_memory_id {
+            out.push(format!("CMS memory: {memory_id}"));
+        }
+        push_section(&mut out, "Decisions / Outcomes", &self.decisions);
+        push_section(&mut out, "Files Touched", &self.files_touched);
+        push_section(&mut out, "Commands Run", &self.commands_run);
+        push_section(&mut out, "Failures / Blockers", &self.failures);
+        push_section(&mut out, "Open Questions", &self.open_questions);
+        push_section(&mut out, "Verification", &self.verification);
+        push_section(&mut out, "Follow-Up", &self.follow_up);
+        push_section(&mut out, "Message Digest", &self.digest);
+        out.join("\n")
+    }
+}
+
+/// Default policy for evaluating active-context pressure.
 ///
-/// This is deliberately advisory: ECM still owns active context exposure and CMS is not mutated by
-/// evaluating the policy. Callers can use the decision to warn, recommend compaction, or block a
-/// future send path once that behavior is intentionally wired behind a feature flag.
+/// ECM still owns active context exposure and CMS is not mutated by evaluating this policy.
+/// Provider send paths can use the decision as an enforceable gate: warn below soft limits,
+/// compact/repair near budget, and block sends that remain over the blocking threshold.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ContextBudgetPolicy {
     pub warning_percent: f64,
@@ -187,6 +357,99 @@ pub struct ContextBudgetDecision {
     pub warnings: Vec<String>,
 }
 
+fn push_section(out: &mut Vec<String>, title: &str, items: &[String]) {
+    if items.is_empty() {
+        return;
+    }
+    out.push(format!("## {title}"));
+    for item in items {
+        out.push(format!("- {item}"));
+    }
+}
+
+fn collect_path_like_tokens(content: &str, out: &mut Vec<String>) {
+    for token in content.split_whitespace() {
+        let candidate = token.trim_matches(|ch: char| {
+            matches!(
+                ch,
+                '`' | '\'' | '"' | ',' | ';' | ':' | ')' | '(' | '[' | ']' | '{' | '}'
+            )
+        });
+        if !looks_like_path(candidate) {
+            continue;
+        }
+        push_unique_limited(out, candidate.to_string(), 16);
+    }
+}
+
+fn collect_command_lines(content: &str, tool_name: Option<&str>, out: &mut Vec<String>) {
+    if let Some(name) = tool_name
+        && matches!(name, "run_command" | "run_tests" | "run_privileged_command")
+    {
+        push_unique_limited(
+            out,
+            format!("tool:{name} {}", truncate_chars(content, 180)),
+            12,
+        );
+    }
+    for line in content.lines() {
+        let trimmed = line.trim().trim_start_matches('$').trim();
+        if starts_with_command(trimmed) {
+            push_unique_limited(out, truncate_chars(trimmed, 180), 12);
+        }
+    }
+}
+
+fn looks_like_path(candidate: &str) -> bool {
+    if candidate.len() < 3 || candidate.contains("//") || candidate.contains('@') {
+        return false;
+    }
+    let has_separator = candidate.contains('/');
+    let has_known_extension = [
+        ".rs", ".toml", ".md", ".json", ".yaml", ".yml", ".ts", ".js", ".py", ".java", ".cpp",
+        ".c", ".h", ".cs", ".sh",
+    ]
+    .iter()
+    .any(|suffix| candidate.ends_with(suffix));
+    has_separator || has_known_extension
+}
+
+fn starts_with_command(line: &str) -> bool {
+    [
+        "cargo ", "git ", "npm ", "pnpm ", "yarn ", "python ", "python3 ", "pytest ", "rg ",
+        "sed ", "grep ", "bash ", "sh ", "./",
+    ]
+    .iter()
+    .any(|prefix| line.starts_with(prefix))
+}
+
+fn contains_any(value: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| value.contains(needle))
+}
+
+fn push_unique_limited(out: &mut Vec<String>, value: String, limit: usize) {
+    let value = compact_whitespace(&value);
+    if value.is_empty() || out.iter().any(|existing| existing == &value) {
+        return;
+    }
+    if out.len() < limit {
+        out.push(value);
+    }
+}
+
+fn compact_whitespace(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn role_label(role: &Role) -> &'static str {
+    match role {
+        Role::System => "system",
+        Role::User => "user",
+        Role::Assistant => "assistant",
+        Role::Tool => "tool",
+    }
+}
+
 fn normalize_percent(value: f64, default: f64) -> f64 {
     if value.is_finite() {
         value.clamp(0.0, 100.0)
@@ -202,6 +465,61 @@ fn truncate_chars(value: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compaction_creates_structured_summary_and_pending_cms_record() {
+        let mut context = ContextManager::new(4);
+        context.add(Message::new(
+            Role::User,
+            "Please inspect vegvisir/src/context.rs and run cargo test -p vegvisir-rust context",
+        ));
+        context.add(Message::new(
+            Role::Assistant,
+            "Implemented structured compaction and decided to keep newest context.",
+        ));
+        context.add(Message::named(
+            Role::Tool,
+            "cargo test -p vegvisir-rust context failed with error E0425",
+            "run_command",
+        ));
+        context.add(Message::new(Role::User, "What remains as follow-up?"));
+        context.add(Message::new(
+            Role::Assistant,
+            "Next step is persisting the summary to CMS.",
+        ));
+
+        assert_eq!(context.compacted_summaries.len(), 1);
+        let summary = &context.compacted_summaries[0];
+        assert_eq!(summary.message_count, 3);
+        assert!(
+            summary
+                .files_touched
+                .iter()
+                .any(|path| path == "vegvisir/src/context.rs")
+        );
+        assert!(
+            summary
+                .commands_run
+                .iter()
+                .any(|command| command.contains("cargo test"))
+        );
+        assert!(
+            summary
+                .failures
+                .iter()
+                .any(|failure| failure.contains("error E0425"))
+        );
+        assert!(summary.render().contains("## Message Digest"));
+
+        let pending = context.take_pending_compactions();
+        assert_eq!(pending.len(), 1);
+        context.mark_compaction_persisted(pending[0].sequence, "mem_context_summary_1");
+        assert!(
+            context.visible_messages()[0]
+                .content
+                .contains("mem_context_summary_1")
+        );
+    }
 
     #[test]
     fn budget_policy_selects_warning_compact_and_block_actions() {

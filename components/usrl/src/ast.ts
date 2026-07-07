@@ -107,6 +107,28 @@ export interface StructField {
   type: TypeExpr;
 }
 
+export interface ParamSpec {
+  type?: string;
+  name: string;
+  defaultValue?: Expr;
+}
+
+export interface ImportSpec {
+  sourcePath: string;
+  alias?: string;
+  names?: string[];
+}
+
+export interface EnumMember {
+  name: string;
+  value?: Expr;
+}
+
+export interface InheritanceSpec {
+  relation: "extends" | "derives";
+  target: string;
+}
+
 export interface TopDecl {
   kind: TopDeclKind;
   name?: string;
@@ -116,6 +138,12 @@ export interface TopDecl {
   typeParams?: string[];
   typeExpr?: TypeExpr;
   structFields?: StructField[];
+  importSpec?: ImportSpec;
+  enumMembers?: EnumMember[];
+  inheritance?: InheritanceSpec;
+  params?: ParamSpec[];
+  args?: Expr[];
+  callArgs?: CallArg[];
 }
 
 export interface Statement {
@@ -147,7 +175,7 @@ export interface Statement {
   body?: Statement[];
   elseBody?: Statement[];
   query?: QuerySpec;
-  params?: Array<{ type?: string; name: string; defaultValue?: Expr }>;
+  params?: ParamSpec[];
   hints?: Expr[];
   loc: SourceLoc;
 }

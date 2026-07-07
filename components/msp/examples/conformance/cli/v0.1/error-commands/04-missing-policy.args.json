@@ -1,0 +1,9 @@
+[
+  "--registry",
+  "examples/registry",
+  "trust",
+  "evaluate",
+  "skill.rust.refactor.module.v1",
+  "--policy",
+  "examples/policies/missing.trust-policy.json"
+]

@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "msp://schemas/dependency.schema.json",
+  "title": "MSP Skill Dependency",
+  "description": "A dependency edge from one MSP skill or pack to another protocol artifact. For local skill and skill_pack dependencies, v0.1 resolves the indexed manifest id and applies deterministic semantic-version matching via resolution.strategy.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "id", "requirement", "required"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": ["skill", "skill_pack", "schema", "verification_contract", "trust_anchor", "format_adapter", "runtime_capability"]
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "requirement": {
+      "type": "string",
+      "description": "For local skill and skill_pack dependencies, a semantic version used with resolution.strategy. Other dependency types may use a URI or capability expression understood by the resolver.",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "required": {
+      "type": "boolean"
+    },
+    "purpose": {
+      "type": "string",
+      "maxLength": 500
+    },
+    "trust": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "required_issuer": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "required_hash": {
+          "type": "string",
+          "pattern": "^(sha256|sha384|sha512):[A-Fa-f0-9]+$"
+        },
+        "must_be_signed": {
+          "type": "boolean",
+          "default": false
+        },
+        "allowed_registries": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "uniqueItems": true,
+          "default": []
+        }
+      }
+    },
+    "resolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "strategy": {
+          "type": "string",
+          "enum": ["exact", "compatible", "latest_patch", "latest_minor", "manual"],
+          "description": "Version matching strategy for local skill and skill_pack dependencies. exact requires equality; compatible is semver-compatible and at least the requirement; latest_patch allows newer patches within the same major/minor; latest_minor allows newer minors within the same major; manual is treated as exact by the local deterministic resolver.",
+          "default": "compatible"
+        },
+        "allow_prerelease": {
+          "type": "boolean",
+          "description": "Permit prerelease resolved versions for local skill and skill_pack semantic-version matching. Prereleases are rejected by default.",
+          "default": false
+        }
+      }
+    }
+  }
+}

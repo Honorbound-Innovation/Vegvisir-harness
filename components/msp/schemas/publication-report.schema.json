@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "msp://schemas/publication-report.schema.json",
+  "title": "MSP Publication Report",
+  "description": "Report emitted by mutating MSP publication commands after writing generated registry artifacts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "registry",
+    "pack_id",
+    "skills_published",
+    "files_written",
+    "warnings",
+    "signed"
+  ],
+  "properties": {
+    "registry": { "$ref": "#/$defs/path" },
+    "pack_id": {
+      "anyOf": [
+        { "$ref": "#/$defs/pack_id" },
+        { "type": "null" }
+      ]
+    },
+    "skills_published": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/skill_id" },
+      "uniqueItems": true
+    },
+    "files_written": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/path" },
+      "uniqueItems": true
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 2000 }
+    },
+    "signed": { "type": "boolean" },
+    "public_key_ref": {
+      "type": "string",
+      "pattern": "^ed25519:[A-Za-z0-9+/]+={0,2}$",
+      "maxLength": 512
+    },
+    "public_key_sha256": {
+      "type": "string",
+      "pattern": "^sha256:[A-Fa-f0-9]{64}$"
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "signed": { "const": true } }, "required": ["signed"] },
+      "then": { "required": ["public_key_ref", "public_key_sha256"] }
+    },
+    {
+      "if": { "properties": { "signed": { "const": false } }, "required": ["signed"] },
+      "then": {
+        "not": {
+          "anyOf": [
+            { "required": ["public_key_ref"] },
+            { "required": ["public_key_sha256"] }
+          ]
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "path": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "skill_id": { "type": "string", "pattern": "^skill(\\.[a-z0-9][a-z0-9_-]*)+\\.v[0-9]+$" },
+    "pack_id": { "type": "string", "pattern": "^pack(\\.[a-z0-9][a-z0-9_-]*)+\\.v[0-9]+$" }
+  }
+}

@@ -10,11 +10,13 @@ pub mod registry;
 pub mod review;
 pub mod runtime;
 pub mod security;
+pub mod semantic;
 pub mod source_meta;
 pub mod telemetry;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
+use serde::Serialize;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -99,6 +101,16 @@ enum Commands {
         #[arg(long)]
         domain: Option<String>,
     },
+    /// Import pre-existing skill YAML/JSON or an existing Skiller bundle without deterministic raw-source generation.
+    ImportSkill {
+        input: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long, default_value = "skiller-imported-bundle")]
+        name: String,
+        #[arg(long)]
+        domain: Option<String>,
+    },
     /// Validate a skill bundle.
     Validate { bundle: PathBuf },
     /// List skills in a bundle.
@@ -133,7 +145,7 @@ enum Commands {
         bundle: PathBuf,
         #[arg(long)]
         out: PathBuf,
-        #[arg(long, default_value = "mock")]
+        #[arg(long, default_value = "vegvisir")]
         provider: String,
         #[arg(long)]
         domain_profile: Option<String>,
@@ -289,6 +301,8 @@ enum Commands {
     },
     /// Assess registry publication readiness.
     Readiness { bundle: PathBuf },
+    /// Summarize suspicious CLI operations, weak titles, and fallback-only Forge state.
+    SuspiciousCommands { bundle: PathBuf },
     /// Generate improvement proposals from telemetry.
     ImproveFromTelemetry {
         bundle: PathBuf,
@@ -360,6 +374,7 @@ enum ForgePassArg {
     RegistryReadiness,
     Critique,
     VerifierReview,
+    ScriptGeneration,
 }
 
 impl From<ForgePassArg> for models::ForgePassType {
@@ -375,6 +390,7 @@ impl From<ForgePassArg> for models::ForgePassType {
             ForgePassArg::RegistryReadiness => models::ForgePassType::RegistryReadiness,
             ForgePassArg::Critique => models::ForgePassType::Critique,
             ForgePassArg::VerifierReview => models::ForgePassType::VerifierReview,
+            ForgePassArg::ScriptGeneration => models::ForgePassType::ScriptGeneration,
         }
     }
 }
@@ -386,6 +402,91 @@ impl From<LoadModeArg> for runtime::LoadMode {
             LoadModeArg::Body => runtime::LoadMode::Body,
             LoadModeArg::Extended => runtime::LoadMode::Extended,
         }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct SemanticDiagnosticReport {
+    suspicious_cli_operation_count: usize,
+    weak_title_count: usize,
+    fallback_only_forge: bool,
+    provider_reviewed: bool,
+    findings: Vec<SemanticDiagnosticFinding>,
+}
+
+#[derive(Debug, Serialize)]
+struct SemanticDiagnosticFinding {
+    kind: String,
+    skill_id: Option<String>,
+    title: Option<String>,
+    target_command: Option<String>,
+    reason: String,
+}
+
+fn semantic_diagnostic_report(bundle: &models::SkillBundle) -> SemanticDiagnosticReport {
+    let mut findings = Vec::new();
+    let mut suspicious_cli_operation_count = 0usize;
+    let mut weak_title_count = 0usize;
+
+    for skill in &bundle.skills {
+        if matches!(skill.skill_type, models::SkillType::CliOperation) {
+            if let Some(command) = skill.metadata.get("target_command") {
+                if let Some(reason) = semantic::suspicious_cli_command_reason(command) {
+                    suspicious_cli_operation_count += 1;
+                    findings.push(SemanticDiagnosticFinding {
+                        kind: "suspicious_cli_operation".into(),
+                        skill_id: Some(skill.id.clone()),
+                        title: Some(skill.title.clone()),
+                        target_command: Some(command.clone()),
+                        reason,
+                    });
+                }
+            } else {
+                suspicious_cli_operation_count += 1;
+                findings.push(SemanticDiagnosticFinding {
+                    kind: "suspicious_cli_operation".into(),
+                    skill_id: Some(skill.id.clone()),
+                    title: Some(skill.title.clone()),
+                    target_command: None,
+                    reason: "CliOperation has no target_command metadata".into(),
+                });
+            }
+        }
+        if semantic::looks_like_weak_title(&skill.title) {
+            weak_title_count += 1;
+            findings.push(SemanticDiagnosticFinding {
+                kind: "weak_title".into(),
+                skill_id: Some(skill.id.clone()),
+                title: Some(skill.title.clone()),
+                target_command: skill.metadata.get("target_command").cloned(),
+                reason: "title looks like a markdown/list/table/source fragment".into(),
+            });
+        }
+    }
+
+    let fallback_only_forge = bundle.forge_requests.iter().any(|request| {
+        request
+            .provider_provenance
+            .as_ref()
+            .map(|provenance| !provenance.live_reasoning)
+            .unwrap_or_else(|| request.provider.eq_ignore_ascii_case("vegvisir"))
+    });
+    if fallback_only_forge {
+        findings.push(SemanticDiagnosticFinding {
+            kind: "forge_provider_review".into(),
+            skill_id: None,
+            title: None,
+            target_command: None,
+            reason: "provider semantic review was not performed; Forge history lacks live provider-backed provenance".into(),
+        });
+    }
+
+    SemanticDiagnosticReport {
+        suspicious_cli_operation_count,
+        weak_title_count,
+        fallback_only_forge,
+        provider_reviewed: !fallback_only_forge,
+        findings,
     }
 }
 
@@ -480,6 +581,16 @@ where
             compiler::compile_cli_help(&input, &name, domain.as_deref())?,
             out,
             "CLI help",
+        )?,
+        Commands::ImportSkill {
+            input,
+            out,
+            name,
+            domain,
+        } => write_bundle(
+            compiler::import_skill_path(&input, &name, domain.as_deref())?,
+            out,
+            "imported skill",
         )?,
         Commands::Validate { bundle } => {
             let report = registry::validate_bundle_path(&bundle)?;
@@ -599,6 +710,10 @@ where
             std::fs::write(
                 out.join("forge-response-template.yaml"),
                 serde_yaml::to_string(&response_template)?,
+            )?;
+            std::fs::write(
+                out.join("skiller-vegvisir-system-prompt.md"),
+                forge::skiller_specialized_vegvisir_system_prompt(),
             )?;
             std::fs::write(
                 out.join("vegvisir-prompt.md"),
@@ -818,6 +933,13 @@ where
             println!(
                 "{}",
                 serde_yaml::to_string(&registry::readiness_report(&bundle))?
+            );
+        }
+        Commands::SuspiciousCommands { bundle } => {
+            let bundle = registry::read_bundle(&bundle)?;
+            println!(
+                "{}",
+                serde_yaml::to_string(&semantic_diagnostic_report(&bundle))?
             );
         }
         Commands::ImproveFromTelemetry { bundle, out } => {

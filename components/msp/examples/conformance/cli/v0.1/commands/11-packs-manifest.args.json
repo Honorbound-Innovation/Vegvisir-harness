@@ -1,0 +1,7 @@
+[
+  "--registry",
+  "examples/registry",
+  "packs",
+  "manifest",
+  "pack.rust.engineering.v1"
+]
