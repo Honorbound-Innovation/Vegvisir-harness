@@ -3159,7 +3159,7 @@ fn apply_requested_model_or_default(app: &mut TuiApplication, model: &str) -> an
 }
 
 fn provider_requires_dynamic_model_discovery(provider: &str) -> bool {
-    matches!(provider, "xai" | "xai-hbse")
+    matches!(provider, "openai-sso" | "xai" | "xai-hbse")
 }
 
 fn apply_command(app: &mut TuiApplication, command: &str) -> anyhow::Result<()> {
@@ -3443,6 +3443,14 @@ mod tests {
             }
         }
         unreachable!("bridge test app construction loop always returns")
+    }
+
+    #[test]
+    fn live_catalog_providers_require_dynamic_model_discovery() {
+        assert!(provider_requires_dynamic_model_discovery("openai-sso"));
+        assert!(provider_requires_dynamic_model_discovery("xai"));
+        assert!(provider_requires_dynamic_model_discovery("xai-hbse"));
+        assert!(!provider_requires_dynamic_model_discovery("openai"));
     }
 
     fn execute_sh(app: &mut TuiApplication, text: &str) -> crate::types::Observation {

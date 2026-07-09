@@ -2068,6 +2068,9 @@ fn provider_and_model_catalogs_load() -> anyhow::Result<()> {
         "azure:gpt-5.4"
     );
     assert!(models.is_model_allowed_for_provider(models.get("gpt-5.5").unwrap(), "openai-sso"));
+    for model in ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] {
+        assert!(models.is_model_allowed_for_provider(models.get(model).unwrap(), "openai-sso"));
+    }
     assert!(models.is_model_allowed_for_provider(models.get("gpt-5.5").unwrap(), "openai-hbse"));
     assert!(
         models.is_model_allowed_for_provider(
@@ -5559,6 +5562,18 @@ fn new_harness_command_suggestions_are_discoverable() -> anyhow::Result<()> {
             .iter()
             .any(|suggestion| suggestion.value == "compare")
     );
+
+    app.session.current_provider = "openai-sso".to_string();
+    app.input.set_buffer("/model gpt-5.6");
+    let openai_sso_models = app.build_suggestions();
+    for model in ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] {
+        assert!(
+            openai_sso_models
+                .iter()
+                .any(|suggestion| suggestion.value == model),
+            "TUI model suggestions should include {model}"
+        );
+    }
 
     app.input.set_buffer("/auto l");
     let auto = app.build_suggestions();
