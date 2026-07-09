@@ -418,6 +418,7 @@ fn models_from_raw(provider_name: &str, raw_models: &Value) -> Vec<ModelInfo> {
                 let value = object
                     .get("id")
                     .or_else(|| object.get("name"))
+                    .or_else(|| object.get("slug"))
                     .and_then(Value::as_str)?;
                 let model_id = value.strip_prefix("models/").unwrap_or(value);
                 let display = object
@@ -426,7 +427,9 @@ fn models_from_raw(provider_name: &str, raw_models: &Value) -> Vec<ModelInfo> {
                     .or_else(|| object.get("name"))
                     .and_then(Value::as_str)
                     .map(|value| value.strip_prefix("models/").unwrap_or(value).to_string());
-                Some(provider_model(provider_name, model_id, display))
+                let mut model = provider_model(provider_name, model_id, display);
+                model.context_window = object.get("context_window").and_then(Value::as_u64);
+                Some(model)
             }
             _ => None,
         })

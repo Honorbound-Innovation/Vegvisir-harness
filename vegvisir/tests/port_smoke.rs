@@ -2671,7 +2671,7 @@ fn openai_sso_model_discovery_uses_saved_tokens() -> anyhow::Result<()> {
                 break;
             }
         }
-        let body = r#"{"data":[{"id":"gpt-sso-live"}]}"#;
+        let body = r#"{"models":[{"slug":"gpt-5.6-sol","display_name":"GPT-5.6-Sol","context_window":372000,"supported_in_api":true,"visibility":"list"},{"slug":"gpt-5.6-terra","display_name":"GPT-5.6-Terra","context_window":372000,"supported_in_api":true,"visibility":"list"},{"slug":"gpt-5.6-luna","display_name":"GPT-5.6-Luna","context_window":372000,"supported_in_api":true,"visibility":"list"}]}"#;
         write!(
             stream,
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
@@ -2704,8 +2704,13 @@ fn openai_sso_model_discovery_uses_saved_tokens() -> anyhow::Result<()> {
 
     let models = discover_provider_models(&provider)?;
 
-    assert_eq!(models[0].name, "gpt-sso-live");
+    assert_eq!(models.len(), 3);
+    assert_eq!(models[0].name, "gpt-5.6-sol");
+    assert_eq!(models[0].display_name.as_deref(), Some("GPT-5.6-Sol"));
+    assert_eq!(models[0].context_window, Some(372000));
     assert_eq!(models[0].provider, "openai-sso");
+    assert_eq!(models[1].name, "gpt-5.6-terra");
+    assert_eq!(models[2].name, "gpt-5.6-luna");
     let request = server.join().expect("server thread completed")?;
     assert!(request.contains("GET /models HTTP/1.1"));
     assert!(request.contains("Authorization: Bearer sso-access-token"));
