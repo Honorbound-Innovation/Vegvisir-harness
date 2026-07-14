@@ -5368,13 +5368,90 @@ impl serde::Serialize for ProviderRunEvent {
 }
 
 fn session_conversation_messages(session: &SessionState) -> Vec<ChatMessage> {
-    let messages = session
+    fit_conversation_messages_to_budget(
+        session_provider_context_messages(session),
+        provider_history_char_budget(session),
+    )
+}
+
+fn session_provider_context_messages(session: &SessionState) -> Vec<ChatMessage> {
+    session
         .messages
         .iter()
-        .filter(|message| message.role != "system")
+        .filter(|message| {
+            message.role != "system"
+                || message.content.starts_with("Context Capsule:")
+                || message
+                    .content
+                    .starts_with("Earlier conversation history was compacted by Vegvisir")
+        })
         .cloned()
-        .collect::<Vec<_>>();
-    fit_conversation_messages_to_budget(messages, provider_history_char_budget(session))
+        .collect()
+}
+
+fn automatically_compact_session_history(
+    session: &mut SessionState,
+    model: &ModelInfo,
+    stable_system_context: &str,
+) -> anyhow::Result<Option<ContextBudgetDecision>> {
+    let messages = session_provider_context_messages(session);
+    if messages.len() < 2 {
+        return Ok(None);
+    }
+
+    let mut probe = messages.clone();
+    if !stable_system_context.trim().is_empty() {
+        probe.insert(
+            0,
+            ChatMessage {
+                role: "system".to_string(),
+                content: stable_system_context.to_string(),
+                attachments: Vec::new(),
+                created_at: chrono::Utc::now(),
+            },
+        );
+    }
+    let decision = provider_message_budget_decision(&probe, model)?;
+    if !matches!(
+        decision.action,
+        ContextBudgetAction::CompactRecommended | ContextBudgetAction::Block
+    ) {
+        return Ok(None);
+    }
+
+    let current_chars = messages
+        .iter()
+        .map(|message| message.content.chars().count())
+        .sum::<usize>();
+    let system_tokens = count_text_tokens(&model.name, stable_system_context) as usize;
+    let token_target_chars = context_repair_target_tokens(model)
+        .saturating_sub(system_tokens)
+        .saturating_mul(3);
+    let ratio_target_chars = if decision.percentage > 0.0 {
+        ((current_chars as f64) * (PROVIDER_CONTEXT_REPAIR_TARGET_PERCENT / decision.percentage))
+            .floor() as usize
+    } else {
+        current_chars
+    };
+    let target_chars = token_target_chars
+        .min(ratio_target_chars)
+        .min(current_chars.saturating_sub(1));
+    if target_chars == 0 {
+        return Ok(None);
+    }
+
+    let compacted = fit_conversation_messages_to_budget(messages.clone(), target_chars);
+    let changed = compacted.len() != messages.len()
+        || compacted
+            .iter()
+            .zip(messages.iter())
+            .any(|(left, right)| left.role != right.role || left.content != right.content);
+    if !changed {
+        return Ok(None);
+    }
+
+    session.messages = compacted;
+    Ok(Some(decision))
 }
 
 fn provider_history_char_budget(session: &SessionState) -> usize {
@@ -5791,6 +5868,15 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
         }
         let model = model_with_session_reasoning(catalog_model, session);
         let model = &model;
+        if let Some(decision) =
+            automatically_compact_session_history(session, model, &session.system_prompt.clone())?
+        {
+            session.activity = "automatically compacted session context".to_string();
+            self.emit_event(ProviderRunEvent::Activity(format!(
+                "automatically compacted session context at {:.1}% usage",
+                decision.percentage
+            )));
+        }
         let mut provider_messages = session_conversation_messages(session);
         if !session.system_prompt.is_empty() {
             provider_messages.insert(
@@ -6012,6 +6098,15 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
         ));
         let mut envelope = envelope;
         apply_system_prompt_to_envelope(&mut envelope, &session.system_prompt);
+        if let Some(decision) =
+            automatically_compact_session_history(session, model, &envelope.model_request.prompt)?
+        {
+            session.activity = "automatically compacted session context".to_string();
+            self.emit_event(ProviderRunEvent::Activity(format!(
+                "automatically compacted session context at {:.1}% usage",
+                decision.percentage
+            )));
+        }
         let mut provider_messages = session_conversation_messages(session);
         provider_messages.insert(
             0,
@@ -7079,6 +7174,93 @@ const message = "approval_id=apr_123";
                 .and_then(Value::as_str),
             Some("auto")
         );
+    }
+
+    #[test]
+    fn session_conversation_messages_includes_manual_context_capsule() {
+        let mut session = SessionState::new("/tmp/workspace", Vec::new(), Vec::new());
+        session.messages.push(ChatMessage {
+            role: "system".to_string(),
+            content: "Context Capsule: manual repair\nCurrent Objective:\n- keep working"
+                .to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        session.messages.push(ChatMessage {
+            role: "system".to_string(),
+            content: "Tool finished: read_file - ok".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "continue".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+
+        let provider_messages = session_conversation_messages(&session);
+
+        assert!(provider_messages.iter().any(|message| {
+            message.role == "system" && message.content.starts_with("Context Capsule:")
+        }));
+        assert!(
+            provider_messages
+                .iter()
+                .all(|message| !message.content.starts_with("Tool finished:"))
+        );
+    }
+
+    #[test]
+    fn automatic_compaction_mutates_session_and_keeps_latest_request() -> anyhow::Result<()> {
+        let model = ModelInfo {
+            name: "gpt-4o".to_string(),
+            provider: "openai".to_string(),
+            display_name: None,
+            context_window: Some(1024),
+            supports_streaming: true,
+            enabled: true,
+            metadata: Default::default(),
+        };
+        let mut session = SessionState::new("/tmp/workspace", Vec::new(), Vec::new());
+        for index in 0..8 {
+            session.messages.push(ChatMessage {
+                role: if index % 2 == 0 { "user" } else { "assistant" }.to_string(),
+                content: format!("old-{index} {}", "context ".repeat(220)),
+                attachments: Vec::new(),
+                created_at: chrono::Utc::now(),
+            });
+        }
+        session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "latest request must survive".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        let original_count = session.messages.len();
+
+        let decision =
+            automatically_compact_session_history(&mut session, &model, "stable system context")?
+                .expect("oversized session should compact automatically");
+
+        assert!(matches!(
+            decision.action,
+            ContextBudgetAction::CompactRecommended | ContextBudgetAction::Block
+        ));
+        assert!(session.messages.len() < original_count);
+        assert!(session.messages.first().is_some_and(|message| {
+            message
+                .content
+                .starts_with("Earlier conversation history was compacted by Vegvisir")
+        }));
+        assert_eq!(
+            session
+                .messages
+                .last()
+                .map(|message| message.content.as_str()),
+            Some("latest request must survive")
+        );
+        Ok(())
     }
 
     #[test]

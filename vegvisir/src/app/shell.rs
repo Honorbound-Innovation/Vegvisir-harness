@@ -514,7 +514,11 @@ impl TuiApplication {
                 format!("Session title: {}", self.session.title)
             }
             "/branch" | "/fork" => self.branch(&args),
-            "/compress" => self.compress(&args),
+            "/compact" => {
+                let result = self.compress(&args);
+                self.autosave_session();
+                result
+            }
             "/system" => self.system_command(&args)?,
             "/system-prompt" => self.system_command(&[])?,
             "/agent" | "/agents" => self.agent_command(&args)?,

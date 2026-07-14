@@ -525,10 +525,10 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
         cmd("/branch", "branch current session", "/branch [name]", &[]),
         cmd("/fork", "fork current session", "/fork", &["/clone"]),
         cmd(
-            "/compress",
-            "summarize/compress current context",
-            "/compress [topic]",
-            &[],
+            "/compact",
+            "compact current context into a structured handoff capsule",
+            "/compact [topic]",
+            &["/compress"],
         ),
         cmd(
             "/system",
@@ -833,7 +833,7 @@ fn supports_noninteractive(name: &str) -> bool {
 fn infer_command_category(name: &str) -> CommandCategory {
     match name {
         "/workspace" | "/projects" | "/attach" | "/diff" => CommandCategory::Workspace,
-        "/recall" | "/memory" | "/remember" | "/context" | "/model-request" | "/compress" => {
+        "/recall" | "/memory" | "/remember" | "/context" | "/model-request" | "/compact" => {
             CommandCategory::MemoryContext
         }
         "/models" | "/model" | "/effort" | "/fast" | "/provider" | "/sprovider" | "/smodel"
@@ -864,7 +864,7 @@ fn infer_command_safety(name: &str) -> CommandSafety {
         "/workspace" | "/projects" | "/system" | "/agent" | "/agents" | "/ka" | "/profile"
         | "/model" | "/provider" | "/sprovider" | "/smodel" | "/effort" | "/fast" | "/tools"
         | "/approvals" | "/skills" | "/memory" | "/remember" | "/hbse" | "/sudo" | "/mcp"
-        | "/config" => CommandSafety::SessionMutation,
+        | "/config" | "/compact" => CommandSafety::SessionMutation,
         "/tasks" => CommandSafety::Destructive,
         "/attach" | "/speech" | "/tts" => CommandSafety::ExternalEffect,
         "/diff" | "/eval" | "/verify" => CommandSafety::ReadOnly,
@@ -1108,6 +1108,18 @@ mod tests {
         let ka = registry.get("/ka").expect("ka command exists");
         assert!(ka.aliases.contains(&"/persona".to_string()));
         assert!(ka.aliases.contains(&"/soul".to_string()));
+    }
+
+    #[test]
+    fn compact_command_is_discoverable_and_compress_remains_an_alias() {
+        let registry = CommandRegistry::with_defaults();
+        let compact = registry.get("/compact").expect("compact command exists");
+        assert_eq!(compact.name, "/compact");
+        assert!(compact.aliases.contains(&"/compress".to_string()));
+        assert_eq!(registry.canonical("/compress"), "/compact");
+        let spec = CommandSpec::from_definition(compact);
+        assert_eq!(spec.category, CommandCategory::MemoryContext);
+        assert_eq!(spec.safety, CommandSafety::SessionMutation);
     }
 
     #[test]

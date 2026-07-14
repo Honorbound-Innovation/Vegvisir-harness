@@ -3833,7 +3833,7 @@ fn application_executes_core_commands_and_demo_runner() -> anyhow::Result<()> {
         created_at: Utc::now(),
     });
     let compressed = app
-        .execute_command("/compress context compression")?
+        .execute_command("/compact context compression")?
         .unwrap();
     assert!(compressed.contains("Context Capsule: context compression"));
     assert!(compressed.contains("Current Objective:"));
