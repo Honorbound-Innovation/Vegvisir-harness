@@ -32,6 +32,9 @@ use crate::{
 const TOOL_OBSERVATION_MODEL_MAX_BYTES: usize = 24 * 1024;
 const OPENAI_TOOL_LOOP_MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 const PROVIDER_CONTEXT_REPAIR_TARGET_PERCENT: f64 = 75.0;
+// Image inputs are billed by dimensions/detail, not by tokenizing their base64 transport.
+// This intentionally conservative allowance exceeds typical provider image-token charges.
+const PROVIDER_IMAGE_INPUT_TOKEN_ESTIMATE: usize = 4_096;
 static RUNTIME_MAX_TOOL_ROUNDS: AtomicUsize = AtomicUsize::new(0);
 
 pub fn direct_provider_auth_allowed() -> bool {
@@ -4776,11 +4779,12 @@ fn enforce_provider_payload_budget(
             "Vegvisir blocked an oversized model request before provider send: {bytes} bytes exceeds {OPENAI_TOOL_LOOP_MAX_BODY_BYTES} bytes. This usually means tool observations or context are too large."
         );
     }
-    let decision = evaluate_serialized_payload_budget(model, &serialized);
+    let estimated_tokens = estimated_provider_payload_tokens(model, payload)?;
+    let decision = evaluate_payload_token_budget(model, estimated_tokens);
     if decision.action == ContextBudgetAction::Block {
         anyhow::bail!(
             "Vegvisir blocked an oversized model request before provider send: estimated {} input tokens for model {} exceeds the active context budget ({}; {:.1}% used). {}",
-            count_text_tokens(&model.name, &serialized),
+            estimated_tokens,
             model.name,
             model
                 .context_window
@@ -4797,21 +4801,74 @@ fn enforce_openai_payload_budget(model: &ModelInfo, payload: &Value) -> anyhow::
     enforce_provider_payload_budget(model, payload).map(|_| ())
 }
 
-fn evaluate_serialized_payload_budget(
-    model: &ModelInfo,
-    serialized_payload: &str,
-) -> ContextBudgetDecision {
-    let used_tokens = count_text_tokens(&model.name, serialized_payload) as usize;
+fn evaluate_payload_token_budget(model: &ModelInfo, used_tokens: usize) -> ContextBudgetDecision {
     let max_tokens = model.context_window.unwrap_or(0) as usize;
     ContextBudgetPolicy::default().evaluate(used_tokens, max_tokens)
+}
+
+fn estimated_provider_payload_tokens(model: &ModelInfo, payload: &Value) -> anyhow::Result<usize> {
+    let mut accounting_payload = payload.clone();
+    let image_count = redact_inline_images_for_token_accounting(&mut accounting_payload);
+    let serialized = serde_json::to_string(&accounting_payload)?;
+    Ok((count_text_tokens(&model.name, &serialized) as usize)
+        .saturating_add(image_count.saturating_mul(PROVIDER_IMAGE_INPUT_TOKEN_ESTIMATE)))
+}
+
+fn redact_inline_images_for_token_accounting(value: &mut Value) -> usize {
+    match value {
+        Value::Array(items) => items
+            .iter_mut()
+            .map(redact_inline_images_for_token_accounting)
+            .sum(),
+        Value::Object(object) => {
+            let mut image_count = 0;
+
+            // OpenAI/Responses-style data URLs.
+            if let Some(Value::String(url)) = object.get_mut("image_url")
+                && url.starts_with("data:image/")
+                && url.contains(";base64,")
+            {
+                *url = "[inline image omitted from text token accounting]".to_string();
+                image_count += 1;
+            }
+
+            // Anthropic-style {type: base64, media_type: image/*, data: ...} blocks.
+            let anthropic_image = object.get("type").and_then(Value::as_str) == Some("base64")
+                && object
+                    .get("media_type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|mime| mime.starts_with("image/"));
+            // Google-style {mimeType: image/*, data: ...} inlineData blocks.
+            let google_image = object
+                .get("mimeType")
+                .and_then(Value::as_str)
+                .is_some_and(|mime| mime.starts_with("image/"));
+            if (anthropic_image || google_image)
+                && let Some(Value::String(data)) = object.get_mut("data")
+                && !data.is_empty()
+            {
+                *data = "[inline image omitted from text token accounting]".to_string();
+                image_count += 1;
+            }
+
+            image_count
+                + object
+                    .values_mut()
+                    .map(redact_inline_images_for_token_accounting)
+                    .sum::<usize>()
+        }
+        _ => 0,
+    }
 }
 
 fn provider_payload_budget_decision(
     model: &ModelInfo,
     payload: &Value,
 ) -> anyhow::Result<ContextBudgetDecision> {
-    let serialized = serde_json::to_string(payload)?;
-    Ok(evaluate_serialized_payload_budget(model, &serialized))
+    Ok(evaluate_payload_token_budget(
+        model,
+        estimated_provider_payload_tokens(model, payload)?,
+    ))
 }
 
 fn provider_message_budget_decision(
@@ -6553,6 +6610,79 @@ mod tests {
                 .to_string()
                 .contains("blocked an oversized model request before provider send")
         );
+    }
+
+    #[test]
+    fn provider_payload_budget_does_not_tokenize_inline_image_base64_as_text() -> anyhow::Result<()>
+    {
+        let model = ModelInfo {
+            name: "gpt-5.6-sol".to_string(),
+            provider: "openai-sso".to_string(),
+            display_name: None,
+            context_window: Some(372_000),
+            supports_streaming: true,
+            enabled: true,
+            metadata: Default::default(),
+        };
+        // Mirrors the transport size of the 614,555-byte PNG from the reported failure.
+        let image_base64 = "A".repeat(820_000);
+        let payload = json!({
+            "model": model.name,
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "inspect this screenshot"},
+                    {
+                        "type": "input_image",
+                        "image_url": format!("data:image/png;base64,{image_base64}")
+                    }
+                ]
+            }]
+        });
+        let estimated = estimated_provider_payload_tokens(&model, &payload)?;
+        assert!(
+            estimated < 10_000,
+            "unexpected image-aware estimate: {estimated}"
+        );
+        assert_ne!(
+            provider_payload_budget_decision(&model, &payload)?.action,
+            ContextBudgetAction::Block
+        );
+        enforce_provider_payload_budget(&model, &payload)?;
+        Ok(())
+    }
+
+    #[test]
+    fn image_token_accounting_handles_openai_anthropic_and_google_shapes() -> anyhow::Result<()> {
+        let model = ModelInfo {
+            name: "gpt-4o".to_string(),
+            provider: "openai".to_string(),
+            display_name: None,
+            context_window: Some(128_000),
+            supports_streaming: true,
+            enabled: true,
+            metadata: Default::default(),
+        };
+        let payload = json!({
+            "openai": {"image_url": format!("data:image/png;base64,{}", "A".repeat(20_000))},
+            "anthropic": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": "B".repeat(20_000)
+            },
+            "google": {
+                "inlineData": {
+                    "mimeType": "image/png",
+                    "data": "C".repeat(20_000)
+                }
+            }
+        });
+
+        let estimated = estimated_provider_payload_tokens(&model, &payload)?;
+        assert!(estimated >= 3 * PROVIDER_IMAGE_INPUT_TOKEN_ESTIMATE);
+        assert!(estimated < 4 * PROVIDER_IMAGE_INPUT_TOKEN_ESTIMATE);
+        Ok(())
     }
 
     #[test]
