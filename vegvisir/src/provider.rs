@@ -5394,15 +5394,23 @@ fn fit_conversation_messages_to_budget(
         return messages;
     }
 
+    // Reserve part of the provider-history budget for a digest before selecting the
+    // recent suffix. Adding a digest after filling the entire budget would make the
+    // supposedly fitted request exceed its own limit.
+    let summary_budget = (budget_chars / 5).clamp(1_024, 12_000).min(budget_chars);
+    let recent_history_budget = budget_chars.saturating_sub(summary_budget);
     let mut kept = Vec::new();
     let mut used_chars = 0usize;
     for message in messages.iter().rev() {
         let message_chars = message.content.chars().count();
-        if !kept.is_empty() && used_chars.saturating_add(message_chars) > budget_chars {
+        if !kept.is_empty() && used_chars.saturating_add(message_chars) > recent_history_budget {
             break;
         }
-        if message_chars > budget_chars {
-            kept.push(truncate_conversation_message(message, budget_chars));
+        if message_chars > recent_history_budget {
+            kept.push(truncate_conversation_message(
+                message,
+                recent_history_budget,
+            ));
             break;
         }
         kept.push(message.clone());
@@ -5416,9 +5424,7 @@ fn fit_conversation_messages_to_budget(
             0,
             ChatMessage {
                 role: "system".to_string(),
-                content: format!(
-                    "Earlier conversation history was omitted from this provider request because it exceeded the model context budget. Omitted messages: {omitted}."
-                ),
+                content: compact_omitted_conversation(&messages[..omitted], summary_budget),
                 attachments: Vec::new(),
                 created_at: chrono::Utc::now(),
             },
@@ -5427,12 +5433,76 @@ fn fit_conversation_messages_to_budget(
     kept
 }
 
+fn compact_omitted_conversation(messages: &[ChatMessage], max_chars: usize) -> String {
+    let header = format!(
+        "Earlier conversation history was compacted by Vegvisir before this provider request. Compacted messages: {}.\n\nCompacted history digest (newest omitted excerpts take priority):",
+        messages.len()
+    );
+    if messages.is_empty() || max_chars <= header.chars().count() {
+        return truncate_chars_owned(&header, max_chars);
+    }
+
+    let mut excerpts = Vec::new();
+    let mut used = header.chars().count();
+    for message in messages.iter().rev() {
+        let role = if message.role.trim().is_empty() {
+            "unknown"
+        } else {
+            message.role.as_str()
+        };
+        let compact = message
+            .content
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if compact.is_empty() {
+            continue;
+        }
+
+        let prefix = format!("- [{role}] ");
+        let separator_chars = 1;
+        let remaining = max_chars.saturating_sub(used + separator_chars);
+        if remaining <= prefix.chars().count() {
+            break;
+        }
+        let excerpt_budget = remaining.saturating_sub(prefix.chars().count()).min(900);
+        let excerpt = truncate_chars_owned(&compact, excerpt_budget);
+        let entry = format!("{prefix}{excerpt}");
+        used = used.saturating_add(separator_chars + entry.chars().count());
+        excerpts.push(entry);
+    }
+    excerpts.reverse();
+
+    if excerpts.is_empty() {
+        header
+    } else {
+        format!("{header}\n{}", excerpts.join("\n"))
+    }
+}
+
+fn truncate_chars_owned(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    if max_chars <= 1 {
+        return "…".chars().take(max_chars).collect();
+    }
+    let mut truncated = value.chars().take(max_chars - 1).collect::<String>();
+    truncated.push('…');
+    truncated
+}
+
 fn truncate_conversation_message(message: &ChatMessage, budget_chars: usize) -> ChatMessage {
     let marker =
         "\n\n[Message truncated by Vegvisir before provider send to fit the model context budget.]";
-    let available = budget_chars.saturating_sub(marker.chars().count()).max(256);
     let mut truncated = message.clone();
-    truncated.content = message
+    let marker_chars = marker.chars().count();
+    if budget_chars <= marker_chars {
+        truncated.content = truncate_chars_owned(marker, budget_chars);
+        return truncated;
+    }
+    let available = budget_chars - marker_chars;
+    let tail = message
         .content
         .chars()
         .rev()
@@ -5441,7 +5511,7 @@ fn truncate_conversation_message(message: &ChatMessage, budget_chars: usize) -> 
         .into_iter()
         .rev()
         .collect::<String>();
-    truncated.content.insert_str(0, marker);
+    truncated.content = format!("{marker}{tail}");
     truncated
 }
 
@@ -6451,6 +6521,76 @@ mod tests {
     }
 
     #[test]
+    fn compacted_history_digest_prioritizes_recent_omitted_context_and_stays_bounded() {
+        let messages = (0..20)
+            .map(|index| ChatMessage {
+                role: if index % 2 == 0 { "user" } else { "assistant" }.to_string(),
+                content: format!("history item {index} {}", "detail ".repeat(200)),
+                attachments: Vec::new(),
+                created_at: chrono::Utc::now(),
+            })
+            .collect::<Vec<_>>();
+
+        let digest = compact_omitted_conversation(&messages, 1_200);
+
+        assert!(digest.contains("Compacted messages: 20"));
+        assert!(digest.contains("history item 19"));
+        assert!(digest.chars().count() <= 1_200);
+    }
+
+    #[test]
+    fn fitted_conversation_includes_digest_without_exceeding_budget() {
+        let messages = vec![
+            ChatMessage {
+                role: "user".to_string(),
+                content: "old task: repair context compaction".to_string(),
+                attachments: Vec::new(),
+                created_at: chrono::Utc::now(),
+            },
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: "a".repeat(3_500),
+                attachments: Vec::new(),
+                created_at: chrono::Utc::now(),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: "continue".to_string(),
+                attachments: Vec::new(),
+                created_at: chrono::Utc::now(),
+            },
+        ];
+
+        let fitted = fit_conversation_messages_to_budget(messages, 4_000);
+        let total_chars = fitted
+            .iter()
+            .map(|message| message.content.chars().count())
+            .sum::<usize>();
+
+        assert!(total_chars <= 4_000);
+        assert!(fitted[0].content.contains("repair context compaction"));
+        assert_eq!(
+            fitted.last().map(|message| message.content.as_str()),
+            Some("continue")
+        );
+    }
+
+    #[test]
+    fn truncating_a_message_honors_even_a_tiny_character_budget() {
+        let message = ChatMessage {
+            role: "assistant".to_string(),
+            content: "content that cannot fit".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        };
+
+        for budget in [0, 1, 16, 128] {
+            let truncated = truncate_conversation_message(&message, budget);
+            assert!(truncated.content.chars().count() <= budget);
+        }
+    }
+
+    #[test]
     fn default_tool_round_limit_is_unlimited() {
         let _guard = TOOL_ROUND_LIMIT_TEST_LOCK.lock().unwrap();
         let previous = RUNTIME_MAX_TOOL_ROUNDS.swap(0, Ordering::Relaxed);
@@ -6976,13 +7116,18 @@ const message = "approval_id=apr_123";
             .map(|message| message.content.chars().count())
             .sum::<usize>();
 
-        assert!(total_chars <= provider_history_char_budget(&session) + 256);
+        assert!(total_chars <= provider_history_char_budget(&session));
         assert!(provider_messages.first().is_some_and(|message| {
             message.role == "system"
                 && message
                     .content
-                    .contains("Earlier conversation history was omitted")
+                    .contains("Earlier conversation history was compacted")
+                && message.content.contains("old request")
         }));
+        assert!(
+            provider_messages[0].content.chars().count()
+                <= (provider_history_char_budget(&session) / 5).clamp(1_024, 12_000)
+        );
         assert!(
             provider_messages
                 .iter()
