@@ -98,10 +98,6 @@ impl TuiApplication {
             self.redraw_requested = true;
             return;
         }
-        if should_refresh_suggestions_before_key(&key) {
-            let suggestions = self.build_suggestions();
-            self.input.update_suggestions(suggestions);
-        }
         if self.handle_sudo_password_prompt_key(key) {
             self.redraw_requested = true;
             return;

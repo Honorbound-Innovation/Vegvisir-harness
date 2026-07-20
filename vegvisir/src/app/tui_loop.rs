@@ -6,7 +6,7 @@ use std::{
 use crossterm::{
     event::{
         self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event,
+        Event, KeyEventKind,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -37,7 +37,10 @@ impl TuiApplication {
 
             if event::poll(poll_timeout)? {
                 match event::read()? {
-                    Event::Key(key) => self.handle_key_event(key),
+                    Event::Key(key) if key.kind != KeyEventKind::Release => {
+                        self.handle_key_event(key)
+                    }
+                    Event::Key(_) => {}
                     Event::Mouse(mouse) => self.handle_mouse_event(mouse),
                     Event::Paste(text) => {
                         if let Some(prompt) = self.sudo_password_prompt.as_mut() {
@@ -105,10 +108,6 @@ impl TuiApplication {
 
     pub(crate) fn should_draw_frame(&self) -> bool {
         self.redraw_requested
-            || !self.pending_background_jobs.is_empty()
-            || !self.pending_speech_jobs.is_empty()
-            || self.task_runner.running_count() > 0
-            || self.active_speech_recording.is_some()
     }
 
     pub(crate) fn drain_before_terminal_exit(&mut self) {

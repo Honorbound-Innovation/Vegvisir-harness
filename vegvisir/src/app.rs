@@ -623,13 +623,6 @@ fn command_matches_palette_query(name: &str, description: &str, raw: &str) -> bo
         || description.contains(&query)
 }
 
-fn should_refresh_suggestions_before_key(key: &KeyEvent) -> bool {
-    !matches!(
-        key.code,
-        KeyCode::Enter | KeyCode::Up | KeyCode::Down | KeyCode::Tab
-    )
-}
-
 fn diff_overlay_from_patch(title: &str, diff: &str) -> DiffOverlay {
     diff_overlay_from_rendered(title, diff, DiffRenderer::Unified)
 }
@@ -3046,6 +3039,31 @@ mod tests {
                 .content
                 .contains("final answer before exit")
         );
+        assert!(app.should_draw_frame());
+        Ok(())
+    }
+
+    #[test]
+    fn idle_background_work_does_not_force_continuous_redraws() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        let (release_tx, release_rx) = mpsc::channel();
+        app.pending_background_jobs
+            .push(std::thread::spawn(move || {
+                release_rx.recv().expect("release background job");
+                Ok("done".to_string())
+            }));
+        app.redraw_requested = false;
+
+        assert!(
+            !app.should_draw_frame(),
+            "background work must redraw only when polling observes a visible change"
+        );
+        release_tx.send(())?;
+        let deadline = Instant::now() + std::time::Duration::from_secs(1);
+        while !app.poll_background_jobs() && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
         assert!(app.should_draw_frame());
         Ok(())
     }
