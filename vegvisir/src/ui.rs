@@ -26,6 +26,7 @@ pub mod input {
     pub struct InputState {
         pub buffer: String,
         pub cursor: usize,
+        pub(crate) cursor_byte: usize,
         pub paste_char_count: usize,
         pub history: Vec<String>,
         pub history_index: Option<usize>,
@@ -83,6 +84,7 @@ pub mod input {
                     .unwrap_or(&suggestion.value)
             );
             self.cursor = self.buffer.chars().count();
+            self.cursor_byte = self.buffer.len();
             self.paste_char_count = 0;
             self.suggestions.clear();
             self.selected_suggestion = 0;
@@ -123,8 +125,8 @@ pub mod input {
             self.history_index = None;
             self.history_draft = None;
             self.preferred_column = None;
-            let byte_index = char_to_byte_index(&self.buffer, self.cursor);
-            self.buffer.insert_str(byte_index, text);
+            self.buffer.insert_str(self.cursor_byte, text);
+            self.cursor_byte += text.len();
             self.cursor += text.chars().count();
             if pasted {
                 self.paste_char_count += text.chars().count();
@@ -135,9 +137,14 @@ pub mod input {
             if self.cursor == 0 {
                 return;
             }
-            let end = char_to_byte_index(&self.buffer, self.cursor);
-            let start = char_to_byte_index(&self.buffer, self.cursor - 1);
+            let end = self.cursor_byte;
+            let start = self.buffer[..end]
+                .char_indices()
+                .next_back()
+                .map(|(index, _)| index)
+                .unwrap_or(0);
             self.buffer.replace_range(start..end, "");
+            self.cursor_byte = start;
             self.cursor -= 1;
             self.paste_char_count = self.paste_char_count.min(self.buffer.chars().count());
             self.history_index = None;
@@ -148,6 +155,7 @@ pub mod input {
         pub fn move_cursor(&mut self, delta: isize) {
             let len = self.buffer.chars().count() as isize;
             self.cursor = (self.cursor as isize + delta).clamp(0, len) as usize;
+            self.cursor_byte = char_to_byte_index(&self.buffer, self.cursor);
             self.preferred_column = None;
         }
 
@@ -185,22 +193,26 @@ pub mod input {
             self.preferred_column = Some(preferred);
             let (start, len) = spans[target_line as usize];
             self.cursor = cursor_for_display_column(&self.buffer, start, len, preferred);
+            self.cursor_byte = char_to_byte_index(&self.buffer, self.cursor);
             true
         }
 
         pub fn move_cursor_home(&mut self) {
             self.cursor = 0;
+            self.cursor_byte = 0;
             self.preferred_column = None;
         }
 
         pub fn move_cursor_end(&mut self) {
             self.cursor = self.buffer.chars().count();
+            self.cursor_byte = self.buffer.len();
             self.preferred_column = None;
         }
 
         pub fn set_buffer(&mut self, value: impl Into<String>) {
             self.buffer = value.into();
             self.cursor = self.buffer.chars().count();
+            self.cursor_byte = self.buffer.len();
             self.paste_char_count = 0;
             self.preferred_column = None;
         }
@@ -208,6 +220,7 @@ pub mod input {
         pub fn clear(&mut self) {
             self.buffer.clear();
             self.cursor = 0;
+            self.cursor_byte = 0;
             self.paste_char_count = 0;
             self.history_index = None;
             self.history_draft = None;
@@ -241,21 +254,21 @@ pub mod input {
                         }
                         None => return false,
                     }
-                    self.cursor = 0;
+                    self.move_cursor_home();
                     return true;
                 }
                 if next >= self.history.len() as isize {
                     self.history_index = None;
                     let draft = self.history_draft.take().unwrap_or_default();
                     self.set_buffer(draft);
-                    self.cursor = 0;
+                    self.move_cursor_home();
                     return true;
                 }
                 let index = next as usize;
                 if !is_slash_command(&self.history[index]) {
                     self.history_index = Some(index);
                     self.set_buffer(self.history[index].clone());
-                    self.cursor = 0;
+                    self.move_cursor_home();
                     return true;
                 }
                 next += delta.signum();
@@ -383,6 +396,21 @@ four",
             input.append_text("a界b", false);
 
             assert_eq!(input.visual_cursor_position(20), (0, 4));
+        }
+
+        #[test]
+        fn append_and_backspace_keep_byte_cursor_in_sync_for_unicode() {
+            let mut input = InputState::default();
+            input.append_text("a界c", false);
+            input.move_cursor(-1);
+            input.append_text("🙂", false);
+            assert_eq!(input.buffer, "a界🙂c");
+
+            input.backspace();
+            assert_eq!(input.buffer, "a界c");
+            input.move_cursor_end();
+            input.append_text("!", false);
+            assert_eq!(input.buffer, "a界c!");
         }
     }
 }

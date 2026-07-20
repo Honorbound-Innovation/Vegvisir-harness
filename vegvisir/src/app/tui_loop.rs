@@ -14,6 +14,8 @@ use crossterm::{
 
 use super::{PendingEditorKind, TuiApplication};
 
+const MAX_QUEUED_EVENTS_PER_TICK: usize = 256;
+
 impl TuiApplication {
     pub fn run(&mut self) -> anyhow::Result<()> {
         let _terminal = TerminalGuard::enter()?;
@@ -36,26 +38,14 @@ impl TuiApplication {
                 .unwrap_or_else(|| Duration::from_millis(50));
 
             if event::poll(poll_timeout)? {
-                match event::read()? {
-                    Event::Key(key) if key.kind != KeyEventKind::Release => {
-                        self.handle_key_event(key)
+                // Terminals commonly queue several key events while a frame is being built.
+                // Process the ready queue as one bounded batch so rapid typing does not pay for
+                // a complete poll/repair/render cycle after every character.
+                for _ in 0..MAX_QUEUED_EVENTS_PER_TICK {
+                    self.handle_terminal_event(event::read()?);
+                    if !self.running || !event::poll(Duration::ZERO)? {
+                        break;
                     }
-                    Event::Key(_) => {}
-                    Event::Mouse(mouse) => self.handle_mouse_event(mouse),
-                    Event::Paste(text) => {
-                        if let Some(prompt) = self.sudo_password_prompt.as_mut() {
-                            for ch in text.chars().filter(|ch| *ch != '\n' && *ch != '\r') {
-                                prompt.push(ch);
-                            }
-                        } else {
-                            self.input.append_text(&text, true);
-                        }
-                        self.redraw_requested = true;
-                    }
-                    Event::Resize(_, _) => {
-                        self.redraw_requested = true;
-                    }
-                    _ => {}
                 }
             }
             if thinking_trace_expiry.is_some_and(|expires_at| expires_at <= chrono::Utc::now()) {
@@ -104,6 +94,26 @@ impl TuiApplication {
         }
         terminal.show_cursor()?;
         Ok(())
+    }
+
+    fn handle_terminal_event(&mut self, terminal_event: Event) {
+        match terminal_event {
+            Event::Key(key) if key.kind != KeyEventKind::Release => self.handle_key_event(key),
+            Event::Key(_) => {}
+            Event::Mouse(mouse) => self.handle_mouse_event(mouse),
+            Event::Paste(text) => {
+                if let Some(prompt) = self.sudo_password_prompt.as_mut() {
+                    for ch in text.chars().filter(|ch| *ch != '\n' && *ch != '\r') {
+                        prompt.push(ch);
+                    }
+                } else {
+                    self.input.append_text(&text, true);
+                }
+                self.redraw_requested = true;
+            }
+            Event::Resize(_, _) => self.redraw_requested = true,
+            _ => {}
+        }
     }
 
     pub(crate) fn should_draw_frame(&self) -> bool {
@@ -234,5 +244,32 @@ impl Drop for TerminalGuard {
             DisableBracketedPaste,
             LeaveAlternateScreen
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    #[test]
+    fn terminal_event_handler_ignores_key_releases() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+
+        app.handle_terminal_event(Event::Key(KeyEvent::new_with_kind(
+            KeyCode::Char('a'),
+            KeyModifiers::NONE,
+            KeyEventKind::Press,
+        )));
+        app.handle_terminal_event(Event::Key(KeyEvent::new_with_kind(
+            KeyCode::Char('b'),
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        )));
+
+        assert_eq!(app.input.buffer, "a");
+        assert!(app.redraw_requested);
+        Ok(())
     }
 }
