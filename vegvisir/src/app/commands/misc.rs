@@ -1310,34 +1310,11 @@ Commands:
     }
 
     pub(crate) fn load_subagent_records(&self) -> anyhow::Result<Vec<SubAgentTaskRecord>> {
-        let path = self.subagent_board_path();
-        if !path.exists() {
-            return Ok(Vec::new());
-        }
-        let text = std::fs::read_to_string(&path)?;
-        if text.trim().is_empty() {
-            return Ok(Vec::new());
-        }
-        match serde_json::from_str::<Vec<SubAgentTaskRecord>>(&text) {
-            Ok(records) => Ok(records),
-            Err(original_error) => {
-                if let Some(records) = recover_subagent_board_records(&text) {
-                    let _ = self.save_subagent_records(&records);
-                    Ok(records)
-                } else {
-                    Err(original_error.into())
-                }
-            }
-        }
+        crate::tools::load_subagent_board_records(&self.subagent_board_path())
     }
 
     fn save_subagent_records(&self, records: &[SubAgentTaskRecord]) -> anyhow::Result<()> {
-        let path = self.subagent_board_path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        atomic_write_json(&path, &serde_json::to_string_pretty(records)?)?;
-        Ok(())
+        crate::tools::save_subagent_board_records(&self.subagent_board_path(), records)
     }
 
     fn find_subagent_record(&self, id_or_name: &str) -> anyhow::Result<Option<SubAgentTaskRecord>> {
@@ -1382,23 +1359,6 @@ Commands:
         self.session.pending_attachments.push(attachment);
         Ok(format!("Attached {name}"))
     }
-}
-
-fn recover_subagent_board_records(text: &str) -> Option<Vec<SubAgentTaskRecord>> {
-    let trimmed = text.trim_start_matches(['\u{feff}', '\u{200b}', '\u{2060}']);
-    let start = trimmed.find('[')?;
-    let candidate = &trimmed[start..];
-    serde_json::from_str::<Vec<SubAgentTaskRecord>>(candidate).ok()
-}
-
-fn atomic_write_json(path: &std::path::Path, content: &str) -> anyhow::Result<()> {
-    use uuid::Uuid;
-    let tmp = path.with_extension(format!("{}.tmp", Uuid::new_v4().simple()));
-    std::fs::write(&tmp, content)?;
-    std::fs::rename(&tmp, path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&tmp);
-    })?;
-    Ok(())
 }
 
 fn format_duration(seconds: i64) -> String {

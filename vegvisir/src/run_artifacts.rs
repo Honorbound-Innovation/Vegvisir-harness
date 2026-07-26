@@ -298,11 +298,7 @@ impl RunArtifactManager {
                 ),
             );
         }
-        match fs::read_to_string(&path)
-            .map_err(anyhow::Error::from)
-            .and_then(|text| {
-                serde_json::from_str::<Vec<SubAgentTaskRecord>>(&text).map_err(Into::into)
-            }) {
+        match crate::tools::load_subagent_board_records(&path) {
             Ok(records) => self.write_subagents_from_records(&records),
             Err(error) => self.write_subagents_unavailable(format!(
                 "subagent board could not be read from {}: {error}",
@@ -1439,7 +1435,8 @@ pub struct RunSubagentEvidence {
 
 impl RunSubagentEvidence {
     pub fn from_records(run_id: String, records: &[SubAgentTaskRecord]) -> Self {
-        let records = records.to_vec();
+        let mut records = records.to_vec();
+        crate::tools::compact_subagent_board_records(&mut records);
         let active_count = records
             .iter()
             .filter(|record| {

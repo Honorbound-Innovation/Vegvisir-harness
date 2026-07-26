@@ -6,7 +6,7 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
-    sync::Arc,
+    sync::{Arc, Mutex, OnceLock},
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
@@ -47,6 +47,19 @@ const LIST_FILES_DEFAULT_LIMIT: usize = 500;
 const LIST_FILES_MAX_LIMIT: usize = 2_000;
 const CHATGPT_ARCHIVE_EXCERPT_CHARS: usize = 1_800;
 const SUBAGENT_DIFF_TEXT_MAX_BYTES: u64 = 1024 * 1024;
+// The subagent board is operational state, not an unbounded transcript archive.
+// Parsing a multi-gigabyte JSON board can require several times its on-disk size
+// in temporary allocations, so reject/archive it before reading any bytes.
+const SUBAGENT_BOARD_MAX_BYTES: u64 = 32 * 1024 * 1024;
+const SUBAGENT_BOARD_MAX_RECORDS: usize = 64;
+const SUBAGENT_FINAL_ANSWER_MAX_BYTES: usize = 32 * 1024;
+const SUBAGENT_EVENT_MAX_COUNT: usize = 32;
+const SUBAGENT_EVENT_FIELD_MAX_BYTES: usize = 2 * 1024;
+const SUBAGENT_FILE_CHANGE_MAX_COUNT: usize = 8;
+const SUBAGENT_DIFF_MAX_BYTES: usize = 16 * 1024;
+const SUBAGENT_TEXT_FIELD_MAX_BYTES: usize = 32 * 1024;
+const SUBAGENT_CHILD_CAPTURE_MAX_BYTES_PER_STREAM: usize = 1024 * 1024;
+static SUBAGENT_BOARD_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 pub const DEFAULT_ACTIVE_SUBAGENT_LIMIT: usize = 3;
 
 const COMMAND_STREAM_READ_CHUNK_BYTES: usize = 8 * 1024;
@@ -1132,19 +1145,70 @@ fn reject_sudo_misuse(parts: &[&str], privileged: bool) -> Option<Observation> {
 #[derive(Debug, Default)]
 struct CommandStreamCapture {
     bytes: Vec<u8>,
+    total_bytes: usize,
+    truncated: bool,
     read_error: Option<String>,
+}
+
+fn append_bounded_bytes(bytes: &mut Vec<u8>, chunk: &[u8], limit: usize) -> bool {
+    if chunk.is_empty() {
+        return false;
+    }
+    if limit == 0 {
+        return true;
+    }
+    if bytes.len().saturating_add(chunk.len()) <= limit {
+        bytes.extend_from_slice(chunk);
+        return false;
+    }
+
+    let head_len = limit / 2;
+    let tail_len = limit.saturating_sub(head_len);
+    let mut bounded = Vec::with_capacity(limit);
+    if bytes.len() >= head_len {
+        bounded.extend_from_slice(&bytes[..head_len]);
+    } else {
+        bounded.extend_from_slice(bytes);
+        bounded.extend_from_slice(&chunk[..(head_len - bytes.len()).min(chunk.len())]);
+    }
+    if tail_len > 0 {
+        if chunk.len() >= tail_len {
+            bounded.extend_from_slice(&chunk[chunk.len() - tail_len..]);
+        } else {
+            let from_existing = tail_len.saturating_sub(chunk.len()).min(bytes.len());
+            bounded.extend_from_slice(&bytes[bytes.len() - from_existing..]);
+            bounded.extend_from_slice(chunk);
+        }
+    }
+    *bytes = bounded;
+    true
+}
+
+fn render_stream_capture(capture: &CommandStreamCapture, stream_name: &str) -> String {
+    if !capture.truncated {
+        return String::from_utf8_lossy(&capture.bytes).to_string();
+    }
+    let midpoint = capture.bytes.len() / 2;
+    format!(
+        "{}\n[Vegvisir {stream_name} capture truncated: retained {} of {} bytes]\n{}",
+        String::from_utf8_lossy(&capture.bytes[..midpoint]),
+        capture.bytes.len(),
+        capture.total_bytes,
+        String::from_utf8_lossy(&capture.bytes[midpoint..]),
+    )
 }
 
 fn spawn_command_stream_reader<R>(
     mut reader: R,
     stream_name: &'static str,
     output_sink: Option<CommandOutputSink>,
+    capture_limit: usize,
 ) -> JoinHandle<CommandStreamCapture>
 where
     R: Read + Send + 'static,
 {
     thread::spawn(move || {
-        let mut bytes = Vec::new();
+        let mut capture = CommandStreamCapture::default();
         let mut emitted_live_bytes = 0usize;
         let mut emitted_truncation_notice = false;
         let mut buffer = [0u8; COMMAND_STREAM_READ_CHUNK_BYTES];
@@ -1152,7 +1216,9 @@ where
             match reader.read(&mut buffer) {
                 Ok(0) => break None,
                 Ok(n) => {
-                    bytes.extend_from_slice(&buffer[..n]);
+                    capture.total_bytes = capture.total_bytes.saturating_add(n);
+                    capture.truncated |=
+                        append_bounded_bytes(&mut capture.bytes, &buffer[..n], capture_limit);
                     if let Some(sink) = &output_sink {
                         let remaining = COMMAND_STREAM_LIVE_MAX_BYTES_PER_STREAM
                             .saturating_sub(emitted_live_bytes);
@@ -1169,7 +1235,7 @@ where
                             sink(CommandOutputChunk {
                                 stream: stream_name.to_string(),
                                 chunk: format!(
-                                    "\n[Vegvisir live {stream_name} stream truncated after {} bytes; full captured output remains available in the final tool observation/artifacts.]\n",
+                                    "\n[Vegvisir live {stream_name} stream truncated after {} bytes; remaining output is drained without being retained in memory.]\n",
                                     COMMAND_STREAM_LIVE_MAX_BYTES_PER_STREAM
                                 ),
                                 truncated: true,
@@ -1180,7 +1246,8 @@ where
                 Err(error) => break Some(error.to_string()),
             }
         };
-        CommandStreamCapture { bytes, read_error }
+        capture.read_error = read_error;
+        capture
     })
 }
 
@@ -1191,13 +1258,13 @@ fn join_command_stream_reader(
     handle
         .map(|handle| {
             handle.join().unwrap_or_else(|_| CommandStreamCapture {
-                bytes: Vec::new(),
                 read_error: Some(format!("{stream_name} reader thread panicked")),
+                ..CommandStreamCapture::default()
             })
         })
         .unwrap_or_else(|| CommandStreamCapture {
-            bytes: Vec::new(),
             read_error: Some(format!("{stream_name} pipe was unavailable")),
+            ..CommandStreamCapture::default()
         })
 }
 
@@ -1321,14 +1388,12 @@ fn execute_bounded_command(
     };
 
     let output_sink = current_command_output_sink();
-    let stdout_reader = child
-        .stdout
-        .take()
-        .map(|reader| spawn_command_stream_reader(reader, "stdout", output_sink.clone()));
-    let stderr_reader = child
-        .stderr
-        .take()
-        .map(|reader| spawn_command_stream_reader(reader, "stderr", output_sink.clone()));
+    let stdout_reader = child.stdout.take().map(|reader| {
+        spawn_command_stream_reader(reader, "stdout", output_sink.clone(), output_limit)
+    });
+    let stderr_reader = child.stderr.take().map(|reader| {
+        spawn_command_stream_reader(reader, "stderr", output_sink.clone(), output_limit)
+    });
     let started = Instant::now();
     let mut timed_out = false;
     let mut status: Option<ExitStatus> = None;
@@ -1360,9 +1425,11 @@ fn execute_bounded_command(
     match status {
         Ok(status) => {
             let mut content = String::new();
-            content.push_str(&String::from_utf8_lossy(&stdout_capture.bytes));
-            content.push_str(&String::from_utf8_lossy(&stderr_capture.bytes));
-            let truncated = content.len() > output_limit;
+            content.push_str(&render_stream_capture(&stdout_capture, "stdout"));
+            content.push_str(&render_stream_capture(&stderr_capture, "stderr"));
+            let truncated = stdout_capture.truncated
+                || stderr_capture.truncated
+                || content.len() > output_limit;
             if truncated {
                 content = compact_text_middle(&content, output_limit, "output");
             }
@@ -1380,8 +1447,8 @@ fn execute_bounded_command(
                 timeout,
                 truncated,
                 privileged,
-                stdout_capture.bytes.len(),
-                stderr_capture.bytes.len(),
+                stdout_capture.total_bytes,
+                stderr_capture.total_bytes,
                 &stream_read_errors,
             );
             Observation {
@@ -3924,22 +3991,49 @@ fn run_spawned_subagent(
             .collect();
         record.observability.launch_env_keys = env.iter().map(|(key, _)| key.clone()).collect();
         let _ = upsert_subagent_record(&board_path, record.clone());
-        let output = Command::new(&executable)
+        let mut command = Command::new(&executable);
+        command
             .args(&argv)
             .current_dir(&workspace)
             .envs(env.iter().map(|(key, value)| (key, value)))
-            .output()
-            .map_err(|error| {
-                format_subagent_spawn_os_error(&executable, &argv, &workspace, &env, &error)
-            })?;
-        let mut text = String::new();
-        text.push_str(&String::from_utf8_lossy(&output.stdout));
-        text.push_str(&String::from_utf8_lossy(&output.stderr));
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command.spawn().map_err(|error| {
+            format_subagent_spawn_os_error(&executable, &argv, &workspace, &env, &error)
+        })?;
+        let stdout_reader = child.stdout.take().map(|reader| {
+            spawn_command_stream_reader(
+                reader,
+                "stdout",
+                None,
+                SUBAGENT_CHILD_CAPTURE_MAX_BYTES_PER_STREAM,
+            )
+        });
+        let stderr_reader = child.stderr.take().map(|reader| {
+            spawn_command_stream_reader(
+                reader,
+                "stderr",
+                None,
+                SUBAGENT_CHILD_CAPTURE_MAX_BYTES_PER_STREAM,
+            )
+        });
+        let status = child.wait()?;
+        let stdout_capture = join_command_stream_reader(stdout_reader, "stdout");
+        let stderr_capture = join_command_stream_reader(stderr_reader, "stderr");
+        let stream_errors = command_stream_read_errors(&stdout_capture, &stderr_capture);
+        if !stream_errors.is_empty() {
+            anyhow::bail!(
+                "subagent output capture failed: {}",
+                stream_errors.join("; ")
+            );
+        }
+        let mut text = render_stream_capture(&stdout_capture, "stdout");
+        text.push_str(&render_stream_capture(&stderr_capture, "stderr"));
         record
             .observability
             .events
             .extend(parse_subagent_json_observability(&text));
-        if !output.status.success() {
+        if !status.success() {
             anyhow::bail!("{}", text.trim());
         }
         Ok(text)
@@ -4249,8 +4343,17 @@ fn parse_subagent_file_scope(
     Ok(scope)
 }
 
-fn load_subagent_board_records(path: &Path) -> anyhow::Result<Vec<SubAgentTaskRecord>> {
+pub(crate) fn load_subagent_board_records(path: &Path) -> anyhow::Result<Vec<SubAgentTaskRecord>> {
+    let _guard = subagent_board_lock()?;
+    load_subagent_board_records_unlocked(path)
+}
+
+fn load_subagent_board_records_unlocked(path: &Path) -> anyhow::Result<Vec<SubAgentTaskRecord>> {
     if !path.exists() {
+        return Ok(Vec::new());
+    }
+    if std::fs::metadata(path)?.len() > SUBAGENT_BOARD_MAX_BYTES {
+        archive_oversized_subagent_board(path)?;
         return Ok(Vec::new());
     }
     let text = std::fs::read_to_string(path)?;
@@ -4258,10 +4361,14 @@ fn load_subagent_board_records(path: &Path) -> anyhow::Result<Vec<SubAgentTaskRe
         return Ok(Vec::new());
     }
     match serde_json::from_str::<Vec<SubAgentTaskRecord>>(&text) {
-        Ok(records) => Ok(records),
+        Ok(mut records) => {
+            compact_subagent_board_records(&mut records);
+            Ok(records)
+        }
         Err(original_error) => {
-            if let Some(records) = recover_subagent_board_records(&text) {
-                let _ = save_subagent_board_records(path, &records);
+            if let Some(mut records) = recover_subagent_board_records(&text) {
+                compact_subagent_board_records(&mut records);
+                let _ = save_subagent_board_records_unlocked(path, &records);
                 Ok(records)
             } else {
                 Err(original_error.into())
@@ -4337,16 +4444,105 @@ fn recover_subagent_board_records_from_partial_array(
     }
 }
 
-fn save_subagent_board_records(path: &Path, records: &[SubAgentTaskRecord]) -> anyhow::Result<()> {
-    atomic_write_json(path, &serde_json::to_string_pretty(records)?)
+pub(crate) fn save_subagent_board_records(
+    path: &Path,
+    records: &[SubAgentTaskRecord],
+) -> anyhow::Result<()> {
+    let _guard = subagent_board_lock()?;
+    save_subagent_board_records_unlocked(path, records)
 }
 
-fn atomic_write_json(path: &Path, content: &str) -> anyhow::Result<()> {
+fn save_subagent_board_records_unlocked(
+    path: &Path,
+    records: &[SubAgentTaskRecord],
+) -> anyhow::Result<()> {
+    let mut records = records.to_vec();
+    compact_subagent_board_records(&mut records);
+    atomic_write_json_value(path, &records)
+}
+
+fn archive_oversized_subagent_board(path: &Path) -> anyhow::Result<PathBuf> {
+    let timestamp = Utc::now().format("%Y%m%dT%H%M%S%.fZ");
+    let archive = path.with_file_name(format!("subagents.oversized-{timestamp}.json"));
+    std::fs::rename(path, &archive)?;
+    Ok(archive)
+}
+
+pub(crate) fn compact_subagent_board_records(records: &mut Vec<SubAgentTaskRecord>) {
+    records.sort_by_key(|record| record.created_at);
+    if records.len() > SUBAGENT_BOARD_MAX_RECORDS {
+        records.drain(..records.len() - SUBAGENT_BOARD_MAX_RECORDS);
+    }
+    for record in records {
+        truncate_string_bytes(&mut record.goal, SUBAGENT_TEXT_FIELD_MAX_BYTES);
+        truncate_string_bytes(&mut record.name, SUBAGENT_EVENT_FIELD_MAX_BYTES);
+        record.observability.launch_argv.truncate(32);
+        for value in &mut record.observability.launch_argv {
+            truncate_string_bytes(value, SUBAGENT_EVENT_FIELD_MAX_BYTES);
+        }
+        record.observability.notes.truncate(32);
+        for value in &mut record.observability.notes {
+            truncate_string_bytes(value, SUBAGENT_EVENT_FIELD_MAX_BYTES);
+        }
+        truncate_option_bytes(&mut record.final_answer, SUBAGENT_FINAL_ANSWER_MAX_BYTES);
+        truncate_option_bytes(&mut record.error, SUBAGENT_FINAL_ANSWER_MAX_BYTES);
+        if record.observability.events.len() > SUBAGENT_EVENT_MAX_COUNT {
+            record
+                .observability
+                .events
+                .drain(..record.observability.events.len() - SUBAGENT_EVENT_MAX_COUNT);
+        }
+        for event in &mut record.observability.events {
+            truncate_option_bytes(&mut event.args, SUBAGENT_EVENT_FIELD_MAX_BYTES);
+            truncate_option_bytes(&mut event.summary, SUBAGENT_EVENT_FIELD_MAX_BYTES);
+            truncate_option_bytes(&mut event.detail, SUBAGENT_EVENT_FIELD_MAX_BYTES);
+        }
+        if record.observability.file_changes.len() > SUBAGENT_FILE_CHANGE_MAX_COUNT {
+            record
+                .observability
+                .file_changes
+                .truncate(SUBAGENT_FILE_CHANGE_MAX_COUNT);
+        }
+        for change in &mut record.observability.file_changes {
+            truncate_option_bytes(&mut change.diff, SUBAGENT_DIFF_MAX_BYTES);
+        }
+    }
+}
+
+fn truncate_option_bytes(value: &mut Option<String>, max_bytes: usize) {
+    let Some(text) = value.as_mut() else { return };
+    truncate_string_bytes(text, max_bytes);
+}
+
+fn truncate_string_bytes(value: &mut String, max_bytes: usize) {
+    if value.len() > max_bytes {
+        *value = compact_text_middle(value, max_bytes, "subagent board field");
+    }
+}
+
+fn atomic_write_json_value(path: &Path, value: &impl serde::Serialize) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let tmp = path.with_extension(format!("{}.tmp", Uuid::new_v4().simple()));
-    std::fs::write(&tmp, content)?;
+    let result = (|| -> anyhow::Result<()> {
+        let file = File::create(&tmp)?;
+        let mut writer = std::io::BufWriter::new(file);
+        serde_json::to_writer_pretty(&mut writer, value)?;
+        use std::io::Write;
+        writer.flush()?;
+        if writer.get_ref().metadata()?.len() > SUBAGENT_BOARD_MAX_BYTES {
+            anyhow::bail!(
+                "bounded subagent board still exceeds {} bytes",
+                SUBAGENT_BOARD_MAX_BYTES
+            );
+        }
+        Ok(())
+    })();
+    if let Err(error) = result {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(error);
+    }
     std::fs::rename(&tmp, path).inspect_err(|_| {
         let _ = std::fs::remove_file(&tmp);
     })?;
@@ -4442,14 +4638,22 @@ fn active_subagent_count(path: &Path) -> anyhow::Result<usize> {
         .count())
 }
 
+fn subagent_board_lock() -> anyhow::Result<std::sync::MutexGuard<'static, ()>> {
+    SUBAGENT_BOARD_WRITE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| anyhow::anyhow!("subagent board write lock poisoned"))
+}
+
 fn upsert_subagent_record(path: &Path, record: SubAgentTaskRecord) -> anyhow::Result<()> {
-    let mut records = load_subagent_board_records(path)?;
+    let _guard = subagent_board_lock()?;
+    let mut records = load_subagent_board_records_unlocked(path)?;
     if let Some(existing) = records.iter_mut().find(|existing| existing.id == record.id) {
         *existing = record;
     } else {
         records.push(record);
     }
-    save_subagent_board_records(path, &records)
+    save_subagent_board_records_unlocked(path, &records)
 }
 
 fn context_options_from_args(args: &Map<String, Value>) -> ContextPrepareOptions {
@@ -6019,6 +6223,83 @@ echo '{"events":[]}'; exit 0
             "subagent child launches must be marked so they cannot write provider/model back to the main session config: {:?}",
             record.observability.launch_env_keys
         );
+        Ok(())
+    }
+
+    #[test]
+    fn bounded_stream_capture_retains_head_and_tail_without_growing_past_limit() {
+        let mut bytes = Vec::new();
+        assert!(!append_bounded_bytes(&mut bytes, b"abcdefgh", 12));
+        assert!(append_bounded_bytes(&mut bytes, b"ijklmnop", 12));
+        assert_eq!(bytes.len(), 12);
+        assert_eq!(&bytes[..6], b"abcdef");
+        assert_eq!(&bytes[6..], b"klmnop");
+
+        assert!(append_bounded_bytes(&mut bytes, b"qrstuvwxyz", 12));
+        assert_eq!(bytes.len(), 12);
+        assert_eq!(&bytes[..6], b"abcdef");
+        assert_eq!(&bytes[6..], b"uvwxyz");
+    }
+
+    #[test]
+    fn subagent_board_compaction_bounds_record_count_and_large_fields() {
+        let now = Utc::now();
+        let mut records = (0..(SUBAGENT_BOARD_MAX_RECORDS + 5))
+            .map(|index| SubAgentTaskRecord {
+                id: format!("task-{index}"),
+                name: "n".repeat(SUBAGENT_EVENT_FIELD_MAX_BYTES + 100),
+                workspace: PathBuf::from("/tmp"),
+                goal: "g".repeat(SUBAGENT_TEXT_FIELD_MAX_BYTES + 100),
+                parent_run_id: None,
+                child_run_id: None,
+                artifact_dir: None,
+                ownership: None,
+                provider: None,
+                model: None,
+                file_scope: Vec::new(),
+                work_budget: SubAgentWorkBudget::default(),
+                status: SubAgentStatus::Completed,
+                created_at: now + chrono::Duration::seconds(index as i64),
+                started_at: None,
+                finished_at: None,
+                checkpoint: None,
+                final_answer: Some("a".repeat(SUBAGENT_FINAL_ANSWER_MAX_BYTES + 100)),
+                error: None,
+                observability: SubAgentObservability::default(),
+            })
+            .collect::<Vec<_>>();
+
+        compact_subagent_board_records(&mut records);
+
+        assert_eq!(records.len(), SUBAGENT_BOARD_MAX_RECORDS);
+        assert_eq!(records[0].id, "task-5");
+        assert!(records.iter().all(|record| {
+            record.name.len() <= SUBAGENT_EVENT_FIELD_MAX_BYTES
+                && record.goal.len() <= SUBAGENT_TEXT_FIELD_MAX_BYTES
+                && record
+                    .final_answer
+                    .as_ref()
+                    .is_some_and(|answer| answer.len() <= SUBAGENT_FINAL_ANSWER_MAX_BYTES)
+        }));
+    }
+
+    #[test]
+    fn oversized_subagent_board_is_archived_without_being_read() -> anyhow::Result<()> {
+        let workspace = TempDir::new()?;
+        let board_path = workspace.path().join("subagents.json");
+        let file = File::create(&board_path)?;
+        file.set_len(SUBAGENT_BOARD_MAX_BYTES + 1)?;
+
+        let records = load_subagent_board_records(&board_path)?;
+
+        assert!(records.is_empty());
+        assert!(!board_path.exists());
+        let archives = std::fs::read_dir(workspace.path())?
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .filter(|name| name.starts_with("subagents.oversized-"))
+            .collect::<Vec<_>>();
+        assert_eq!(archives.len(), 1);
         Ok(())
     }
 
