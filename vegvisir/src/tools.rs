@@ -3390,6 +3390,7 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
                 args.get("work_budget"),
                 Some(effective_max_steps),
                 &spawn_subagent_defaults.work_budget,
+                bypass_sandbox,
             );
             let workspace_scope_sandbox = match if bypass_sandbox {
                 WorkspaceSandbox::new_unrestricted(&workspace)
@@ -3686,9 +3687,18 @@ fn parse_subagent_work_budget(
     value: Option<&Value>,
     max_steps_value: Option<u64>,
     default_budget: &SubAgentWorkBudget,
+    dangerous_bypass: bool,
 ) -> SubAgentWorkBudget {
     let mut budget = default_budget.clone();
     budget.max_steps = max_steps_value;
+    let explicit_allowed_tools = value
+        .and_then(Value::as_object)
+        .is_some_and(|object| object.contains_key("allowed_tools"));
+    if dangerous_bypass && !explicit_allowed_tools {
+        // Startup dangerous bypass must not silently inherit the restrictive review-only
+        // allow-list. An operator can still impose a task-local allow-list explicitly.
+        budget.allowed_tools.clear();
+    }
     let Some(Value::Object(object)) = value else {
         return budget;
     };
@@ -5383,6 +5393,7 @@ mod skiller_tool_tests {
             None,
             Some(5),
             &SubagentSpawnDefaults::default().work_budget,
+            false,
         );
 
         assert_eq!(budget.max_steps, Some(5));
@@ -5391,6 +5402,41 @@ mod skiller_tool_tests {
         assert_eq!(budget.max_output_bytes, Some(16 * 1024));
         assert!(budget.allowed_tools.contains(&"list_files".to_string()));
         assert!(budget.notes.contains("targeted"));
+    }
+
+    #[test]
+    fn dangerous_bypass_drops_implicit_subagent_tool_allowlist() {
+        let budget = parse_subagent_work_budget(
+            None,
+            Some(5),
+            &SubagentSpawnDefaults::default().work_budget,
+            true,
+        );
+
+        assert!(budget.allowed_tools.is_empty());
+        assert_eq!(budget.max_tool_calls, Some(8));
+        assert_eq!(budget.max_read_bytes, Some(64 * 1024));
+        assert_eq!(budget.max_output_bytes, Some(16 * 1024));
+    }
+
+    #[test]
+    fn dangerous_bypass_preserves_explicit_subagent_tool_allowlist() {
+        let value = json!({"allowed_tools": ["read_file", "write_file", "run_tests"]});
+        let budget = parse_subagent_work_budget(
+            Some(&value),
+            Some(5),
+            &SubagentSpawnDefaults::default().work_budget,
+            true,
+        );
+
+        assert_eq!(
+            budget.allowed_tools,
+            vec![
+                "read_file".to_string(),
+                "write_file".to_string(),
+                "run_tests".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -5771,7 +5817,8 @@ mod skiller_tool_tests {
     }
 
     #[test]
-    fn spawn_subagent_uses_configurable_spawn_defaults() -> anyhow::Result<()> {
+    fn dangerous_bypass_keeps_quantitative_spawn_defaults_but_drops_implicit_tool_allowlist()
+    -> anyhow::Result<()> {
         let _env_lock = env_var_test_lock();
         let workspace = TempDir::new()?;
         let fake_bin = workspace.path().join("fake-vegvisir");
@@ -5862,7 +5909,7 @@ echo '{"events":[]}'; exit 0
                 .data
                 .get("work_budget")
                 .and_then(|budget| budget.get("allowed_tools")),
-            Some(&json!(["read_file", "rg"]))
+            Some(&json!([]))
         );
         let records = load_subagent_board_records(&board_path)?;
         let record = records
@@ -5873,7 +5920,7 @@ echo '{"events":[]}'; exit 0
         assert_eq!(record.work_budget.max_tool_calls, Some(17));
         assert_eq!(record.work_budget.max_read_bytes, Some(222_222));
         assert_eq!(record.work_budget.max_output_bytes, Some(33_333));
-        assert!(record.work_budget.allowed_tools.contains(&"rg".to_string()));
+        assert!(record.work_budget.allowed_tools.is_empty());
         assert_eq!(record.work_budget.notes, "custom defaults for deep review");
         Ok(())
     }
