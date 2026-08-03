@@ -1924,7 +1924,10 @@ fn configured_subagent_spawn_defaults(
 #[cfg(test)]
 mod tests {
     use super::{StreamEvent, SudoPasswordPrompt, TuiApplication};
-    use crate::core::{ChatMessage, SessionState};
+    use crate::{
+        core::{ChatMessage, SessionState},
+        ui::input::Suggestion,
+    };
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
     use serde_json::Value;
     use std::{
@@ -2446,6 +2449,34 @@ mod tests {
         assert_eq!(action.id, "bug_goblin");
         assert!(action.path.ends_with("ka/bug_goblin.json"));
         assert!(action.path.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn goal_specification_path_is_submitted_while_palette_is_open() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.open_command_palette();
+        app.input.set_buffer("/goal start ");
+        assert!(app.build_suggestions().is_empty());
+        app.input.set_buffer("/goal start missing.md");
+        let suggestions = app.build_suggestions();
+        assert!(suggestions.is_empty());
+        app.input.suggestions = vec![Suggestion::new(
+            "start",
+            "specification-driven end-to-end implementation",
+            Some("/goal start ".to_string()),
+        )];
+
+        app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(!app.command_palette_open);
+        assert!(app.input.buffer.is_empty());
+        assert!(app.session.messages.iter().any(|message| {
+            message
+                .content
+                .contains("could not read specification `missing.md`")
+        }));
         Ok(())
     }
 

@@ -204,7 +204,13 @@ impl TuiApplication {
             }
             KeyCode::Enter => {
                 if self.command_palette_open {
-                    self.accept_palette_selection_for_execution();
+                    // A palette item is a completion, not an override for text that the
+                    // user has already appended (for example `/goal start spec.md`).
+                    // Only replace the buffer when the selected replacement still extends
+                    // the current input; otherwise submit the typed command as-is.
+                    if self.palette_selection_extends_input() {
+                        self.accept_palette_selection_for_execution();
+                    }
                     self.command_palette_open = false;
                     self.handle_submit();
                 } else if self.should_execute_selected_slash_suggestion() {
@@ -543,6 +549,17 @@ impl TuiApplication {
         self.command_palette_open = true;
         let suggestions = self.build_suggestions();
         self.input.update_suggestions(suggestions);
+    }
+
+    fn palette_selection_extends_input(&self) -> bool {
+        let Some(suggestion) = self.input.suggestions.get(self.input.selected_suggestion) else {
+            return false;
+        };
+        let Some(replacement) = suggestion.replacement.as_deref() else {
+            return false;
+        };
+        replacement.starts_with(self.input.buffer.as_str())
+            && replacement.len() > self.input.buffer.len()
     }
 
     pub(crate) fn accept_palette_selection_for_execution(&mut self) {

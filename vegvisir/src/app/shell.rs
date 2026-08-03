@@ -348,6 +348,14 @@ impl TuiApplication {
                 .collect();
         }
         if raw.starts_with("/goal ") || raw == "/goal " {
+            // Once a path-taking subcommand has been completed, the subcommand suggestions
+            // must not compete with normal text entry. Otherwise Tab or Enter can accept the
+            // stale subcommand item and replace the specification path.
+            if matches!(parts.get(1), Some(&"start" | &"run" | &"resume"))
+                && (parts.len() >= 3 || trailing_space)
+            {
+                return Vec::new();
+            }
             let prefix = if trailing_space {
                 ""
             } else {
@@ -360,7 +368,7 @@ impl TuiApplication {
                     Suggestion::new(
                         command.to_string(),
                         "specification-driven end-to-end implementation".to_string(),
-                        Some(format!("/goal {command} ")),
+                        Some(format!("/goal {command}")),
                     )
                 })
                 .collect();
