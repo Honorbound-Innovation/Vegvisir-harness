@@ -499,6 +499,12 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
             "/autonomy [on|off|status|stop|validate [plan]|resume <plan>|max-steps <n>|max-attempts <n>]",
             &[],
         ),
+        cmd(
+            "/goal",
+            "implement a Markdown specification end to end until all exit criteria are verified",
+            "/goal [start|run|status|stop|resume] <specification.md>",
+            &[],
+        ),
         cmd("/history", "show conversation history", "/history", &[]),
         cmd(
             "/status",

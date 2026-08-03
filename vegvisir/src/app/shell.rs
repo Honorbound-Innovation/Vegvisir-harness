@@ -347,6 +347,24 @@ impl TuiApplication {
                 })
                 .collect();
         }
+        if raw.starts_with("/goal ") || raw == "/goal " {
+            let prefix = if trailing_space {
+                ""
+            } else {
+                parts.get(1).copied().unwrap_or("")
+            };
+            return ["start", "run", "status", "stop", "resume"]
+                .into_iter()
+                .filter(|command| command.starts_with(prefix))
+                .map(|command| {
+                    Suggestion::new(
+                        command.to_string(),
+                        "specification-driven end-to-end implementation".to_string(),
+                        Some(format!("/goal {command} ")),
+                    )
+                })
+                .collect();
+        }
         if raw.starts_with("/model ")
             || raw == "/model "
             || raw.starts_with("/models ")
@@ -495,6 +513,7 @@ impl TuiApplication {
             "/recover" => self.recover_command(&args)?,
             "/auto" | "/autonomous" => self.autonomous_command(&args),
             "/autonomy" => self.autonomy_command(&args),
+            "/goal" => self.goal_command(&args),
             "/history" => self.history(),
             "/status" => self.session_status_command(&args),
             "/diff" => self.diff_command(&args)?,

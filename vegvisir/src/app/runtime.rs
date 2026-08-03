@@ -86,6 +86,7 @@ impl TuiApplication {
         let lsl_config = self.lsl_runtime_config();
         let autonomous_mode_enabled = self.autonomous_mode_enabled;
         let autonomy_level = self.autonomous_level.min(6) as u8;
+        let goal_mode_enabled = self.goal.active;
         let (stream_tx, stream_rx) = mpsc::channel();
         let (steering_tx, steering_rx) = mpsc::channel();
         let cancel_token = Arc::new(AtomicBool::new(false));
@@ -165,7 +166,9 @@ impl TuiApplication {
             let model_content =
                 apply_user_profile_context(profile_context.as_deref(), &model_content);
             let model_content = apply_subagent_delegation_context(&model_content);
-            let model_content = if autonomous_mode_enabled {
+            let model_content = if goal_mode_enabled {
+                apply_goal_mode_contract(&model_content)
+            } else if autonomous_mode_enabled {
                 apply_autonomous_mode_contract(&model_content, autonomy_level)
             } else {
                 model_content
@@ -284,6 +287,7 @@ impl TuiApplication {
                         self.autonomy.enabled = false;
                         self.autonomy.last_status = "cancelled".to_string();
                     }
+                    self.goal_cancelled("cancelled");
                 } else {
                     self.finish_active_tool_tasks_without_tool_end(crate::tasks::TaskState::Failed);
                     let failed_run = self.fail_tui_turn_artifact(&error.to_string(), true);
@@ -298,6 +302,7 @@ impl TuiApplication {
                         self.autonomy.enabled = false;
                         self.autonomy.last_status = format!("failed: {error}");
                     }
+                    self.goal_cancelled(&format!("failed: {error}"));
                 }
                 self.autosave_session();
             }
@@ -325,6 +330,7 @@ impl TuiApplication {
                     self.autonomy.enabled = false;
                     self.autonomy.last_status = "failed: provider worker panicked".to_string();
                 }
+                self.goal_cancelled("failed: provider worker panicked");
                 self.autosave_session();
             }
         }
@@ -531,6 +537,7 @@ Steering: {display_content}{attachment_note}"
         self.autonomy.active = false;
         self.autonomy.enabled = false;
         self.autonomy.last_status = "cancelled".to_string();
+        self.goal_cancelled("cancelled");
         if let Some(cancel_token) = &self.pending_cancel {
             cancel_token.store(true, Ordering::SeqCst);
         }
@@ -1483,6 +1490,7 @@ Steering: {display_content}{attachment_note}"
             self.autonomy.enabled = false;
             self.autonomy.last_status = format!("failed: turn repair: {reason}");
         }
+        self.goal_cancelled(&format!("failed: turn repair: {reason}"));
         self.autosave_session();
         self.chat_scroll_offset = 0;
         self.redraw_requested = true;
@@ -2139,6 +2147,27 @@ pub(crate) fn apply_user_profile_context(profile_context: Option<&str>, content:
         return content.to_string();
     };
     format!("{profile_context}\n\nUser request:\n{content}")
+}
+
+pub(crate) fn apply_goal_mode_contract(content: &str) -> String {
+    format!(
+        r#"[Vegvisir goal mode is ENABLED]
+
+You are executing an unattended, specification-driven implementation goal.
+
+Runtime contract:
+- Read and follow the complete specification supplied by the user; do not reduce it to a fixed number of steps or a single response.
+- Plan the entire specification before implementation, then execute the plan end to end.
+- Continue inspecting, implementing, testing, fixing, and verifying until every explicit exit/acceptance criterion is satisfied.
+- Use the goal controller's Markdown plan, checklist, and evidence requirements as the completion gate. Never claim completion early.
+- Continue automatically between model turns. A normal turn ending is not goal completion.
+- Preserve unrelated work and stay within the active workspace, tool, approval, sandbox, secret, and user-authority boundaries.
+- Pause for required approvals or blockers, never request plaintext secrets, and honor cancellation immediately.
+- When all criteria are truly met, provide a concise final report with changed files, verification, and remaining risks.
+
+Goal-mode turn:
+{content}"#
+    )
 }
 
 pub(crate) fn apply_autonomous_mode_contract(content: &str, level: u8) -> String {

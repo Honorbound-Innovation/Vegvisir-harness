@@ -156,6 +156,7 @@ pub struct TuiApplication {
     pub drag_anchor: Option<(u16, u16)>,
     pub drag_current: Option<(u16, u16)>,
     pub autonomy: AutonomyState,
+    pub(crate) goal: GoalState,
     pub observed_subagent_transcript_signatures: BTreeMap<String, String>,
     pub last_subagent_board_poll: Option<std::time::Instant>,
 }
@@ -417,6 +418,53 @@ pub struct ProfileOverlayField {
     pub label: String,
     pub value: String,
     pub hint: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct GoalState {
+    pub enabled: bool,
+    pub active: bool,
+    pub spec_path: Option<String>,
+    pub plan_path: Option<String>,
+    pub objective: String,
+    pub step: usize,
+    pub last_status: String,
+    pub current_node_id: Option<String>,
+    pub current_node_title: Option<String>,
+    pub node_total: usize,
+    pub node_completed: usize,
+    pub checklist_total: usize,
+    pub checklist_completed: usize,
+    pub current_evidence_path: Option<String>,
+    pub current_evidence_status: Option<String>,
+    pub current_evidence_valid: bool,
+    pub current_evidence_blocked: bool,
+    pub exit_criteria_complete: bool,
+}
+
+impl Default for GoalState {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            active: false,
+            spec_path: None,
+            plan_path: None,
+            objective: String::new(),
+            step: 0,
+            last_status: "off".to_string(),
+            current_node_id: None,
+            current_node_title: None,
+            node_total: 0,
+            node_completed: 0,
+            checklist_total: 0,
+            checklist_completed: 0,
+            current_evidence_path: None,
+            current_evidence_status: None,
+            current_evidence_valid: false,
+            current_evidence_blocked: false,
+            exit_criteria_complete: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1105,6 +1153,7 @@ impl TuiApplication {
             drag_anchor: None,
             drag_current: None,
             autonomy: AutonomyState::default(),
+            goal: GoalState::default(),
             observed_subagent_transcript_signatures: BTreeMap::new(),
             last_subagent_board_poll: None,
         };

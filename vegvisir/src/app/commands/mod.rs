@@ -1,6 +1,7 @@
 pub(crate) mod agents;
 mod autonomy;
 mod autonomy_plan;
+mod goal;
 mod mcp_hbse;
 mod memory;
 mod misc;

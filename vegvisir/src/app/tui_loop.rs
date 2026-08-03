@@ -56,6 +56,7 @@ impl TuiApplication {
             self.turn_repair(false);
             self.expire_ephemeral_notice();
             self.poll_autonomy_controller();
+            self.poll_goal_controller();
             self.poll_background_jobs();
             self.poll_task_runner();
             if self.pending_editor_action.is_some() {
