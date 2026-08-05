@@ -702,7 +702,7 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
         cmd(
             "/effort",
             "show or set model reasoning effort",
-            "/effort [minimal|low|medium|high|default]",
+            "/effort [minimal|low|medium|high|xhigh|max|default]",
             &["/reasoning", "/reasoning-effort"],
         ),
         cmd(

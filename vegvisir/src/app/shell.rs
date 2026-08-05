@@ -299,22 +299,24 @@ impl TuiApplication {
             } else {
                 parts.get(1).copied().unwrap_or("")
             };
-            return ["minimal", "low", "medium", "high", "default"]
-                .into_iter()
-                .filter(|level| level.starts_with(prefix))
-                .map(|level| {
-                    let description = if level == "default" {
-                        "use model catalog default".to_string()
-                    } else {
-                        format!("set reasoning effort to {level}")
-                    };
-                    Suggestion::new(
-                        level.to_string(),
-                        description,
-                        Some(format!("/effort {level}")),
-                    )
-                })
-                .collect();
+            return [
+                "minimal", "low", "medium", "high", "xhigh", "max", "default",
+            ]
+            .into_iter()
+            .filter(|level| level.starts_with(prefix))
+            .map(|level| {
+                let description = if level == "default" {
+                    "use model catalog default".to_string()
+                } else {
+                    format!("set reasoning effort to {level}")
+                };
+                Suggestion::new(
+                    level.to_string(),
+                    description,
+                    Some(format!("/effort {level}")),
+                )
+            })
+            .collect();
         }
         if raw.starts_with("/auto ")
             || raw == "/auto "

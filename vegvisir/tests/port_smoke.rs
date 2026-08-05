@@ -10592,7 +10592,18 @@ fn effort_command_sets_selectable_reasoning_override() -> anyhow::Result<()> {
     app.session.current_model = "gpt-5.5".to_string();
 
     let status = app.execute_command("/effort")?.unwrap();
-    assert!(status.contains("Selectable values: minimal, low, medium, high"));
+    assert!(status.contains("Selectable values: minimal, low, medium, high, xhigh, max"));
+
+    let selected = app.execute_command("/effort xhigh")?.unwrap();
+    assert!(selected.contains("Reasoning effort set to xhigh"));
+    assert_eq!(
+        app.session.current_reasoning_level.as_deref(),
+        Some("xhigh")
+    );
+
+    let selected = app.execute_command("/effort max")?.unwrap();
+    assert!(selected.contains("Reasoning effort set to max"));
+    assert_eq!(app.session.current_reasoning_level.as_deref(), Some("max"));
 
     let selected = app.execute_command("/effort low")?.unwrap();
     assert!(selected.contains("Reasoning effort set to low"));
@@ -10668,13 +10679,16 @@ fn provider_payloads_apply_model_reasoning_settings_across_wire_formats() -> any
         "openai",
         "gpt-test",
         BTreeMap::from([
-            ("reasoning_level".to_string(), json!("high")),
+            ("reasoning_level".to_string(), json!("xhigh")),
             ("reasoning_summary".to_string(), json!(true)),
         ]),
     );
     let responses =
         vegvisir_rust::provider::test_support::responses_payload_for_test(&messages, &openai_model);
-    assert_eq!(responses.pointer("/reasoning/effort"), Some(&json!("high")));
+    assert_eq!(
+        responses.pointer("/reasoning/effort"),
+        Some(&json!("xhigh"))
+    );
     assert_eq!(
         responses.pointer("/reasoning/summary"),
         Some(&json!("auto"))
@@ -10729,7 +10743,7 @@ fn openai_tool_loop_applies_model_reasoning_effort() -> anyhow::Result<()> {
     let model = test_model_with_metadata(
         "openai",
         "gpt-test",
-        BTreeMap::from([("reasoning_effort".to_string(), json!("minimal"))]),
+        BTreeMap::from([("reasoning_effort".to_string(), json!("max"))]),
     );
     let mut execute_tool = |_: &str, _: Map<String, Value>| "unused".to_string();
 
@@ -10737,7 +10751,7 @@ fn openai_tool_loop_applies_model_reasoning_effort() -> anyhow::Result<()> {
 
     assert_eq!(result, "done");
     let captured = payloads.lock().unwrap();
-    assert_eq!(captured[0].get("reasoning_effort"), Some(&json!("minimal")));
+    assert_eq!(captured[0].get("reasoning_effort"), Some(&json!("max")));
     Ok(())
 }
 

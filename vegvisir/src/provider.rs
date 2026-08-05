@@ -571,11 +571,16 @@ impl ProviderAdapter for OpenAICompatibleProviderAdapter {
         let mut post = |payload: Value| -> anyhow::Result<String> {
             let mut request = ureq::post(&url)
                 .set("Content-Type", "application/json")
-                .set("Accept", "text/event-stream");
+                .set("Accept", "text/event-stream")
+                // Do not reuse a provider connection for SSE. A stale pooled
+                // connection can surface as an intermittent chunk decoder error.
+                .set("Connection", "close");
             if let Some(api_key) = &api_key {
                 request = request.set("Authorization", &format!("Bearer {api_key}"));
             }
-            Ok(send_provider_json(request, payload, &self.config.name)?.into_string()?)
+            read_ureq_stream_body_with_retry(|| {
+                send_provider_json(request.clone(), payload.clone(), &self.config.name)
+            })
         };
         openai_tool_loop_streaming(
             model,
@@ -651,12 +656,20 @@ impl OpenAICompatibleProviderAdapter {
         let url = format!("{}/responses", base_url.trim_end_matches('/'));
         let mut request = ureq::post(&url)
             .set("Content-Type", "application/json")
-            .set("Accept", "text/event-stream");
+            .set("Accept", "text/event-stream")
+            // Do not reuse a provider connection for SSE. A stale pooled
+            // connection can surface as an intermittent chunk decoder error.
+            .set("Connection", "close");
         if let Some(api_key) = api_key {
             request = request.set("Authorization", &format!("Bearer {api_key}"));
         }
-        let response = send_provider_json(request, payload, &self.config.name)?;
-        parse_response_sse_value_reader(BufReader::new(response.into_reader()), on_delta)
+        stream_ureq_response_with_retry(
+            || send_provider_json(request.clone(), payload.clone(), &self.config.name),
+            |response, callback| {
+                parse_response_sse_value_reader(BufReader::new(response.into_reader()), callback)
+            },
+            on_delta,
+        )
     }
 
     fn post_chat_completion_streaming(
@@ -688,12 +701,20 @@ impl OpenAICompatibleProviderAdapter {
         }
         let mut request = ureq::post(&url)
             .set("Content-Type", "application/json")
-            .set("Accept", "text/event-stream");
+            .set("Accept", "text/event-stream")
+            // Do not reuse a provider connection for SSE. A stale pooled
+            // connection can surface as an intermittent chunk decoder error.
+            .set("Connection", "close");
         if let Some(api_key) = api_key {
             request = request.set("Authorization", &format!("Bearer {api_key}"));
         }
-        let response = send_provider_json(request, payload, &self.config.name)?;
-        parse_openai_sse_reader(BufReader::new(response.into_reader()), on_delta)
+        stream_ureq_response_with_retry(
+            || send_provider_json(request.clone(), payload.clone(), &self.config.name),
+            |response, callback| {
+                parse_openai_sse_reader(BufReader::new(response.into_reader()), callback)
+            },
+            on_delta,
+        )
     }
 
     fn post_chat_completion(
@@ -738,13 +759,19 @@ impl OpenAICompatibleProviderAdapter {
                     "application/json"
                 },
             );
+        if stream {
+            request = request.set("Connection", "close");
+        }
         if let Some(api_key) = api_key {
             request = request.set("Authorization", &format!("Bearer {api_key}"));
         }
-        let response = send_provider_json(request, payload, &self.config.name)?;
         if stream {
-            parse_openai_sse(&response.into_string()?)
+            let body = read_ureq_stream_body_with_retry(|| {
+                send_provider_json(request.clone(), payload.clone(), &self.config.name)
+            })?;
+            parse_openai_sse(&body)
         } else {
+            let response = send_provider_json(request, payload, &self.config.name)?;
             let response: Value = response.into_json()?;
             extract_openai_compatible_text(&response).ok_or_else(|| {
                 anyhow::anyhow!(
@@ -1500,9 +1527,12 @@ impl ProviderAdapter for AnthropicProviderAdapter {
             .set("x-api-key", &api_key)
             .set("anthropic-version", "2023-06-01")
             .set("Content-Type", "application/json")
-            .set("Accept", "text/event-stream");
-        let response = send_provider_json(request, payload, &self.config.name)?;
-        parse_anthropic_sse_response(&response.into_string()?)
+            .set("Accept", "text/event-stream")
+            .set("Connection", "close");
+        let body = read_ureq_stream_body_with_retry(|| {
+            send_provider_json(request.clone(), payload.clone(), &self.config.name)
+        })?;
+        parse_anthropic_sse_response(&body)
     }
 
     fn supports_tool_calls(&self, _model: &ModelInfo, _selected_provider: &str) -> bool {
@@ -1905,9 +1935,12 @@ impl ProviderAdapter for GoogleProviderAdapter {
         );
         let request = ureq::post(&url)
             .set("Content-Type", "application/json")
-            .set("Accept", "text/event-stream");
-        let response = send_provider_json(request, payload, &self.config.name)?;
-        parse_google_stream(&response.into_string()?)
+            .set("Accept", "text/event-stream")
+            .set("Connection", "close");
+        let body = read_ureq_stream_body_with_retry(|| {
+            send_provider_json(request.clone(), payload.clone(), &self.config.name)
+        })?;
+        parse_google_stream(&body)
     }
 
     fn supports_tool_calls(&self, _model: &ModelInfo, _selected_provider: &str) -> bool {
@@ -2329,24 +2362,31 @@ impl OpenAISsoProfileAdapter {
         .set("Authorization", &format!("Bearer {}", tokens.access_token))
         .set("ChatGPT-Account-ID", &tokens.account_id)
         .set("Content-Type", "application/json")
-        .set("Accept", "text/event-stream");
-        match request.send_json(payload) {
-            Ok(response) => {
-                parse_response_sse_value_reader(BufReader::new(response.into_reader()), on_delta)
-            }
-            Err(ureq::Error::Status(401, _)) => {
-                anyhow::bail!("OpenAI SSO rejected the saved login. Run /auth openai-sso again.")
-            }
-            Err(ureq::Error::Status(code, response)) => {
-                let detail = response.into_string().unwrap_or_default();
-                anyhow::bail!(
-                    "openai-sso request failed: {} {}",
-                    code,
-                    detail.chars().take(400).collect::<String>()
-                )
-            }
-            Err(error) => Err(error.into()),
-        }
+        .set("Accept", "text/event-stream")
+        .set("Connection", "close");
+        stream_ureq_response_with_retry(
+            || match request.clone().send_json(payload.clone()) {
+                Ok(response) => Ok(response),
+                Err(ureq::Error::Status(401, _)) => {
+                    anyhow::bail!(
+                        "OpenAI SSO rejected the saved login. Run /auth openai-sso again."
+                    )
+                }
+                Err(ureq::Error::Status(code, response)) => {
+                    let detail = response.into_string().unwrap_or_default();
+                    anyhow::bail!(
+                        "openai-sso request failed: {} {}",
+                        code,
+                        detail.chars().take(400).collect::<String>()
+                    )
+                }
+                Err(error) => Err(error.into()),
+            },
+            |response, callback| {
+                parse_response_sse_value_reader(BufReader::new(response.into_reader()), callback)
+            },
+            on_delta,
+        )
     }
 
     fn post_response_streaming(
@@ -2364,24 +2404,31 @@ impl OpenAISsoProfileAdapter {
         .set("Authorization", &format!("Bearer {}", tokens.access_token))
         .set("ChatGPT-Account-ID", &tokens.account_id)
         .set("Content-Type", "application/json")
-        .set("Accept", "text/event-stream");
-        match request.send_json(payload) {
-            Ok(response) => {
-                parse_response_sse_text_reader(BufReader::new(response.into_reader()), on_delta)
-            }
-            Err(ureq::Error::Status(401, _)) => {
-                anyhow::bail!("OpenAI SSO rejected the saved login. Run /auth openai-sso again.")
-            }
-            Err(ureq::Error::Status(code, response)) => {
-                let detail = response.into_string().unwrap_or_default();
-                anyhow::bail!(
-                    "openai-sso request failed: {} {}",
-                    code,
-                    detail.chars().take(400).collect::<String>()
-                )
-            }
-            Err(error) => Err(error.into()),
-        }
+        .set("Accept", "text/event-stream")
+        .set("Connection", "close");
+        stream_ureq_response_with_retry(
+            || match request.clone().send_json(payload.clone()) {
+                Ok(response) => Ok(response),
+                Err(ureq::Error::Status(401, _)) => {
+                    anyhow::bail!(
+                        "OpenAI SSO rejected the saved login. Run /auth openai-sso again."
+                    )
+                }
+                Err(ureq::Error::Status(code, response)) => {
+                    let detail = response.into_string().unwrap_or_default();
+                    anyhow::bail!(
+                        "openai-sso request failed: {} {}",
+                        code,
+                        detail.chars().take(400).collect::<String>()
+                    )
+                }
+                Err(error) => Err(error.into()),
+            },
+            |response, callback| {
+                parse_response_sse_text_reader(BufReader::new(response.into_reader()), callback)
+            },
+            on_delta,
+        )
     }
 }
 
@@ -2497,6 +2544,117 @@ fn send_provider_json(
         }
         Err(error) => Err(error.into()),
     }
+}
+
+const MAX_PROVIDER_STREAM_ATTEMPTS: usize = 2;
+const PROVIDER_STREAM_RETRY_DELAY: Duration = Duration::from_millis(75);
+
+fn is_retryable_chunk_decode_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        let message = cause.to_string().to_ascii_lowercase();
+        message.contains("decoding chunks")
+            || message.contains("chunk decode")
+            || message.contains("chunked encoding")
+    })
+}
+
+fn stream_ureq_response_with_retry<T, Send, Parse>(
+    mut send: Send,
+    mut parse: Parse,
+    on_delta: &mut dyn FnMut(&str),
+) -> anyhow::Result<T>
+where
+    Send: FnMut() -> anyhow::Result<ureq::Response>,
+    Parse: FnMut(ureq::Response, &mut dyn FnMut(&str)) -> anyhow::Result<T>,
+{
+    // A stream can fail after already yielding visible text. If the retry
+    // starts from the beginning, suppress the prefix we already displayed so
+    // the user sees one continuous answer rather than duplicated text.
+    let mut displayed_prefix = String::new();
+    let mut replay_offset = 0;
+    for attempt in 0..MAX_PROVIDER_STREAM_ATTEMPTS {
+        let response = send()?;
+        let result = {
+            let mut emit = |delta: &str| {
+                if attempt == 0 {
+                    displayed_prefix.push_str(delta);
+                    on_delta(delta);
+                } else {
+                    emit_replayed_stream_delta(
+                        delta,
+                        &displayed_prefix,
+                        &mut replay_offset,
+                        on_delta,
+                    );
+                }
+            };
+            parse(response, &mut emit)
+        };
+        match result {
+            Ok(value) => return Ok(value),
+            Err(error)
+                if attempt + 1 < MAX_PROVIDER_STREAM_ATTEMPTS
+                    && is_retryable_chunk_decode_error(&error) =>
+            {
+                thread::sleep(PROVIDER_STREAM_RETRY_DELAY);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("provider stream retry loop must return from every attempt")
+}
+
+fn emit_replayed_stream_delta(
+    delta: &str,
+    displayed_prefix: &str,
+    replay_offset: &mut usize,
+    on_delta: &mut dyn FnMut(&str),
+) {
+    if delta.is_empty() {
+        return;
+    }
+    if *replay_offset < displayed_prefix.len() {
+        let remaining = &displayed_prefix[*replay_offset..];
+        if remaining.starts_with(delta) {
+            *replay_offset += delta.len();
+            return;
+        }
+        if let Some(suffix) = delta.strip_prefix(remaining) {
+            *replay_offset = displayed_prefix.len();
+            if !suffix.is_empty() {
+                on_delta(suffix);
+            }
+            return;
+        }
+        // The provider did not replay the same prefix. Do not hide a new
+        // response; forward it rather than risking a truncated answer.
+        *replay_offset = displayed_prefix.len();
+    }
+    on_delta(delta);
+}
+
+fn read_ureq_stream_body_with_retry<Send>(mut send: Send) -> anyhow::Result<String>
+where
+    Send: FnMut() -> anyhow::Result<ureq::Response>,
+{
+    for attempt in 0..MAX_PROVIDER_STREAM_ATTEMPTS {
+        let response = send()?;
+        let mut body = String::new();
+        match response.into_reader().read_to_string(&mut body) {
+            Ok(_) => return Ok(body),
+            Err(error) => {
+                let error = anyhow::Error::from(error);
+                if attempt + 1 < MAX_PROVIDER_STREAM_ATTEMPTS
+                    && is_retryable_chunk_decode_error(&error)
+                {
+                    thread::sleep(PROVIDER_STREAM_RETRY_DELAY);
+                    continue;
+                }
+                return Err(error);
+            }
+        }
+    }
+    unreachable!("provider stream retry loop must return from every attempt")
 }
 
 fn prompt_cache_metadata(envelope: &CachedPromptEnvelope) -> Value {
@@ -3639,9 +3797,8 @@ fn model_reasoning_effort(model: &ModelInfo) -> Option<&str> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .or_else(|| match model_reasoning_level(model) {
-            Some("minimal") | Some("low") | Some("medium") | Some("high") => {
-                model_reasoning_level(model)
-            }
+            Some("minimal") | Some("low") | Some("medium") | Some("high") | Some("xhigh")
+            | Some("max") => model_reasoning_level(model),
             _ => None,
         })
 }
@@ -3678,6 +3835,8 @@ fn anthropic_thinking_budget_tokens(model: &ModelInfo) -> Option<u64> {
             Some("low") => Some(4_096),
             Some("medium") => Some(8_192),
             Some("high") => Some(16_384),
+            Some("xhigh") => Some(24_576),
+            Some("max") => Some(32_768),
             _ => None,
         })
 }
@@ -3700,7 +3859,10 @@ fn google_thinking_budget(model: &ModelInfo) -> Option<i64> {
             Some("minimal") => Some(0),
             Some("low") => Some(1_024),
             Some("medium") => Some(8_192),
-            Some("high") => Some(32_768),
+            // Gemini exposes a provider-specific token budget rather than
+            // OpenAI's named effort values. Keep the strongest portable
+            // levels within the currently supported 32K budget ceiling.
+            Some("high") | Some("xhigh") | Some("max") => Some(32_768),
             _ => None,
         })
 }
@@ -6578,12 +6740,118 @@ pub mod test_support {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{
+        collections::BTreeMap,
+        io::{Read, Write},
+        net::TcpListener,
+    };
 
     use super::*;
     use std::sync::Mutex;
 
     static TOOL_ROUND_LIMIT_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn malformed_chunked_stream_is_retried_before_turn_failure() -> anyhow::Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let server = thread::spawn(move || {
+            for (index, incoming) in listener.incoming().take(2).enumerate() {
+                let Ok(mut stream) = incoming else {
+                    return;
+                };
+                let mut request = [0_u8; 1024];
+                let _ = stream.read(&mut request);
+                let response = if index == 0 {
+                    concat!(
+                        "HTTP/1.1 200 OK\r\n",
+                        "Transfer-Encoding: chunked\r\n",
+                        "Connection: close\r\n",
+                        "\r\n",
+                        "not-a-chunk\r\n",
+                        "broken\r\n"
+                    )
+                } else {
+                    concat!(
+                        "HTTP/1.1 200 OK\r\n",
+                        "Transfer-Encoding: chunked\r\n",
+                        "Connection: close\r\n",
+                        "\r\n",
+                        "5\r\nhello\r\n",
+                        "0\r\n\r\n"
+                    )
+                };
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        let body = read_ureq_stream_body_with_retry(|| {
+            Ok(ureq::get(&format!("http://{address}/stream"))
+                .set("Connection", "close")
+                .call()?)
+        })?;
+
+        assert_eq!(body, "hello");
+        server
+            .join()
+            .map_err(|_| anyhow::anyhow!("chunk test server panicked"))?;
+        Ok(())
+    }
+
+    #[test]
+    fn mid_stream_chunk_failure_retries_without_duplicate_visible_text() -> anyhow::Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let server = thread::spawn(move || {
+            for (index, incoming) in listener.incoming().take(2).enumerate() {
+                let Ok(mut stream) = incoming else {
+                    return;
+                };
+                let mut request = [0_u8; 1024];
+                let _ = stream.read(&mut request);
+                let response = if index == 0 {
+                    let first_event =
+                        "data: {\"choices\":[{\"delta\":{\"content\":\"hello \"}}]}\n\n";
+                    format!(
+                        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n{}\r\nnot-a-chunk\r\nbroken\r\n",
+                        first_event.len(),
+                        first_event
+                    )
+                } else {
+                    let body = concat!(
+                        "data: {\"choices\":[{\"delta\":{\"content\":\"hello world\"}}]}\n\n",
+                        "data: [DONE]\n\n"
+                    );
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                };
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        let mut visible = String::new();
+        let response = stream_ureq_response_with_retry(
+            || {
+                Ok(ureq::get(&format!("http://{address}/stream"))
+                    .set("Connection", "close")
+                    .call()?)
+            },
+            |response, callback| {
+                parse_openai_sse_reader(BufReader::new(response.into_reader()), callback)
+            },
+            &mut |delta| visible.push_str(delta),
+        )?;
+
+        assert_eq!(response, "hello world");
+        assert_eq!(visible, "hello world");
+        server
+            .join()
+            .map_err(|_| anyhow::anyhow!("chunk test server panicked"))?;
+        Ok(())
+    }
 
     #[test]
     fn provider_payload_budget_blocks_oversized_request() {
