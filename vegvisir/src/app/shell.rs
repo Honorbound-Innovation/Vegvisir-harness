@@ -349,6 +349,44 @@ impl TuiApplication {
                 })
                 .collect();
         }
+        if raw.starts_with("/acp ") || raw == "/acp " {
+            if matches!(
+                parts.get(1),
+                Some(&"run" | &"execute" | &"show-command" | &"show-command-file")
+            ) && (parts.len() >= 3 || trailing_space)
+            {
+                return Vec::new();
+            }
+            let prefix = if trailing_space {
+                ""
+            } else {
+                parts.get(1).copied().unwrap_or("")
+            };
+            return [
+                ("help", "show ACP command help"),
+                ("init", "create the ACP workspace directory pattern"),
+                ("status", "show ACP files and progress"),
+                ("validate", "validate the ACP workspace structure"),
+                ("context", "show bounded ACP context for model turns"),
+                ("list", "list ACP command documents"),
+                ("show-command", "show one ACP command document"),
+                ("run", "run an ACP command document as a model turn"),
+            ]
+            .into_iter()
+            .filter(|(command, _)| command.starts_with(prefix))
+            .map(|(command, description)| {
+                Suggestion::new(
+                    command.to_string(),
+                    description.to_string(),
+                    Some(if matches!(command, "run" | "show-command") {
+                        format!("/acp {command} ")
+                    } else {
+                        format!("/acp {command}")
+                    }),
+                )
+            })
+            .collect();
+        }
         if raw.starts_with("/goal ") || raw == "/goal " {
             // Once a path-taking subcommand has been completed, the subcommand suggestions
             // must not compete with normal text entry. Otherwise Tab or Enter can accept the
@@ -524,6 +562,7 @@ impl TuiApplication {
             "/auto" | "/autonomous" => self.autonomous_command(&args),
             "/autonomy" => self.autonomy_command(&args),
             "/goal" => self.goal_command(&args),
+            "/acp" => self.acp_command(&args)?,
             "/history" => self.history(),
             "/status" => self.session_status_command(&args),
             "/diff" => self.diff_command(&args)?,

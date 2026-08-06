@@ -47,6 +47,20 @@ impl TuiApplication {
             return;
         }
 
+        if crate::acp::is_command_invocation(&raw) {
+            match crate::acp::expand_command_invocation(&self.cwd, &raw) {
+                Ok(Some(prompt)) => {
+                    self.start_background_send_with_display(prompt, raw.clone(), Vec::new());
+                }
+                Ok(None) => {}
+                Err(error) => self.push_system_message(format!("ACP command failed: {error}")),
+            }
+            self.autosave_session();
+            self.chat_scroll_offset = 0;
+            self.redraw_requested = true;
+            return;
+        }
+
         let (mut content, mut attachments) = extract_attachments(&raw, &self.cwd);
         let pending = std::mem::take(&mut self.session.pending_attachments);
         attachments = pending.into_iter().chain(attachments).collect();
@@ -412,7 +426,11 @@ impl TuiApplication {
                     return true;
                 };
                 prompt.attempts += 1;
-                let result = crate::privilege::sudo_refresh_with_tui_password(&mut prompt.buffer);
+                let supervisor = self.tool_registry.sudo_supervisor();
+                let result = crate::privilege::sudo_refresh_with_tui_password(
+                    &supervisor,
+                    &mut prompt.buffer,
+                );
                 prompt.clear_secret();
                 match result {
                     Ok(()) => {

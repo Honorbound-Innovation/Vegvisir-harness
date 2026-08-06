@@ -370,7 +370,10 @@ impl SudoPasswordPrompt {
     }
 
     pub fn pop(&mut self) {
-        let _ = self.buffer.pop();
+        if let Some(last) = self.buffer.len().checked_sub(1) {
+            self.buffer[last] = '\0';
+            self.buffer.pop();
+        }
     }
 
     pub fn clear_secret(&mut self) {
@@ -1615,7 +1618,19 @@ impl TuiApplication {
             &self.session,
             &cfg,
         )?;
+        let model_content = self.apply_acp_context_to_content(&model_content);
         Ok((model_content, trace))
+    }
+
+    pub(crate) fn apply_acp_context_to_content(&self, content: &str) -> String {
+        let Some(context) = crate::acp::AcpSnapshot::load(&self.cwd)
+            .ok()
+            .filter(|snapshot| snapshot.initialized)
+            .map(|snapshot| snapshot.render_context())
+        else {
+            return content.to_string();
+        };
+        format!("{content}\n\n{context}")
     }
 
     fn openai_sso_status(&self) -> String {

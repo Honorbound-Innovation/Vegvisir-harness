@@ -1,3 +1,4 @@
+pub(crate) mod acp;
 pub(crate) mod agents;
 mod autonomy;
 mod autonomy_plan;

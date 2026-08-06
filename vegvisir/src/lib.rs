@@ -1,3 +1,4 @@
+pub mod acp;
 pub mod agent_admin;
 pub mod app;
 pub mod attachments;

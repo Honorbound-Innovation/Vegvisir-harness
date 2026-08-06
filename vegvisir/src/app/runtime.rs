@@ -43,15 +43,24 @@ impl TuiApplication {
         content: String,
         attachments: Vec<crate::core::Attachment>,
     ) {
-        if self.pending_send.is_some() {
-            self.queue_steering_message(content, attachments);
-            return;
-        }
         let display_content = if content.trim().is_empty() && !attachments.is_empty() {
             "Please review the attached file(s).".to_string()
         } else {
             content.clone()
         };
+        self.start_background_send_with_display(content, display_content, attachments);
+    }
+
+    pub(crate) fn start_background_send_with_display(
+        &mut self,
+        content: String,
+        display_content: String,
+        attachments: Vec<crate::core::Attachment>,
+    ) {
+        if self.pending_send.is_some() {
+            self.queue_steering_message(content, attachments);
+            return;
+        }
         self.session.messages.push(ChatMessage {
             role: "user".to_string(),
             content: display_content.clone(),
@@ -84,6 +93,10 @@ impl TuiApplication {
         let cwd = self.cwd.clone();
         let data_root = self.data_root.clone();
         let lsl_config = self.lsl_runtime_config();
+        let acp_context = crate::acp::AcpSnapshot::load(&cwd)
+            .ok()
+            .filter(|snapshot| snapshot.initialized)
+            .map(|snapshot| snapshot.render_context());
         let autonomous_mode_enabled = self.autonomous_mode_enabled;
         let autonomy_level = self.autonomous_level.min(6) as u8;
         let goal_mode_enabled = self.goal.active;
@@ -159,13 +172,18 @@ impl TuiApplication {
             let (model_content, skill_trace) = prepare_lsl_augmented_content(
                 &cwd,
                 &data_root,
-                &display_content,
+                &content,
                 &worker_session,
                 &lsl_config,
             )?;
             let model_content =
                 apply_user_profile_context(profile_context.as_deref(), &model_content);
             let model_content = apply_subagent_delegation_context(&model_content);
+            let model_content = if let Some(acp_context) = acp_context.as_deref() {
+                format!("{model_content}\n\n{acp_context}")
+            } else {
+                model_content
+            };
             let model_content = if goal_mode_enabled {
                 apply_goal_mode_contract(&model_content)
             } else if autonomous_mode_enabled {

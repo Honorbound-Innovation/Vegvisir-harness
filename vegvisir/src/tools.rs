@@ -897,12 +897,26 @@ fn validate_schema_number_constraints(
     Ok(())
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct ToolRegistry {
     tools: HashMap<String, Tool>,
+    sudo_supervisor: Arc<Mutex<privilege::SudoSupervisor>>,
+}
+
+impl Default for ToolRegistry {
+    fn default() -> Self {
+        Self {
+            tools: HashMap::new(),
+            sudo_supervisor: privilege::new_sudo_supervisor(),
+        }
+    }
 }
 
 impl ToolRegistry {
+    pub(crate) fn sudo_supervisor(&self) -> Arc<Mutex<privilege::SudoSupervisor>> {
+        self.sudo_supervisor.clone()
+    }
+
     pub fn register(&mut self, tool: Tool) -> anyhow::Result<()> {
         if self.tools.contains_key(&tool.name) {
             anyhow::bail!("Tool already registered: {}", tool.name);
@@ -1083,7 +1097,7 @@ fn terminate_child_process_group(child: &mut Child) {
 }
 
 const NORMAL_SUDO_REJECTION: &str = "Direct sudo through normal command tools is disabled so sudo passwords cannot enter chat/session/trace history. Run /sudo auth, then use run_privileged_command.";
-const PRIVILEGED_SUDO_REJECTION: &str = "Do not include sudo in run_privileged_command arguments. Run /sudo auth, then provide the underlying command; Vegvisir adds sudo -n internally.";
+const PRIVILEGED_SUDO_REJECTION: &str = "Do not include sudo in run_privileged_command arguments. Run /sudo auth, then provide the underlying command; Vegvisir executes it through the private local supervisor.";
 
 fn command_mentions_sudo_invocation(parts: &[&str]) -> bool {
     let Some((program, args)) = parts.split_first() else {
@@ -1328,7 +1342,7 @@ fn command_observation_data(
     data.insert(
         "sudo_password_visibility".to_string(),
         json!(if privileged {
-            "not-collected; sudo -n uses existing timestamp only"
+            "not-collected; private local sudo supervisor owns authorization stdin"
         } else {
             "not-applicable"
         }),
@@ -1465,6 +1479,90 @@ fn execute_bounded_command(
             }
         }
         Err(error) => Observation::err(error.to_string(), "CommandError"),
+    }
+}
+
+fn execute_supervised_privileged_command(
+    parts: &[&str],
+    sandbox_config: &CommandSandboxConfig,
+    timeout: u64,
+    output_limit: usize,
+    failure_error: &str,
+    supervisor: Arc<Mutex<privilege::SudoSupervisor>>,
+) -> Observation {
+    if parts.is_empty() {
+        return Observation::err("Empty command", "ValueError");
+    }
+    if let Some(rejection) = reject_sudo_misuse(parts, true) {
+        return rejection;
+    }
+    let sandboxed_command = match build_sandboxed_command(parts, sandbox_config) {
+        Ok(command) => command,
+        Err(error) => return Observation::err(error.to_string(), "CommandError"),
+    };
+    let mut command_parts = Vec::with_capacity(sandboxed_command.args.len() + 1);
+    command_parts.push(sandboxed_command.program.clone());
+    command_parts.extend(sandboxed_command.args.iter().cloned());
+
+    let result = match supervisor.lock() {
+        Ok(mut supervisor) => supervisor.run(
+            &command_parts,
+            &sandboxed_command.current_dir,
+            Duration::from_secs(timeout),
+            output_limit,
+        ),
+        Err(_) => Err(anyhow::anyhow!("sudo supervisor state is unavailable")),
+    };
+    let output = match result {
+        Ok(output) => output,
+        Err(error) if error.to_string() == privilege::SUDO_SUPERVISOR_NOT_AUTHENTICATED => {
+            return Observation::err(
+                format!(
+                    "Privileged command requires /sudo auth. {}",
+                    privilege::SUDO_SUPERVISOR_NOT_AUTHENTICATED
+                ),
+                "SudoAuthenticationRequired",
+            );
+        }
+        Err(error) if error.to_string() == privilege::SUDO_SUPERVISOR_TIMEOUT => {
+            return Observation::err(error.to_string(), "CommandTimeout");
+        }
+        Err(error) => return Observation::err(error.to_string(), failure_error),
+    };
+
+    if let Some(sink) = current_command_output_sink()
+        && !output.content.is_empty()
+    {
+        sink(CommandOutputChunk {
+            stream: "stdout".to_string(),
+            chunk: output.content.clone(),
+            truncated: output.truncated,
+        });
+    }
+    let mut data = command_observation_data(
+        parts,
+        &sandboxed_command,
+        false,
+        output.status,
+        false,
+        timeout,
+        output.truncated,
+        true,
+        output.total_bytes,
+        0,
+        &[],
+    );
+    data.insert("streaming_capture".to_string(), json!(false));
+    data.insert(
+        "stream_capture_mode".to_string(),
+        json!("private_sudo_supervisor_bounded_merged_output"),
+    );
+    data.insert("supervisor_owned_stdin".to_string(), json!(true));
+    Observation {
+        ok: output.status == 0,
+        content: output.content,
+        data,
+        error: (output.status != 0).then(|| failure_error.to_string()),
     }
 }
 
@@ -1889,6 +1987,7 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
     let active_subagent_limit = active_subagent_limit.max(1);
     let subagent_spawn_defaults = subagent_spawn_defaults.normalized();
     let mut registry = ToolRegistry::default();
+    let privileged_sudo_supervisor = registry.sudo_supervisor();
 
     let list_sandbox = sandbox.clone();
     registry.register(Tool::new(
@@ -2368,9 +2467,10 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
     ))?;
 
     let privileged_sandbox_config = command_sandbox_config.clone();
+    let privileged_sudo_supervisor_for_tool = privileged_sudo_supervisor.clone();
     registry.register(Tool::new(
         "run_privileged_command",
-        "Run an allow-listed privileged command via sudo -n using an existing sudo timestamp; Vegvisir never reads or logs the sudo password.",
+        "Run an allow-listed privileged command through Vegvisir's private local sudo supervisor after /sudo auth; the model never receives the sudo password or supervisor terminal.",
         Arc::new(move |args| {
             let Some(command) = args.get("command").and_then(Value::as_array) else {
                 return Observation::err("Missing command", "ValueError");
@@ -2389,14 +2489,13 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
                 .and_then(Value::as_u64)
                 .unwrap_or(20000)
                 .clamp(1024, 1_000_000) as usize;
-            execute_bounded_command(
+            execute_supervised_privileged_command(
                 &parts,
                 &privileged_sandbox_config,
                 timeout,
                 output_limit,
                 "PrivilegedCommandFailed",
-                false,
-                true,
+                privileged_sudo_supervisor_for_tool.clone(),
             )
         }),
         json!({"required": ["command"], "properties": {"command": "array", "timeout": "integer", "output_limit": "integer"}}),
@@ -5033,6 +5132,31 @@ mod skiller_tool_tests {
         assert!(!rejection.ok);
         assert_eq!(rejection.error.as_deref(), Some("SudoInvocationRejected"));
         assert!(rejection.content.contains("Do not include sudo"));
+    }
+
+    #[test]
+    fn supervised_privileged_command_fails_closed_without_local_authentication()
+    -> anyhow::Result<()> {
+        let workspace = TempDir::new()?;
+        let supervisor = privilege::new_sudo_supervisor();
+        let sandbox = CommandSandboxConfig::path_only(workspace.path());
+
+        let observation = execute_supervised_privileged_command(
+            &["id"],
+            &sandbox,
+            1,
+            1024,
+            "PrivilegedCommandFailed",
+            supervisor,
+        );
+
+        assert!(!observation.ok);
+        assert_eq!(
+            observation.error.as_deref(),
+            Some("SudoAuthenticationRequired")
+        );
+        assert!(observation.content.contains("/sudo auth"));
+        Ok(())
     }
 
     #[test]
