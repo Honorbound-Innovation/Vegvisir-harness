@@ -156,6 +156,7 @@ pub struct TuiApplication {
     pub drag_anchor: Option<(u16, u16)>,
     pub drag_current: Option<(u16, u16)>,
     pub autonomy: AutonomyState,
+    pub(crate) goal: GoalState,
     pub observed_subagent_transcript_signatures: BTreeMap<String, String>,
     pub last_subagent_board_poll: Option<std::time::Instant>,
 }
@@ -369,7 +370,10 @@ impl SudoPasswordPrompt {
     }
 
     pub fn pop(&mut self) {
-        let _ = self.buffer.pop();
+        if let Some(last) = self.buffer.len().checked_sub(1) {
+            self.buffer[last] = '\0';
+            self.buffer.pop();
+        }
     }
 
     pub fn clear_secret(&mut self) {
@@ -417,6 +421,53 @@ pub struct ProfileOverlayField {
     pub label: String,
     pub value: String,
     pub hint: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct GoalState {
+    pub enabled: bool,
+    pub active: bool,
+    pub spec_path: Option<String>,
+    pub plan_path: Option<String>,
+    pub objective: String,
+    pub step: usize,
+    pub last_status: String,
+    pub current_node_id: Option<String>,
+    pub current_node_title: Option<String>,
+    pub node_total: usize,
+    pub node_completed: usize,
+    pub checklist_total: usize,
+    pub checklist_completed: usize,
+    pub current_evidence_path: Option<String>,
+    pub current_evidence_status: Option<String>,
+    pub current_evidence_valid: bool,
+    pub current_evidence_blocked: bool,
+    pub exit_criteria_complete: bool,
+}
+
+impl Default for GoalState {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            active: false,
+            spec_path: None,
+            plan_path: None,
+            objective: String::new(),
+            step: 0,
+            last_status: "off".to_string(),
+            current_node_id: None,
+            current_node_title: None,
+            node_total: 0,
+            node_completed: 0,
+            checklist_total: 0,
+            checklist_completed: 0,
+            current_evidence_path: None,
+            current_evidence_status: None,
+            current_evidence_valid: false,
+            current_evidence_blocked: false,
+            exit_criteria_complete: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -621,13 +672,6 @@ fn command_matches_palette_query(name: &str, description: &str, raw: &str) -> bo
     name.trim_start_matches('/').starts_with(&query)
         || name.contains(&query)
         || description.contains(&query)
-}
-
-fn should_refresh_suggestions_before_key(key: &KeyEvent) -> bool {
-    !matches!(
-        key.code,
-        KeyCode::Enter | KeyCode::Up | KeyCode::Down | KeyCode::Tab
-    )
 }
 
 fn diff_overlay_from_patch(title: &str, diff: &str) -> DiffOverlay {
@@ -1112,6 +1156,7 @@ impl TuiApplication {
             drag_anchor: None,
             drag_current: None,
             autonomy: AutonomyState::default(),
+            goal: GoalState::default(),
             observed_subagent_transcript_signatures: BTreeMap::new(),
             last_subagent_board_poll: None,
         };
@@ -1573,7 +1618,19 @@ impl TuiApplication {
             &self.session,
             &cfg,
         )?;
+        let model_content = self.apply_acp_context_to_content(&model_content);
         Ok((model_content, trace))
+    }
+
+    pub(crate) fn apply_acp_context_to_content(&self, content: &str) -> String {
+        let Some(context) = crate::acp::AcpSnapshot::load(&self.cwd)
+            .ok()
+            .filter(|snapshot| snapshot.initialized)
+            .map(|snapshot| snapshot.render_context())
+        else {
+            return content.to_string();
+        };
+        format!("{content}\n\n{context}")
     }
 
     fn openai_sso_status(&self) -> String {
@@ -1882,7 +1939,10 @@ fn configured_subagent_spawn_defaults(
 #[cfg(test)]
 mod tests {
     use super::{StreamEvent, SudoPasswordPrompt, TuiApplication};
-    use crate::core::{ChatMessage, SessionState};
+    use crate::{
+        core::{ChatMessage, SessionState},
+        ui::input::Suggestion,
+    };
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
     use serde_json::Value;
     use std::{
@@ -2404,6 +2464,34 @@ mod tests {
         assert_eq!(action.id, "bug_goblin");
         assert!(action.path.ends_with("ka/bug_goblin.json"));
         assert!(action.path.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn goal_specification_path_is_submitted_while_palette_is_open() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        app.open_command_palette();
+        app.input.set_buffer("/goal start ");
+        assert!(app.build_suggestions().is_empty());
+        app.input.set_buffer("/goal start missing.md");
+        let suggestions = app.build_suggestions();
+        assert!(suggestions.is_empty());
+        app.input.suggestions = vec![Suggestion::new(
+            "start",
+            "specification-driven end-to-end implementation",
+            Some("/goal start ".to_string()),
+        )];
+
+        app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(!app.command_palette_open);
+        assert!(app.input.buffer.is_empty());
+        assert!(app.session.messages.iter().any(|message| {
+            message
+                .content
+                .contains("could not read specification `missing.md`")
+        }));
         Ok(())
     }
 
@@ -3046,6 +3134,31 @@ mod tests {
                 .content
                 .contains("final answer before exit")
         );
+        assert!(app.should_draw_frame());
+        Ok(())
+    }
+
+    #[test]
+    fn idle_background_work_does_not_force_continuous_redraws() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut app = TuiApplication::with_data_root(tmp.path(), tmp.path().join("home"))?;
+        let (release_tx, release_rx) = mpsc::channel();
+        app.pending_background_jobs
+            .push(std::thread::spawn(move || {
+                release_rx.recv().expect("release background job");
+                Ok("done".to_string())
+            }));
+        app.redraw_requested = false;
+
+        assert!(
+            !app.should_draw_frame(),
+            "background work must redraw only when polling observes a visible change"
+        );
+        release_tx.send(())?;
+        let deadline = Instant::now() + std::time::Duration::from_secs(1);
+        while !app.poll_background_jobs() && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
         assert!(app.should_draw_frame());
         Ok(())
     }

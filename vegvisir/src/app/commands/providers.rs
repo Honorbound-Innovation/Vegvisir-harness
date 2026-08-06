@@ -184,11 +184,11 @@ impl TuiApplication {
     }
 
     pub(crate) fn effort_command(&mut self, args: &[String]) -> anyhow::Result<String> {
-        const LEVELS: [&str; 4] = ["minimal", "low", "medium", "high"];
+        const LEVELS: [&str; 6] = ["minimal", "low", "medium", "high", "xhigh", "max"];
         if args.is_empty() || matches!(args[0].as_str(), "show" | "status") {
             let Some(model) = self.models.get(&self.session.current_model) else {
                 return Ok(format!(
-                    "Current model {} is not in the model registry. Usage: /effort <minimal|low|medium|high|default>",
+                    "Current model {} is not in the model registry. Usage: /effort <minimal|low|medium|high|xhigh|max|default>",
                     self.session.current_model
                 ));
             };
@@ -207,7 +207,7 @@ impl TuiApplication {
                 .as_deref()
                 .unwrap_or("none");
             return Ok(format!(
-                "Reasoning effort for {}: {effective}\nSession override: {override_label}\nCatalog default: {}\nSelectable values: {}\nUsage: /effort <minimal|low|medium|high|default>",
+                "Reasoning effort for {}: {effective}\nSession override: {override_label}\nCatalog default: {}\nSelectable values: {}\nUsage: /effort <minimal|low|medium|high|xhigh|max|default>",
                 self.session.current_model,
                 catalog.unwrap_or("unset"),
                 LEVELS.join(", ")
@@ -229,7 +229,7 @@ impl TuiApplication {
         }
         if !LEVELS.contains(&requested.as_str()) {
             return Ok(format!(
-                "Unknown reasoning effort: {requested}\nSelectable values: {}\nUsage: /effort <minimal|low|medium|high|default>",
+                "Unknown reasoning effort: {requested}\nSelectable values: {}\nUsage: /effort <minimal|low|medium|high|xhigh|max|default>",
                 LEVELS.join(", ")
             ));
         }

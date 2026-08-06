@@ -47,6 +47,20 @@ impl TuiApplication {
             return;
         }
 
+        if crate::acp::is_command_invocation(&raw) {
+            match crate::acp::expand_command_invocation(&self.cwd, &raw) {
+                Ok(Some(prompt)) => {
+                    self.start_background_send_with_display(prompt, raw.clone(), Vec::new());
+                }
+                Ok(None) => {}
+                Err(error) => self.push_system_message(format!("ACP command failed: {error}")),
+            }
+            self.autosave_session();
+            self.chat_scroll_offset = 0;
+            self.redraw_requested = true;
+            return;
+        }
+
         let (mut content, mut attachments) = extract_attachments(&raw, &self.cwd);
         let pending = std::mem::take(&mut self.session.pending_attachments);
         attachments = pending.into_iter().chain(attachments).collect();
@@ -97,10 +111,6 @@ impl TuiApplication {
             }
             self.redraw_requested = true;
             return;
-        }
-        if should_refresh_suggestions_before_key(&key) {
-            let suggestions = self.build_suggestions();
-            self.input.update_suggestions(suggestions);
         }
         if self.handle_sudo_password_prompt_key(key) {
             self.redraw_requested = true;
@@ -208,7 +218,13 @@ impl TuiApplication {
             }
             KeyCode::Enter => {
                 if self.command_palette_open {
-                    self.accept_palette_selection_for_execution();
+                    // A palette item is a completion, not an override for text that the
+                    // user has already appended (for example `/goal start spec.md`).
+                    // Only replace the buffer when the selected replacement still extends
+                    // the current input; otherwise submit the typed command as-is.
+                    if self.palette_selection_extends_input() {
+                        self.accept_palette_selection_for_execution();
+                    }
                     self.command_palette_open = false;
                     self.handle_submit();
                 } else if self.should_execute_selected_slash_suggestion() {
@@ -410,7 +426,11 @@ impl TuiApplication {
                     return true;
                 };
                 prompt.attempts += 1;
-                let result = crate::privilege::sudo_refresh_with_tui_password(&mut prompt.buffer);
+                let supervisor = self.tool_registry.sudo_supervisor();
+                let result = crate::privilege::sudo_refresh_with_tui_password(
+                    &supervisor,
+                    &mut prompt.buffer,
+                );
                 prompt.clear_secret();
                 match result {
                     Ok(()) => {
@@ -547,6 +567,17 @@ impl TuiApplication {
         self.command_palette_open = true;
         let suggestions = self.build_suggestions();
         self.input.update_suggestions(suggestions);
+    }
+
+    fn palette_selection_extends_input(&self) -> bool {
+        let Some(suggestion) = self.input.suggestions.get(self.input.selected_suggestion) else {
+            return false;
+        };
+        let Some(replacement) = suggestion.replacement.as_deref() else {
+            return false;
+        };
+        replacement.starts_with(self.input.buffer.as_str())
+            && replacement.len() > self.input.buffer.len()
     }
 
     pub(crate) fn accept_palette_selection_for_execution(&mut self) {

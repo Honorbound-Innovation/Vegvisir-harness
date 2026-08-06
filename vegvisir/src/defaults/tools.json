@@ -25,7 +25,7 @@
     {
       "name": "run_privileged_command",
       "category": "execution",
-      "description": "Run an allow-listed privileged command via sudo -n after /sudo auth; Vegvisir never reads or logs the sudo password.",
+      "description": "Run an allow-listed privileged command through Vegvisir's private local sudo supervisor after /sudo auth; the model never receives the sudo password or supervisor terminal.",
       "risky": true
     },
     {

@@ -32,6 +32,9 @@ use crate::{
 const TOOL_OBSERVATION_MODEL_MAX_BYTES: usize = 24 * 1024;
 const OPENAI_TOOL_LOOP_MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 const PROVIDER_CONTEXT_REPAIR_TARGET_PERCENT: f64 = 75.0;
+// Image inputs are billed by dimensions/detail, not by tokenizing their base64 transport.
+// This intentionally conservative allowance exceeds typical provider image-token charges.
+const PROVIDER_IMAGE_INPUT_TOKEN_ESTIMATE: usize = 4_096;
 static RUNTIME_MAX_TOOL_ROUNDS: AtomicUsize = AtomicUsize::new(0);
 
 pub fn direct_provider_auth_allowed() -> bool {
@@ -568,11 +571,16 @@ impl ProviderAdapter for OpenAICompatibleProviderAdapter {
         let mut post = |payload: Value| -> anyhow::Result<String> {
             let mut request = ureq::post(&url)
                 .set("Content-Type", "application/json")
-                .set("Accept", "text/event-stream");
+                .set("Accept", "text/event-stream")
+                // Do not reuse a provider connection for SSE. A stale pooled
+                // connection can surface as an intermittent chunk decoder error.
+                .set("Connection", "close");
             if let Some(api_key) = &api_key {
                 request = request.set("Authorization", &format!("Bearer {api_key}"));
             }
-            Ok(send_provider_json(request, payload, &self.config.name)?.into_string()?)
+            read_ureq_stream_body_with_retry(|| {
+                send_provider_json(request.clone(), payload.clone(), &self.config.name)
+            })
         };
         openai_tool_loop_streaming(
             model,
@@ -648,12 +656,20 @@ impl OpenAICompatibleProviderAdapter {
         let url = format!("{}/responses", base_url.trim_end_matches('/'));
         let mut request = ureq::post(&url)
             .set("Content-Type", "application/json")
-            .set("Accept", "text/event-stream");
+            .set("Accept", "text/event-stream")
+            // Do not reuse a provider connection for SSE. A stale pooled
+            // connection can surface as an intermittent chunk decoder error.
+            .set("Connection", "close");
         if let Some(api_key) = api_key {
             request = request.set("Authorization", &format!("Bearer {api_key}"));
         }
-        let response = send_provider_json(request, payload, &self.config.name)?;
-        parse_response_sse_value_reader(BufReader::new(response.into_reader()), on_delta)
+        stream_ureq_response_with_retry(
+            || send_provider_json(request.clone(), payload.clone(), &self.config.name),
+            |response, callback| {
+                parse_response_sse_value_reader(BufReader::new(response.into_reader()), callback)
+            },
+            on_delta,
+        )
     }
 
     fn post_chat_completion_streaming(
@@ -685,12 +701,20 @@ impl OpenAICompatibleProviderAdapter {
         }
         let mut request = ureq::post(&url)
             .set("Content-Type", "application/json")
-            .set("Accept", "text/event-stream");
+            .set("Accept", "text/event-stream")
+            // Do not reuse a provider connection for SSE. A stale pooled
+            // connection can surface as an intermittent chunk decoder error.
+            .set("Connection", "close");
         if let Some(api_key) = api_key {
             request = request.set("Authorization", &format!("Bearer {api_key}"));
         }
-        let response = send_provider_json(request, payload, &self.config.name)?;
-        parse_openai_sse_reader(BufReader::new(response.into_reader()), on_delta)
+        stream_ureq_response_with_retry(
+            || send_provider_json(request.clone(), payload.clone(), &self.config.name),
+            |response, callback| {
+                parse_openai_sse_reader(BufReader::new(response.into_reader()), callback)
+            },
+            on_delta,
+        )
     }
 
     fn post_chat_completion(
@@ -735,13 +759,19 @@ impl OpenAICompatibleProviderAdapter {
                     "application/json"
                 },
             );
+        if stream {
+            request = request.set("Connection", "close");
+        }
         if let Some(api_key) = api_key {
             request = request.set("Authorization", &format!("Bearer {api_key}"));
         }
-        let response = send_provider_json(request, payload, &self.config.name)?;
         if stream {
-            parse_openai_sse(&response.into_string()?)
+            let body = read_ureq_stream_body_with_retry(|| {
+                send_provider_json(request.clone(), payload.clone(), &self.config.name)
+            })?;
+            parse_openai_sse(&body)
         } else {
+            let response = send_provider_json(request, payload, &self.config.name)?;
             let response: Value = response.into_json()?;
             extract_openai_compatible_text(&response).ok_or_else(|| {
                 anyhow::anyhow!(
@@ -1497,9 +1527,12 @@ impl ProviderAdapter for AnthropicProviderAdapter {
             .set("x-api-key", &api_key)
             .set("anthropic-version", "2023-06-01")
             .set("Content-Type", "application/json")
-            .set("Accept", "text/event-stream");
-        let response = send_provider_json(request, payload, &self.config.name)?;
-        parse_anthropic_sse_response(&response.into_string()?)
+            .set("Accept", "text/event-stream")
+            .set("Connection", "close");
+        let body = read_ureq_stream_body_with_retry(|| {
+            send_provider_json(request.clone(), payload.clone(), &self.config.name)
+        })?;
+        parse_anthropic_sse_response(&body)
     }
 
     fn supports_tool_calls(&self, _model: &ModelInfo, _selected_provider: &str) -> bool {
@@ -1902,9 +1935,12 @@ impl ProviderAdapter for GoogleProviderAdapter {
         );
         let request = ureq::post(&url)
             .set("Content-Type", "application/json")
-            .set("Accept", "text/event-stream");
-        let response = send_provider_json(request, payload, &self.config.name)?;
-        parse_google_stream(&response.into_string()?)
+            .set("Accept", "text/event-stream")
+            .set("Connection", "close");
+        let body = read_ureq_stream_body_with_retry(|| {
+            send_provider_json(request.clone(), payload.clone(), &self.config.name)
+        })?;
+        parse_google_stream(&body)
     }
 
     fn supports_tool_calls(&self, _model: &ModelInfo, _selected_provider: &str) -> bool {
@@ -2326,24 +2362,31 @@ impl OpenAISsoProfileAdapter {
         .set("Authorization", &format!("Bearer {}", tokens.access_token))
         .set("ChatGPT-Account-ID", &tokens.account_id)
         .set("Content-Type", "application/json")
-        .set("Accept", "text/event-stream");
-        match request.send_json(payload) {
-            Ok(response) => {
-                parse_response_sse_value_reader(BufReader::new(response.into_reader()), on_delta)
-            }
-            Err(ureq::Error::Status(401, _)) => {
-                anyhow::bail!("OpenAI SSO rejected the saved login. Run /auth openai-sso again.")
-            }
-            Err(ureq::Error::Status(code, response)) => {
-                let detail = response.into_string().unwrap_or_default();
-                anyhow::bail!(
-                    "openai-sso request failed: {} {}",
-                    code,
-                    detail.chars().take(400).collect::<String>()
-                )
-            }
-            Err(error) => Err(error.into()),
-        }
+        .set("Accept", "text/event-stream")
+        .set("Connection", "close");
+        stream_ureq_response_with_retry(
+            || match request.clone().send_json(payload.clone()) {
+                Ok(response) => Ok(response),
+                Err(ureq::Error::Status(401, _)) => {
+                    anyhow::bail!(
+                        "OpenAI SSO rejected the saved login. Run /auth openai-sso again."
+                    )
+                }
+                Err(ureq::Error::Status(code, response)) => {
+                    let detail = response.into_string().unwrap_or_default();
+                    anyhow::bail!(
+                        "openai-sso request failed: {} {}",
+                        code,
+                        detail.chars().take(400).collect::<String>()
+                    )
+                }
+                Err(error) => Err(error.into()),
+            },
+            |response, callback| {
+                parse_response_sse_value_reader(BufReader::new(response.into_reader()), callback)
+            },
+            on_delta,
+        )
     }
 
     fn post_response_streaming(
@@ -2361,24 +2404,31 @@ impl OpenAISsoProfileAdapter {
         .set("Authorization", &format!("Bearer {}", tokens.access_token))
         .set("ChatGPT-Account-ID", &tokens.account_id)
         .set("Content-Type", "application/json")
-        .set("Accept", "text/event-stream");
-        match request.send_json(payload) {
-            Ok(response) => {
-                parse_response_sse_text_reader(BufReader::new(response.into_reader()), on_delta)
-            }
-            Err(ureq::Error::Status(401, _)) => {
-                anyhow::bail!("OpenAI SSO rejected the saved login. Run /auth openai-sso again.")
-            }
-            Err(ureq::Error::Status(code, response)) => {
-                let detail = response.into_string().unwrap_or_default();
-                anyhow::bail!(
-                    "openai-sso request failed: {} {}",
-                    code,
-                    detail.chars().take(400).collect::<String>()
-                )
-            }
-            Err(error) => Err(error.into()),
-        }
+        .set("Accept", "text/event-stream")
+        .set("Connection", "close");
+        stream_ureq_response_with_retry(
+            || match request.clone().send_json(payload.clone()) {
+                Ok(response) => Ok(response),
+                Err(ureq::Error::Status(401, _)) => {
+                    anyhow::bail!(
+                        "OpenAI SSO rejected the saved login. Run /auth openai-sso again."
+                    )
+                }
+                Err(ureq::Error::Status(code, response)) => {
+                    let detail = response.into_string().unwrap_or_default();
+                    anyhow::bail!(
+                        "openai-sso request failed: {} {}",
+                        code,
+                        detail.chars().take(400).collect::<String>()
+                    )
+                }
+                Err(error) => Err(error.into()),
+            },
+            |response, callback| {
+                parse_response_sse_text_reader(BufReader::new(response.into_reader()), callback)
+            },
+            on_delta,
+        )
     }
 }
 
@@ -2494,6 +2544,117 @@ fn send_provider_json(
         }
         Err(error) => Err(error.into()),
     }
+}
+
+const MAX_PROVIDER_STREAM_ATTEMPTS: usize = 2;
+const PROVIDER_STREAM_RETRY_DELAY: Duration = Duration::from_millis(75);
+
+fn is_retryable_chunk_decode_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        let message = cause.to_string().to_ascii_lowercase();
+        message.contains("decoding chunks")
+            || message.contains("chunk decode")
+            || message.contains("chunked encoding")
+    })
+}
+
+fn stream_ureq_response_with_retry<T, Send, Parse>(
+    mut send: Send,
+    mut parse: Parse,
+    on_delta: &mut dyn FnMut(&str),
+) -> anyhow::Result<T>
+where
+    Send: FnMut() -> anyhow::Result<ureq::Response>,
+    Parse: FnMut(ureq::Response, &mut dyn FnMut(&str)) -> anyhow::Result<T>,
+{
+    // A stream can fail after already yielding visible text. If the retry
+    // starts from the beginning, suppress the prefix we already displayed so
+    // the user sees one continuous answer rather than duplicated text.
+    let mut displayed_prefix = String::new();
+    let mut replay_offset = 0;
+    for attempt in 0..MAX_PROVIDER_STREAM_ATTEMPTS {
+        let response = send()?;
+        let result = {
+            let mut emit = |delta: &str| {
+                if attempt == 0 {
+                    displayed_prefix.push_str(delta);
+                    on_delta(delta);
+                } else {
+                    emit_replayed_stream_delta(
+                        delta,
+                        &displayed_prefix,
+                        &mut replay_offset,
+                        on_delta,
+                    );
+                }
+            };
+            parse(response, &mut emit)
+        };
+        match result {
+            Ok(value) => return Ok(value),
+            Err(error)
+                if attempt + 1 < MAX_PROVIDER_STREAM_ATTEMPTS
+                    && is_retryable_chunk_decode_error(&error) =>
+            {
+                thread::sleep(PROVIDER_STREAM_RETRY_DELAY);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("provider stream retry loop must return from every attempt")
+}
+
+fn emit_replayed_stream_delta(
+    delta: &str,
+    displayed_prefix: &str,
+    replay_offset: &mut usize,
+    on_delta: &mut dyn FnMut(&str),
+) {
+    if delta.is_empty() {
+        return;
+    }
+    if *replay_offset < displayed_prefix.len() {
+        let remaining = &displayed_prefix[*replay_offset..];
+        if remaining.starts_with(delta) {
+            *replay_offset += delta.len();
+            return;
+        }
+        if let Some(suffix) = delta.strip_prefix(remaining) {
+            *replay_offset = displayed_prefix.len();
+            if !suffix.is_empty() {
+                on_delta(suffix);
+            }
+            return;
+        }
+        // The provider did not replay the same prefix. Do not hide a new
+        // response; forward it rather than risking a truncated answer.
+        *replay_offset = displayed_prefix.len();
+    }
+    on_delta(delta);
+}
+
+fn read_ureq_stream_body_with_retry<Send>(mut send: Send) -> anyhow::Result<String>
+where
+    Send: FnMut() -> anyhow::Result<ureq::Response>,
+{
+    for attempt in 0..MAX_PROVIDER_STREAM_ATTEMPTS {
+        let response = send()?;
+        let mut body = String::new();
+        match response.into_reader().read_to_string(&mut body) {
+            Ok(_) => return Ok(body),
+            Err(error) => {
+                let error = anyhow::Error::from(error);
+                if attempt + 1 < MAX_PROVIDER_STREAM_ATTEMPTS
+                    && is_retryable_chunk_decode_error(&error)
+                {
+                    thread::sleep(PROVIDER_STREAM_RETRY_DELAY);
+                    continue;
+                }
+                return Err(error);
+            }
+        }
+    }
+    unreachable!("provider stream retry loop must return from every attempt")
 }
 
 fn prompt_cache_metadata(envelope: &CachedPromptEnvelope) -> Value {
@@ -3636,9 +3797,8 @@ fn model_reasoning_effort(model: &ModelInfo) -> Option<&str> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .or_else(|| match model_reasoning_level(model) {
-            Some("minimal") | Some("low") | Some("medium") | Some("high") => {
-                model_reasoning_level(model)
-            }
+            Some("minimal") | Some("low") | Some("medium") | Some("high") | Some("xhigh")
+            | Some("max") => model_reasoning_level(model),
             _ => None,
         })
 }
@@ -3675,6 +3835,8 @@ fn anthropic_thinking_budget_tokens(model: &ModelInfo) -> Option<u64> {
             Some("low") => Some(4_096),
             Some("medium") => Some(8_192),
             Some("high") => Some(16_384),
+            Some("xhigh") => Some(24_576),
+            Some("max") => Some(32_768),
             _ => None,
         })
 }
@@ -3697,7 +3859,10 @@ fn google_thinking_budget(model: &ModelInfo) -> Option<i64> {
             Some("minimal") => Some(0),
             Some("low") => Some(1_024),
             Some("medium") => Some(8_192),
-            Some("high") => Some(32_768),
+            // Gemini exposes a provider-specific token budget rather than
+            // OpenAI's named effort values. Keep the strongest portable
+            // levels within the currently supported 32K budget ceiling.
+            Some("high") | Some("xhigh") | Some("max") => Some(32_768),
             _ => None,
         })
 }
@@ -4776,11 +4941,12 @@ fn enforce_provider_payload_budget(
             "Vegvisir blocked an oversized model request before provider send: {bytes} bytes exceeds {OPENAI_TOOL_LOOP_MAX_BODY_BYTES} bytes. This usually means tool observations or context are too large."
         );
     }
-    let decision = evaluate_serialized_payload_budget(model, &serialized);
+    let estimated_tokens = estimated_provider_payload_tokens(model, payload)?;
+    let decision = evaluate_payload_token_budget(model, estimated_tokens);
     if decision.action == ContextBudgetAction::Block {
         anyhow::bail!(
             "Vegvisir blocked an oversized model request before provider send: estimated {} input tokens for model {} exceeds the active context budget ({}; {:.1}% used). {}",
-            count_text_tokens(&model.name, &serialized),
+            estimated_tokens,
             model.name,
             model
                 .context_window
@@ -4797,21 +4963,74 @@ fn enforce_openai_payload_budget(model: &ModelInfo, payload: &Value) -> anyhow::
     enforce_provider_payload_budget(model, payload).map(|_| ())
 }
 
-fn evaluate_serialized_payload_budget(
-    model: &ModelInfo,
-    serialized_payload: &str,
-) -> ContextBudgetDecision {
-    let used_tokens = count_text_tokens(&model.name, serialized_payload) as usize;
+fn evaluate_payload_token_budget(model: &ModelInfo, used_tokens: usize) -> ContextBudgetDecision {
     let max_tokens = model.context_window.unwrap_or(0) as usize;
     ContextBudgetPolicy::default().evaluate(used_tokens, max_tokens)
+}
+
+fn estimated_provider_payload_tokens(model: &ModelInfo, payload: &Value) -> anyhow::Result<usize> {
+    let mut accounting_payload = payload.clone();
+    let image_count = redact_inline_images_for_token_accounting(&mut accounting_payload);
+    let serialized = serde_json::to_string(&accounting_payload)?;
+    Ok((count_text_tokens(&model.name, &serialized) as usize)
+        .saturating_add(image_count.saturating_mul(PROVIDER_IMAGE_INPUT_TOKEN_ESTIMATE)))
+}
+
+fn redact_inline_images_for_token_accounting(value: &mut Value) -> usize {
+    match value {
+        Value::Array(items) => items
+            .iter_mut()
+            .map(redact_inline_images_for_token_accounting)
+            .sum(),
+        Value::Object(object) => {
+            let mut image_count = 0;
+
+            // OpenAI/Responses-style data URLs.
+            if let Some(Value::String(url)) = object.get_mut("image_url")
+                && url.starts_with("data:image/")
+                && url.contains(";base64,")
+            {
+                *url = "[inline image omitted from text token accounting]".to_string();
+                image_count += 1;
+            }
+
+            // Anthropic-style {type: base64, media_type: image/*, data: ...} blocks.
+            let anthropic_image = object.get("type").and_then(Value::as_str) == Some("base64")
+                && object
+                    .get("media_type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|mime| mime.starts_with("image/"));
+            // Google-style {mimeType: image/*, data: ...} inlineData blocks.
+            let google_image = object
+                .get("mimeType")
+                .and_then(Value::as_str)
+                .is_some_and(|mime| mime.starts_with("image/"));
+            if (anthropic_image || google_image)
+                && let Some(Value::String(data)) = object.get_mut("data")
+                && !data.is_empty()
+            {
+                *data = "[inline image omitted from text token accounting]".to_string();
+                image_count += 1;
+            }
+
+            image_count
+                + object
+                    .values_mut()
+                    .map(redact_inline_images_for_token_accounting)
+                    .sum::<usize>()
+        }
+        _ => 0,
+    }
 }
 
 fn provider_payload_budget_decision(
     model: &ModelInfo,
     payload: &Value,
 ) -> anyhow::Result<ContextBudgetDecision> {
-    let serialized = serde_json::to_string(payload)?;
-    Ok(evaluate_serialized_payload_budget(model, &serialized))
+    Ok(evaluate_payload_token_budget(
+        model,
+        estimated_provider_payload_tokens(model, payload)?,
+    ))
 }
 
 fn provider_message_budget_decision(
@@ -5368,13 +5587,90 @@ impl serde::Serialize for ProviderRunEvent {
 }
 
 fn session_conversation_messages(session: &SessionState) -> Vec<ChatMessage> {
-    let messages = session
+    fit_conversation_messages_to_budget(
+        session_provider_context_messages(session),
+        provider_history_char_budget(session),
+    )
+}
+
+fn session_provider_context_messages(session: &SessionState) -> Vec<ChatMessage> {
+    session
         .messages
         .iter()
-        .filter(|message| message.role != "system")
+        .filter(|message| {
+            message.role != "system"
+                || message.content.starts_with("Context Capsule:")
+                || message
+                    .content
+                    .starts_with("Earlier conversation history was compacted by Vegvisir")
+        })
         .cloned()
-        .collect::<Vec<_>>();
-    fit_conversation_messages_to_budget(messages, provider_history_char_budget(session))
+        .collect()
+}
+
+fn automatically_compact_session_history(
+    session: &mut SessionState,
+    model: &ModelInfo,
+    stable_system_context: &str,
+) -> anyhow::Result<Option<ContextBudgetDecision>> {
+    let messages = session_provider_context_messages(session);
+    if messages.len() < 2 {
+        return Ok(None);
+    }
+
+    let mut probe = messages.clone();
+    if !stable_system_context.trim().is_empty() {
+        probe.insert(
+            0,
+            ChatMessage {
+                role: "system".to_string(),
+                content: stable_system_context.to_string(),
+                attachments: Vec::new(),
+                created_at: chrono::Utc::now(),
+            },
+        );
+    }
+    let decision = provider_message_budget_decision(&probe, model)?;
+    if !matches!(
+        decision.action,
+        ContextBudgetAction::CompactRecommended | ContextBudgetAction::Block
+    ) {
+        return Ok(None);
+    }
+
+    let current_chars = messages
+        .iter()
+        .map(|message| message.content.chars().count())
+        .sum::<usize>();
+    let system_tokens = count_text_tokens(&model.name, stable_system_context) as usize;
+    let token_target_chars = context_repair_target_tokens(model)
+        .saturating_sub(system_tokens)
+        .saturating_mul(3);
+    let ratio_target_chars = if decision.percentage > 0.0 {
+        ((current_chars as f64) * (PROVIDER_CONTEXT_REPAIR_TARGET_PERCENT / decision.percentage))
+            .floor() as usize
+    } else {
+        current_chars
+    };
+    let target_chars = token_target_chars
+        .min(ratio_target_chars)
+        .min(current_chars.saturating_sub(1));
+    if target_chars == 0 {
+        return Ok(None);
+    }
+
+    let compacted = fit_conversation_messages_to_budget(messages.clone(), target_chars);
+    let changed = compacted.len() != messages.len()
+        || compacted
+            .iter()
+            .zip(messages.iter())
+            .any(|(left, right)| left.role != right.role || left.content != right.content);
+    if !changed {
+        return Ok(None);
+    }
+
+    session.messages = compacted;
+    Ok(Some(decision))
 }
 
 fn provider_history_char_budget(session: &SessionState) -> usize {
@@ -5394,15 +5690,23 @@ fn fit_conversation_messages_to_budget(
         return messages;
     }
 
+    // Reserve part of the provider-history budget for a digest before selecting the
+    // recent suffix. Adding a digest after filling the entire budget would make the
+    // supposedly fitted request exceed its own limit.
+    let summary_budget = (budget_chars / 5).clamp(1_024, 12_000).min(budget_chars);
+    let recent_history_budget = budget_chars.saturating_sub(summary_budget);
     let mut kept = Vec::new();
     let mut used_chars = 0usize;
     for message in messages.iter().rev() {
         let message_chars = message.content.chars().count();
-        if !kept.is_empty() && used_chars.saturating_add(message_chars) > budget_chars {
+        if !kept.is_empty() && used_chars.saturating_add(message_chars) > recent_history_budget {
             break;
         }
-        if message_chars > budget_chars {
-            kept.push(truncate_conversation_message(message, budget_chars));
+        if message_chars > recent_history_budget {
+            kept.push(truncate_conversation_message(
+                message,
+                recent_history_budget,
+            ));
             break;
         }
         kept.push(message.clone());
@@ -5416,9 +5720,7 @@ fn fit_conversation_messages_to_budget(
             0,
             ChatMessage {
                 role: "system".to_string(),
-                content: format!(
-                    "Earlier conversation history was omitted from this provider request because it exceeded the model context budget. Omitted messages: {omitted}."
-                ),
+                content: compact_omitted_conversation(&messages[..omitted], summary_budget),
                 attachments: Vec::new(),
                 created_at: chrono::Utc::now(),
             },
@@ -5427,12 +5729,76 @@ fn fit_conversation_messages_to_budget(
     kept
 }
 
+fn compact_omitted_conversation(messages: &[ChatMessage], max_chars: usize) -> String {
+    let header = format!(
+        "Earlier conversation history was compacted by Vegvisir before this provider request. Compacted messages: {}.\n\nCompacted history digest (newest omitted excerpts take priority):",
+        messages.len()
+    );
+    if messages.is_empty() || max_chars <= header.chars().count() {
+        return truncate_chars_owned(&header, max_chars);
+    }
+
+    let mut excerpts = Vec::new();
+    let mut used = header.chars().count();
+    for message in messages.iter().rev() {
+        let role = if message.role.trim().is_empty() {
+            "unknown"
+        } else {
+            message.role.as_str()
+        };
+        let compact = message
+            .content
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if compact.is_empty() {
+            continue;
+        }
+
+        let prefix = format!("- [{role}] ");
+        let separator_chars = 1;
+        let remaining = max_chars.saturating_sub(used + separator_chars);
+        if remaining <= prefix.chars().count() {
+            break;
+        }
+        let excerpt_budget = remaining.saturating_sub(prefix.chars().count()).min(900);
+        let excerpt = truncate_chars_owned(&compact, excerpt_budget);
+        let entry = format!("{prefix}{excerpt}");
+        used = used.saturating_add(separator_chars + entry.chars().count());
+        excerpts.push(entry);
+    }
+    excerpts.reverse();
+
+    if excerpts.is_empty() {
+        header
+    } else {
+        format!("{header}\n{}", excerpts.join("\n"))
+    }
+}
+
+fn truncate_chars_owned(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    if max_chars <= 1 {
+        return "…".chars().take(max_chars).collect();
+    }
+    let mut truncated = value.chars().take(max_chars - 1).collect::<String>();
+    truncated.push('…');
+    truncated
+}
+
 fn truncate_conversation_message(message: &ChatMessage, budget_chars: usize) -> ChatMessage {
     let marker =
         "\n\n[Message truncated by Vegvisir before provider send to fit the model context budget.]";
-    let available = budget_chars.saturating_sub(marker.chars().count()).max(256);
     let mut truncated = message.clone();
-    truncated.content = message
+    let marker_chars = marker.chars().count();
+    if budget_chars <= marker_chars {
+        truncated.content = truncate_chars_owned(marker, budget_chars);
+        return truncated;
+    }
+    let available = budget_chars - marker_chars;
+    let tail = message
         .content
         .chars()
         .rev()
@@ -5441,7 +5807,7 @@ fn truncate_conversation_message(message: &ChatMessage, budget_chars: usize) -> 
         .into_iter()
         .rev()
         .collect::<String>();
-    truncated.content.insert_str(0, marker);
+    truncated.content = format!("{marker}{tail}");
     truncated
 }
 
@@ -5721,6 +6087,15 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
         }
         let model = model_with_session_reasoning(catalog_model, session);
         let model = &model;
+        if let Some(decision) =
+            automatically_compact_session_history(session, model, &session.system_prompt.clone())?
+        {
+            session.activity = "automatically compacted session context".to_string();
+            self.emit_event(ProviderRunEvent::Activity(format!(
+                "automatically compacted session context at {:.1}% usage",
+                decision.percentage
+            )));
+        }
         let mut provider_messages = session_conversation_messages(session);
         if !session.system_prompt.is_empty() {
             provider_messages.insert(
@@ -5942,6 +6317,15 @@ impl<P: ProviderAdapter> ConversationRunner<P> {
         ));
         let mut envelope = envelope;
         apply_system_prompt_to_envelope(&mut envelope, &session.system_prompt);
+        if let Some(decision) =
+            automatically_compact_session_history(session, model, &envelope.model_request.prompt)?
+        {
+            session.activity = "automatically compacted session context".to_string();
+            self.emit_event(ProviderRunEvent::Activity(format!(
+                "automatically compacted session context at {:.1}% usage",
+                decision.percentage
+            )));
+        }
         let mut provider_messages = session_conversation_messages(session);
         provider_messages.insert(
             0,
@@ -6356,12 +6740,118 @@ pub mod test_support {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{
+        collections::BTreeMap,
+        io::{Read, Write},
+        net::TcpListener,
+    };
 
     use super::*;
     use std::sync::Mutex;
 
     static TOOL_ROUND_LIMIT_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn malformed_chunked_stream_is_retried_before_turn_failure() -> anyhow::Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let server = thread::spawn(move || {
+            for (index, incoming) in listener.incoming().take(2).enumerate() {
+                let Ok(mut stream) = incoming else {
+                    return;
+                };
+                let mut request = [0_u8; 1024];
+                let _ = stream.read(&mut request);
+                let response = if index == 0 {
+                    concat!(
+                        "HTTP/1.1 200 OK\r\n",
+                        "Transfer-Encoding: chunked\r\n",
+                        "Connection: close\r\n",
+                        "\r\n",
+                        "not-a-chunk\r\n",
+                        "broken\r\n"
+                    )
+                } else {
+                    concat!(
+                        "HTTP/1.1 200 OK\r\n",
+                        "Transfer-Encoding: chunked\r\n",
+                        "Connection: close\r\n",
+                        "\r\n",
+                        "5\r\nhello\r\n",
+                        "0\r\n\r\n"
+                    )
+                };
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        let body = read_ureq_stream_body_with_retry(|| {
+            Ok(ureq::get(&format!("http://{address}/stream"))
+                .set("Connection", "close")
+                .call()?)
+        })?;
+
+        assert_eq!(body, "hello");
+        server
+            .join()
+            .map_err(|_| anyhow::anyhow!("chunk test server panicked"))?;
+        Ok(())
+    }
+
+    #[test]
+    fn mid_stream_chunk_failure_retries_without_duplicate_visible_text() -> anyhow::Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let server = thread::spawn(move || {
+            for (index, incoming) in listener.incoming().take(2).enumerate() {
+                let Ok(mut stream) = incoming else {
+                    return;
+                };
+                let mut request = [0_u8; 1024];
+                let _ = stream.read(&mut request);
+                let response = if index == 0 {
+                    let first_event =
+                        "data: {\"choices\":[{\"delta\":{\"content\":\"hello \"}}]}\n\n";
+                    format!(
+                        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n{}\r\nnot-a-chunk\r\nbroken\r\n",
+                        first_event.len(),
+                        first_event
+                    )
+                } else {
+                    let body = concat!(
+                        "data: {\"choices\":[{\"delta\":{\"content\":\"hello world\"}}]}\n\n",
+                        "data: [DONE]\n\n"
+                    );
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                };
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        let mut visible = String::new();
+        let response = stream_ureq_response_with_retry(
+            || {
+                Ok(ureq::get(&format!("http://{address}/stream"))
+                    .set("Connection", "close")
+                    .call()?)
+            },
+            |response, callback| {
+                parse_openai_sse_reader(BufReader::new(response.into_reader()), callback)
+            },
+            &mut |delta| visible.push_str(delta),
+        )?;
+
+        assert_eq!(response, "hello world");
+        assert_eq!(visible, "hello world");
+        server
+            .join()
+            .map_err(|_| anyhow::anyhow!("chunk test server panicked"))?;
+        Ok(())
+    }
 
     #[test]
     fn provider_payload_budget_blocks_oversized_request() {
@@ -6388,6 +6878,79 @@ mod tests {
                 .to_string()
                 .contains("blocked an oversized model request before provider send")
         );
+    }
+
+    #[test]
+    fn provider_payload_budget_does_not_tokenize_inline_image_base64_as_text() -> anyhow::Result<()>
+    {
+        let model = ModelInfo {
+            name: "gpt-5.6-sol".to_string(),
+            provider: "openai-sso".to_string(),
+            display_name: None,
+            context_window: Some(372_000),
+            supports_streaming: true,
+            enabled: true,
+            metadata: Default::default(),
+        };
+        // Mirrors the transport size of the 614,555-byte PNG from the reported failure.
+        let image_base64 = "A".repeat(820_000);
+        let payload = json!({
+            "model": model.name,
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "inspect this screenshot"},
+                    {
+                        "type": "input_image",
+                        "image_url": format!("data:image/png;base64,{image_base64}")
+                    }
+                ]
+            }]
+        });
+        let estimated = estimated_provider_payload_tokens(&model, &payload)?;
+        assert!(
+            estimated < 10_000,
+            "unexpected image-aware estimate: {estimated}"
+        );
+        assert_ne!(
+            provider_payload_budget_decision(&model, &payload)?.action,
+            ContextBudgetAction::Block
+        );
+        enforce_provider_payload_budget(&model, &payload)?;
+        Ok(())
+    }
+
+    #[test]
+    fn image_token_accounting_handles_openai_anthropic_and_google_shapes() -> anyhow::Result<()> {
+        let model = ModelInfo {
+            name: "gpt-4o".to_string(),
+            provider: "openai".to_string(),
+            display_name: None,
+            context_window: Some(128_000),
+            supports_streaming: true,
+            enabled: true,
+            metadata: Default::default(),
+        };
+        let payload = json!({
+            "openai": {"image_url": format!("data:image/png;base64,{}", "A".repeat(20_000))},
+            "anthropic": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": "B".repeat(20_000)
+            },
+            "google": {
+                "inlineData": {
+                    "mimeType": "image/png",
+                    "data": "C".repeat(20_000)
+                }
+            }
+        });
+
+        let estimated = estimated_provider_payload_tokens(&model, &payload)?;
+        assert!(estimated >= 3 * PROVIDER_IMAGE_INPUT_TOKEN_ESTIMATE);
+        assert!(estimated < 4 * PROVIDER_IMAGE_INPUT_TOKEN_ESTIMATE);
+        Ok(())
     }
 
     #[test]
@@ -6448,6 +7011,76 @@ mod tests {
                 .all(|message| !message.content.contains("old context old context"))
         );
         Ok(())
+    }
+
+    #[test]
+    fn compacted_history_digest_prioritizes_recent_omitted_context_and_stays_bounded() {
+        let messages = (0..20)
+            .map(|index| ChatMessage {
+                role: if index % 2 == 0 { "user" } else { "assistant" }.to_string(),
+                content: format!("history item {index} {}", "detail ".repeat(200)),
+                attachments: Vec::new(),
+                created_at: chrono::Utc::now(),
+            })
+            .collect::<Vec<_>>();
+
+        let digest = compact_omitted_conversation(&messages, 1_200);
+
+        assert!(digest.contains("Compacted messages: 20"));
+        assert!(digest.contains("history item 19"));
+        assert!(digest.chars().count() <= 1_200);
+    }
+
+    #[test]
+    fn fitted_conversation_includes_digest_without_exceeding_budget() {
+        let messages = vec![
+            ChatMessage {
+                role: "user".to_string(),
+                content: "old task: repair context compaction".to_string(),
+                attachments: Vec::new(),
+                created_at: chrono::Utc::now(),
+            },
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: "a".repeat(3_500),
+                attachments: Vec::new(),
+                created_at: chrono::Utc::now(),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: "continue".to_string(),
+                attachments: Vec::new(),
+                created_at: chrono::Utc::now(),
+            },
+        ];
+
+        let fitted = fit_conversation_messages_to_budget(messages, 4_000);
+        let total_chars = fitted
+            .iter()
+            .map(|message| message.content.chars().count())
+            .sum::<usize>();
+
+        assert!(total_chars <= 4_000);
+        assert!(fitted[0].content.contains("repair context compaction"));
+        assert_eq!(
+            fitted.last().map(|message| message.content.as_str()),
+            Some("continue")
+        );
+    }
+
+    #[test]
+    fn truncating_a_message_honors_even_a_tiny_character_budget() {
+        let message = ChatMessage {
+            role: "assistant".to_string(),
+            content: "content that cannot fit".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        };
+
+        for budget in [0, 1, 16, 128] {
+            let truncated = truncate_conversation_message(&message, budget);
+            assert!(truncated.content.chars().count() <= budget);
+        }
     }
 
     #[test]
@@ -6942,6 +7575,93 @@ const message = "approval_id=apr_123";
     }
 
     #[test]
+    fn session_conversation_messages_includes_manual_context_capsule() {
+        let mut session = SessionState::new("/tmp/workspace", Vec::new(), Vec::new());
+        session.messages.push(ChatMessage {
+            role: "system".to_string(),
+            content: "Context Capsule: manual repair\nCurrent Objective:\n- keep working"
+                .to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        session.messages.push(ChatMessage {
+            role: "system".to_string(),
+            content: "Tool finished: read_file - ok".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "continue".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+
+        let provider_messages = session_conversation_messages(&session);
+
+        assert!(provider_messages.iter().any(|message| {
+            message.role == "system" && message.content.starts_with("Context Capsule:")
+        }));
+        assert!(
+            provider_messages
+                .iter()
+                .all(|message| !message.content.starts_with("Tool finished:"))
+        );
+    }
+
+    #[test]
+    fn automatic_compaction_mutates_session_and_keeps_latest_request() -> anyhow::Result<()> {
+        let model = ModelInfo {
+            name: "gpt-4o".to_string(),
+            provider: "openai".to_string(),
+            display_name: None,
+            context_window: Some(1024),
+            supports_streaming: true,
+            enabled: true,
+            metadata: Default::default(),
+        };
+        let mut session = SessionState::new("/tmp/workspace", Vec::new(), Vec::new());
+        for index in 0..8 {
+            session.messages.push(ChatMessage {
+                role: if index % 2 == 0 { "user" } else { "assistant" }.to_string(),
+                content: format!("old-{index} {}", "context ".repeat(220)),
+                attachments: Vec::new(),
+                created_at: chrono::Utc::now(),
+            });
+        }
+        session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "latest request must survive".to_string(),
+            attachments: Vec::new(),
+            created_at: chrono::Utc::now(),
+        });
+        let original_count = session.messages.len();
+
+        let decision =
+            automatically_compact_session_history(&mut session, &model, "stable system context")?
+                .expect("oversized session should compact automatically");
+
+        assert!(matches!(
+            decision.action,
+            ContextBudgetAction::CompactRecommended | ContextBudgetAction::Block
+        ));
+        assert!(session.messages.len() < original_count);
+        assert!(session.messages.first().is_some_and(|message| {
+            message
+                .content
+                .starts_with("Earlier conversation history was compacted by Vegvisir")
+        }));
+        assert_eq!(
+            session
+                .messages
+                .last()
+                .map(|message| message.content.as_str()),
+            Some("latest request must survive")
+        );
+        Ok(())
+    }
+
+    #[test]
     fn session_conversation_messages_uses_recent_bounded_suffix() {
         let mut session = SessionState::new("/tmp/workspace", Vec::new(), Vec::new());
         session.context_limit = 20_000;
@@ -6976,13 +7696,18 @@ const message = "approval_id=apr_123";
             .map(|message| message.content.chars().count())
             .sum::<usize>();
 
-        assert!(total_chars <= provider_history_char_budget(&session) + 256);
+        assert!(total_chars <= provider_history_char_budget(&session));
         assert!(provider_messages.first().is_some_and(|message| {
             message.role == "system"
                 && message
                     .content
-                    .contains("Earlier conversation history was omitted")
+                    .contains("Earlier conversation history was compacted")
+                && message.content.contains("old request")
         }));
+        assert!(
+            provider_messages[0].content.chars().count()
+                <= (provider_history_char_budget(&session) / 5).clamp(1_024, 12_000)
+        );
         assert!(
             provider_messages
                 .iter()

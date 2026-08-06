@@ -140,6 +140,7 @@ Recent Vegvisir builds make high-capability sessions more controllable and easie
 - Run artifacts can be browsed from the TUI with `/runs list`, `/runs show <id>`, `/runs diff <id>`, `/runs replay-plan <id>`, plus `/context last`, `/memory used-this-turn`, `/memory writes-this-session`, and `/memory why <id>`.
 - Provider/model surfaces include `/provider compare`, `/provider diagnose`, and `/model compare` for local capability inspection without exposing plaintext secrets.
 - `/auto level <0-6>` records explicit operator autonomy posture while preserving approvals, workspace containment, secret boundaries, and sandbox policy.
+- `/goal start path/to/specification.md` runs a separate unbounded specification implementation loop until every planned exit criterion has validated evidence; use `/goal status` or `/goal stop` to inspect/control it.
 - Subagents are tracked as bounded workers with durable board records. Use `/subagents list`, `/subagents show <id-or-name>`, `/subagents cancel <id-or-name>`, and `/subagents policy`.
 - Provider reasoning summaries, when surfaced by a provider/model, are hidden from the chat transcript so only the assistant answer is displayed and persisted.
 - STDIO MCP calls are timeout-bound and can restart once after an initial failure, making local MCP integrations less fragile.

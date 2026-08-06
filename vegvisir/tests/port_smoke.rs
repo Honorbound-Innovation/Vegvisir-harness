@@ -2068,6 +2068,9 @@ fn provider_and_model_catalogs_load() -> anyhow::Result<()> {
         "azure:gpt-5.4"
     );
     assert!(models.is_model_allowed_for_provider(models.get("gpt-5.5").unwrap(), "openai-sso"));
+    for model in ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] {
+        assert!(models.is_model_allowed_for_provider(models.get(model).unwrap(), "openai-sso"));
+    }
     assert!(models.is_model_allowed_for_provider(models.get("gpt-5.5").unwrap(), "openai-hbse"));
     assert!(
         models.is_model_allowed_for_provider(
@@ -2671,7 +2674,7 @@ fn openai_sso_model_discovery_uses_saved_tokens() -> anyhow::Result<()> {
                 break;
             }
         }
-        let body = r#"{"data":[{"id":"gpt-sso-live"}]}"#;
+        let body = r#"{"models":[{"slug":"gpt-5.6-sol","display_name":"GPT-5.6-Sol","context_window":372000,"supported_in_api":true,"visibility":"list"},{"slug":"gpt-5.6-terra","display_name":"GPT-5.6-Terra","context_window":372000,"supported_in_api":true,"visibility":"list"},{"slug":"gpt-5.6-luna","display_name":"GPT-5.6-Luna","context_window":372000,"supported_in_api":true,"visibility":"list"}]}"#;
         write!(
             stream,
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
@@ -2704,8 +2707,13 @@ fn openai_sso_model_discovery_uses_saved_tokens() -> anyhow::Result<()> {
 
     let models = discover_provider_models(&provider)?;
 
-    assert_eq!(models[0].name, "gpt-sso-live");
+    assert_eq!(models.len(), 3);
+    assert_eq!(models[0].name, "gpt-5.6-sol");
+    assert_eq!(models[0].display_name.as_deref(), Some("GPT-5.6-Sol"));
+    assert_eq!(models[0].context_window, Some(372000));
     assert_eq!(models[0].provider, "openai-sso");
+    assert_eq!(models[1].name, "gpt-5.6-terra");
+    assert_eq!(models[2].name, "gpt-5.6-luna");
     let request = server.join().expect("server thread completed")?;
     assert!(request.contains("GET /models HTTP/1.1"));
     assert!(request.contains("Authorization: Bearer sso-access-token"));
@@ -3825,7 +3833,7 @@ fn application_executes_core_commands_and_demo_runner() -> anyhow::Result<()> {
         created_at: Utc::now(),
     });
     let compressed = app
-        .execute_command("/compress context compression")?
+        .execute_command("/compact context compression")?
         .unwrap();
     assert!(compressed.contains("Context Capsule: context compression"));
     assert!(compressed.contains("Current Objective:"));
@@ -5554,6 +5562,18 @@ fn new_harness_command_suggestions_are_discoverable() -> anyhow::Result<()> {
             .iter()
             .any(|suggestion| suggestion.value == "compare")
     );
+
+    app.session.current_provider = "openai-sso".to_string();
+    app.input.set_buffer("/model gpt-5.6");
+    let openai_sso_models = app.build_suggestions();
+    for model in ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] {
+        assert!(
+            openai_sso_models
+                .iter()
+                .any(|suggestion| suggestion.value == model),
+            "TUI model suggestions should include {model}"
+        );
+    }
 
     app.input.set_buffer("/auto l");
     let auto = app.build_suggestions();
@@ -10572,7 +10592,18 @@ fn effort_command_sets_selectable_reasoning_override() -> anyhow::Result<()> {
     app.session.current_model = "gpt-5.5".to_string();
 
     let status = app.execute_command("/effort")?.unwrap();
-    assert!(status.contains("Selectable values: minimal, low, medium, high"));
+    assert!(status.contains("Selectable values: minimal, low, medium, high, xhigh, max"));
+
+    let selected = app.execute_command("/effort xhigh")?.unwrap();
+    assert!(selected.contains("Reasoning effort set to xhigh"));
+    assert_eq!(
+        app.session.current_reasoning_level.as_deref(),
+        Some("xhigh")
+    );
+
+    let selected = app.execute_command("/effort max")?.unwrap();
+    assert!(selected.contains("Reasoning effort set to max"));
+    assert_eq!(app.session.current_reasoning_level.as_deref(), Some("max"));
 
     let selected = app.execute_command("/effort low")?.unwrap();
     assert!(selected.contains("Reasoning effort set to low"));
@@ -10648,13 +10679,16 @@ fn provider_payloads_apply_model_reasoning_settings_across_wire_formats() -> any
         "openai",
         "gpt-test",
         BTreeMap::from([
-            ("reasoning_level".to_string(), json!("high")),
+            ("reasoning_level".to_string(), json!("xhigh")),
             ("reasoning_summary".to_string(), json!(true)),
         ]),
     );
     let responses =
         vegvisir_rust::provider::test_support::responses_payload_for_test(&messages, &openai_model);
-    assert_eq!(responses.pointer("/reasoning/effort"), Some(&json!("high")));
+    assert_eq!(
+        responses.pointer("/reasoning/effort"),
+        Some(&json!("xhigh"))
+    );
     assert_eq!(
         responses.pointer("/reasoning/summary"),
         Some(&json!("auto"))
@@ -10709,7 +10743,7 @@ fn openai_tool_loop_applies_model_reasoning_effort() -> anyhow::Result<()> {
     let model = test_model_with_metadata(
         "openai",
         "gpt-test",
-        BTreeMap::from([("reasoning_effort".to_string(), json!("minimal"))]),
+        BTreeMap::from([("reasoning_effort".to_string(), json!("max"))]),
     );
     let mut execute_tool = |_: &str, _: Map<String, Value>| "unused".to_string();
 
@@ -10717,7 +10751,7 @@ fn openai_tool_loop_applies_model_reasoning_effort() -> anyhow::Result<()> {
 
     assert_eq!(result, "done");
     let captured = payloads.lock().unwrap();
-    assert_eq!(captured[0].get("reasoning_effort"), Some(&json!("minimal")));
+    assert_eq!(captured[0].get("reasoning_effort"), Some(&json!("max")));
     Ok(())
 }
 

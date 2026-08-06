@@ -24,6 +24,39 @@
       }
     },
     {
+      "name": "gpt-5.6-sol",
+      "provider": "openai",
+      "display_name": "GPT-5.6-Sol",
+      "context_window": 372000,
+      "metadata": {
+        "reasoning_level": "low",
+        "reasoning_summary": true,
+        "fast_capable": true
+      }
+    },
+    {
+      "name": "gpt-5.6-terra",
+      "provider": "openai",
+      "display_name": "GPT-5.6-Terra",
+      "context_window": 372000,
+      "metadata": {
+        "reasoning_level": "medium",
+        "reasoning_summary": true,
+        "fast_capable": true
+      }
+    },
+    {
+      "name": "gpt-5.6-luna",
+      "provider": "openai",
+      "display_name": "GPT-5.6-Luna",
+      "context_window": 372000,
+      "metadata": {
+        "reasoning_level": "medium",
+        "reasoning_summary": true,
+        "fast_capable": true
+      }
+    },
+    {
       "name": "gpt-5.5",
       "provider": "openai",
       "display_name": "GPT-5.5",

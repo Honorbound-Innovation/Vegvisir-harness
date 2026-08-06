@@ -9,7 +9,8 @@ impl TuiApplication {
                     .iter()
                     .any(|arg| matches!(arg.as_str(), "--terminal" | "terminal" | "os-prompt"))
                 {
-                    return match crate::privilege::sudo_refresh_interactive_from_tui() {
+                    let supervisor = self.tool_registry.sudo_supervisor();
+                    return match crate::privilege::sudo_refresh_interactive_from_tui(&supervisor) {
                         Ok(()) => {
                             self.clear_requested = true;
                             self.redraw_requested = true;
@@ -18,10 +19,10 @@ impl TuiApplication {
                                 json!({
                                     "session": self.session.session_id,
                                     "workspace": self.cwd.display().to_string(),
-                                    "auth_path": "hbse-broker-os-prompt",
+                                    "auth_path": "os-sudo-prompt",
                                 }),
                             );
-                            "Sudo authentication refreshed through the OS prompt / HBSE broker path. Vegvisir did not read, store, or log the password. Privileged commands can now use the cached sudo timestamp with sudo -n.".to_string()
+                            "Sudo authentication refreshed through the OS prompt. Vegvisir did not read, store, or log the password. Privileged commands can now use the private local supervisor.".to_string()
                         }
                         Err(error) => {
                             self.clear_requested = true;
@@ -35,8 +36,9 @@ impl TuiApplication {
                 String::new()
             }
             Some("clear" | "invalidate" | "logout" | "forget") => {
-                match crate::privilege::sudo_invalidate() {
-                    Ok(()) => "Sudo timestamp invalidated with sudo -k.".to_string(),
+                let supervisor = self.tool_registry.sudo_supervisor();
+                match crate::privilege::sudo_invalidate(&supervisor) {
+                    Ok(()) => "Private sudo supervisor stopped and sudo timestamp invalidated with sudo -k.".to_string(),
                     Err(error) => format!("Failed to invalidate sudo timestamp: {error}"),
                 }
             }
@@ -57,7 +59,7 @@ impl TuiApplication {
         self.clear_requested = true;
         self.redraw_requested = true;
         self.session.status = "sudo auth prompt open".to_string();
-        self.session.activity = "Secure sudo prompt is open; type the password locally, Enter hands off to the broker flow, Esc cancels.".to_string();
+        self.session.activity = "Secure sudo prompt is open; type the password locally, Enter hands it only to sudo, Esc cancels.".to_string();
         self.ephemeral_notice = Some(EphemeralNotice::new(
             "Secure sudo prompt opened. Type only in the masked modal; Esc cancels.",
             EphemeralNoticeKind::Info,
@@ -66,9 +68,10 @@ impl TuiApplication {
     }
 
     fn sudo_status_text(&self) -> String {
-        let status = crate::privilege::sudo_status();
+        let supervisor = self.tool_registry.sudo_supervisor();
+        let status = crate::privilege::sudo_status_for_supervisor(&supervisor);
         format!(
-            "Sudo workflow:\n  sudo available: {}\n  authenticated: {}\n  status: {}\n\nUsage:\n  /sudo auth              Opens Vegvisir's local secure prompt, then refreshes auth through the broker flow.\n  /sudo auth --terminal   Fallback: temporarily leaves the TUI and lets the OS / HBSE prompt handle authentication.\n  /sudo clear             Invalidates the sudo timestamp with sudo -k.\n\nSecurity invariant: Vegvisir never sends the sudo password to chat/model/tools/logs/traces/run artifacts. Authentication is brokered; the prompt buffer is local, masked on screen, and cleared after use. Privileged command execution uses sudo -n and fails closed when no sudo timestamp is active.",
+            "Sudo workflow:\n  sudo available: {}\n  authenticated: {}\n  status: {}\n\nUsage:\n  /sudo auth              Opens Vegvisir's local secure prompt and authenticates sudo.\n  /sudo auth --terminal   Fallback: temporarily leaves the TUI and lets the OS sudo prompt handle authentication.\n  /sudo clear             Stops the private supervisor and invalidates the sudo timestamp.\n\nSecurity invariant: Vegvisir never sends the sudo password to chat/model/tools/logs/traces/run artifacts. Authentication is handled locally by sudo; the prompt buffer and supervisor stdin/PTY remain local, masked or inaccessible to the model, and are cleared or stopped after use. Privileged commands fail closed when no supervisor is active.",
             yes_no(status.sudo_available),
             yes_no(status.authenticated),
             status.message,

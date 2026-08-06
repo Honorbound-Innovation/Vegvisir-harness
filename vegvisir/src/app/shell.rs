@@ -299,22 +299,24 @@ impl TuiApplication {
             } else {
                 parts.get(1).copied().unwrap_or("")
             };
-            return ["minimal", "low", "medium", "high", "default"]
-                .into_iter()
-                .filter(|level| level.starts_with(prefix))
-                .map(|level| {
-                    let description = if level == "default" {
-                        "use model catalog default".to_string()
-                    } else {
-                        format!("set reasoning effort to {level}")
-                    };
-                    Suggestion::new(
-                        level.to_string(),
-                        description,
-                        Some(format!("/effort {level}")),
-                    )
-                })
-                .collect();
+            return [
+                "minimal", "low", "medium", "high", "xhigh", "max", "default",
+            ]
+            .into_iter()
+            .filter(|level| level.starts_with(prefix))
+            .map(|level| {
+                let description = if level == "default" {
+                    "use model catalog default".to_string()
+                } else {
+                    format!("set reasoning effort to {level}")
+                };
+                Suggestion::new(
+                    level.to_string(),
+                    description,
+                    Some(format!("/effort {level}")),
+                )
+            })
+            .collect();
         }
         if raw.starts_with("/auto ")
             || raw == "/auto "
@@ -343,6 +345,70 @@ impl TuiApplication {
                         } else {
                             format!("/auto {mode}")
                         }),
+                    )
+                })
+                .collect();
+        }
+        if raw.starts_with("/acp ") || raw == "/acp " {
+            if matches!(
+                parts.get(1),
+                Some(&"run" | &"execute" | &"show-command" | &"show-command-file")
+            ) && (parts.len() >= 3 || trailing_space)
+            {
+                return Vec::new();
+            }
+            let prefix = if trailing_space {
+                ""
+            } else {
+                parts.get(1).copied().unwrap_or("")
+            };
+            return [
+                ("help", "show ACP command help"),
+                ("init", "create the ACP workspace directory pattern"),
+                ("status", "show ACP files and progress"),
+                ("validate", "validate the ACP workspace structure"),
+                ("context", "show bounded ACP context for model turns"),
+                ("list", "list ACP command documents"),
+                ("show-command", "show one ACP command document"),
+                ("run", "run an ACP command document as a model turn"),
+            ]
+            .into_iter()
+            .filter(|(command, _)| command.starts_with(prefix))
+            .map(|(command, description)| {
+                Suggestion::new(
+                    command.to_string(),
+                    description.to_string(),
+                    Some(if matches!(command, "run" | "show-command") {
+                        format!("/acp {command} ")
+                    } else {
+                        format!("/acp {command}")
+                    }),
+                )
+            })
+            .collect();
+        }
+        if raw.starts_with("/goal ") || raw == "/goal " {
+            // Once a path-taking subcommand has been completed, the subcommand suggestions
+            // must not compete with normal text entry. Otherwise Tab or Enter can accept the
+            // stale subcommand item and replace the specification path.
+            if matches!(parts.get(1), Some(&"start" | &"run" | &"resume"))
+                && (parts.len() >= 3 || trailing_space)
+            {
+                return Vec::new();
+            }
+            let prefix = if trailing_space {
+                ""
+            } else {
+                parts.get(1).copied().unwrap_or("")
+            };
+            return ["start", "run", "status", "stop", "resume"]
+                .into_iter()
+                .filter(|command| command.starts_with(prefix))
+                .map(|command| {
+                    Suggestion::new(
+                        command.to_string(),
+                        "specification-driven end-to-end implementation".to_string(),
+                        Some(format!("/goal {command}")),
                     )
                 })
                 .collect();
@@ -495,6 +561,8 @@ impl TuiApplication {
             "/recover" => self.recover_command(&args)?,
             "/auto" | "/autonomous" => self.autonomous_command(&args),
             "/autonomy" => self.autonomy_command(&args),
+            "/goal" => self.goal_command(&args),
+            "/acp" => self.acp_command(&args)?,
             "/history" => self.history(),
             "/status" => self.session_status_command(&args),
             "/diff" => self.diff_command(&args)?,
@@ -514,7 +582,11 @@ impl TuiApplication {
                 format!("Session title: {}", self.session.title)
             }
             "/branch" | "/fork" => self.branch(&args),
-            "/compress" => self.compress(&args),
+            "/compact" => {
+                let result = self.compress(&args);
+                self.autosave_session();
+                result
+            }
             "/system" => self.system_command(&args)?,
             "/system-prompt" => self.system_command(&[])?,
             "/agent" | "/agents" => self.agent_command(&args)?,

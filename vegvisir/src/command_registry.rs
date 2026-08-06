@@ -499,6 +499,18 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
             "/autonomy [on|off|status|stop|validate [plan]|resume <plan>|max-steps <n>|max-attempts <n>]",
             &[],
         ),
+        cmd(
+            "/goal",
+            "implement a Markdown specification end to end until all exit criteria are verified",
+            "/goal [start|run|status|stop|resume] <specification.md>",
+            &[],
+        ),
+        cmd(
+            "/acp",
+            "discover, validate, and run Agent Context Protocol workspace documents",
+            "/acp [help|init|status|validate|context|list|show-command|run] [name]",
+            &[],
+        ),
         cmd("/history", "show conversation history", "/history", &[]),
         cmd(
             "/status",
@@ -525,10 +537,10 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
         cmd("/branch", "branch current session", "/branch [name]", &[]),
         cmd("/fork", "fork current session", "/fork", &["/clone"]),
         cmd(
-            "/compress",
-            "summarize/compress current context",
-            "/compress [topic]",
-            &[],
+            "/compact",
+            "compact current context into a structured handoff capsule",
+            "/compact [topic]",
+            &["/compress"],
         ),
         cmd(
             "/system",
@@ -696,7 +708,7 @@ pub fn default_command_definitions() -> Vec<CommandDefinition> {
         cmd(
             "/effort",
             "show or set model reasoning effort",
-            "/effort [minimal|low|medium|high|default]",
+            "/effort [minimal|low|medium|high|xhigh|max|default]",
             &["/reasoning", "/reasoning-effort"],
         ),
         cmd(
@@ -823,6 +835,7 @@ fn supports_noninteractive(name: &str) -> bool {
             | "/skills"
             | "/subagents"
             | "/mcp"
+            | "/acp"
             | "/hbse"
             | "/config"
             | "/runs"
@@ -833,9 +846,8 @@ fn supports_noninteractive(name: &str) -> bool {
 fn infer_command_category(name: &str) -> CommandCategory {
     match name {
         "/workspace" | "/projects" | "/attach" | "/diff" => CommandCategory::Workspace,
-        "/recall" | "/memory" | "/remember" | "/context" | "/model-request" | "/compress" => {
-            CommandCategory::MemoryContext
-        }
+        "/recall" | "/memory" | "/remember" | "/context" | "/model-request" | "/compact"
+        | "/acp" => CommandCategory::MemoryContext,
         "/models" | "/model" | "/effort" | "/fast" | "/provider" | "/sprovider" | "/smodel"
         | "/providers" | "/auth" => CommandCategory::ModelProvider,
         "/agent" | "/agents" | "/subagents" | "/tasks" | "/work" | "/auto" | "/autonomy" => {
@@ -864,7 +876,7 @@ fn infer_command_safety(name: &str) -> CommandSafety {
         "/workspace" | "/projects" | "/system" | "/agent" | "/agents" | "/ka" | "/profile"
         | "/model" | "/provider" | "/sprovider" | "/smodel" | "/effort" | "/fast" | "/tools"
         | "/approvals" | "/skills" | "/memory" | "/remember" | "/hbse" | "/sudo" | "/mcp"
-        | "/config" => CommandSafety::SessionMutation,
+        | "/config" | "/compact" | "/acp" => CommandSafety::SessionMutation,
         "/tasks" => CommandSafety::Destructive,
         "/attach" | "/speech" | "/tts" => CommandSafety::ExternalEffect,
         "/diff" | "/eval" | "/verify" => CommandSafety::ReadOnly,
@@ -1074,6 +1086,22 @@ mod tests {
         assert!(!spec.contexts.contains(&ExecutionContext::Subagent));
     }
     #[test]
+    fn acp_command_is_registered_for_context_discovery() {
+        let registry = CommandRegistry::with_defaults();
+        let acp = registry.get("/acp").expect("ACP command is registered");
+        assert!(acp.usage.contains("validate"));
+        let (command, args) = registry
+            .parse_with_aliases("/acp status")
+            .expect("ACP command should parse");
+        assert_eq!(command, "/acp");
+        assert_eq!(args, vec!["status".to_string()]);
+        let spec = CommandSpec::from_definition(acp);
+        assert_eq!(spec.category, CommandCategory::MemoryContext);
+        assert!(spec.supports_noninteractive);
+        assert!(spec.contexts.contains(&ExecutionContext::Api));
+    }
+
+    #[test]
     fn default_tool_registry_validates_current_tools() -> anyhow::Result<()> {
         let registry = ToolRegistry::from_definitions(default_tool_definitions()?);
         registry.validate()?;
@@ -1108,6 +1136,18 @@ mod tests {
         let ka = registry.get("/ka").expect("ka command exists");
         assert!(ka.aliases.contains(&"/persona".to_string()));
         assert!(ka.aliases.contains(&"/soul".to_string()));
+    }
+
+    #[test]
+    fn compact_command_is_discoverable_and_compress_remains_an_alias() {
+        let registry = CommandRegistry::with_defaults();
+        let compact = registry.get("/compact").expect("compact command exists");
+        assert_eq!(compact.name, "/compact");
+        assert!(compact.aliases.contains(&"/compress".to_string()));
+        assert_eq!(registry.canonical("/compress"), "/compact");
+        let spec = CommandSpec::from_definition(compact);
+        assert_eq!(spec.category, CommandCategory::MemoryContext);
+        assert_eq!(spec.safety, CommandSafety::SessionMutation);
     }
 
     #[test]

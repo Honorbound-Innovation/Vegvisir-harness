@@ -868,7 +868,7 @@ fn reject_unsafe_sudo_invocation(tool_name: &str, args: &Map<String, Value>) -> 
     }
     if tool_name == "run_privileged_command" && command_mentions_sudo_invocation(&parts) {
         anyhow::bail!(
-            "Do not include sudo in run_privileged_command arguments. Run /sudo auth, then provide the underlying command; Vegvisir adds sudo -n internally."
+            "Do not include sudo in run_privileged_command arguments. Run /sudo auth, then provide the underlying command; Vegvisir executes it through the private local supervisor."
         );
     }
     if tool_name != "run_privileged_command" && command_mentions_sudo_invocation(&parts) {
