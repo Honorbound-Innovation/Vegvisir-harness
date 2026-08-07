@@ -31,6 +31,14 @@ use crate::{
 
 const TOOL_OBSERVATION_MODEL_MAX_BYTES: usize = 24 * 1024;
 const OPENAI_TOOL_LOOP_MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
+const MAX_PROVIDER_REQUEST_BYTES: usize = 8 * 1024 * 1024;
+const MAX_PROVIDER_RESPONSE_BODY_BYTES: usize = 8 * 1024 * 1024;
+const MAX_PROVIDER_RESPONSE_TEXT_BYTES: usize = 512 * 1024;
+const MAX_PROVIDER_STREAM_LINE_BYTES: usize = 1024 * 1024;
+const MAX_INLINE_IMAGE_BYTES: usize = 6 * 1024 * 1024;
+const MAX_INLINE_IMAGE_TOTAL_BYTES: usize = 4 * 1024 * 1024;
+const PROVIDER_RESPONSE_TRUNCATION_MARKER: &str =
+    "\n[provider response truncated by Vegvisir memory bound]\n";
 const PROVIDER_CONTEXT_REPAIR_TARGET_PERCENT: f64 = 75.0;
 // Image inputs are billed by dimensions/detail, not by tokenizing their base64 transport.
 // This intentionally conservative allowance exceeds typical provider image-token charges.
@@ -614,8 +622,10 @@ impl OpenAICompatibleProviderAdapter {
         if let Some(api_key) = api_key {
             request = request.set("Authorization", &format!("Bearer {api_key}"));
         }
-        let response: Value =
-            send_provider_json(request, payload, &self.config.name)?.into_json()?;
+        let response: Value = read_bounded_json_response(
+            send_provider_json(request, payload, &self.config.name)?,
+            &self.config.name,
+        )?;
         let provider_response = image_generation_provider_response(&response);
         if provider_response.artifacts.is_empty() {
             anyhow::bail!(
@@ -772,7 +782,7 @@ impl OpenAICompatibleProviderAdapter {
             parse_openai_sse(&body)
         } else {
             let response = send_provider_json(request, payload, &self.config.name)?;
-            let response: Value = response.into_json()?;
+            let response: Value = read_bounded_json_response(response, &self.config.name)?;
             extract_openai_compatible_text(&response).ok_or_else(|| {
                 anyhow::anyhow!(
                     "Provider {} response did not include assistant text",
@@ -814,8 +824,10 @@ impl OpenAICompatibleProviderAdapter {
         if let Some(api_key) = api_key {
             request = request.set("Authorization", &format!("Bearer {api_key}"));
         }
-        let response: Value =
-            send_provider_json(request, payload, &self.config.name)?.into_json()?;
+        let response: Value = read_bounded_json_response(
+            send_provider_json(request, payload, &self.config.name)?,
+            &self.config.name,
+        )?;
         let provider_response = openai_compatible_provider_response(&response);
         if provider_response.content.is_empty() && provider_response.artifacts.is_empty() {
             anyhow::bail!(
@@ -1559,7 +1571,10 @@ impl ProviderAdapter for AnthropicProviderAdapter {
                 .set("anthropic-version", "2023-06-01")
                 .set("Content-Type", "application/json")
                 .set("Accept", "application/json");
-            Ok(send_provider_json(request, payload, &self.config.name)?.into_json()?)
+            Ok(read_bounded_json_response(
+                send_provider_json(request, payload, &self.config.name)?,
+                &self.config.name,
+            )?)
         };
         anthropic_tool_loop(
             messages,
@@ -1588,11 +1603,11 @@ fn anthropic_messages_payload(messages: &[ChatMessage], model: &ModelInfo) -> Va
         "messages": messages
             .iter()
             .filter(|message| message.role != "system")
-            .map(|message| {
-                json!({
+            .scan(0usize, |inline_image_bytes, message| {
+                Some(json!({
                     "role": if message.role == "assistant" { "assistant" } else { "user" },
-                    "content": anthropic_message_content(message),
-                })
+                    "content": anthropic_message_content(message, inline_image_bytes),
+                }))
             })
             .collect::<Vec<_>>(),
     });
@@ -1621,7 +1636,7 @@ fn anthropic_apply_cache_control_to_last(items: &mut [Value]) {
     }
 }
 
-fn anthropic_message_content(message: &ChatMessage) -> Value {
+fn anthropic_message_content(message: &ChatMessage, inline_image_bytes: &mut usize) -> Value {
     let image_attachments = message
         .attachments
         .iter()
@@ -1635,7 +1650,9 @@ fn anthropic_message_content(message: &ChatMessage) -> Value {
         "text": text_with_attachment_refs(message),
     })];
     for attachment in image_attachments {
-        if let Ok(data) = image_attachment_base64(&attachment.path) {
+        if reserve_inline_image_bytes(attachment, inline_image_bytes)
+            && let Ok(data) = image_attachment_base64(&attachment.path)
+        {
             blocks.push(json!({
                 "type": "image",
                 "source": {
@@ -1971,7 +1988,10 @@ impl ProviderAdapter for GoogleProviderAdapter {
             let request = ureq::post(&url)
                 .set("Content-Type", "application/json")
                 .set("Accept", "application/json");
-            Ok(send_provider_json(request, payload, &self.config.name)?.into_json()?)
+            Ok(read_bounded_json_response(
+                send_provider_json(request, payload, &self.config.name)?,
+                &self.config.name,
+            )?)
         };
         google_tool_loop(
             messages,
@@ -2114,11 +2134,11 @@ fn google_generate_content_payload(messages: &[ChatMessage], model: &ModelInfo) 
     let mut contents = messages
         .iter()
         .filter(|message| message.role != "system")
-        .map(|message| {
-            json!({
+        .scan(0usize, |inline_image_bytes, message| {
+            Some(json!({
                 "role": if message.role == "assistant" { "model" } else { "user" },
-                "parts": google_message_parts(message),
-            })
+                "parts": google_message_parts(message, inline_image_bytes),
+            }))
         })
         .collect::<Vec<_>>();
     if contents.is_empty() {
@@ -2132,13 +2152,15 @@ fn google_generate_content_payload(messages: &[ChatMessage], model: &ModelInfo) 
     payload
 }
 
-fn google_message_parts(message: &ChatMessage) -> Vec<Value> {
+fn google_message_parts(message: &ChatMessage, inline_image_bytes: &mut usize) -> Vec<Value> {
     let mut parts = vec![json!({"text": text_with_attachment_refs(message)})];
     for attachment in &message.attachments {
         if attachment.kind != "image" {
             continue;
         }
-        if let Ok(data) = image_attachment_base64(&attachment.path) {
+        if reserve_inline_image_bytes(attachment, inline_image_bytes)
+            && let Ok(data) = image_attachment_base64(&attachment.path)
+        {
             parts.push(json!({
                 "inlineData": {
                     "mimeType": attachment
@@ -2364,8 +2386,9 @@ impl OpenAISsoProfileAdapter {
         .set("Content-Type", "application/json")
         .set("Accept", "text/event-stream")
         .set("Connection", "close");
+        let body = bounded_json_request_body(&payload, "openai-sso")?;
         stream_ureq_response_with_retry(
-            || match request.clone().send_json(payload.clone()) {
+            || match request.clone().send_string(&body) {
                 Ok(response) => Ok(response),
                 Err(ureq::Error::Status(401, _)) => {
                     anyhow::bail!(
@@ -2373,7 +2396,11 @@ impl OpenAISsoProfileAdapter {
                     )
                 }
                 Err(ureq::Error::Status(code, response)) => {
-                    let detail = response.into_string().unwrap_or_default();
+                    let mut detail = String::new();
+                    let _ = response
+                        .into_reader()
+                        .take(4 * 1024)
+                        .read_to_string(&mut detail);
                     anyhow::bail!(
                         "openai-sso request failed: {} {}",
                         code,
@@ -2406,8 +2433,9 @@ impl OpenAISsoProfileAdapter {
         .set("Content-Type", "application/json")
         .set("Accept", "text/event-stream")
         .set("Connection", "close");
+        let body = bounded_json_request_body(&payload, "openai-sso")?;
         stream_ureq_response_with_retry(
-            || match request.clone().send_json(payload.clone()) {
+            || match request.clone().send_string(&body) {
                 Ok(response) => Ok(response),
                 Err(ureq::Error::Status(401, _)) => {
                     anyhow::bail!(
@@ -2415,7 +2443,11 @@ impl OpenAISsoProfileAdapter {
                     )
                 }
                 Err(ureq::Error::Status(code, response)) => {
-                    let detail = response.into_string().unwrap_or_default();
+                    let mut detail = String::new();
+                    let _ = response
+                        .into_reader()
+                        .take(4 * 1024)
+                        .read_to_string(&mut detail);
                     anyhow::bail!(
                         "openai-sso request failed: {} {}",
                         code,
@@ -2530,20 +2562,56 @@ fn responses_tool_schema(tool: &Value) -> Value {
     })
 }
 
+fn bounded_json_request_body(payload: &Value, provider_name: &str) -> anyhow::Result<String> {
+    let body = serde_json::to_string(payload)?;
+    if body.len() > MAX_PROVIDER_REQUEST_BYTES {
+        anyhow::bail!(
+            "Vegvisir blocked an oversized {provider_name} provider request: {} bytes exceeds the {} MiB request bound",
+            body.len(),
+            MAX_PROVIDER_REQUEST_BYTES / (1024 * 1024)
+        );
+    }
+    Ok(body)
+}
+
 fn send_provider_json(
     request: ureq::Request,
     payload: Value,
     provider_name: &str,
 ) -> anyhow::Result<ureq::Response> {
-    match request.send_json(payload) {
+    let body = bounded_json_request_body(&payload, provider_name)?;
+    match request.send_string(&body) {
         Ok(response) => Ok(response),
         Err(ureq::Error::Status(code, response)) => {
-            let detail = response.into_string().unwrap_or_default();
+            let mut detail = String::new();
+            let _ = response
+                .into_reader()
+                .take(4 * 1024)
+                .read_to_string(&mut detail);
             let detail = detail.chars().take(400).collect::<String>();
             anyhow::bail!("{provider_name} request failed: {code} {detail}")
         }
         Err(error) => Err(error.into()),
     }
+}
+
+fn read_bounded_json_response(
+    response: ureq::Response,
+    provider_name: &str,
+) -> anyhow::Result<Value> {
+    let mut body = String::new();
+    let mut reader = response
+        .into_reader()
+        .take((MAX_PROVIDER_RESPONSE_BODY_BYTES + 1) as u64);
+    reader.read_to_string(&mut body)?;
+    if body.len() > MAX_PROVIDER_RESPONSE_BODY_BYTES {
+        anyhow::bail!(
+            "Vegvisir rejected an oversized {provider_name} provider response body: {} bytes exceeds the {} MiB response bound",
+            body.len(),
+            MAX_PROVIDER_RESPONSE_BODY_BYTES / (1024 * 1024)
+        );
+    }
+    Ok(serde_json::from_str(&body)?)
 }
 
 const MAX_PROVIDER_STREAM_ATTEMPTS: usize = 2;
@@ -2571,13 +2639,22 @@ where
     // starts from the beginning, suppress the prefix we already displayed so
     // the user sees one continuous answer rather than duplicated text.
     let mut displayed_prefix = String::new();
+    let mut displayed_prefix_truncated = false;
     let mut replay_offset = 0;
     for attempt in 0..MAX_PROVIDER_STREAM_ATTEMPTS {
         let response = send()?;
         let result = {
             let mut emit = |delta: &str| {
                 if attempt == 0 {
-                    displayed_prefix.push_str(delta);
+                    if !displayed_prefix_truncated {
+                        let remaining =
+                            MAX_PROVIDER_RESPONSE_TEXT_BYTES.saturating_sub(displayed_prefix.len());
+                        let end = safe_provider_prefix_boundary(delta, remaining);
+                        displayed_prefix.push_str(&delta[..end]);
+                        if end < delta.len() {
+                            displayed_prefix_truncated = true;
+                        }
+                    }
                     on_delta(delta);
                 } else {
                     emit_replayed_stream_delta(
@@ -2594,6 +2671,7 @@ where
             Ok(value) => return Ok(value),
             Err(error)
                 if attempt + 1 < MAX_PROVIDER_STREAM_ATTEMPTS
+                    && !displayed_prefix_truncated
                     && is_retryable_chunk_decode_error(&error) =>
             {
                 thread::sleep(PROVIDER_STREAM_RETRY_DELAY);
@@ -2633,6 +2711,73 @@ fn emit_replayed_stream_delta(
     on_delta(delta);
 }
 
+fn append_bounded_provider_text(output: &mut String, delta: &str) -> String {
+    if delta.is_empty() || output.len() >= MAX_PROVIDER_RESPONSE_TEXT_BYTES {
+        return String::new();
+    }
+    let marker = PROVIDER_RESPONSE_TRUNCATION_MARKER;
+    let content_budget = MAX_PROVIDER_RESPONSE_TEXT_BYTES
+        .saturating_sub(marker.len())
+        .saturating_sub(output.len());
+    if delta.len() <= content_budget {
+        output.push_str(delta);
+        return delta.to_string();
+    }
+
+    let end = safe_provider_prefix_boundary(delta, content_budget);
+    let mut emitted = delta[..end].to_string();
+    output.push_str(&delta[..end]);
+    let marker_budget = MAX_PROVIDER_RESPONSE_TEXT_BYTES.saturating_sub(output.len());
+    let marker_end = safe_provider_prefix_boundary(marker, marker_budget);
+    output.push_str(&marker[..marker_end]);
+    emitted.push_str(&marker[..marker_end]);
+    emitted
+}
+
+fn safe_provider_prefix_boundary(text: &str, max_bytes: usize) -> usize {
+    let mut end = max_bytes.min(text.len());
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
+}
+
+fn read_bounded_stream_line<R: BufRead>(reader: &mut R, line: &mut String) -> anyhow::Result<bool> {
+    let mut bytes = Vec::new();
+    loop {
+        let chunk = reader.fill_buf()?;
+        if chunk.is_empty() {
+            break;
+        }
+        if let Some(newline) = chunk.iter().position(|byte| *byte == b'\n') {
+            let end = newline + 1;
+            if bytes.len().saturating_add(end) > MAX_PROVIDER_STREAM_LINE_BYTES {
+                anyhow::bail!(
+                    "Vegvisir rejected an oversized provider stream line exceeding {} MiB",
+                    MAX_PROVIDER_STREAM_LINE_BYTES / (1024 * 1024)
+                );
+            }
+            bytes.extend_from_slice(&chunk[..end]);
+            reader.consume(end);
+            break;
+        }
+        if bytes.len().saturating_add(chunk.len()) > MAX_PROVIDER_STREAM_LINE_BYTES {
+            anyhow::bail!(
+                "Vegvisir rejected an oversized provider stream line exceeding {} MiB",
+                MAX_PROVIDER_STREAM_LINE_BYTES / (1024 * 1024)
+            );
+        }
+        let consumed = chunk.len();
+        bytes.extend_from_slice(chunk);
+        reader.consume(consumed);
+    }
+    if bytes.is_empty() {
+        return Ok(false);
+    }
+    *line = String::from_utf8_lossy(&bytes).into_owned();
+    Ok(true)
+}
+
 fn read_ureq_stream_body_with_retry<Send>(mut send: Send) -> anyhow::Result<String>
 where
     Send: FnMut() -> anyhow::Result<ureq::Response>,
@@ -2640,7 +2785,17 @@ where
     for attempt in 0..MAX_PROVIDER_STREAM_ATTEMPTS {
         let response = send()?;
         let mut body = String::new();
-        match response.into_reader().read_to_string(&mut body) {
+        let mut reader = response
+            .into_reader()
+            .take((MAX_PROVIDER_RESPONSE_BODY_BYTES + 1) as u64);
+        match reader.read_to_string(&mut body) {
+            Ok(_) if body.len() > MAX_PROVIDER_RESPONSE_BODY_BYTES => {
+                anyhow::bail!(
+                    "Vegvisir rejected an oversized provider response body: {} bytes exceeds the {} MiB response bound",
+                    body.len(),
+                    MAX_PROVIDER_RESPONSE_BODY_BYTES / (1024 * 1024)
+                );
+            }
             Ok(_) => return Ok(body),
             Err(error) => {
                 let error = anyhow::Error::from(error);
@@ -2757,8 +2912,38 @@ fn data_url(path: &str, mime_type: Option<&str>) -> anyhow::Result<String> {
     ))
 }
 
+fn reserve_inline_image_bytes(attachment: &Attachment, used: &mut usize) -> bool {
+    let size = attachment
+        .size_bytes
+        .and_then(|bytes| usize::try_from(bytes).ok())
+        .or_else(|| {
+            fs::metadata(&attachment.path)
+                .ok()
+                .and_then(|metadata| usize::try_from(metadata.len()).ok())
+        });
+    let Some(size) = size else {
+        return false;
+    };
+    if size > MAX_INLINE_IMAGE_BYTES || used.saturating_add(size) > MAX_INLINE_IMAGE_TOTAL_BYTES {
+        return false;
+    }
+    *used = used.saturating_add(size);
+    true
+}
+
 fn image_attachment_base64(path: &str) -> anyhow::Result<String> {
-    Ok(STANDARD.encode(fs::read(path)?))
+    let file = fs::File::open(path)?;
+    let mut bytes = Vec::new();
+    file.take((MAX_INLINE_IMAGE_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_INLINE_IMAGE_BYTES {
+        anyhow::bail!(
+            "Vegvisir refused to inline image attachment {path}: {} bytes exceeds the {} MiB image bound",
+            bytes.len(),
+            MAX_INLINE_IMAGE_BYTES / (1024 * 1024)
+        );
+    }
+    Ok(STANDARD.encode(bytes))
 }
 
 fn model_uses_images_generations_api(model: &ModelInfo) -> bool {
@@ -3125,6 +3310,14 @@ fn hbse_provider_http_with_url_and_headers_and_purpose(
     headers: Value,
     purpose_override: Option<&str>,
 ) -> anyhow::Result<Value> {
+    if body.len() > MAX_PROVIDER_REQUEST_BYTES {
+        anyhow::bail!(
+            "Vegvisir blocked an oversized {} HBSE provider request: {} bytes exceeds the {} MiB request bound",
+            config.name,
+            body.len(),
+            MAX_PROVIDER_REQUEST_BYTES / (1024 * 1024)
+        );
+    }
     let socket_path = hbse_socket_path(config);
     let secret_ref = hbse_secret_ref(config)?;
     let consumer = config
@@ -3236,6 +3429,12 @@ fn read_json_line(stream: &mut UnixStream) -> anyhow::Result<Value> {
             break;
         }
         bytes.extend_from_slice(&buffer[..n]);
+        if bytes.len() > MAX_PROVIDER_RESPONSE_BODY_BYTES {
+            anyhow::bail!(
+                "Vegvisir rejected an oversized HBSE provider response: more than {} MiB before the JSON line terminator",
+                MAX_PROVIDER_RESPONSE_BODY_BYTES / (1024 * 1024)
+            );
+        }
         if buffer[..n].contains(&b'\n') {
             break;
         }
@@ -3560,12 +3759,20 @@ fn parse_openai_sse_with_callback(
 }
 
 fn parse_openai_sse_reader<R: BufRead>(
-    reader: R,
+    mut reader: R,
     on_delta: &mut dyn FnMut(&str),
 ) -> anyhow::Result<String> {
     let mut output = String::new();
-    for line in reader.lines() {
-        let line = line?;
+    let mut line = String::new();
+    let mut stream_bytes = 0usize;
+    while read_bounded_stream_line(&mut reader, &mut line)? {
+        stream_bytes = stream_bytes.saturating_add(line.len());
+        if stream_bytes > MAX_PROVIDER_RESPONSE_BODY_BYTES {
+            anyhow::bail!(
+                "Vegvisir rejected a provider stream larger than the {} MiB response bound",
+                MAX_PROVIDER_RESPONSE_BODY_BYTES / (1024 * 1024)
+            );
+        }
         let line = line.trim();
         let Some(data) = line.strip_prefix("data:") else {
             continue;
@@ -3578,21 +3785,17 @@ fn parse_openai_sse_reader<R: BufRead>(
         if let Some(message) = provider_error_message(&value) {
             anyhow::bail!(message);
         }
-        if let Some(delta) = value
+        let delta = value
             .pointer("/choices/0/delta/content")
             .and_then(Value::as_str)
-        {
-            output.push_str(delta);
-            on_delta(delta);
-        } else if let Some(text) = value.pointer("/choices/0/text").and_then(Value::as_str) {
-            output.push_str(text);
-            on_delta(text);
-        } else if let Some(delta) = value.get("delta").and_then(Value::as_str) {
-            output.push_str(delta);
-            on_delta(delta);
-        } else if let Some(text) = value.get("output_text").and_then(Value::as_str) {
-            output.push_str(text);
-            on_delta(text);
+            .or_else(|| value.pointer("/choices/0/text").and_then(Value::as_str))
+            .or_else(|| value.get("delta").and_then(Value::as_str))
+            .or_else(|| value.get("output_text").and_then(Value::as_str));
+        if let Some(delta) = delta {
+            let emitted = append_bounded_provider_text(&mut output, delta);
+            if !emitted.is_empty() {
+                on_delta(&emitted);
+            }
         }
     }
     Ok(output)
@@ -3630,7 +3833,7 @@ fn parse_anthropic_sse_response(text: &str) -> anyhow::Result<ProviderResponse> 
             }
             Some("content_block_delta") => {
                 if let Some(delta) = value.pointer("/delta/text").and_then(Value::as_str) {
-                    output.push_str(delta);
+                    let _ = append_bounded_provider_text(&mut output, delta);
                 }
             }
             Some("error") => {
@@ -3724,7 +3927,7 @@ fn responses_payload(messages: &[ChatMessage], model: &ModelInfo) -> Value {
     let mut input = messages
         .iter()
         .filter(|message| message.role != "system")
-        .map(|message| {
+        .scan(0usize, |inline_image_bytes, message| {
             let role = if message.role == "assistant" {
                 "assistant"
             } else {
@@ -3740,17 +3943,18 @@ fn responses_payload(messages: &[ChatMessage], model: &ModelInfo) -> Value {
             if role == "user" {
                 for attachment in &message.attachments {
                     if attachment.kind == "image"
+                        && reserve_inline_image_bytes(attachment, inline_image_bytes)
                         && let Ok(url) = data_url(&attachment.path, attachment.mime_type.as_deref())
                     {
                         content.push(json!({"type": "input_image", "image_url": url}));
                     }
                 }
             }
-            json!({
+            Some(json!({
                 "type": "message",
                 "role": role,
                 "content": content,
-            })
+            }))
         })
         .collect::<Vec<_>>();
     if input.is_empty() {
@@ -3874,15 +4078,23 @@ fn apply_google_reasoning_settings(payload: &mut Value, model: &ModelInfo) {
 }
 
 fn parse_response_sse_text_reader<R: BufRead>(
-    reader: R,
+    mut reader: R,
     on_delta: &mut dyn FnMut(&str),
 ) -> anyhow::Result<String> {
     let mut output = String::new();
     let mut body_lines = Vec::new();
     let mut emitted_reasoning_trace = false;
     let mut emitted_answer_header = false;
-    for line in reader.lines() {
-        let line = line?;
+    let mut line = String::new();
+    let mut stream_bytes = 0usize;
+    while read_bounded_stream_line(&mut reader, &mut line)? {
+        stream_bytes = stream_bytes.saturating_add(line.len());
+        if stream_bytes > MAX_PROVIDER_RESPONSE_BODY_BYTES {
+            anyhow::bail!(
+                "Vegvisir rejected a provider stream larger than the {} MiB response bound",
+                MAX_PROVIDER_RESPONSE_BODY_BYTES / (1024 * 1024)
+            );
+        }
         let line = line.trim();
         if line.is_empty() {
             continue;
@@ -3928,7 +4140,7 @@ fn parse_response_sse_value(text: &str, on_delta: &mut dyn FnMut(&str)) -> anyho
 }
 
 fn parse_response_sse_value_reader<R: BufRead>(
-    reader: R,
+    mut reader: R,
     on_delta: &mut dyn FnMut(&str),
 ) -> anyhow::Result<Value> {
     let mut body_lines = Vec::new();
@@ -3939,8 +4151,16 @@ fn parse_response_sse_value_reader<R: BufRead>(
     let mut output_text = String::new();
     let mut emitted_reasoning_trace = false;
     let mut emitted_answer_header = false;
-    for line in reader.lines() {
-        let line = line?;
+    let mut line = String::new();
+    let mut stream_bytes = 0usize;
+    while read_bounded_stream_line(&mut reader, &mut line)? {
+        stream_bytes = stream_bytes.saturating_add(line.len());
+        if stream_bytes > MAX_PROVIDER_RESPONSE_BODY_BYTES {
+            anyhow::bail!(
+                "Vegvisir rejected a provider stream larger than the {} MiB response bound",
+                MAX_PROVIDER_RESPONSE_BODY_BYTES / (1024 * 1024)
+            );
+        }
         let line = line.trim();
         if line.is_empty() {
             continue;
@@ -3986,16 +4206,26 @@ fn parse_response_sse_value_reader<R: BufRead>(
             Some("response.function_call_arguments.delta") => {
                 if let Some(item_id) = value.get("item_id").and_then(Value::as_str) {
                     let delta = value.get("delta").and_then(Value::as_str).unwrap_or("");
-                    argument_deltas
-                        .entry(item_id.to_string())
-                        .or_default()
-                        .push_str(delta);
+                    let arguments = argument_deltas.entry(item_id.to_string()).or_default();
+                    arguments.push_str(delta);
+                    *arguments = crate::core::truncate_utf8_middle(
+                        arguments,
+                        64 * 1024,
+                        "provider tool arguments",
+                    );
                 }
             }
             Some("response.function_call_arguments.done") => {
                 if let Some(item_id) = value.get("item_id").and_then(Value::as_str) {
                     let arguments = value.get("arguments").and_then(Value::as_str).unwrap_or("");
-                    argument_deltas.insert(item_id.to_string(), arguments.to_string());
+                    argument_deltas.insert(
+                        item_id.to_string(),
+                        crate::core::truncate_utf8_middle(
+                            arguments,
+                            64 * 1024,
+                            "provider tool arguments",
+                        ),
+                    );
                 }
             }
             Some("response.reasoning_summary_text.delta")
@@ -4020,7 +4250,7 @@ fn parse_response_sse_value_reader<R: BufRead>(
             }
             _ => {
                 if let Some(text) = extract_response_text(&value) {
-                    output_text.push_str(&text);
+                    let _ = append_bounded_provider_text(&mut output_text, &text);
                 }
             }
         }
@@ -4162,8 +4392,10 @@ fn emit_response_output_delta(
         on_delta("\n```\n\n**Answer**\n\n");
         *emitted_answer_header = true;
     }
-    output.push_str(delta);
-    on_delta(delta);
+    let emitted = append_bounded_provider_text(output, delta);
+    if !emitted.is_empty() {
+        on_delta(&emitted);
+    }
 }
 
 fn close_reasoning_trace_if_unanswered(
@@ -4248,7 +4480,7 @@ fn append_google_value(value: &Value, output: &mut String) -> anyhow::Result<()>
         };
         for part in parts {
             if let Some(text) = part.get("text").and_then(Value::as_str) {
-                output.push_str(text);
+                let _ = append_bounded_provider_text(output, text);
             }
         }
     }
@@ -4891,8 +5123,10 @@ fn parse_openai_tool_sse_with_callback(
         if let Some(content) = delta.get("content").and_then(Value::as_str)
             && !content.is_empty()
         {
-            output.push_str(content);
-            on_delta(content);
+            let emitted = append_bounded_provider_text(&mut output, content);
+            if !emitted.is_empty() {
+                on_delta(&emitted);
+            }
         }
         for item in delta
             .get("tool_calls")
@@ -4910,6 +5144,11 @@ fn parse_openai_tool_sse_with_callback(
             }
             if let Some(arguments) = item.pointer("/function/arguments").and_then(Value::as_str) {
                 part.arguments.push_str(arguments);
+                part.arguments = crate::core::truncate_utf8_middle(
+                    &part.arguments,
+                    64 * 1024,
+                    "provider tool arguments",
+                );
             }
         }
     }
@@ -6750,6 +6989,28 @@ mod tests {
     use std::sync::Mutex;
 
     static TOOL_ROUND_LIMIT_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn provider_text_and_request_bodies_have_hard_bounds() -> anyhow::Result<()> {
+        let oversized_payload = json!({
+            "content": "x".repeat(MAX_PROVIDER_REQUEST_BYTES),
+        });
+        let request_error = bounded_json_request_body(&oversized_payload, "test-provider")
+            .expect_err("oversized request should be rejected");
+        assert!(
+            request_error
+                .to_string()
+                .contains("oversized test-provider provider request")
+        );
+
+        let source = "y".repeat(MAX_PROVIDER_RESPONSE_TEXT_BYTES * 2);
+        let mut output = String::new();
+        let emitted = append_bounded_provider_text(&mut output, &source);
+        assert!(output.len() <= MAX_PROVIDER_RESPONSE_TEXT_BYTES);
+        assert!(emitted.len() <= MAX_PROVIDER_RESPONSE_TEXT_BYTES);
+        assert!(output.contains("provider response truncated"));
+        Ok(())
+    }
 
     #[test]
     fn malformed_chunked_stream_is_retried_before_turn_failure() -> anyhow::Result<()> {

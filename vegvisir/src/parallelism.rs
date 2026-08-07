@@ -108,9 +108,9 @@ where
     }
 
     let worker = std::sync::Arc::new(worker);
-    let (job_tx, job_rx) = std::sync::mpsc::channel::<(usize, T)>();
+    let (job_tx, job_rx) = std::sync::mpsc::sync_channel::<(usize, T)>(workers);
     let job_rx = std::sync::Arc::new(std::sync::Mutex::new(job_rx));
-    let (result_tx, result_rx) = std::sync::mpsc::channel::<(usize, R)>();
+    let (result_tx, result_rx) = std::sync::mpsc::sync_channel::<(usize, R)>(workers);
 
     let mut handles = Vec::with_capacity(workers);
     for _ in 0..workers {
@@ -135,19 +135,31 @@ where
     }
     drop(result_tx);
 
-    for (index, item) in items.into_iter().enumerate() {
+    let mut next_item = items.into_iter().enumerate();
+    for _ in 0..workers {
+        let Some((index, item)) = next_item.next() else {
+            break;
+        };
         if job_tx.send((index, item)).is_err() {
             break;
         }
     }
-    drop(job_tx);
 
     let mut results: Vec<Option<R>> = (0..len).map(|_| None).collect();
-    for _ in 0..len {
-        if let Ok((index, result)) = result_rx.recv() {
-            results[index] = Some(result);
+    let mut completed = 0usize;
+    while completed < len {
+        let Ok((index, result)) = result_rx.recv() else {
+            break;
+        };
+        results[index] = Some(result);
+        completed += 1;
+        if let Some((next_index, next_value)) = next_item.next()
+            && job_tx.send((next_index, next_value)).is_err()
+        {
+            break;
         }
     }
+    drop(job_tx);
 
     for handle in handles {
         let _ = handle.join();
@@ -220,5 +232,28 @@ mod tests {
         let values = vec![1, 2, 3, 4, 5, 6];
         let doubled = run_parallel_ordered(values, 3, |value| value * 2);
         assert_eq!(doubled, vec![2, 4, 6, 8, 10, 12]);
+    }
+
+    #[test]
+    fn run_parallel_ordered_never_exceeds_worker_bound() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let active_for_worker = Arc::clone(&active);
+        let peak_for_worker = Arc::clone(&peak);
+        let results = run_parallel_ordered((0..24).collect(), 3, move |value| {
+            let current = active_for_worker.fetch_add(1, Ordering::SeqCst) + 1;
+            peak_for_worker.fetch_max(current, Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            active_for_worker.fetch_sub(1, Ordering::SeqCst);
+            value * 2
+        });
+
+        assert_eq!(results.len(), 24);
+        assert!(peak.load(Ordering::SeqCst) <= 3);
     }
 }

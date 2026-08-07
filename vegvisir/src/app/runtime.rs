@@ -1,6 +1,6 @@
 use std::{
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -11,6 +11,11 @@ use std::{
 use serde_json::json;
 
 use super::*;
+
+const STREAM_CHANNEL_CAPACITY: usize = 1024;
+const MAX_STREAM_EVENT_TEXT_BYTES: usize = 64 * 1024;
+const CMS_WRITEBACK_QUEUE_CAPACITY: usize = 4;
+const STEERING_CHANNEL_CAPACITY: usize = 32;
 
 impl TuiApplication {
     pub(crate) fn show_ephemeral_notice(
@@ -61,6 +66,17 @@ impl TuiApplication {
             self.queue_steering_message(content, attachments);
             return;
         }
+        self.session.enforce_history_limits();
+        let content = crate::core::truncate_utf8_middle(
+            &content,
+            crate::core::MAX_SESSION_MESSAGE_BYTES,
+            "user message",
+        );
+        let display_content = crate::core::truncate_utf8_middle(
+            &display_content,
+            crate::core::MAX_SESSION_MESSAGE_BYTES,
+            "display message",
+        );
         self.session.messages.push(ChatMessage {
             role: "user".to_string(),
             content: display_content.clone(),
@@ -100,8 +116,8 @@ impl TuiApplication {
         let autonomous_mode_enabled = self.autonomous_mode_enabled;
         let autonomy_level = self.autonomous_level.min(6) as u8;
         let goal_mode_enabled = self.goal.active;
-        let (stream_tx, stream_rx) = mpsc::channel();
-        let (steering_tx, steering_rx) = mpsc::channel();
+        let (stream_tx, stream_rx) = mpsc::sync_channel(STREAM_CHANNEL_CAPACITY);
+        let (steering_tx, steering_rx) = mpsc::sync_channel(STEERING_CHANNEL_CAPACITY);
         let cancel_token = Arc::new(AtomicBool::new(false));
         let worker_cancel_token = Arc::clone(&cancel_token);
         self.pending_stream = Some(stream_rx);
@@ -135,13 +151,24 @@ impl TuiApplication {
                     let stream_tx = stream_tx.clone();
                     move |event| {
                         let event = match event {
-                            ProviderRunEvent::Activity(activity) => StreamEvent::Activity(activity),
+                            ProviderRunEvent::Activity(activity) => {
+                                StreamEvent::Activity(crate::core::truncate_utf8_middle(
+                                    &activity,
+                                    MAX_STREAM_EVENT_TEXT_BYTES,
+                                    "stream activity",
+                                ))
+                            }
                             ProviderRunEvent::ApprovalRequired { request } => {
                                 StreamEvent::ApprovalRequired { request }
                             }
-                            ProviderRunEvent::ToolStart { name, args } => {
-                                StreamEvent::ToolStart { name, args }
-                            }
+                            ProviderRunEvent::ToolStart { name, args } => StreamEvent::ToolStart {
+                                name,
+                                args: crate::core::truncate_utf8_middle(
+                                    &args,
+                                    MAX_STREAM_EVENT_TEXT_BYTES,
+                                    "tool arguments",
+                                ),
+                            },
                             ProviderRunEvent::ToolOutput {
                                 name,
                                 stream,
@@ -150,7 +177,11 @@ impl TuiApplication {
                             } => StreamEvent::ToolOutput {
                                 name,
                                 stream,
-                                chunk,
+                                chunk: crate::core::truncate_utf8_middle(
+                                    &chunk,
+                                    MAX_STREAM_EVENT_TEXT_BYTES,
+                                    "tool output",
+                                ),
                                 truncated,
                             },
                             ProviderRunEvent::ToolEnd {
@@ -161,8 +192,18 @@ impl TuiApplication {
                             } => StreamEvent::ToolEnd {
                                 name,
                                 ok,
-                                summary,
-                                detail,
+                                summary: crate::core::truncate_utf8_middle(
+                                    &summary,
+                                    MAX_STREAM_EVENT_TEXT_BYTES,
+                                    "tool summary",
+                                ),
+                                detail: detail.map(|detail| {
+                                    crate::core::truncate_utf8_middle(
+                                        &detail,
+                                        MAX_STREAM_EVENT_TEXT_BYTES,
+                                        "tool detail",
+                                    )
+                                }),
                             },
                         };
                         let _ = stream_tx.send(event);
@@ -199,7 +240,12 @@ impl TuiApplication {
             let _ = stream_tx.send(StreamEvent::PromptEnvelope(Box::new(envelope.clone())));
             let mut on_delta = |delta: &str| {
                 if !worker_cancel_token.load(Ordering::SeqCst) {
-                    let _ = stream_tx.send(StreamEvent::Delta(delta.to_string()));
+                    let delta = crate::core::truncate_utf8_middle(
+                        delta,
+                        MAX_STREAM_EVENT_TEXT_BYTES,
+                        "stream delta",
+                    );
+                    let _ = stream_tx.send(StreamEvent::Delta(delta));
                 }
             };
             let response = runner.send_with_envelope_streaming(
@@ -270,6 +316,7 @@ impl TuiApplication {
                 self.merge_live_tool_messages(&mut session);
                 self.merge_live_reasoning_trace(&mut session);
                 self.restore_latest_visible_user_message(&mut session);
+                session.enforce_history_limits();
                 let had_tool_activity = self.completed_session_had_tool_activity(&session);
                 let final_response = session
                     .messages
@@ -289,6 +336,7 @@ impl TuiApplication {
                 // pending_stream. This keeps failed-tool turns from ending as a
                 // silent/empty assistant message with no "what failed" context.
                 self.poll_stream_events();
+                self.session.enforce_history_limits();
                 self.session.status = "ready".to_string();
                 self.session.activity.clear();
                 self.clear_pending_turn_runtime_handles();
@@ -326,6 +374,7 @@ impl TuiApplication {
             }
             Err(_) => {
                 self.poll_stream_events();
+                self.session.enforce_history_limits();
                 self.session.status = "ready".to_string();
                 self.session.activity.clear();
                 self.clear_pending_turn_runtime_handles();
@@ -516,8 +565,13 @@ impl TuiApplication {
         if display_content.trim().is_empty() {
             return;
         }
+        let display_content = crate::core::truncate_utf8_middle(
+            &display_content,
+            crate::core::MAX_SESSION_MESSAGE_BYTES,
+            "steering message",
+        );
         if let Some(sender) = &self.pending_steering {
-            match sender.send(display_content.clone()) {
+            match sender.try_send(display_content.clone()) {
                 Ok(()) => {
                     let attachment_note = if attachments.is_empty() {
                         String::new()
@@ -535,7 +589,11 @@ Note: {} attachment(s) were not injected into the in-flight run; send them after
 Steering: {display_content}{attachment_note}"
                     ));
                 }
-                Err(_) => self.push_system_message(
+                Err(std::sync::mpsc::TrySendError::Full(_)) => self.push_system_message(
+                    "Could not queue steering message because the in-flight run already has the maximum pending steering messages."
+                        .to_string(),
+                ),
+                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => self.push_system_message(
                     "Could not queue steering message because the in-flight run is closing."
                         .to_string(),
                 ),
@@ -1681,6 +1739,7 @@ Steering: {display_content}{attachment_note}"
                 }
             }
         }
+        self.session.enforce_history_limits();
         self.redraw_requested = true;
         if reached_frame_budget {
             // Leave remaining deltas for the next UI tick. This prevents a hot
@@ -1760,6 +1819,11 @@ Next step: retry or continue from the last successful step instead of leaving th
     }
 
     pub(crate) fn push_live_tool_message(&mut self, content: String) {
+        let content = crate::core::truncate_utf8_middle(
+            &content,
+            crate::core::MAX_SESSION_MESSAGE_BYTES,
+            "live tool message",
+        );
         if self
             .session
             .messages
@@ -2090,27 +2154,72 @@ fn turn_repair_idle_timeout() -> Duration {
     )
 }
 
+struct CmsWritebackJob {
+    config: crate::memory::VegvisirCmsConfig,
+    user_content: String,
+    assistant_response: String,
+    artifact_manager: Option<RunArtifactManager>,
+}
+
+fn cms_writeback_sender() -> &'static std::sync::mpsc::SyncSender<CmsWritebackJob> {
+    static SENDER: OnceLock<std::sync::mpsc::SyncSender<CmsWritebackJob>> = OnceLock::new();
+    SENDER.get_or_init(|| {
+        let (sender, receiver) = mpsc::sync_channel(CMS_WRITEBACK_QUEUE_CAPACITY);
+        thread::Builder::new()
+            .name("vegvisir-cms-writeback".to_string())
+            .spawn(move || {
+                while let Ok(job) = receiver.recv() {
+                    process_cms_complete_turn_writeback(job);
+                }
+            })
+            .expect("failed to start CMS writeback worker");
+        sender
+    })
+}
+
 fn spawn_cms_complete_turn_writeback(
     config: crate::memory::VegvisirCmsConfig,
     user_content: String,
     assistant_response: String,
     artifact_manager: Option<RunArtifactManager>,
 ) {
-    thread::spawn(move || {
-        let mut config = config;
-        config.commit_writebacks = true;
-        let outcome = match VegvisirCms::open(config) {
-            Ok(mut cms) => cms
-                .complete_turn(&user_content, &assistant_response)
-                .map(|results| (results, None))
-                .unwrap_or_else(|error| (Vec::new(), Some(error.to_string()))),
-            Err(error) => (Vec::new(), Some(error.to_string())),
-        };
-        if let Some(manager) = artifact_manager {
-            let (results, error) = outcome;
-            let _ = manager.write_memory_written_from_outcome(&results, error.as_deref());
+    let job = CmsWritebackJob {
+        config,
+        user_content,
+        assistant_response,
+        artifact_manager,
+    };
+    if let Err(error) = cms_writeback_sender().try_send(job) {
+        if let mpsc::TrySendError::Full(job) = error {
+            if let Some(manager) = job.artifact_manager {
+                let _ = manager.write_memory_written_unavailable(
+                    "CMS writeback queue is full; durable writeback was skipped to keep process memory bounded",
+                );
+            }
         }
-    });
+    }
+}
+
+fn process_cms_complete_turn_writeback(job: CmsWritebackJob) {
+    let CmsWritebackJob {
+        config,
+        user_content,
+        assistant_response,
+        artifact_manager,
+    } = job;
+    let mut config = config;
+    config.commit_writebacks = true;
+    let outcome = match VegvisirCms::open(config) {
+        Ok(mut cms) => cms
+            .complete_turn(&user_content, &assistant_response)
+            .map(|results| (results, None))
+            .unwrap_or_else(|error| (Vec::new(), Some(error.to_string()))),
+        Err(error) => (Vec::new(), Some(error.to_string())),
+    };
+    if let Some(manager) = artifact_manager {
+        let (results, error) = outcome;
+        let _ = manager.write_memory_written_from_outcome(&results, error.as_deref());
+    }
 }
 
 fn new_spinner_verb_seed(session_id: &str) -> u64 {

@@ -1,4 +1,5 @@
 pub mod input {
+    use crate::core::{MAX_INPUT_BUFFER_BYTES, enforce_input_history_limits};
     use unicode_width::UnicodeWidthChar;
 
     #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -115,6 +116,7 @@ pub mod input {
             let value = value.into();
             if !value.is_empty() {
                 self.history.push(value);
+                enforce_input_history_limits(&mut self.history);
             }
             self.history_index = None;
             self.history_draft = None;
@@ -125,6 +127,15 @@ pub mod input {
             self.history_index = None;
             self.history_draft = None;
             self.preferred_column = None;
+            let remaining = MAX_INPUT_BUFFER_BYTES.saturating_sub(self.buffer.len());
+            if remaining == 0 {
+                return;
+            }
+            let end = safe_prefix_boundary(text, remaining);
+            let text = &text[..end];
+            if text.is_empty() {
+                return;
+            }
             self.buffer.insert_str(self.cursor_byte, text);
             self.cursor_byte += text.len();
             self.cursor += text.chars().count();
@@ -282,6 +293,14 @@ pub mod input {
 
     fn first_non_command_history_index(history: &[String]) -> Option<usize> {
         history.iter().position(|entry| !is_slash_command(entry))
+    }
+
+    fn safe_prefix_boundary(text: &str, max_bytes: usize) -> usize {
+        let mut end = max_bytes.min(text.len());
+        while end > 0 && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        end
     }
 
     fn char_to_byte_index(value: &str, char_index: usize) -> usize {

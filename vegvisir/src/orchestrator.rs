@@ -143,6 +143,7 @@ impl<M: Model> AgentHarness<M> {
         let mut state = if let Some(run_id) = &task.resume_run_id {
             let snapshot = checkpoint_store.load(run_id)?;
             self.context = snapshot.context;
+            self.context.enforce_limits();
             snapshot.state
         } else {
             let mut state = RunState::new(&task.goal);
@@ -154,6 +155,7 @@ impl<M: Model> AgentHarness<M> {
             self.persist_pending_context_compactions(&state);
             state
         };
+        self.context.enforce_limits();
         let checkpoint = self.checkpoint_path(&task, &state);
         let (artifact_manager, mut artifact_manifest) = RunArtifactManager::start_with_run_id(
             &task.workspace,
