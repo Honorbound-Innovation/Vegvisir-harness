@@ -1,10 +1,13 @@
 use std::{
     collections::BTreeMap,
     fs::{self, OpenOptions},
-    io::Write,
+    io::{BufReader, Write},
     path::{Path, PathBuf},
     process::Command,
-    sync::{Mutex, OnceLock},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use chrono::{DateTime, Utc};
@@ -80,12 +83,13 @@ impl RunManifest {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct RunArtifactManager {
     pub workspace: PathBuf,
     pub data_root: PathBuf,
     pub run_id: String,
     pub run_dir: PathBuf,
+    runtime_event_seq: Arc<AtomicU64>,
 }
 
 impl RunArtifactManager {
@@ -149,11 +153,13 @@ impl RunArtifactManager {
             .unwrap_or_else(|| workspace.join(".vegvisir").join("runs").join(&run_id));
         fs::create_dir_all(&run_dir)?;
 
+        let runtime_event_seq = Arc::new(AtomicU64::new(runtime_event_sequence(&run_dir)));
         let manager = Self {
             workspace: workspace.clone(),
             data_root,
             run_id: run_id.clone(),
             run_dir,
+            runtime_event_seq,
         };
         let manifest = RunManifest::new(run_id, session_id, workspace, provider, model, agent);
         manager.write_manifest(&manifest)?;
@@ -173,11 +179,14 @@ impl RunArtifactManager {
         run_id: impl Into<String>,
         run_dir: impl Into<PathBuf>,
     ) -> Self {
+        let run_dir = run_dir.into();
+        let runtime_event_seq = Arc::new(AtomicU64::new(runtime_event_sequence(&run_dir)));
         Self {
             workspace: workspace.into(),
             data_root: data_root.into(),
             run_id: run_id.into(),
-            run_dir: run_dir.into(),
+            run_dir,
+            runtime_event_seq,
         }
     }
 
@@ -474,8 +483,8 @@ impl RunArtifactManager {
         let _guard = runtime_event_append_lock()
             .lock()
             .expect("runtime event append lock poisoned");
-        let envelope =
-            EventEnvelope::new(self.run_id.clone(), self.next_runtime_event_seq(), event);
+        let seq = self.runtime_event_seq.fetch_add(1, Ordering::SeqCst) + 1;
+        let envelope = EventEnvelope::new(self.run_id.clone(), seq, event);
         self.append_jsonl_record("runtime-events.jsonl", &to_jsonl_record(&envelope)?)?;
         Ok(envelope)
     }
@@ -580,12 +589,6 @@ impl RunArtifactManager {
             .open(self.artifact_path(name))?;
         writeln!(file, "{record}")?;
         Ok(())
-    }
-
-    fn next_runtime_event_seq(&self) -> u64 {
-        fs::read_to_string(self.artifact_path("runtime-events.jsonl"))
-            .map(|text| text.lines().count() as u64 + 1)
-            .unwrap_or(1)
     }
 
     fn record_verification_from_provider_event(
@@ -1780,6 +1783,34 @@ impl ToolRunEvent {
 pub enum ToolRunPhase {
     Start,
     End,
+}
+
+fn runtime_event_sequence(run_dir: &Path) -> u64 {
+    let path = run_dir.join("runtime-events.jsonl");
+    let Ok(file) = fs::File::open(path) else {
+        return 0;
+    };
+    // Count delimiters without materializing an entire historical JSONL line.
+    // A damaged or unexpectedly large line must not recreate the startup memory
+    // spike this manager is intended to avoid.
+    let mut reader = BufReader::new(file);
+    let mut buffer = [0_u8; 8 * 1024];
+    let mut count = 0_u64;
+    loop {
+        match std::io::Read::read(&mut reader, &mut buffer) {
+            Ok(0) => break,
+            Ok(bytes_read) => {
+                count = count.saturating_add(
+                    buffer[..bytes_read]
+                        .iter()
+                        .filter(|byte| **byte == b'\n')
+                        .count() as u64,
+                );
+            }
+            Err(_) => break,
+        }
+    }
+    count
 }
 
 fn runtime_event_append_lock() -> &'static Mutex<()> {

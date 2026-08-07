@@ -1,12 +1,12 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     fmt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
         Arc,
         atomic::AtomicBool,
-        mpsc::{Receiver, Sender},
+        mpsc::{Receiver, SyncSender},
     },
     thread::JoinHandle,
     time::{Duration, Instant},
@@ -25,9 +25,10 @@ use crate::{
     },
     core::{
         AgentProfileStore, ChatMessage, ConfigStore, HbseServiceRef, HbseServiceRefStore,
-        McpConfigStore, McpServerConfig, McpToolConfig, McpTransport, ModelRegistry,
-        ProviderConfig, ProviderRegistry, SessionManager, SessionState, SessionStore,
-        default_system_prompt, default_tool_definitions, load_skill_definitions,
+        MAX_SESSION_MESSAGE_BYTES, McpConfigStore, McpServerConfig, McpToolConfig, McpTransport,
+        ModelRegistry, ProviderConfig, ProviderRegistry, SessionManager, SessionState,
+        SessionStore, default_system_prompt, default_tool_definitions, load_skill_definitions,
+        truncate_utf8_middle,
     },
     environment::get_env,
     guardrails::{
@@ -125,7 +126,7 @@ pub struct TuiApplication {
     pending_stream: Option<Receiver<StreamEvent>>,
     pending_cancel: Option<Arc<AtomicBool>>,
     pending_run_artifact: Option<(RunArtifactManager, RunManifest)>,
-    pending_steering: Option<Sender<String>>,
+    pending_steering: Option<SyncSender<String>>,
     pending_turn_started_at: Option<Instant>,
     pending_turn_last_activity_at: Option<Instant>,
     pending_assistant_paragraph_break: bool,
@@ -169,6 +170,9 @@ pub struct HeadlessObservedRun {
     pub memory_write_results: Vec<CommitResult>,
     pub memory_write_error: Option<String>,
 }
+
+const MAX_HEADLESS_OBSERVED_EVENTS: usize = 512;
+const MAX_HEADLESS_OBSERVED_EVENT_TEXT_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct EphemeralNotice {
@@ -251,6 +255,63 @@ enum StreamEvent {
         summary: String,
         detail: Option<String>,
     },
+}
+
+fn bound_headless_provider_event(event: ProviderRunEvent) -> ProviderRunEvent {
+    match event {
+        ProviderRunEvent::Activity(activity) => ProviderRunEvent::Activity(truncate_utf8_middle(
+            &activity,
+            MAX_HEADLESS_OBSERVED_EVENT_TEXT_BYTES,
+            "headless activity",
+        )),
+        ProviderRunEvent::ApprovalRequired { request } => {
+            ProviderRunEvent::ApprovalRequired { request }
+        }
+        ProviderRunEvent::ToolStart { name, args } => ProviderRunEvent::ToolStart {
+            name,
+            args: truncate_utf8_middle(
+                &args,
+                MAX_HEADLESS_OBSERVED_EVENT_TEXT_BYTES,
+                "headless tool arguments",
+            ),
+        },
+        ProviderRunEvent::ToolOutput {
+            name,
+            stream,
+            chunk,
+            truncated,
+        } => ProviderRunEvent::ToolOutput {
+            name,
+            stream,
+            chunk: truncate_utf8_middle(
+                &chunk,
+                MAX_HEADLESS_OBSERVED_EVENT_TEXT_BYTES,
+                "headless tool output",
+            ),
+            truncated,
+        },
+        ProviderRunEvent::ToolEnd {
+            name,
+            ok,
+            summary,
+            detail,
+        } => ProviderRunEvent::ToolEnd {
+            name,
+            ok,
+            summary: truncate_utf8_middle(
+                &summary,
+                MAX_HEADLESS_OBSERVED_EVENT_TEXT_BYTES,
+                "headless tool summary",
+            ),
+            detail: detail.map(|detail| {
+                truncate_utf8_middle(
+                    &detail,
+                    MAX_HEADLESS_OBSERVED_EVENT_TEXT_BYTES,
+                    "headless tool detail",
+                )
+            }),
+        },
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1228,7 +1289,9 @@ impl TuiApplication {
     }
 
     pub fn send_headless_observed(&mut self, content: &str) -> anyhow::Result<HeadlessObservedRun> {
-        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let events = Arc::new(std::sync::Mutex::new(VecDeque::with_capacity(
+            MAX_HEADLESS_OBSERVED_EVENTS,
+        )));
         let captured_events = Arc::clone(&events);
         let mut runner = ConversationRunner {
             provider: ProviderRouter::from_registry(&self.provider_registry)
@@ -1242,7 +1305,10 @@ impl TuiApplication {
             tool_executor: Some(self.tool_executor.clone()),
             event_sink: Some(Arc::new(move |event| {
                 if let Ok(mut events) = captured_events.lock() {
-                    events.push(event);
+                    if events.len() >= MAX_HEADLESS_OBSERVED_EVENTS {
+                        events.pop_front();
+                    }
+                    events.push_back(bound_headless_provider_event(event));
                 }
             })),
             cancel_token: None,
@@ -1271,7 +1337,7 @@ impl TuiApplication {
         self.autosave_session();
         let events = events
             .lock()
-            .map(|events| events.clone())
+            .map(|events| events.iter().cloned().collect())
             .unwrap_or_default();
         Ok(HeadlessObservedRun {
             response,
@@ -1360,10 +1426,15 @@ impl TuiApplication {
     fn push_system_message(&mut self, content: impl Into<String>) {
         self.session.messages.push(ChatMessage {
             role: "system".to_string(),
-            content: content.into(),
+            content: truncate_utf8_middle(
+                &content.into(),
+                MAX_SESSION_MESSAGE_BYTES,
+                "system message",
+            ),
             attachments: Vec::new(),
             created_at: chrono::Utc::now(),
         });
+        self.session.enforce_history_limits();
     }
 
     pub(crate) fn toggle_tool_log_visibility(&mut self) {

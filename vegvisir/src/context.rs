@@ -2,6 +2,13 @@ use std::collections::BTreeMap;
 
 use crate::types::{Message, Role};
 
+const MAX_CONTEXT_MESSAGE_BYTES: usize = 256 * 1024;
+const MAX_CONTEXT_SUMMARY_BYTES: usize = 256 * 1024;
+const MAX_COMPACTED_SUMMARIES: usize = 32;
+const MAX_PENDING_COMPACTIONS: usize = 8;
+const MAX_COMPACTED_VALUE_BYTES: usize = 64 * 1024;
+const CONTEXT_TRUNCATION_MARKER: &str = "\n[context content truncated by Vegvisir memory bound]\n";
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ContextManager {
     pub max_messages: usize,
@@ -33,12 +40,37 @@ impl ContextManager {
     }
 
     pub fn add(&mut self, message: Message) {
-        self.messages.push(message);
+        self.messages.push(bound_message(message));
         self.compact_if_needed();
+        self.enforce_limits();
+    }
+
+    /// Repair limits after loading an older checkpoint and keep active context
+    /// proportional to the current run rather than the amount of output a tool
+    /// happened to produce.
+    pub fn enforce_limits(&mut self) {
+        for message in &mut self.messages {
+            bound_message_in_place(message);
+        }
+        while self.messages.len() > self.max_messages.max(1) {
+            self.compact_if_needed();
+        }
+        if self.compacted_summaries.len() > MAX_COMPACTED_SUMMARIES {
+            let remove = self.compacted_summaries.len() - MAX_COMPACTED_SUMMARIES;
+            self.compacted_summaries.drain(..remove);
+        }
+        if self.pending_compactions.len() > MAX_PENDING_COMPACTIONS {
+            let remove = self.pending_compactions.len() - MAX_PENDING_COMPACTIONS;
+            self.pending_compactions.drain(..remove);
+        }
+        self.rebuild_summary_text();
     }
 
     pub fn visible_messages(&self) -> Vec<Message> {
-        let summary = self.visible_summary();
+        let summary = bounded_text(
+            &self.visible_summary(),
+            MAX_CONTEXT_MESSAGE_BYTES.saturating_sub(64),
+        );
         if summary.trim().is_empty() {
             return self.messages.clone();
         }
@@ -67,21 +99,36 @@ impl ContextManager {
 
     fn visible_summary(&self) -> String {
         if self.compacted_summaries.is_empty() {
-            return self.summary.clone();
+            return bounded_text(&self.summary, MAX_CONTEXT_SUMMARY_BYTES);
         }
-        self.compacted_summaries
-            .iter()
-            .map(ContextCompactionSummary::render)
-            .filter(|summary| !summary.trim().is_empty())
-            .collect::<Vec<_>>()
-            .join("\n\n")
+        let mut summaries = Vec::new();
+        let mut used = 0usize;
+        for summary in self.compacted_summaries.iter().rev() {
+            let rendered = summary.render();
+            if rendered.trim().is_empty() {
+                continue;
+            }
+            let separator = usize::from(!summaries.is_empty()) * 2;
+            let remaining = MAX_CONTEXT_SUMMARY_BYTES.saturating_sub(used + separator);
+            if remaining == 0 {
+                break;
+            }
+            let rendered = bounded_text(&rendered, remaining);
+            used = used.saturating_add(separator + rendered.len());
+            summaries.push(rendered);
+            if used >= MAX_CONTEXT_SUMMARY_BYTES {
+                break;
+            }
+        }
+        summaries.reverse();
+        summaries.join("\n\n")
     }
 
     fn compact_if_needed(&mut self) {
-        if self.messages.len() <= self.max_messages {
+        if self.messages.len() <= self.max_messages.max(1) {
             return;
         }
-        let keep = (self.max_messages / 2).max(1);
+        let keep = (self.max_messages.max(1) / 2).max(1);
         let stale: Vec<_> = self.messages.drain(..self.messages.len() - keep).collect();
         let sequence = self.compacted_summaries.len() + 1;
         let summary = ContextCompactionSummary::from_messages(sequence, &stale);
@@ -91,7 +138,13 @@ impl ContextManager {
     }
 
     fn rebuild_summary_text(&mut self) {
-        self.summary = self.visible_summary();
+        // `summary` is retained for checkpoints written by older versions. Do
+        // not also keep a full rendered copy once structured summaries exist.
+        if self.compacted_summaries.is_empty() {
+            self.summary = bounded_text(&self.summary, MAX_CONTEXT_SUMMARY_BYTES);
+        } else {
+            self.summary.clear();
+        }
     }
 }
 
@@ -428,7 +481,7 @@ fn contains_any(value: &str, needles: &[&str]) -> bool {
 }
 
 fn push_unique_limited(out: &mut Vec<String>, value: String, limit: usize) {
-    let value = compact_whitespace(&value);
+    let value = bounded_text(&compact_whitespace(&value), 2_048);
     if value.is_empty() || out.iter().any(|existing| existing == &value) {
         return;
     }
@@ -438,7 +491,31 @@ fn push_unique_limited(out: &mut Vec<String>, value: String, limit: usize) {
 }
 
 fn compact_whitespace(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ")
+    let mut compact = String::new();
+    let mut first = true;
+    let mut truncated = false;
+    for word in value.split_whitespace() {
+        let separator = usize::from(!first);
+        if compact
+            .len()
+            .saturating_add(separator)
+            .saturating_add(word.len())
+            > MAX_COMPACTED_VALUE_BYTES
+        {
+            truncated = true;
+            break;
+        }
+        if !first {
+            compact.push(' ');
+        }
+        compact.push_str(word);
+        first = false;
+    }
+    if truncated {
+        compact = bounded_text(&compact, MAX_COMPACTED_VALUE_BYTES.saturating_sub(32));
+        compact.push_str(" …[truncated]");
+    }
+    compact
 }
 
 fn role_label(role: &Role) -> &'static str {
@@ -460,6 +537,62 @@ fn normalize_percent(value: f64, default: f64) -> f64 {
 
 fn truncate_chars(value: &str, max: usize) -> String {
     value.chars().take(max).collect()
+}
+
+fn bound_message(mut message: Message) -> Message {
+    bound_message_in_place(&mut message);
+    message
+}
+
+fn bound_message_in_place(message: &mut Message) {
+    message.content = bounded_text(&message.content, MAX_CONTEXT_MESSAGE_BYTES);
+}
+
+fn bounded_text(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_string();
+    }
+    if max_bytes <= CONTEXT_TRUNCATION_MARKER.len() {
+        return utf8_prefix(value, max_bytes);
+    }
+    let content_bytes = max_bytes - CONTEXT_TRUNCATION_MARKER.len();
+    let head_bytes = content_bytes / 2;
+    let tail_bytes = content_bytes.saturating_sub(head_bytes);
+    let head_end = safe_char_boundary_at_or_before(value, head_bytes);
+    let tail_start = safe_char_boundary_at_or_after(value, value.len().saturating_sub(tail_bytes));
+    format!(
+        "{}{}{}",
+        &value[..head_end],
+        CONTEXT_TRUNCATION_MARKER,
+        &value[tail_start..]
+    )
+}
+
+fn utf8_prefix(value: &str, max_bytes: usize) -> String {
+    let mut prefix = String::new();
+    for ch in value.chars() {
+        if prefix.len().saturating_add(ch.len_utf8()) > max_bytes {
+            break;
+        }
+        prefix.push(ch);
+    }
+    prefix
+}
+
+fn safe_char_boundary_at_or_before(value: &str, index: usize) -> usize {
+    let mut index = index.min(value.len());
+    while index > 0 && !value.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
+fn safe_char_boundary_at_or_after(value: &str, index: usize) -> usize {
+    let mut index = index.min(value.len());
+    while index < value.len() && !value.is_char_boundary(index) {
+        index += 1;
+    }
+    index
 }
 
 #[cfg(test)]
@@ -552,5 +685,34 @@ mod tests {
         assert_eq!(policy.warning_percent, 90.0);
         assert_eq!(policy.compaction_percent, 90.0);
         assert_eq!(policy.block_percent, 95.0);
+    }
+
+    #[test]
+    fn context_bounds_large_messages_and_summary_history() {
+        let mut context = ContextManager::new(2);
+        for index in 0..80 {
+            context.add(Message::new(
+                Role::Tool,
+                format!("step-{index} {}", "output ".repeat(100_000)),
+            ));
+        }
+
+        assert!(
+            context
+                .messages
+                .iter()
+                .all(|message| message.content.len() <= MAX_CONTEXT_MESSAGE_BYTES)
+        );
+        assert!(context.compacted_summaries.len() <= MAX_COMPACTED_SUMMARIES);
+        assert!(context.visible_messages().iter().all(|message| {
+            message.content.len() <= MAX_CONTEXT_MESSAGE_BYTES.max(MAX_CONTEXT_SUMMARY_BYTES)
+        }));
+    }
+
+    #[test]
+    fn compact_whitespace_does_not_materialize_unbounded_input() {
+        let compacted = compact_whitespace(&"word ".repeat(MAX_COMPACTED_VALUE_BYTES * 2));
+        assert!(compacted.len() <= MAX_COMPACTED_VALUE_BYTES + 32);
+        assert!(compacted.contains("truncated"));
     }
 }

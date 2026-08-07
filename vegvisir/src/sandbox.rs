@@ -245,24 +245,52 @@ impl WorkspaceSandbox {
         Ok(resolved)
     }
 
-    pub fn read_text(&self, path: impl AsRef<Path>) -> anyhow::Result<String> {
-        let requested = path.as_ref();
+    fn open_read_file(&self, requested: &Path) -> anyhow::Result<fs::File> {
         if !self.bypass {
             reject_requested_symlink_components(self.root.as_path(), requested)?;
             #[cfg(target_os = "linux")]
-            if let Some(mut file) =
-                openat2_read_beneath(self.root.as_path(), requested).transpose()?
-            {
-                let mut content = String::new();
-                file.read_to_string(&mut content)?;
-                return Ok(content);
+            if let Some(file) = openat2_read_beneath(self.root.as_path(), requested).transpose()? {
+                return Ok(file);
             }
         }
         let target = self.resolve(requested)?;
-        let mut file = open_read_no_follow(&target, self.bypass)?;
+        open_read_no_follow(&target, self.bypass)
+    }
+
+    pub fn read_text(&self, path: impl AsRef<Path>) -> anyhow::Result<String> {
+        let requested = path.as_ref();
+        let mut file = self.open_read_file(requested)?;
         let mut content = String::new();
         file.read_to_string(&mut content)?;
         Ok(content)
+    }
+
+    /// Read a UTF-8 prefix without allocating for the entire file. This is
+    /// used by tools whose result is already subject to a hard output budget.
+    pub fn read_text_bounded(
+        &self,
+        path: impl AsRef<Path>,
+        max_bytes: usize,
+    ) -> anyhow::Result<(String, bool, u64)> {
+        let requested = path.as_ref();
+        let mut file = self.open_read_file(requested)?;
+        let original_bytes = file.metadata()?.len();
+        let max_bytes = max_bytes.max(1);
+        if original_bytes <= max_bytes as u64 {
+            let mut content = String::new();
+            file.read_to_string(&mut content)?;
+            return Ok((content, false, original_bytes));
+        }
+
+        const TRUNCATION_MARKER: &str = "\n[read_file truncated by Vegvisir memory bound]\n";
+        let content_budget = max_bytes.saturating_sub(TRUNCATION_MARKER.len());
+        let mut bytes = Vec::with_capacity(content_budget);
+        file.take(content_budget as u64).read_to_end(&mut bytes)?;
+        let mut content = utf8_prefix_bytes(&bytes);
+        if max_bytes > TRUNCATION_MARKER.len() {
+            content.push_str(TRUNCATION_MARKER);
+        }
+        Ok((content, true, original_bytes))
     }
 
     pub fn write_text(&self, path: impl AsRef<Path>, content: &str) -> anyhow::Result<PathBuf> {
@@ -285,6 +313,14 @@ impl WorkspaceSandbox {
         file.write_all(content.as_bytes())?;
         Ok(target)
     }
+}
+
+fn utf8_prefix_bytes(bytes: &[u8]) -> String {
+    let valid_bytes = match std::str::from_utf8(bytes) {
+        Ok(value) => value.len(),
+        Err(error) => error.valid_up_to(),
+    };
+    String::from_utf8(bytes[..valid_bytes].to_vec()).unwrap_or_default()
 }
 
 #[cfg(target_os = "linux")]
@@ -545,6 +581,23 @@ mod tests {
             fs::read_to_string(dir.path().join("new/dir/file.txt"))?,
             "ok"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn bounded_read_does_not_materialize_the_whole_file() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let content = "0123456789".repeat(10_000);
+        fs::write(dir.path().join("large.txt"), &content)?;
+        let sandbox = WorkspaceSandbox::new(dir.path())?;
+
+        let (bounded, truncated, original_bytes) = sandbox.read_text_bounded("large.txt", 128)?;
+
+        assert!(truncated);
+        assert_eq!(original_bytes, content.len() as u64);
+        assert!(bounded.len() <= 128);
+        assert!(bounded.starts_with("0123456789"));
+        assert!(bounded.contains("read_file truncated"));
         Ok(())
     }
 

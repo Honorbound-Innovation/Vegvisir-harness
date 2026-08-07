@@ -64,6 +64,7 @@ pub const DEFAULT_ACTIVE_SUBAGENT_LIMIT: usize = 3;
 
 const COMMAND_STREAM_READ_CHUNK_BYTES: usize = 8 * 1024;
 const COMMAND_STREAM_LIVE_MAX_BYTES_PER_STREAM: usize = 128 * 1024;
+const MAX_TOOL_OBSERVATION_BYTES: usize = 256 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommandOutputChunk {
@@ -1009,7 +1010,25 @@ impl ToolExecutor {
             }
             self.logger
                 .emit("tool_start", json!({"tool": call.name, "args": args}));
-            let observation = (tool.handler)(args.clone());
+            let mut observation = (tool.handler)(args.clone());
+            let original_bytes = observation.content.len();
+            if original_bytes > MAX_TOOL_OBSERVATION_BYTES {
+                observation.content = compact_text_middle(
+                    &observation.content,
+                    MAX_TOOL_OBSERVATION_BYTES,
+                    "tool observation",
+                );
+                observation
+                    .data
+                    .insert("output_truncated".to_string(), json!(true));
+                observation
+                    .data
+                    .insert("output_bytes".to_string(), json!(original_bytes));
+                observation.data.insert(
+                    "max_output_bytes".to_string(),
+                    json!(MAX_TOOL_OBSERVATION_BYTES),
+                );
+            }
             self.logger.emit(
                 "tool_end",
                 json!({"tool": call.name, "ok": observation.ok, "error": observation.error}),
@@ -2008,23 +2027,27 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
             if !root.exists() {
                 return Observation::err(format!("Path does not exist: {path}"), "NotFound");
             }
-            let mut files = WalkDir::new(&root)
+            let mut files = Vec::with_capacity(limit);
+            let mut total_files = 0usize;
+            for entry in WalkDir::new(&root)
                 .into_iter()
                 .filter_map(Result::ok)
                 .filter(|entry| entry.file_type().is_file())
-                .filter_map(|entry| {
-                    entry
-                        .path()
-                        .strip_prefix(&list_sandbox.root)
-                        .ok()
-                        .map(|path| path.to_string_lossy().to_string())
-                        .or_else(|| Some(entry.path().display().to_string()))
-                })
-                .collect::<Vec<_>>();
+            {
+                total_files = total_files.saturating_add(1);
+                if files.len() < limit {
+                    files.push(
+                        entry
+                            .path()
+                            .strip_prefix(&list_sandbox.root)
+                            .ok()
+                            .map(|path| path.to_string_lossy().to_string())
+                            .unwrap_or_else(|| entry.path().display().to_string()),
+                    );
+                }
+            }
             files.sort();
-            let total_files = files.len();
             let truncated = total_files > limit;
-            files.truncate(limit);
             let mut data = Map::new();
             data.insert("files".to_string(), json!(files.clone()));
             data.insert("total_files".to_string(), json!(total_files));
@@ -2054,27 +2077,19 @@ pub fn build_builtin_registry_with_cms_mode_subagent_config(
             let Some(path) = args.get("path").and_then(Value::as_str) else {
                 return Observation::err("Missing path", "ValueError");
             };
-            match read_sandbox.read_text(path) {
-                Ok(content) => {
-                    let original_bytes = content.len();
-                    let max_read_bytes = get_env("VEGVISIR_SUBAGENT_MAX_READ_BYTES")
-                        .and_then(|value| value.trim().parse::<usize>().ok())
-                        .filter(|value| *value > 0);
-                    let truncated = max_read_bytes.is_some_and(|limit| original_bytes > limit);
-                    let content = if let Some(limit) =
-                        max_read_bytes.filter(|limit| original_bytes > *limit)
-                    {
-                        compact_text_middle(&content, limit, "read_file")
-                    } else {
-                        content
-                    };
+            let configured_max_read_bytes = get_env("VEGVISIR_SUBAGENT_MAX_READ_BYTES")
+                .and_then(|value| value.trim().parse::<usize>().ok())
+                .filter(|value| *value > 0);
+            let max_read_bytes = configured_max_read_bytes
+                .unwrap_or(MAX_TOOL_OBSERVATION_BYTES)
+                .min(MAX_TOOL_OBSERVATION_BYTES);
+            match read_sandbox.read_text_bounded(path, max_read_bytes) {
+                Ok((content, truncated, original_bytes)) => {
                     let mut data = Map::new();
                     data.insert("path".to_string(), json!(path));
                     data.insert("bytes".to_string(), json!(original_bytes));
                     data.insert("output_truncated".to_string(), json!(truncated));
-                    if let Some(limit) = max_read_bytes {
-                        data.insert("max_read_bytes".to_string(), json!(limit));
-                    }
+                    data.insert("max_read_bytes".to_string(), json!(max_read_bytes));
                     Observation {
                         ok: true,
                         content,

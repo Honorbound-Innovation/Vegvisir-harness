@@ -11,6 +11,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+pub const MAX_SESSION_MESSAGES: usize = 512;
+pub const MAX_SESSION_MESSAGE_BYTES: usize = 512 * 1024;
+pub const MAX_SESSION_HISTORY_BYTES: usize = 4 * 1024 * 1024;
+pub const MAX_SESSION_FILE_BYTES: u64 = 16 * 1024 * 1024;
+pub const MAX_SESSION_ATTACHMENTS: usize = 128;
+pub const MAX_SESSION_MESSAGE_ATTACHMENTS: usize = 16;
+const MAX_ATTACHMENT_FIELD_BYTES: usize = 8 * 1024;
+pub const MAX_INPUT_HISTORY_ENTRIES: usize = 256;
+pub const MAX_INPUT_HISTORY_ENTRY_BYTES: usize = 64 * 1024;
+pub const MAX_INPUT_HISTORY_BYTES: usize = 2 * 1024 * 1024;
+pub const MAX_INPUT_BUFFER_BYTES: usize = 1024 * 1024;
+const SESSION_HISTORY_MARKER_BYTES: usize = 1024;
+
 use crate::lsl::{parse_lsl, subskill_metadata};
 
 fn now_iso() -> DateTime<Utc> {
@@ -513,6 +526,97 @@ pub struct SessionState {
 }
 
 impl SessionState {
+    /// Keep the persisted/live transcript bounded. Large command/tool payloads are
+    /// available in task/run artifacts; the session transcript is a working-set
+    /// view and must not become an unbounded archive.
+    pub fn enforce_history_limits(&mut self) -> bool {
+        let mut changed = enforce_input_history_limits(&mut self.input_history);
+        changed |= enforce_attachment_limits(&mut self.pending_attachments, 0);
+        let mut remaining_attachments = MAX_SESSION_ATTACHMENTS;
+        for message in self.messages.iter_mut().rev() {
+            let before = message.attachments.len();
+            let keep = before
+                .min(MAX_SESSION_MESSAGE_ATTACHMENTS)
+                .min(remaining_attachments);
+            if before > keep {
+                message.attachments.drain(..before - keep);
+                changed = true;
+            }
+            changed |= enforce_attachment_limits(&mut message.attachments, keep);
+            remaining_attachments = remaining_attachments.saturating_sub(keep);
+        }
+        let original_total_bytes = self
+            .messages
+            .iter()
+            .map(|message| message.content.len())
+            .sum::<usize>();
+        let messages_over_limit = self.messages.len() > MAX_SESSION_MESSAGES
+            || original_total_bytes > MAX_SESSION_HISTORY_BYTES;
+
+        for message in &mut self.messages {
+            if message.content.len() > MAX_SESSION_MESSAGE_BYTES {
+                message.content = truncate_utf8_middle(
+                    &message.content,
+                    MAX_SESSION_MESSAGE_BYTES,
+                    "session message",
+                );
+                changed = true;
+            }
+        }
+
+        // A single oversized message can be repaired in place without adding a
+        // misleading history marker or evicting otherwise valid messages.
+        if !messages_over_limit {
+            return changed;
+        }
+        if self.messages.is_empty() {
+            return changed;
+        }
+
+        let old_message_count = self.messages.len();
+        let marker = format!(
+            "Earlier session history was bounded by Vegvisir. Omitted {} older message(s) ({} bytes); detailed tool output remains in run/task artifacts.",
+            old_message_count, original_total_bytes
+        );
+        let marker = truncate_utf8_middle(&marker, SESSION_HISTORY_MARKER_BYTES, "history marker");
+        let marker_message = ChatMessage {
+            role: "system".to_string(),
+            content: marker,
+            attachments: Vec::new(),
+            created_at: now_iso(),
+        };
+        let retained_budget =
+            MAX_SESSION_HISTORY_BYTES.saturating_sub(marker_message.content.len());
+        let retained_slots = MAX_SESSION_MESSAGES.saturating_sub(1);
+        let mut retained = Vec::new();
+        let mut retained_bytes = 0usize;
+        for message in self.messages.iter().rev() {
+            if retained.len() >= retained_slots {
+                break;
+            }
+            let message_bytes = message.content.len();
+            if !retained.is_empty()
+                && retained_bytes.saturating_add(message_bytes) > retained_budget
+            {
+                break;
+            }
+            let mut message = message.clone();
+            if retained.is_empty() && message_bytes > retained_budget {
+                message.content =
+                    truncate_utf8_middle(&message.content, retained_budget, "session history");
+            }
+            retained_bytes = retained_bytes.saturating_add(message.content.len());
+            retained.push(message);
+        }
+        retained.reverse();
+
+        let mut bounded = Vec::with_capacity(retained.len() + 1);
+        bounded.push(marker_message);
+        bounded.extend(retained);
+        self.messages = bounded;
+        true
+    }
+
     pub fn new(
         cwd: impl AsRef<Path>,
         tools: Vec<ToolDefinition>,
@@ -573,14 +677,24 @@ impl SessionStore {
 
     pub fn save(&self, session: &SessionState) -> anyhow::Result<PathBuf> {
         let path = self.path_for(&session.session_id);
-        fs::write(&path, serde_json::to_string_pretty(session)?)?;
+        let mut bounded = session.clone();
+        bounded.enforce_history_limits();
+        fs::write(&path, serde_json::to_string_pretty(&bounded)?)?;
         Ok(path)
     }
 
     pub fn load(&self, session_id: &str) -> anyhow::Result<SessionState> {
-        Ok(serde_json::from_str(&fs::read_to_string(
-            self.path_for(session_id),
-        )?)?)
+        let path = self.path_for(session_id);
+        if fs::metadata(&path)?.len() > MAX_SESSION_FILE_BYTES {
+            anyhow::bail!(
+                "session file {} exceeds the {} MiB safety limit; start a new session or remove the oversized checkpoint",
+                path.display(),
+                MAX_SESSION_FILE_BYTES / (1024 * 1024)
+            );
+        }
+        let mut session: SessionState = serde_json::from_str(&fs::read_to_string(path)?)?;
+        session.enforce_history_limits();
+        Ok(session)
     }
 
     pub fn list(&self) -> anyhow::Result<Vec<SessionState>> {
@@ -596,8 +710,12 @@ impl SessionStore {
                 .and_then(|ext| ext.to_str())
                 .map(|ext| ext == "json")
                 .unwrap_or(false)
+                && entry.metadata()?.len() <= MAX_SESSION_FILE_BYTES
             {
-                sessions.push(serde_json::from_str(&fs::read_to_string(entry.path())?)?);
+                let mut session: SessionState =
+                    serde_json::from_str(&fs::read_to_string(entry.path())?)?;
+                session.enforce_history_limits();
+                sessions.push(session);
             }
         }
         sessions.sort_by(|left, right| right.created_at.cmp(&left.created_at));
@@ -669,6 +787,132 @@ impl SessionManager {
             session.messages.pop();
         }
     }
+}
+
+fn enforce_attachment_limits(attachments: &mut Vec<Attachment>, available: usize) -> bool {
+    let mut changed = false;
+    let keep = attachments
+        .len()
+        .min(MAX_SESSION_MESSAGE_ATTACHMENTS)
+        .min(if available == 0 {
+            MAX_SESSION_ATTACHMENTS
+        } else {
+            available
+        });
+    if attachments.len() > keep {
+        let remove = attachments.len() - keep;
+        attachments.drain(..remove);
+        changed = true;
+    }
+    for attachment in attachments {
+        let path = truncate_utf8_middle(
+            &attachment.path,
+            MAX_ATTACHMENT_FIELD_BYTES,
+            "attachment path",
+        );
+        if path != attachment.path {
+            attachment.path = path;
+            changed = true;
+        }
+        let kind = truncate_utf8_middle(
+            &attachment.kind,
+            MAX_ATTACHMENT_FIELD_BYTES,
+            "attachment kind",
+        );
+        if kind != attachment.kind {
+            attachment.kind = kind;
+            changed = true;
+        }
+        if let Some(mime_type) = &mut attachment.mime_type {
+            let bounded = truncate_utf8_middle(
+                mime_type,
+                MAX_ATTACHMENT_FIELD_BYTES,
+                "attachment MIME type",
+            );
+            if *mime_type != bounded {
+                *mime_type = bounded;
+                changed = true;
+            }
+        }
+        if let Some(name) = &mut attachment.name {
+            let bounded = truncate_utf8_middle(name, MAX_ATTACHMENT_FIELD_BYTES, "attachment name");
+            if *name != bounded {
+                *name = bounded;
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
+pub(crate) fn enforce_input_history_limits(history: &mut Vec<String>) -> bool {
+    let mut changed = false;
+    for entry in history.iter_mut() {
+        if entry.len() > MAX_INPUT_HISTORY_ENTRY_BYTES {
+            *entry =
+                truncate_utf8_middle(entry, MAX_INPUT_HISTORY_ENTRY_BYTES, "input history entry");
+            changed = true;
+        }
+    }
+
+    let total_bytes = history.iter().map(String::len).sum::<usize>();
+    if history.len() <= MAX_INPUT_HISTORY_ENTRIES && total_bytes <= MAX_INPUT_HISTORY_BYTES {
+        return changed;
+    }
+
+    let mut retained = Vec::new();
+    let mut retained_bytes = 0usize;
+    for entry in history.iter().rev() {
+        if retained.len() >= MAX_INPUT_HISTORY_ENTRIES {
+            break;
+        }
+        if !retained.is_empty()
+            && retained_bytes.saturating_add(entry.len()) > MAX_INPUT_HISTORY_BYTES
+        {
+            break;
+        }
+        let mut entry = entry.clone();
+        if retained.is_empty() && entry.len() > MAX_INPUT_HISTORY_BYTES {
+            entry = truncate_utf8_middle(&entry, MAX_INPUT_HISTORY_BYTES, "input history");
+        }
+        retained_bytes = retained_bytes.saturating_add(entry.len());
+        retained.push(entry);
+    }
+    retained.reverse();
+    *history = retained;
+    true
+}
+
+pub(crate) fn truncate_utf8_middle(value: &str, max_bytes: usize, label: &str) -> String {
+    if value.len() <= max_bytes {
+        return value.to_string();
+    }
+    if max_bytes == 0 {
+        return String::new();
+    }
+    let marker = format!(
+        "\n[{label} truncated by Vegvisir; original {} bytes]\n",
+        value.len()
+    );
+    if max_bytes <= marker.len() {
+        let mut end = max_bytes.min(value.len());
+        while end > 0 && !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        return value[..end].to_string();
+    }
+    let available = max_bytes - marker.len();
+    let head_target = available.saturating_mul(2) / 3;
+    let tail_target = available.saturating_sub(head_target);
+    let mut head_end = head_target.min(value.len());
+    while head_end > 0 && !value.is_char_boundary(head_end) {
+        head_end -= 1;
+    }
+    let mut tail_start = value.len().saturating_sub(tail_target);
+    while tail_start < value.len() && !value.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
+    format!("{}{}{}", &value[..head_end], marker, &value[tail_start..])
 }
 
 #[derive(Clone, Debug)]
@@ -1209,7 +1453,74 @@ pub fn normalize_agent_id(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentProfileStore, load_skill_definitions};
+    use chrono::Utc;
+
+    use super::{
+        AgentProfileStore, Attachment, ChatMessage, MAX_SESSION_ATTACHMENTS,
+        MAX_SESSION_MESSAGE_ATTACHMENTS, MAX_SESSION_MESSAGE_BYTES, MAX_SESSION_MESSAGES,
+        SessionState, load_skill_definitions,
+    };
+
+    #[test]
+    fn session_history_bounds_messages_content_and_attachment_metadata() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut session = SessionState::new(tmp.path(), Vec::new(), Vec::new());
+        session
+            .messages
+            .extend((0..MAX_SESSION_MESSAGES + 10).map(|index| ChatMessage {
+                role: "user".to_string(),
+                content: format!("message-{index}"),
+                attachments: Vec::new(),
+                created_at: Utc::now(),
+            }));
+        session.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "x".repeat(MAX_SESSION_MESSAGE_BYTES + 32),
+            attachments: (0..MAX_SESSION_MESSAGE_ATTACHMENTS + 4)
+                .map(|index| Attachment {
+                    path: format!("/tmp/{index}"),
+                    kind: "file".to_string(),
+                    mime_type: None,
+                    name: None,
+                    size_bytes: None,
+                })
+                .collect(),
+            created_at: Utc::now(),
+        });
+        session.pending_attachments = (0..MAX_SESSION_MESSAGE_ATTACHMENTS + 4)
+            .map(|index| Attachment {
+                path: format!("/tmp/pending-{index}"),
+                kind: "file".to_string(),
+                mime_type: None,
+                name: None,
+                size_bytes: None,
+            })
+            .collect();
+
+        session.enforce_history_limits();
+
+        assert!(session.messages.len() <= MAX_SESSION_MESSAGES);
+        assert!(
+            session
+                .messages
+                .iter()
+                .all(|message| message.content.len() <= MAX_SESSION_MESSAGE_BYTES)
+        );
+        assert!(
+            session
+                .messages
+                .iter()
+                .all(|message| message.attachments.len() <= MAX_SESSION_MESSAGE_ATTACHMENTS)
+        );
+        let attachment_count = session.pending_attachments.len()
+            + session
+                .messages
+                .iter()
+                .map(|message| message.attachments.len())
+                .sum::<usize>();
+        assert!(attachment_count <= MAX_SESSION_ATTACHMENTS + MAX_SESSION_MESSAGE_ATTACHMENTS);
+        Ok(())
+    }
 
     #[test]
     fn missing_agent_profile_error_names_profile_and_path() -> anyhow::Result<()> {

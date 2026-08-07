@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     fs::OpenOptions,
-    io::{BufRead, BufReader, Write},
+    io::{Read, Write},
     path::PathBuf,
     process::{Child, Command, Stdio},
     sync::mpsc::{self, Receiver, TryRecvError},
@@ -20,6 +20,10 @@ use crate::{
 const DEFAULT_OUTPUT_RETENTION_BYTES: usize = 64 * 1024;
 const DEFAULT_BACKGROUND_TIMEOUT_SECONDS: u64 = 30 * 60;
 const DEFAULT_BACKGROUND_STALL_SECONDS: u64 = 10 * 60;
+const DEFAULT_TASK_RECORD_MAX_COUNT: usize = 256;
+const DEFAULT_TASK_EVENT_MAX_COUNT: usize = 512;
+const TASK_OUTPUT_CHANNEL_CAPACITY: usize = 128;
+const TASK_OUTPUT_CHUNK_BYTES: usize = 8 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -264,6 +268,8 @@ pub struct TaskManager {
     events: Vec<TaskLifecycleEvent>,
     next_id: u64,
     output_retention_bytes: usize,
+    max_records: usize,
+    max_events: usize,
 }
 
 impl Default for TaskManager {
@@ -279,11 +285,25 @@ impl TaskManager {
             events: Vec::new(),
             next_id: 1,
             output_retention_bytes: DEFAULT_OUTPUT_RETENTION_BYTES,
+            max_records: DEFAULT_TASK_RECORD_MAX_COUNT,
+            max_events: DEFAULT_TASK_EVENT_MAX_COUNT,
         }
     }
 
     pub fn with_output_retention_bytes(mut self, bytes: usize) -> Self {
         self.output_retention_bytes = bytes;
+        self
+    }
+
+    pub fn with_max_records(mut self, max_records: usize) -> Self {
+        self.max_records = max_records.max(1);
+        self.prune_records();
+        self
+    }
+
+    pub fn with_max_events(mut self, max_events: usize) -> Self {
+        self.max_events = max_events.max(1);
+        self.prune_events();
         self
     }
 
@@ -312,12 +332,13 @@ impl TaskManager {
             owner_agent_id: request.owner_agent_id,
             retained_output: String::new(),
         };
-        self.events.push(TaskLifecycleEvent::Registered {
+        self.push_event(TaskLifecycleEvent::Registered {
             task_id: id.clone(),
             kind: record.kind.clone(),
             description: record.description.clone(),
         });
         self.records.insert(id.clone(), record);
+        self.prune_records();
         id
     }
 
@@ -351,7 +372,7 @@ impl TaskManager {
             .is_none();
         self.transition(id, TaskState::RunningForeground)?;
         if was_never_started {
-            self.events.push(TaskLifecycleEvent::Started {
+            self.push_event(TaskLifecycleEvent::Started {
                 task_id: id.to_string(),
                 foreground: true,
             });
@@ -366,12 +387,12 @@ impl TaskManager {
             .unwrap_or(false);
         self.transition(id, TaskState::RunningBackground)?;
         if was_queued {
-            self.events.push(TaskLifecycleEvent::Started {
+            self.push_event(TaskLifecycleEvent::Started {
                 task_id: id.to_string(),
                 foreground: false,
             });
         } else {
-            self.events.push(TaskLifecycleEvent::Backgrounded {
+            self.push_event(TaskLifecycleEvent::Backgrounded {
                 task_id: id.to_string(),
             });
         }
@@ -380,7 +401,7 @@ impl TaskManager {
 
     pub fn mark_waiting_for_input(&mut self, id: &str) -> Result<(), TaskTransitionError> {
         self.transition(id, TaskState::WaitingForInput)?;
-        self.events.push(TaskLifecycleEvent::WaitingForInput {
+        self.push_event(TaskLifecycleEvent::WaitingForInput {
             task_id: id.to_string(),
         });
         Ok(())
@@ -394,10 +415,16 @@ impl TaskManager {
         record.output_offset = record.output_offset.saturating_add(chunk.len() as u64);
         record.retained_output.push_str(chunk);
         let truncated = truncate_to_tail(&mut record.retained_output, self.output_retention_bytes);
-        self.events.push(TaskLifecycleEvent::Output {
+        let event_chunk = crate::core::truncate_utf8_middle(
+            chunk,
+            DEFAULT_OUTPUT_RETENTION_BYTES,
+            "task event output",
+        );
+        let event_chunk_truncated = event_chunk.len() < chunk.len();
+        self.push_event(TaskLifecycleEvent::Output {
             task_id: id.to_string(),
-            chunk: chunk.to_string(),
-            truncated,
+            chunk: event_chunk,
+            truncated: truncated || event_chunk_truncated,
         });
         Ok(())
     }
@@ -417,6 +444,40 @@ impl TaskManager {
 
     pub fn timeout(&mut self, id: &str) -> Result<(), TaskTransitionError> {
         self.finish(id, TaskState::TimedOut, None)
+    }
+
+    fn push_event(&mut self, event: TaskLifecycleEvent) {
+        if self.max_events == 0 {
+            return;
+        }
+        if self.events.len() >= self.max_events {
+            let remove = self.events.len() - self.max_events + 1;
+            self.events.drain(..remove);
+        }
+        self.events.push(event);
+    }
+
+    fn prune_events(&mut self) {
+        if self.events.len() > self.max_events {
+            let remove = self.events.len() - self.max_events;
+            self.events.drain(..remove);
+        }
+    }
+
+    fn prune_records(&mut self) {
+        while self.records.len() > self.max_records {
+            let Some(id) = self
+                .records
+                .iter()
+                .find(|(_, record)| record.is_terminal())
+                .map(|(id, _)| id.clone())
+            else {
+                // Never evict a running task merely to satisfy the history
+                // bound; active records are needed for cancellation/status.
+                break;
+            };
+            self.records.remove(&id);
+        }
     }
 
     fn next_task_id(&mut self, kind: &TaskKind) -> String {
@@ -483,7 +544,7 @@ impl TaskManager {
             record.started_at = Some(Utc::now());
         }
         record.finished_at = Some(Utc::now());
-        self.events.push(TaskLifecycleEvent::Completed {
+        self.push_event(TaskLifecycleEvent::Completed {
             task_id: id.to_string(),
             state,
             exit_code,
@@ -657,7 +718,7 @@ impl TaskRunner {
         };
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
-        let (output_tx, output_rx) = mpsc::channel();
+        let (output_tx, output_rx) = mpsc::sync_channel(TASK_OUTPUT_CHANNEL_CAPACITY);
         let output_file = record.output_file.clone();
         let mut output_threads = Vec::new();
         if let Some(stdout) = stdout {
@@ -773,28 +834,29 @@ impl TaskSpawnRequestExt for TaskSpawnRequest {
 
 fn spawn_output_reader<R>(
     reader: R,
-    output_tx: mpsc::Sender<String>,
+    output_tx: mpsc::SyncSender<String>,
     output_file: PathBuf,
 ) -> JoinHandle<()>
 where
-    R: std::io::Read + Send + 'static,
+    R: Read + Send + 'static,
 {
     thread::spawn(move || {
-        let mut reader = BufReader::new(reader);
-        let mut line = Vec::new();
+        let mut reader = reader;
+        let mut buffer = [0_u8; TASK_OUTPUT_CHUNK_BYTES];
         loop {
-            line.clear();
-            match reader.read_until(b'\n', &mut line) {
+            match reader.read(&mut buffer) {
                 Ok(0) => break,
-                Ok(_) => {
-                    let chunk = String::from_utf8_lossy(&line).to_string();
+                Ok(bytes_read) => {
+                    let chunk = String::from_utf8_lossy(&buffer[..bytes_read]).to_string();
                     let _ = append_output_file(&output_file, &chunk);
                     if output_tx.send(chunk).is_err() {
                         break;
                     }
                 }
                 Err(error) => {
-                    let _ = output_tx.send(format!("[task output read error: {error}]\n"));
+                    let message = format!("[task output read error: {error}]\n");
+                    let _ = append_output_file(&output_file, &message);
+                    let _ = output_tx.send(message);
                     break;
                 }
             }
@@ -1030,6 +1092,27 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn lifecycle_output_events_do_not_retain_unbounded_chunks() {
+        let mut manager = TaskManager::new();
+        let id = manager.register(request(TaskKind::Shell));
+        let chunk = "x".repeat(DEFAULT_OUTPUT_RETENTION_BYTES * 2);
+
+        manager.append_output(&id, &chunk).unwrap();
+
+        match manager.events().last() {
+            Some(TaskLifecycleEvent::Output {
+                chunk: retained,
+                truncated,
+                ..
+            }) => {
+                assert!(retained.len() <= DEFAULT_OUTPUT_RETENTION_BYTES);
+                assert!(*truncated);
+            }
+            other => panic!("expected output lifecycle event, got {other:?}"),
+        }
     }
 
     #[test]
